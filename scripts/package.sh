@@ -29,6 +29,9 @@ xuan_stage="$xuan_temporary/$xuan_name"
 mkdir -p "$xuan_stage"/{bin,share,scripts}
 install -m755 target/release/xuan "$xuan_stage/bin/xuan"
 strip "$xuan_stage/bin/xuan"
+if [[ -n ${XUAN_MAX_GLIBC:-} ]]; then
+    python3 scripts/check-glibc.py --max-version "$XUAN_MAX_GLIBC" "$xuan_stage/bin/xuan"
+fi
 cp -R assets/icons "$xuan_stage/share/"
 install -Dm644 packaging/me.silverl.xuan.desktop "$xuan_stage/share/applications/me.silverl.xuan.desktop"
 install -Dm644 packaging/me.silverl.xuan.xml "$xuan_stage/share/mime/packages/me.silverl.xuan.xml"

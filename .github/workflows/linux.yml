@@ -9,13 +9,18 @@ permissions:
   contents: read
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    # Keep native release binaries usable on glibc 2.35 and newer.
+    runs-on: ubuntu-22.04
     env:
       CARGO_TERM_COLOR: always
+      XUAN_MAX_GLIBC: '2.35'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
       - name: Install Linux libraries
         run: |
           sudo apt-get update
@@ -70,3 +75,36 @@ jobs:
           name: xuan-linux-x86_64
           path: dist/*
           if-no-files-found: error
+  compatibility:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ubuntu: '20.04'
+            native: '0'
+          - ubuntu: '22.04'
+            native: '1'
+          - ubuntu: '24.04'
+            native: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: xuan-linux-x86_64
+          path: dist
+      - name: Test release on Ubuntu ${{ matrix.ubuntu }}
+        env:
+          UBUNTU_VERSION: ${{ matrix.ubuntu }}
+          XUAN_CHECK_NATIVE: ${{ matrix.native }}
+        run: |
+          chmod +x dist/*.AppImage
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/dist:/packages:ro" \
+            -v "$GITHUB_WORKSPACE/scripts:/checks:ro" \
+            -e XUAN_CHECK_NATIVE \
+            "ubuntu:$UBUNTU_VERSION" bash /checks/check-linux-compat.sh

@@ -121,6 +121,17 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
         )
     else:
         assert executable.stat().st_mode & 0o777 == 0o755
+        if maximum := os.environ.get("XUAN_MAX_GLIBC"):
+            subprocess.run(
+                [
+                    sys.executable,
+                    ROOT / "scripts/check-glibc.py",
+                    "--max-version",
+                    maximum,
+                    executable,
+                ],
+                check=True,
+            )
     for original in icons:
         installed = prefix / "share/icons" / original.relative_to(ROOT / "assets/icons")
         assert installed.read_bytes() == original.read_bytes(), installed
@@ -147,7 +158,9 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
         )
     if not windows or sys.platform == "win32":
         actual_version = subprocess.check_output(
-            [executable, "--version"], text=True, timeout=30
+            [prefix.parent / "AppRun" if appimage else executable, "--version"],
+            text=True,
+            timeout=30,
         ).strip()
         assert actual_version == f"xuan {VERSION}", actual_version
 
@@ -171,6 +184,9 @@ def check_source(temporary):
         "assets/svg/transform.svg",
         "scripts/package.sh",
         "scripts/package-native.py",
+        "scripts/check-glibc.py",
+        "scripts/check-linux-compat.sh",
+        "scripts/linuxdeploy-plugin-xuan",
         "scripts/package-windows.py",
         "scripts/package-source.py",
         "packaging/AppRun",
@@ -216,13 +232,18 @@ def check_source(temporary):
 
 
 def check_appimage(temporary):
-    package = ROOT / "dist" / f"{NAME}.AppImage"
+    package = ROOT / "dist" / f"xuan-{VERSION}-{platform.machine()}.AppImage"
     check_checksum(package)
     assert package.stat().st_mode & 0o777 == 0o755
     with package.open("rb") as stream:
         header = stream.read(11)
     assert header[:4] == b"\x7fELF" and header[8:11] == b"AI\x02", (
         "Expected a type 2 AppImage"
+    )
+    headers = subprocess.check_output(["readelf", "-lW", package], text=True)
+    dynamic = subprocess.check_output(["readelf", "-dW", package], text=True)
+    assert "INTERP" not in headers and "(NEEDED)" not in dynamic, (
+        "The AppImage runtime must not depend on the host C library"
     )
     destination = temporary / "AppImage with spaces"
     destination.mkdir()
@@ -253,6 +274,32 @@ def check_appimage(temporary):
         ["desktop-file-validate", appdir / "me.silverl.xuan.desktop"], check=True
     )
     check_files(appdir / "usr", appimage=True)
+    glibc = appdir / "usr/lib/glibc"
+    loader = glibc / "ld-linux.so.2"
+    assert loader.is_file(), "Missing bundled dynamic loader"
+    assert (glibc / "libc.so.6").is_file(), "Missing bundled glibc"
+    assert any((appdir / "usr/share/licenses/glibc").iterdir()), (
+        "Missing glibc license notices"
+    )
+    # Inspect actual resolution, not just the presence of libc in the image.
+    dependencies = subprocess.check_output(
+        [
+            loader,
+            "--inhibit-cache",
+            "--library-path",
+            f"{glibc}:{appdir / 'usr/lib'}:{appdir / 'usr/lib64'}",
+            "--list",
+            appdir / "usr/bin/xuan",
+        ],
+        text=True,
+        timeout=30,
+    )
+    assert "not found" not in dependencies, dependencies
+    resolved = re.findall(r"=> (.+) \(0x[0-9a-f]+\)", dependencies)
+    assert resolved, dependencies
+    for path in resolved:
+        assert Path(path).resolve().is_relative_to(appdir), dependencies
+    assert str(glibc / "libc.so.6") in dependencies, dependencies
     for name in (
         "libxkbcommon.so.0",
         "libxkbcommon-x11.so.0",
@@ -274,7 +321,7 @@ def check_appimage(temporary):
         ).strip()
         assert actual_version == f"xuan {VERSION}", actual_version
     print(
-        f"Verified {package.name}: payload, desktop entry, bundled libraries, FUSE-free launch"
+        f"Verified {package.name}: payload, bundled glibc/loader, static runtime, FUSE-free launch"
     )
 
 

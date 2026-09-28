@@ -221,28 +221,83 @@ def copy_rpm_library_licenses(payload, cache):
                 shutil.copyfile(notice, destination)
 
 
+def find_library(name, cache, architecture):
+    for candidate in re.findall(
+        rf"^\s*{re.escape(name)} .* => (.+)$", cache, re.MULTILINE
+    ):
+        path = Path(candidate)
+        with path.open("rb") as library:
+            header = library.read(20)
+        if (
+            header[:6] == b"\x7fELF\x02\x01"
+            and struct.unpack("<H", header[18:20])[0] == ARCHITECTURES[architecture][1]
+        ):
+            return path
+    raise ValueError(f"Missing AppImage runtime library: {name}")
+
+
+def bundle_glibc(payload):
+    # Run as a linuxdeploy input plugin, after its ELF rewriting pass. The loader
+    # and glibc must remain unmodified and come from the same build system.
+    cache = subprocess.check_output(["ldconfig", "-p"], text=True)
+    architecture = platform.machine()
+    libc = find_library("libc.so.6", cache, architecture)
+    interpreter = Path(
+        subprocess.check_output(
+            ["patchelf", "--print-interpreter", payload / "usr/bin/xuan"], text=True
+        ).strip()
+    )
+    destination = payload / "usr/lib/glibc"
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(interpreter, destination / interpreter.name)
+    (destination / "ld-linux.so.2").symlink_to(interpreter.name)
+    for name in (
+        "libc.so.6",
+        "libm.so.6",
+        "libdl.so.2",
+        "libpthread.so.0",
+        "librt.so.1",
+        "libresolv.so.2",
+        "libutil.so.1",
+        "libanl.so.1",
+    ):
+        shutil.copy2(find_library(name, cache, architecture), destination / name)
+    # Older glibc releases use separate modules for local users and DNS.
+    for name in ("libnss_files.so.2", "libnss_dns.so.2"):
+        if re.search(rf"^\s*{re.escape(name)} ", cache, re.MULTILINE):
+            shutil.copy2(find_library(name, cache, architecture), destination / name)
+    (destination / "version").write_text(
+        os.confstr("CS_GNU_LIBC_VERSION").split()[1] + "\n"
+    )
+    (destination / "system-loader").write_text(str(interpreter) + "\n")
+
+    notices = payload / "usr/share/licenses/glibc"
+    notices.mkdir(parents=True, exist_ok=True)
+    if Path("/etc/debian_version").exists():
+        shutil.copy2("/usr/share/doc/libc6/copyright", notices / "copyright")
+    else:
+        files = subprocess.check_output(
+            ["rpm", "-qL", "-f", libc], text=True
+        ).splitlines()
+        for name in files:
+            path = Path(name)
+            if path.is_file():
+                shutil.copy2(path, notices / path.name)
+    if not any(notices.iterdir()):
+        raise ValueError("Missing glibc license notices")
+    for path in (*destination.iterdir(), *notices.iterdir()):
+        path.chmod(0o755 if path.name.startswith("ld-") else 0o644)
+
+
 def build_appimage(payload, output, version, architecture):
     # These libraries are opened with dlopen, so ELF dependency scanning misses them.
     # Keep the Vulkan loader and GPU drivers on the host.
     cache = subprocess.check_output(["ldconfig", "-p"], text=True)
     libraries = []
-    for name in RPM_LIBRARIES:
+    for name in [*RPM_LIBRARIES, "libgcc_s.so.1"]:
         if name == "libvulkan.so.1":
             continue
-        for candidate in re.findall(
-            rf"^\s*{re.escape(name)} .* => (.+)$", cache, re.MULTILINE
-        ):
-            with Path(candidate).open("rb") as library:
-                header = library.read(20)
-            if (
-                header[:6] == b"\x7fELF\x02\x01"
-                and struct.unpack("<H", header[18:20])[0]
-                == ARCHITECTURES[architecture][1]
-            ):
-                libraries.extend(("--library", candidate))
-                break
-        else:
-            raise ValueError(f"Missing AppImage runtime library: {name}")
+        libraries.extend(("--library", str(find_library(name, cache, architecture))))
     environment = {
         **os.environ,
         "ARCH": architecture,
@@ -253,6 +308,7 @@ def build_appimage(payload, output, version, architecture):
         "NO_STRIP": "1",  # The staged executable is already stripped.
         "LDAI_OUTPUT": str(output),
         "LDAI_NO_APPSTREAM": "1",
+        "PATH": f"{ROOT / 'scripts'}{os.pathsep}{os.environ['PATH']}",
     }
     subprocess.run(
         [
@@ -272,7 +328,15 @@ def build_appimage(payload, output, version, architecture):
     )
     copy_rpm_library_licenses(payload, cache)
     subprocess.run(
-        ["linuxdeploy", "--appdir", payload, "--output", "appimage"],
+        [
+            "linuxdeploy",
+            "--appdir",
+            payload,
+            "--plugin",
+            "xuan",
+            "--output",
+            "appimage",
+        ],
         env=environment,
         check=True,
     )
@@ -284,11 +348,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     formats = ("deb", "rpm", "appimage", "all")
     parser.add_argument("--check-tools", choices=formats)
+    parser.add_argument("--bundle-glibc", type=Path)
     parser.add_argument("format", nargs="?", choices=formats)
     parser.add_argument("stage", nargs="?", type=Path)
     parser.add_argument("version", nargs="?")
     parser.add_argument("output", nargs="?", type=Path)
     args = parser.parse_args()
+    if args.bundle_glibc:
+        bundle_glibc(args.bundle_glibc)
+        return
     if args.check_tools:
         check_tools(args.check_tools)
         return
@@ -306,10 +374,10 @@ def main():
         formats = ("deb", "rpm", "appimage") if args.format == "all" else (args.format,)
         for package_format in formats:
             extension = "AppImage" if package_format == "appimage" else package_format
-            output = (
-                args.output.resolve()
-                / f"xuan-{args.version}-linux-{architecture}.{extension}"
-            )
+            name = f"xuan-{args.version}"
+            if package_format != "appimage":
+                name += "-linux"
+            output = args.output.resolve() / f"{name}-{architecture}.{extension}"
             if package_format == "deb":
                 build_deb(payload, output, version, architecture, glibc)
             elif package_format == "rpm":

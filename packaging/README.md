@@ -6,6 +6,8 @@ On Windows, extract the entire ZIP and double-click `xuan.exe`, or run `.\xuan.e
 
 On Linux, launch Xuan from your application menu or run `xuan --demo`. In a portable Linux archive, run `bin/xuan` directly or use `scripts/install.sh` to install under `~/.local`.
 
+Native Linux releases require glibc 2.35 or newer. The AppImage includes glibc and its loader for older systems.
+
 For an AppImage, make the downloaded file executable with `chmod +x xuan-*.AppImage`, then run `./xuan-*.AppImage --demo`. If FUSE is unavailable, add `--appimage-extract-and-run` before `--demo`.
 
 - [Installation and editing](../docs/USAGE.md)

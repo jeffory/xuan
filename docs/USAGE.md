@@ -29,11 +29,13 @@ Get-Content .\xuan-<version>-windows-x86_64.zip.sha256
 For a standalone AppImage, make the downloaded file executable and launch it:
 
 ```sh
-chmod +x xuan-<version>-linux-x86_64.AppImage
-./xuan-<version>-linux-x86_64.AppImage --demo
+chmod +x xuan-<version>-x86_64.AppImage
+./xuan-<version>-x86_64.AppImage --demo
 ```
 
-Replace `<version>` with the downloaded version. The AppImage bundles Xuan and its X11/Wayland client libraries; it needs no installation or administrator access. It still uses your system's glibc, Vulkan loader, graphics drivers, and desktop portal. Release AppImages target Ubuntu 24.04 (glibc **2.39**) and compatible newer distributions. If FUSE is unavailable, run `./xuan-<version>-linux-x86_64.AppImage --appimage-extract-and-run --demo`. To remove it, delete the AppImage. It does not install a launcher or file associations.
+Replace `<version>` with the downloaded version. The AppImage bundles Xuan, its X11/Wayland client libraries, glibc, and a matching dynamic loader; it needs no installation or administrator access. It can run on systems with older glibc, including Ubuntu 20.04. Your system still supplies the Vulkan loader, graphics drivers, and desktop portal. On systems with a newer glibc than the bundled copy, the launcher uses the system's matching libc and loader to support newer graphics drivers. If FUSE is unavailable, run `./xuan-<version>-x86_64.AppImage --appimage-extract-and-run --demo`. To remove it, delete the AppImage. It does not install a launcher or file associations.
+
+Native Linux releases (`.deb`, `.rpm`, and `.tar.gz`) require glibc **2.35** or newer, as provided by Ubuntu 22.04. Use the AppImage on older distributions.
 
 On Debian or Ubuntu, install the downloaded `.deb` with APT so runtime dependencies are installed too:
 
