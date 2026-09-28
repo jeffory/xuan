@@ -215,7 +215,17 @@ impl GpuCompositor {
                 label: Some("xuan composite frame"),
             });
         let mut buffers = self.buffers.clone();
-        clear_composite(&mut encoder, &buffers[0]);
+        let mut params = Parameters::zeroed();
+        params.canvas = [
+            size[0] as f32,
+            size[1] as f32,
+            document.width as f32,
+            document.height as f32,
+        ];
+        params.flags[1] = 102;
+        // Clear through storage writes too: older Mesa drivers can retain stale
+        // pixels when a render-pass clear follows compute writes to this texture.
+        self.dispatch(&mut encoder, &buffers, 1, &self.blank, &self.blank, &params);
         let mut current = 0;
         let mut groups = Vec::new();
         let mut group_depth = 0;
@@ -412,13 +422,6 @@ impl GpuCompositor {
             );
             current = 1 - current;
         }
-        let mut params = Parameters::zeroed();
-        params.canvas = [
-            size[0] as f32,
-            size[1] as f32,
-            document.width as f32,
-            document.height as f32,
-        ];
         params.flags[1] = if straight_output { 101 } else { 100 };
         self.dispatch(
             &mut encoder,
@@ -541,25 +544,6 @@ impl GpuCompositor {
         pass.set_bind_group(0, &bind, &[]);
         pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
     }
-}
-
-fn clear_composite(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
-    let view = texture.create_view(&Default::default());
-    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("clear composition"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &view,
-            resolve_target: None,
-            depth_slice: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        occlusion_query_set: None,
-        timestamp_writes: None,
-    });
 }
 
 fn target(
@@ -803,6 +787,35 @@ impl Processor {
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    #[ignore = "requires a Vulkan or OpenGL compute adapter"]
+    fn repeated_composition_clears_previous_pixels() {
+        let instance = wgpu::Instance::new(&Default::default());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut compositor = GpuCompositor::new(device, queue);
+
+        for (width, height) in [(7, 1), (12, 10), (65, 33)] {
+            let mut document = Document::new(width, height).unwrap();
+            document.layers = vec![
+                Layer::image(
+                    "Translucent source",
+                    RgbaImage::from_pixel(width, height, Rgba([51, 102, 153, 99])),
+                ),
+                // Two layers write to both ping-pong buffers before the next clear.
+                Layer::image("Transparent source", RgbaImage::new(width, height)),
+            ];
+            for _ in 0..3 {
+                compositor.render(&document, [width, height]);
+                compare(&document, &readback(&compositor), "Repeated frame");
+            }
+            document.layers[0].visible = false;
+            compositor.render(&document, [width, height]);
+            assert!(readback(&compositor).iter().all(|byte| *byte == 0));
+        }
+    }
 
     #[test]
     #[ignore = "requires a Vulkan or OpenGL compute adapter"]

@@ -52,6 +52,10 @@ fn sample_motion_blur(uv: vec2<f32>) -> vec4<f32> {
 fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
     if any(id.xy >= vec2<u32>(params.canvas.xy)) { return; }
     let position = vec2<i32>(id.xy);
+    if params.flags.y == 102u {
+        textureStore(output, position, vec4(0.0));
+        return;
+    }
     let dst = textureLoad(previous, position, 0);
     if params.flags.y >= 100u {
         textureStore(display, position, select(vec4(dst.rgb * dst.a, dst.a), dst, params.flags.y == 101u));
