@@ -51,6 +51,7 @@ enum WorkerResult {
         side: u32,
         interactive: bool,
         crop: [f32; 4],
+        quarter_turns: u8,
         preview: Box<PreparedPreview>,
         before: Option<PreviewImage>,
     },
@@ -240,6 +241,14 @@ impl Develop {
         self.last_change = Instant::now();
         self.error = None;
         self.notice = None;
+    }
+
+    pub fn rotate(&mut self, clockwise: bool) {
+        self.settings.quarter_turns =
+            (self.settings.quarter_turns + if clockwise { 1 } else { 3 }) % 4;
+        self.pan = Vec2::ZERO;
+        self.canvas_drag = None;
+        self.last_brush_point = None;
     }
 
     fn update_preview_resolution(&mut self, ctx: &egui::Context) {
@@ -597,6 +606,7 @@ impl EditorApp {
                         side,
                         interactive,
                         crop,
+                        quarter_turns,
                         preview,
                         before,
                     }) => {
@@ -609,7 +619,10 @@ impl EditorApp {
                             && develop
                                 .rendered_revision
                                 .is_none_or(|previous| revision > previous);
-                        if (current || progressing) && crop == develop.settings.crop {
+                        if (current || progressing)
+                            && crop == develop.settings.crop
+                            && quarter_turns == develop.settings.quarter_turns
+                        {
                             if let Some(before) = before {
                                 develop.before =
                                     Some(before.register(ctx, self.gpu_state.as_ref()));
@@ -714,6 +727,7 @@ impl EditorApp {
                             side,
                             interactive,
                             crop: settings.crop,
+                            quarter_turns: settings.quarter_turns,
                             preview: Box::new(preview),
                             before,
                         })
@@ -839,6 +853,12 @@ impl EditorApp {
                     );
                     ui.add_enabled_ui(interactive, |ui| {
                         export = widgets::button(ui, "16-bit TIFF…").clicked();
+                        if super::icons::rotate_button(ui, false).clicked() {
+                            d.rotate(false);
+                        }
+                        if super::icons::rotate_button(ui, true).clicked() {
+                            d.rotate(true);
+                        }
                     });
                     ui.separator();
                     ui.add_enabled_ui(interactive, |ui| {
@@ -881,17 +901,22 @@ impl EditorApp {
                     tr("RAW embedded · 32-bit float processing · sRGB photo layer")
                 });
                 if let Some(asset) = &d.asset {
+                    let [width, height] = d
+                        .settings
+                        .output_size([asset.metadata.width, asset.metadata.height]);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(format!(
                             "{} × {} · {}",
-                            asset.metadata.width,
-                            asset.metadata.height,
-                            if d.full
-                                .as_ref()
-                                .zip(d.texture.as_ref())
-                                .is_some_and(|(full, texture)| texture.size_vec2()
-                                    == crop_rect(full, &d.settings).size())
-                            {
+                            width,
+                            height,
+                            if d.full.as_ref().zip(d.texture.as_ref()).is_some_and(
+                                |(full, texture)| {
+                                    let [width, height] = d
+                                        .settings
+                                        .output_size([full.camera.width(), full.camera.height()]);
+                                    texture.size_vec2() == vec2(width as f32, height as f32)
+                                }
+                            ) {
                                 tr("Full resolution")
                             } else {
                                 tr("Preview")
@@ -1050,13 +1075,39 @@ fn loaded(
     })
 }
 
+fn draw_rotated_original(
+    painter: &egui::Painter,
+    texture: egui::TextureId,
+    rect: Rect,
+    crop: Rect,
+    quarter_turns: u8,
+) {
+    let mut mesh = egui::Mesh::with_texture(texture);
+    mesh.add_rect_with_uv(
+        rect,
+        Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    for vertex in &mut mesh.vertices {
+        let point = raw::rotate_point(
+            Point::new(vertex.uv.x, vertex.uv.y),
+            (4 - quarter_turns) % 4,
+        );
+        vertex.uv = crop.min + vec2(point.x, point.y) * crop.size();
+    }
+    painter.add(mesh);
+}
+
 fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, interactive: bool) {
     let (viewport, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let before = d.before.as_ref().unwrap_or(&texture);
     let full = d.full.as_ref().unwrap();
     let source = crop_rect(full, &d.settings);
     // Keep zoom and pan independent of the texture while a sharper render arrives.
-    let image_size = source.size() / ui.pixels_per_point();
+    let [width, height] = d
+        .settings
+        .output_size([full.camera.width(), full.camera.height()]);
+    let image_size = vec2(width as f32, height as f32) / ui.pixels_per_point();
     let side_by_side = d.compare == Compare::SideBySide;
     let available = vec2(
         viewport.width() / if side_by_side { 2.0 } else { 1.0 },
@@ -1117,9 +1168,22 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
     } else {
         &texture
     };
+    let original = |painter: &egui::Painter, rect: Rect| {
+        if d.before.is_some() {
+            draw_rotated_original(
+                painter,
+                before.id(),
+                rect,
+                original_uv,
+                d.settings.quarter_turns,
+            );
+        } else {
+            painter.image(texture.id(), rect, uv, Color32::WHITE);
+        }
+    };
     match d.compare {
         Compare::Original => {
-            painter.image(before.id(), rect, original_uv, Color32::WHITE);
+            original(&painter, rect);
         }
         Compare::Edited => {
             painter.image(shown.id(), rect, uv, Color32::WHITE);
@@ -1133,12 +1197,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
             }
             let original_viewport =
                 Rect::from_min_max(viewport.min, pos2(viewport.center().x, viewport.bottom()));
-            painter.with_clip_rect(original_viewport).image(
-                before.id(),
-                original_rect,
-                original_uv,
-                Color32::WHITE,
-            );
+            original(&painter.with_clip_rect(original_viewport), original_rect);
             painter
                 .with_clip_rect(edited_viewport)
                 .image(shown.id(), rect, uv, Color32::WHITE);
@@ -1147,9 +1206,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
             painter.image(shown.id(), rect, uv, Color32::WHITE);
             let x = rect.left() + rect.width() * d.split;
             let clip = Rect::from_min_max(rect.min, pos2(x, rect.bottom())).intersect(viewport);
-            painter
-                .with_clip_rect(clip)
-                .image(before.id(), rect, original_uv, Color32::WHITE);
+            original(&painter.with_clip_rect(clip), rect);
             painter.line_segment(
                 [pos2(x, rect.top()), pos2(x, rect.bottom())],
                 Stroke::new(1.5_f32, Color32::WHITE),
@@ -1206,14 +1263,10 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
         .interact_pointer_pos()
         .filter(|p| rect.contains(*p) && edited_viewport.contains(*p))
         .map(|p| {
-            Point::new(
-                d.settings.crop[0]
-                    + (p.x - rect.left()) / rect.width()
-                        * (d.settings.crop[2] - d.settings.crop[0]),
-                d.settings.crop[1]
-                    + (p.y - rect.top()) / rect.height()
-                        * (d.settings.crop[3] - d.settings.crop[1]),
-            )
+            d.settings.image_point(Point::new(
+                (p.x - rect.left()) / rect.width(),
+                (p.y - rect.top()) / rect.height(),
+            ))
         });
     let other_brush_points: usize = d
         .settings
@@ -1324,13 +1377,10 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
     {
         let painter = painter.with_clip_rect(edited_viewport);
         let to_screen = |p: Point| {
+            let p = d.settings.display_point(p);
             pos2(
-                rect.left()
-                    + (p.x - d.settings.crop[0]) / (d.settings.crop[2] - d.settings.crop[0])
-                        * rect.width(),
-                rect.top()
-                    + (p.y - d.settings.crop[1]) / (d.settings.crop[3] - d.settings.crop[1])
-                        * rect.height(),
+                rect.left() + p.x * rect.width(),
+                rect.top() + p.y * rect.height(),
             )
         };
         let stroke = Stroke::new(1.5_f32, Color32::from_rgb(255, 185, 75));
@@ -1338,7 +1388,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
             for point in &overlay.points {
                 painter.circle_stroke(
                     to_screen(*point),
-                    overlay.radius * rect.height() / (d.settings.crop[3] - d.settings.crop[1]),
+                    overlay.radius * full.camera.height() as f32 * d.zoom / ui.pixels_per_point(),
                     stroke,
                 );
             }
@@ -2156,6 +2206,7 @@ mod tests {
         let d = app.develop.as_mut().unwrap();
         d.settings.brightness = 12.34;
         d.settings.rotation = 1.25;
+        d.settings.quarter_turns = 3;
         // Presets can contain valid brush radii outside the control's edit range.
         d.settings.overlays = [0.002, 0.75]
             .map(|radius| raw::Overlay {
@@ -2194,6 +2245,92 @@ mod tests {
         assert!(d.undo.is_empty());
         app.develop.as_mut().unwrap().undo(true);
         assert_eq!(app.develop.as_ref().unwrap().settings.exposure, 1.0);
+    }
+
+    #[test]
+    fn raw_rotate_buttons_are_undoable_and_commit_swapped_dimensions() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        app.develop = Some(ready(&ctx));
+        app.develop.as_mut().unwrap().panel = 3;
+        click_text(&ctx, &mut app, "Rotate right 90°");
+        assert_eq!(app.develop.as_ref().unwrap().settings.quarter_turns, 1);
+        app.command("undo");
+        assert_eq!(app.develop.as_ref().unwrap().settings.quarter_turns, 0);
+        app.command("redo");
+        assert_eq!(app.develop.as_ref().unwrap().settings.quarter_turns, 1);
+        click_text(&ctx, &mut app, "Rotate left 90°");
+        assert_eq!(app.develop.as_ref().unwrap().settings.quarter_turns, 0);
+        click_text(&ctx, &mut app, "Rotate left 90°");
+        assert_eq!(app.develop.as_ref().unwrap().settings.quarter_turns, 3);
+        click_text(&ctx, &mut app, "Develop");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.develop.is_some() {
+            assert!(Instant::now() < deadline);
+            app.poll_develop(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let doc = &app.session().unwrap().document;
+        assert_eq!((doc.width, doc.height), (48, 64));
+        assert_eq!(
+            doc.layers[0].pixels.as_ref().unwrap().dimensions(),
+            (48, 64)
+        );
+        assert_eq!(
+            doc.layers[0].raw.as_ref().unwrap().settings.quarter_turns,
+            3
+        );
+    }
+
+    #[test]
+    fn rotated_original_and_edited_views_use_the_same_portrait_geometry() {
+        let ctx = egui::Context::default();
+        let mut d = ready(&ctx);
+        d.settings.quarter_turns = 1;
+        d.settings.crop = [0.25, 0.0, 1.0, 1.0];
+        d.view_command("actual");
+        for compare in [
+            Compare::Edited,
+            Compare::Original,
+            Compare::Split,
+            Compare::SideBySide,
+        ] {
+            d.compare = compare;
+            let output = canvas_frame(&ctx, &mut d, vec![]);
+            let id = if compare == Compare::Original {
+                d.before.as_ref().unwrap().id()
+            } else {
+                d.texture.as_ref().unwrap().id()
+            };
+            assert_eq!(image_rect(&output, id).size(), vec2(48.0, 48.0));
+            if compare != Compare::Edited {
+                let original = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Mesh(mesh)
+                            if mesh.texture_id == d.before.as_ref().unwrap().id() =>
+                        {
+                            Some(mesh)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let top_left = original
+                    .vertices
+                    .iter()
+                    .find(|v| v.pos == original.calc_bounds().min)
+                    .unwrap();
+                assert_eq!(top_left.uv, pos2(0.25, 1.0));
+            }
+        }
+        d.settings.crop = [0.0, 0.0, 1.0, 1.0];
+        d.compare = Compare::Edited;
+        let texture = d.texture.as_ref().unwrap().id();
+        assert_eq!(
+            image_rect(&canvas_frame(&ctx, &mut d, vec![]), texture).size(),
+            vec2(48.0, 64.0)
+        );
     }
 
     #[test]
@@ -2259,6 +2396,7 @@ mod tests {
             side: 1,
             interactive: false,
             crop: d.settings.crop,
+            quarter_turns: d.settings.quarter_turns,
             preview: Box::new(
                 PreparedPreview::cpu(RgbaImage::new(1, 1), false, &AtomicBool::new(false)).unwrap(),
             ),
@@ -2568,6 +2706,7 @@ mod tests {
             side: 64,
             interactive: true,
             crop: d.settings.crop,
+            quarter_turns: d.settings.quarter_turns,
             preview: Box::new(
                 PreparedPreview::cpu(pixels.clone(), false, &AtomicBool::new(false)).unwrap(),
             ),

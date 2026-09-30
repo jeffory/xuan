@@ -304,6 +304,18 @@ fn processing_raw_matches_cpu_at_both_depths() {
         DevelopSettings::default(),
         settings.clone(),
         DevelopSettings {
+            quarter_turns: 1,
+            ..settings.clone()
+        },
+        DevelopSettings {
+            quarter_turns: 2,
+            ..settings.clone()
+        },
+        DevelopSettings {
+            quarter_turns: 3,
+            ..settings.clone()
+        },
+        DevelopSettings {
             negative: NegativeSettings {
                 enabled: true,
                 film_base: [0.9, 0.5, 0.2],
@@ -319,10 +331,10 @@ fn processing_raw_matches_cpu_at_both_depths() {
             ..settings
         },
     ] {
-        let [l, t, r, b] = super::raw_crop(&s, [89, 67]);
+        let [width, height] = s.output_size([89, 67]);
         let actual = RgbaImage::from_raw(
-            r - l,
-            b - t,
+            width,
+            height,
             gpu.develop(&raw, &s, raw.as_shot, 8, &cancel).unwrap(),
         )
         .unwrap();
@@ -1107,9 +1119,10 @@ fn processing_resident_raw_previews_match_output_and_keep_old_frames_immutable()
         1,
     );
     assert!(first.warnings.is_none());
-    for exposure in [-0.7, 1.2, 0.0] {
+    for (i, exposure) in [-0.7, 1.2, 0.0].into_iter().enumerate() {
         let settings = DevelopSettings {
             exposure,
+            quarter_turns: i as u8 + 1,
             rotation: 17.0,
             crop: [0.031, 0.017, 0.969, 0.94],
             clarity: 12.0,

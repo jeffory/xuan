@@ -478,6 +478,14 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
     );
     percent(ui, tr("Vignetting"), &mut d.settings.vignette);
     heading(ui, tr("Geometry"));
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Rotate left 90°")).clicked() {
+            d.rotate(false);
+        }
+        if widgets::button(ui, tr("Rotate right 90°")).clicked() {
+            d.rotate(true);
+        }
+    });
     slider(
         ui,
         tr("Straighten"),
@@ -489,39 +497,20 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
     percent(ui, tr("Vertical"), &mut d.settings.perspective[1]);
     heading(ui, tr("Crop"));
     ui.label(
-        egui::RichText::new(tr("Bounds as a fraction of the original image"))
+        egui::RichText::new(tr("Bounds as a fraction of the rotated image"))
             .small()
             .color(theme::MUTED),
     );
-    let [left, top, right, bottom] = d.settings.crop;
-    slider(
-        ui,
-        tr("Left"),
-        &mut d.settings.crop[0],
-        0.0..=(right - 0.01),
-        "",
-    );
-    slider(
-        ui,
-        tr("Top"),
-        &mut d.settings.crop[1],
-        0.0..=(bottom - 0.01),
-        "",
-    );
-    slider(
-        ui,
-        tr("Right"),
-        &mut d.settings.crop[2],
-        (left + 0.01)..=1.0,
-        "",
-    );
-    slider(
-        ui,
-        tr("Bottom"),
-        &mut d.settings.crop[3],
-        (top + 0.01)..=1.0,
-        "",
-    );
+    let mut crop = d.settings.display_crop();
+    let original_crop = crop;
+    let [left, top, right, bottom] = crop;
+    slider(ui, tr("Left"), &mut crop[0], 0.0..=(right - 0.01), "");
+    slider(ui, tr("Top"), &mut crop[1], 0.0..=(bottom - 0.01), "");
+    slider(ui, tr("Right"), &mut crop[2], (left + 0.01)..=1.0, "");
+    slider(ui, tr("Bottom"), &mut crop[3], (top + 0.01)..=1.0, "");
+    if crop != original_crop {
+        d.settings.set_display_crop(crop);
+    }
     ui.horizontal(|ui| {
         if widgets::button(ui, tr("Uncrop")).clicked() {
             d.settings.crop = [0.0, 0.0, 1.0, 1.0];

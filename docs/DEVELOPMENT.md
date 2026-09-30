@@ -163,6 +163,11 @@ cargo run --locked -- /path/to/photo.CR3 --screenshot /tmp/develop.png
 
 `XUAN_TEST_RAW_PREVIEW=/tmp/preview.png` optionally writes the engine test's default preview. The sample checks cover full-resolution rendering, project save/load, reopening Develop and cancellation. Verified samples include Nikon Z6 III NEF (4032 × 6048 after orientation) and Canon EOS M50 Mark II CR3 (4000 × 6000 after orientation). `XUAN_TEST_NEF` remains accepted as a fallback for existing local test commands.
 
+Set `XUAN_TEST_RAW_QUARTER_TURNS=1` (or 2/3) to include clockwise quarter turns
+in the engine sample roundtrip and its optional preview. Rotation regressions
+also compare exact CPU pixel placement at 8/16 bits, GPU output and resident
+previews, crop/picker coordinates, before/after alignment, and Develop Undo/Redo.
+
 RAF/ARW verification also covers these seven local samples through both the engine
 roundtrip and the Develop commit/reopen/cancel tests:
 

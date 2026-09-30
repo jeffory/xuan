@@ -245,7 +245,15 @@ fn raw_encode(@builtin(global_invocation_id) id: vec3<u32>) {
     if (any(id.xy >= size)) {
         return;
     }
-    let source = id.xy + vec2<u32>(config[13].xy);
+    let crop_size = vec2<u32>(config[15].xy);
+    var point = id.xy;
+    switch u32(config[15].z) {
+        case 1u: { point = vec2(id.y, crop_size.y - 1u - id.x); }
+        case 2u: { point = crop_size - 1u - id.xy; }
+        case 3u: { point = vec2(crop_size.x - 1u - id.y, id.x); }
+        default: {}
+    }
+    let source = point + vec2<u32>(config[13].xy);
     var p = load_float(source.y * u32(config[0].x) + source.x);
     // Native preview textures use egui's premultiplied alpha convention.
     if (config[14].z != 0.0) {

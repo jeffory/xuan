@@ -413,9 +413,11 @@ Manual lens correction	手动镜头校正
 Defringe	去边缘色差
 Geometry	几何
 Straighten	拉直
+Rotate left 90°	向左旋转 90°
+Rotate right 90°	向右旋转 90°
 Horizontal	水平
 Vertical	垂直
-Bounds as a fraction of the original image	以原始图像的比例设置边界
+Bounds as a fraction of the rotated image	以旋转后图像的比例设置边界
 Uncrop	取消裁剪
 Square	正方形
 Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.	镜头校正需手动调整。照片编辑器目前使用 8 位 sRGB；RAW 数据和冲洗设置保留原始精度。

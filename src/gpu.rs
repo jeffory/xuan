@@ -15,7 +15,7 @@ pub(crate) use paint::{
     FilterSelection, Paint, Stroke, adjust_mask, filter_selection, match_colors, paint,
     project_selection, shape, stroke,
 };
-pub(crate) use raw::{crop as raw_crop, develop};
+pub(crate) use raw::develop;
 pub use raw_preview::{RawPreview, RawPreviewRenderer};
 #[cfg(test)]
 mod filter_layer_tests;

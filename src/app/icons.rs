@@ -133,6 +133,30 @@ pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
     response
 }
 
+pub fn rotate_button(ui: &mut Ui, clockwise: bool) -> egui::Response {
+    let label = if clockwise {
+        tr("Rotate right 90°")
+    } else {
+        tr("Rotate left 90°")
+    };
+    let response = ui.add(super::widgets::Button::new("").min_size(vec2(30.0, 22.0)));
+    let source = if clockwise {
+        egui::include_image!("../../assets/svg/rotate-right.svg")
+    } else {
+        egui::include_image!("../../assets/svg/rotate-left.svg")
+    };
+    svg(
+        ui,
+        source,
+        Rect::from_center_size(response.rect.center(), Vec2::splat(16.0)),
+        theme::TEXT,
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    response.on_hover_text(label)
+}
+
 pub fn lock(ui: &mut Ui, locked: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(16.0, 22.0), egui::Sense::click());
     let source = if locked {

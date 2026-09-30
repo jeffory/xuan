@@ -96,6 +96,9 @@ pub struct DevelopSettings {
     pub chromatic_blue: f32,
     pub defringe: f32,
     pub vignette: f32,
+    /// Clockwise quarter turns applied after development and cropping.
+    pub quarter_turns: u8,
+    /// Fine straightening in degrees, before cropping.
     pub rotation: f32,
     pub perspective: [f32; 2],
     /// Left, top, right, bottom in normalized oriented image coordinates.
@@ -140,6 +143,7 @@ impl Default for DevelopSettings {
             chromatic_blue: 0.0,
             defringe: 0.0,
             vignette: 0.0,
+            quarter_turns: 0,
             rotation: 0.0,
             perspective: [0.0; 2],
             crop: [0.0, 0.0, 1.0, 1.0],
@@ -157,6 +161,60 @@ fn range(value: f32, min: f32, max: f32) -> Result<()> {
 }
 
 impl DevelopSettings {
+    pub fn crop_pixels(&self, size: [u32; 2]) -> [u32; 4] {
+        [
+            (self.crop[0] * size[0] as f32).floor() as u32,
+            (self.crop[1] * size[1] as f32).floor() as u32,
+            (self.crop[2] * size[0] as f32).ceil().min(size[0] as f32) as u32,
+            (self.crop[3] * size[1] as f32).ceil().min(size[1] as f32) as u32,
+        ]
+    }
+
+    pub fn output_size(&self, source: [u32; 2]) -> [u32; 2] {
+        let [left, top, right, bottom] = self.crop_pixels(source);
+        if self.quarter_turns.is_multiple_of(2) {
+            [right - left, bottom - top]
+        } else {
+            [bottom - top, right - left]
+        }
+    }
+
+    /// Map an uncropped development coordinate to the rotated, cropped display.
+    pub fn display_point(&self, point: Point) -> Point {
+        rotate_point(
+            Point::new(
+                (point.x - self.crop[0]) / (self.crop[2] - self.crop[0]),
+                (point.y - self.crop[1]) / (self.crop[3] - self.crop[1]),
+            ),
+            self.quarter_turns,
+        )
+    }
+
+    pub fn image_point(&self, point: Point) -> Point {
+        let point = rotate_point(point, (4 - self.quarter_turns) % 4);
+        Point::new(
+            self.crop[0] + point.x * (self.crop[2] - self.crop[0]),
+            self.crop[1] + point.y * (self.crop[3] - self.crop[1]),
+        )
+    }
+
+    pub fn display_crop(&self) -> [f32; 4] {
+        rotate_crop(self.crop, self.quarter_turns)
+    }
+
+    pub fn set_display_crop(&mut self, crop: [f32; 4]) {
+        self.crop = rotate_crop(crop, (4 - self.quarter_turns) % 4);
+    }
+
+    pub(crate) fn crop_source_pixel(&self, x: u32, y: u32, size: [u32; 2]) -> [u32; 2] {
+        match self.quarter_turns {
+            1 => [y, size[1] - 1 - x],
+            2 => [size[0] - 1 - x, size[1] - 1 - y],
+            3 => [size[0] - 1 - y, x],
+            _ => [x, y],
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.negative.validate()?;
         range(self.temperature, 2000.0, 25_000.0)?;
@@ -192,6 +250,7 @@ impl DevelopSettings {
         range(self.sharpen_radius, 0.3, 5.0)?;
         range(self.sharpen_threshold, 0.0, 1.0)?;
         range(self.rotation, -45.0, 45.0)?;
+        ensure!(self.quarter_turns < 4, "Invalid RAW rotation");
         for value in self.perspective {
             range(value, -100.0, 100.0)?;
         }
@@ -236,4 +295,20 @@ impl DevelopSettings {
         ensure!(points <= 8192, "Too many RAW brush points (maximum 8192)");
         Ok(())
     }
+}
+
+/// Rotate normalized coordinates clockwise, including coordinates outside the image.
+pub fn rotate_point(point: Point, quarter_turns: u8) -> Point {
+    match quarter_turns % 4 {
+        1 => Point::new(1.0 - point.y, point.x),
+        2 => Point::new(1.0 - point.x, 1.0 - point.y),
+        3 => Point::new(point.y, 1.0 - point.x),
+        _ => point,
+    }
+}
+
+pub(super) fn rotate_crop(crop: [f32; 4], quarter_turns: u8) -> [f32; 4] {
+    let a = rotate_point(Point::new(crop[0], crop[1]), quarter_turns);
+    let b = rotate_point(Point::new(crop[2], crop[3]), quarter_turns);
+    [a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)]
 }

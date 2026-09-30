@@ -167,9 +167,8 @@ pub fn render(
     cancel: &AtomicBool,
 ) -> Result<RgbaImage> {
     if let Some(bytes) = accelerated(raw, settings, cancel, 8)? {
-        let [l, t, r, b] =
-            crate::gpu::raw_crop(settings, [raw.camera.width(), raw.camera.height()]);
-        return Ok(RgbaImage::from_raw(r - l, b - t, bytes).unwrap());
+        let [width, height] = settings.output_size([raw.camera.width(), raw.camera.height()]);
+        return Ok(RgbaImage::from_raw(width, height, bytes).unwrap());
     }
     render_at_depth(raw, settings, cancel, |v| (v * 255.0).round() as u8)
 }
@@ -180,15 +179,14 @@ pub fn render_16(
     cancel: &AtomicBool,
 ) -> Result<ImageBuffer<Rgba<u16>, Vec<u16>>> {
     if let Some(bytes) = accelerated(raw, settings, cancel, 16)? {
-        let [l, t, r, b] =
-            crate::gpu::raw_crop(settings, [raw.camera.width(), raw.camera.height()]);
+        let [width, height] = settings.output_size([raw.camera.width(), raw.camera.height()]);
         let pixels = bytes
             .as_chunks::<2>()
             .0
             .iter()
             .map(|p| u16::from_le_bytes([p[0], p[1]]))
             .collect();
-        return Ok(ImageBuffer::from_raw(r - l, b - t, pixels).unwrap());
+        return Ok(ImageBuffer::from_raw(width, height, pixels).unwrap());
     }
     render_at_depth(raw, settings, cancel, |v| (v * 65_535.0).round() as u16)
 }
@@ -360,11 +358,9 @@ where
         }
     }
     cancelled(cancel)?;
-    let left = (s.crop[0] * width as f32).floor() as u32;
-    let top = (s.crop[1] * height as f32).floor() as u32;
-    let right = (s.crop[2] * width as f32).ceil().min(width as f32) as u32;
-    let bottom = (s.crop[3] * height as f32).ceil().min(height as f32) as u32;
-    let mut output = ImageBuffer::<Rgba<T>, Vec<T>>::new(right - left, bottom - top);
+    let [left, top, right, bottom] = s.crop_pixels([width, height]);
+    let [out_width, out_height] = s.output_size([width, height]);
+    let mut output = ImageBuffer::<Rgba<T>, Vec<T>>::new(out_width, out_height);
     let out_width = output.width() as usize;
     output
         .as_mut()
@@ -373,7 +369,8 @@ where
         .try_for_each(|(y, row)| -> Result<()> {
             cancelled(cancel)?;
             for (x, p) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let rgb = image.get_pixel(left + x as u32, top + y as u32);
+                let [x, y] = s.crop_source_pixel(x as u32, y as u32, [right - left, bottom - top]);
+                let rgb = image.get_pixel(left + x, top + y);
                 for c in 0..3 {
                     p[c] = encode(rgb[c].clamp(0.0, 1.0));
                 }

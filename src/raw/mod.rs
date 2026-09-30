@@ -26,7 +26,7 @@ use crate::document::validate_size;
 pub use negative::{NegativeSettings, analyze_negative, sample_film_base};
 pub(crate) use process::white_balance;
 pub use process::{auto_exposure, render, render_16, sample_white_balance, source_point};
-pub use settings::{DevelopSettings, Overlay, OverlayKind, WhiteBalance};
+pub use settings::{DevelopSettings, Overlay, OverlayKind, WhiteBalance, rotate_point};
 
 pub const MAX_RAW_BYTES: u64 = 512 * 1024 * 1024;
 pub const EXTENSIONS: &[&str] = &["nef", "nrw", "cr2", "cr3", "crw", "raf", "arw"];
@@ -273,8 +273,16 @@ pub fn update_layer(
     validate_size(pixels.width(), pixels.height())?;
     // A new crop changes source bounds. Map it through the old placement so
     // uncropped content stays at its original document position and scale.
-    let old = layer.raw.as_ref().unwrap().settings.crop;
-    let new = asset.settings.crop;
+    let previous = &layer.raw.as_ref().unwrap().settings;
+    let old = previous.display_crop();
+    let new = settings::rotate_crop(asset.settings.crop, previous.quarter_turns);
+    let turns = (asset.settings.quarter_turns + 4 - previous.quarter_turns) % 4;
+    if old != new || turns != 0 {
+        // Document-space masks retain their alignment through RAW geometry edits.
+        if let Some(mask) = &mut layer.mask {
+            mask.placement = Some(mask.placement.unwrap_or(layer.transform));
+        }
+    }
     if old != new {
         let transform = layer.transform.expanded(
             (new[0] - old[0]) / (old[2] - old[0]),
@@ -282,11 +290,22 @@ pub fn update_layer(
             (new[2] - old[0]) / (old[2] - old[0]),
             (new[3] - old[1]) / (old[3] - old[1]),
         );
-        // Existing masks keep their document-space alignment through a RAW crop.
-        if let Some(mask) = &mut layer.mask {
-            mask.placement = Some(mask.placement.unwrap_or(layer.transform));
-        }
         layer.transform = transform;
+    }
+    if turns != 0 {
+        let transform = &mut layer.transform;
+        let center = transform.center();
+        if !turns.is_multiple_of(2) {
+            std::mem::swap(&mut transform.width, &mut transform.height);
+            std::mem::swap(&mut transform.flip_x, &mut transform.flip_y);
+        }
+        transform.x = center.x - transform.width * 0.5;
+        transform.y = center.y - transform.height * 0.5;
+        // Rotate the perspective placement with the image, retaining the layer's
+        // separate composition rotation and scale.
+        transform.warp = transform.warp.map(|quad| {
+            std::array::from_fn(|i| rotate_point(quad[(i + 4 - turns as usize) % 4], turns))
+        });
     }
     layer.raw = Some(asset);
     layer.pixels = Some(Arc::new(pixels));

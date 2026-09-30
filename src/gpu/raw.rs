@@ -55,9 +55,15 @@ impl Processor {
         let source = &work.source;
         let buffers = &work.pixels;
         let mut config = settings(raw, s, wb, depth);
-        let [left, top, right, bottom] = crop(s, size);
-        let target = [right - left, bottom - top];
+        let [left, top, right, bottom] = s.crop_pixels(size);
+        let target = s.output_size(size);
         config[13] = [left as f32, top as f32, target[0] as f32, target[1] as f32];
+        config[15] = [
+            (right - left) as f32,
+            (bottom - top) as f32,
+            s.quarter_turns as f32,
+            0.0,
+        ];
         let bytes = u64::from(target[0]) * u64::from(target[1]) * u64::from(depth / 2);
         let output = self.empty(bytes)?;
         ensure!(!cancel.load(Ordering::Relaxed), "RAW development cancelled");
@@ -172,15 +178,6 @@ impl Processor {
         }
         Ok((encoder, current))
     }
-}
-
-pub(crate) fn crop(s: &DevelopSettings, size: [u32; 2]) -> [u32; 4] {
-    [
-        (s.crop[0] * size[0] as f32).floor() as u32,
-        (s.crop[1] * size[1] as f32).floor() as u32,
-        (s.crop[2] * size[0] as f32).ceil().min(size[0] as f32) as u32,
-        (s.crop[3] * size[1] as f32).ceil().min(size[1] as f32) as u32,
-    ]
 }
 
 pub(super) fn settings(

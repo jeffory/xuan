@@ -1,4 +1,5 @@
 use super::*;
+use crate::document::Point;
 use image::Rgb;
 use std::sync::atomic::AtomicBool;
 
@@ -89,12 +90,77 @@ fn crop_and_local_adjustment_are_nondestructive() {
 }
 
 #[test]
+fn quarter_turns_rotate_the_complete_cropped_development_at_both_depths() {
+    let raw = synthetic();
+    let cancel = AtomicBool::new(false);
+    let mut settings = DevelopSettings {
+        crop: [0.13, 0.21, 0.92, 0.89],
+        rotation: 7.0,
+        overlays: vec![Overlay {
+            exposure: -1.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let before = render(&raw, &settings, &cancel).unwrap();
+    let before16 = render_16(&raw, &settings, &cancel).unwrap();
+    for turns in 1..4 {
+        settings.quarter_turns = turns;
+        let expected = match turns {
+            1 => image::imageops::rotate90(&before),
+            2 => image::imageops::rotate180(&before),
+            _ => image::imageops::rotate270(&before),
+        };
+        let expected16 = match turns {
+            1 => image::imageops::rotate90(&before16),
+            2 => image::imageops::rotate180(&before16),
+            _ => image::imageops::rotate270(&before16),
+        };
+        assert_eq!(render(&raw, &settings, &cancel).unwrap(), expected);
+        assert_eq!(render_16(&raw, &settings, &cancel).unwrap(), expected16);
+    }
+}
+
+#[test]
+fn rotated_crop_and_picker_coordinates_match_the_display() {
+    let mut settings = DevelopSettings {
+        crop: [0.125, 0.25, 0.875, 1.0],
+        ..Default::default()
+    };
+    for turns in 0..4 {
+        settings.quarter_turns = turns;
+        let point = Point::new(0.375, 0.625);
+        let display = settings.display_point(point);
+        assert!(settings.image_point(display).distance(point) < 1e-6);
+        let display_crop = settings.display_crop();
+        settings.set_display_crop(display_crop);
+        assert_eq!(settings.crop, [0.125, 0.25, 0.875, 1.0]);
+    }
+    settings.quarter_turns = 1;
+    assert_eq!(
+        settings.image_point(Point::new(0.0, 0.0)),
+        Point::new(0.125, 1.0)
+    );
+    assert_eq!(settings.output_size([64, 48]), [36, 48]);
+    settings.set_display_crop([0.25, 0.125, 1.0, 0.875]);
+    assert_eq!(settings.crop, [0.125, 0.0, 0.875, 0.75]);
+    let legacy: DevelopSettings = serde_json::from_str("{}").unwrap();
+    assert_eq!(legacy.quarter_turns, 0);
+    settings.quarter_turns = 4;
+    assert!(settings.validate().is_err());
+}
+
+#[test]
 #[ignore = "Set XUAN_TEST_RAW to a local camera file"]
 fn sample_raw_develop_roundtrip() {
     let path = std::env::var_os("XUAN_TEST_RAW")
         .or_else(|| std::env::var_os("XUAN_TEST_NEF"))
         .expect("Set XUAN_TEST_RAW");
-    let (asset, raw) = open(Path::new(&path)).unwrap();
+    let (mut asset, raw) = open(Path::new(&path)).unwrap();
+    if let Ok(turns) = std::env::var("XUAN_TEST_RAW_QUARTER_TURNS") {
+        asset.settings.quarter_turns = turns.parse().unwrap();
+        asset.settings.validate().unwrap();
+    }
     assert!(is_raw(Path::new(&path)));
     assert!(raw.camera.as_raw().iter().all(|v| v.is_finite()));
     println!(
@@ -108,11 +174,13 @@ fn sample_raw_develop_roundtrip() {
     }
     assert!(pixels.pixels().any(|p| p[0] != p[1]));
     let full = render(&raw, &asset.settings, &AtomicBool::new(false)).unwrap();
-    assert_eq!(full.dimensions(), (raw.metadata.width, raw.metadata.height));
+    let [width, height] = asset
+        .settings
+        .output_size([raw.metadata.width, raw.metadata.height]);
+    assert_eq!(full.dimensions(), (width, height));
     let mut layer = crate::document::Layer::image("RAW", full);
     layer.raw = Some(asset.clone());
-    let mut document =
-        crate::document::Document::new(raw.metadata.width, raw.metadata.height).unwrap();
+    let mut document = crate::document::Document::new(width, height).unwrap();
     document.select(layer.id, false);
     document.layers = vec![layer];
     let dir = tempfile::tempdir().unwrap();
@@ -271,6 +339,7 @@ fn raw_project_assets_settings_and_history_survive_roundtrip() {
         metadata: raw.metadata.clone(),
         settings: DevelopSettings {
             exposure: -0.5,
+            quarter_turns: 1,
             ..Default::default()
         },
         bytes: Arc::new(b"test fixture bytes".to_vec()),
@@ -380,6 +449,63 @@ fn raw_crop_preserves_the_placement_of_surviving_pixels() {
         .transform
         .point(crate::document::Point::new(0.25, 0.5));
     assert!(center_before.distance(center_after) < 0.001);
+}
+
+#[test]
+fn raw_redevelopment_rotates_placement_and_preserves_masks_and_later_crops() {
+    let raw = synthetic();
+    let asset = RawAsset {
+        filename: "test.RAF".into(),
+        metadata: raw.metadata,
+        settings: DevelopSettings::default(),
+        bytes: Arc::new(vec![1]),
+    };
+    let mut layer = crate::document::Layer::image("RAW", RgbaImage::new(64, 48));
+    layer.raw = Some(asset.clone());
+    layer.transform.rotation = 25.0;
+    layer.transform.flip_x = true;
+    layer.transform.warp = Some([
+        Point::new(0.1, 0.0),
+        Point::new(1.0, 0.2),
+        Point::new(0.9, 0.9),
+        Point::new(0.0, 1.0),
+    ]);
+    layer.mask = Some(crate::document::Mask::white());
+    let before = layer.transform;
+    for turns in 1..4 {
+        let mut rotated = layer.clone();
+        let mut asset = asset.clone();
+        asset.settings.quarter_turns = turns;
+        let [width, height] = asset.settings.output_size([64, 48]);
+        update_layer(&mut rotated, asset.clone(), RgbaImage::new(width, height)).unwrap();
+        assert_eq!(rotated.transform.center(), before.center());
+        assert_eq!(rotated.mask.as_ref().unwrap().placement, Some(before));
+        let point = Point::new(0.3, 0.6);
+        let old = before.point(point);
+        let center = before.center();
+        let (sin, cos) = (turns as f32 * 90.0).to_radians().sin_cos();
+        let expected = Point::new(
+            center.x + cos * (old.x - center.x) - sin * (old.y - center.y),
+            center.y + sin * (old.x - center.x) + cos * (old.y - center.y),
+        );
+        assert!(
+            rotated
+                .transform
+                .point(rotate_point(point, turns))
+                .distance(expected)
+                < 1e-4
+        );
+        asset.settings.crop = [0.25, 0.0, 0.75, 1.0];
+        let [width, height] = asset.settings.output_size([64, 48]);
+        update_layer(&mut rotated, asset.clone(), RgbaImage::new(width, height)).unwrap();
+        assert!(
+            rotated
+                .transform
+                .point(asset.settings.display_point(point))
+                .distance(expected)
+                < 1e-4
+        );
+    }
 }
 
 fn synthetic_negative() -> (DecodedRaw, NegativeSettings) {
@@ -529,8 +655,9 @@ fn sample_negative_raw_develop_roundtrip() {
     }
     assert!(pixels.pixels().any(|p| (25..230).contains(&p[0])));
     let full = render(&raw, &asset.settings, &cancel).unwrap();
-    let [left, top, right, bottom] =
-        crate::gpu::raw_crop(&asset.settings, [raw.camera.width(), raw.camera.height()]);
+    let [left, top, right, bottom] = asset
+        .settings
+        .crop_pixels([raw.camera.width(), raw.camera.height()]);
     assert_eq!(full.dimensions(), (right - left, bottom - top));
     let high = render_16(&proxy, &asset.settings, &cancel).unwrap();
     for (eight, sixteen) in pixels.as_raw().iter().zip(high.as_raw()) {
