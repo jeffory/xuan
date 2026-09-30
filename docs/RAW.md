@@ -1,6 +1,6 @@
 # RAW Develop
 
-Open a Nikon `.nef`/`.nrw` or Canon `.cr2`/`.cr3`/`.crw` through File → Open, Import Image as Layer, the command line, a file-manager paste, or drag-and-drop. The image first opens in Develop. Files selected together are queued, so each RAW receives its own Develop session. Import-as-layer remembers its destination project.
+Open a Nikon `.nef`/`.nrw`, Canon `.cr2`/`.cr3`/`.crw`, Fujifilm `.raf`, or Sony `.arw` through File → Open, Import Image as Layer, the command line, a file-manager paste, or drag-and-drop. The image first opens in Develop. Files selected together are queued, so each RAW receives its own Develop session. Import-as-layer remembers its destination project.
 
 Use **Develop** to create a photo layer, or **Cancel** to leave the destination document unchanged. Double-click the RAW layer row or the image with Move selected to return to Develop. Layer → Develop RAW and the layer context menu also reopen it. A committed redevelopment is one document undo step; changes inside Develop have their own Undo/Redo. Cancelling redevelopment retains the last committed pixels and settings.
 
@@ -24,7 +24,7 @@ The RGB histogram and clipping indicators describe the developed output. Compare
 
 ## Precision and output
 
-Rawler decodes the actual sensor data, corrects camera black/white levels, and performs PPG Bayer demosaicing. Xuan preserves oriented camera RGB in 32-bit floating point, applies white balance and exposure before the camera-to-sRGB matrix and display transfer function, and retains values above 1 until tone processing. Exposure reduction can therefore recover encoded highlight differences that are absent in an 8-bit preview. Sensor-saturated channels contain no recoverable detail.
+Rawler decodes the actual sensor data. Bayer files use its black/white-level correction and PPG demosaicing. Fujifilm X-Trans files use Xuan’s 6×6 demosaicing path, which applies the sensor’s repeating black levels, reconstructs green, and interpolates red/blue differences from green. Both paths preserve sensor crop alignment and camera orientation. Xuan preserves oriented camera RGB in 32-bit floating point, applies white balance and exposure before the camera-to-sRGB matrix and display transfer function, and retains values above 1 until tone processing. Exposure reduction can therefore recover encoded highlight differences that are absent in an 8-bit preview. Sensor-saturated channels contain no recoverable detail.
 
 **Develop** renders a full-resolution 8-bit sRGB photo layer, matching the existing compositor. **16-bit TIFF…** renders directly from the floating-point pipeline, without an intermediate 8-bit conversion, and embeds an sRGB ICC profile. It exports the current RAW development alone, including crop and local masks. To export the whole composition, use the normal photo editor's File → Export. Both outputs are independent of preview zoom and comparison/clipping overlays.
 
@@ -32,7 +32,7 @@ Decoding, preview processing and analysis, full-resolution development, and TIFF
 
 ## Current limits
 
-This implements the Develop → embedded RAW layer → Develop workflow and the controls listed above. It is not full Affinity feature parity. Camera support follows Rawler 0.7.2's Nikon NEF/NRW and Canon CR2/CR3/CRW decoders and requires an RGB Bayer sensor. Canon CR3 RAW and C-RAW use the same Develop workflow. Reduced-resolution Canon sRAW/mRAW and older non-RGB sensor layouts are not supported. Unsupported/damaged files produce an error. The camera's embedded JPEG is not used as the development source.
+This implements the Develop → embedded RAW layer → Develop workflow and the controls listed above. It is not full Affinity feature parity. Camera support follows Rawler 0.7.2's Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW decoders. RGB Bayer and 6×6 X-Trans sensors are supported; individual camera models and compression modes must be supported by that decoder. Canon CR3 RAW and C-RAW use the same Develop workflow. Reduced-resolution Canon sRAW/mRAW and older non-RGB sensor layouts are not supported. Unsupported/damaged files produce an error. The camera's embedded JPEG is not used as the development source.
 
 Lens correction is manual; there is no automatic lens-profile database. Noise reduction is a conventional local filter, not a learned denoiser. Defringing suppresses purple excess and can affect purple objects. There is no reconstruction of saturated sensor channels, dual-illuminant profile interpolation, custom camera/ICC output profiles, wide-gamut/HDR compositor, RAW spot-healing tool, automatic subject masks, or batch preset development. Use the photo editor's healing tools after developing/rasterizing. RAW metadata remains in the project; the TIFF export currently includes the output color profile but does not copy shooting EXIF.
 

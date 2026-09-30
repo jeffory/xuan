@@ -4,6 +4,7 @@ mod process;
 mod settings;
 #[cfg(test)]
 mod tests;
+mod xtrans;
 
 use std::{fs::File, io::Read, path::Path, sync::Arc};
 
@@ -28,7 +29,7 @@ pub use process::{auto_exposure, render, render_16, sample_white_balance, source
 pub use settings::{DevelopSettings, Overlay, OverlayKind, WhiteBalance};
 
 pub const MAX_RAW_BYTES: u64 = 512 * 1024 * 1024;
-pub const EXTENSIONS: &[&str] = &["nef", "nrw", "cr2", "cr3", "crw"];
+pub const EXTENSIONS: &[&str] = &["nef", "nrw", "cr2", "cr3", "crw", "raf", "arw"];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RawMetadata {
@@ -162,16 +163,13 @@ fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
     let source = RawSource::new_from_slice(bytes);
     let header = rawler::decode_dummy(&source).context("Unsupported or damaged RAW file")?;
     validate_size(header.width.try_into()?, header.height.try_into()?)?;
-    ensure!(
-        matches!(&header.photometric, RawPhotometricInterpretation::Cfa(c)
-        if c.cfa.is_rgb() && c.cfa.width == 2 && c.cfa.height == 2),
-        "This RAW sensor layout is not supported; an RGB Bayer RAW file is required (Canon sRAW/mRAW is not supported)"
-    );
+    validate_sensor(&header)?;
     let decoder = rawler::get_decoder(&source)?;
     let params = RawDecodeParams::default();
     let metadata = decoder.raw_metadata(&source, &params)?;
     let raw = decoder.raw_image(&source, &params, false)?;
     validate_size(raw.width.try_into()?, raw.height.try_into()?)?;
+    validate_sensor(&raw)?;
     let matrix = raw
         .color_matrix
         .get(&Illuminant::D65)
@@ -195,23 +193,7 @@ fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
         as_shot.iter().all(|v| v.is_finite() && *v > 0.0),
         "Invalid camera white balance"
     );
-    let developer = RawDevelop {
-        steps: vec![
-            ProcessingStep::Rescale,
-            ProcessingStep::Demosaic,
-            ProcessingStep::CropActiveArea,
-            ProcessingStep::CropDefault,
-        ],
-    };
-    let Intermediate::ThreeColor(pixels) = developer.develop_intermediate(&raw)? else {
-        bail!("RAW decoder did not produce an RGB image");
-    };
-    let camera = ImageBuffer::from_raw(
-        pixels.width as u32,
-        pixels.height as u32,
-        pixels.data.into_iter().flatten().collect(),
-    )
-    .context("Invalid decoded RAW dimensions")?;
+    let camera = develop_camera(&raw)?;
     let mut oriented = DynamicImage::ImageRgb32F(camera);
     oriented.apply_orientation(
         image::metadata::Orientation::from_exif(
@@ -242,6 +224,39 @@ fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
         xyz_to_camera,
         metadata,
     })
+}
+
+fn validate_sensor(raw: &rawler::RawImage) -> Result<()> {
+    ensure!(
+        raw.cpp == 1
+            && matches!(&raw.photometric, RawPhotometricInterpretation::Cfa(c)
+            if c.cfa.is_rgb() && matches!((c.cfa.width, c.cfa.height), (2, 2) | (6, 6))),
+        "This RAW sensor layout is not supported; an RGB Bayer or X-Trans RAW file is required (Canon sRAW/mRAW is not supported)"
+    );
+    Ok(())
+}
+
+fn develop_camera(raw: &rawler::RawImage) -> Result<Rgb32FImage> {
+    if matches!(&raw.photometric, RawPhotometricInterpretation::Cfa(c) if c.cfa.width == 6) {
+        return xtrans::develop(raw);
+    }
+    let developer = RawDevelop {
+        steps: vec![
+            ProcessingStep::Rescale,
+            ProcessingStep::Demosaic,
+            ProcessingStep::CropActiveArea,
+            ProcessingStep::CropDefault,
+        ],
+    };
+    let Intermediate::ThreeColor(pixels) = developer.develop_intermediate(raw)? else {
+        bail!("RAW decoder did not produce an RGB image");
+    };
+    ImageBuffer::from_raw(
+        pixels.width as u32,
+        pixels.height as u32,
+        pixels.data.into_iter().flatten().collect(),
+    )
+    .context("Invalid decoded RAW dimensions")
 }
 
 /// Preserve layer placement, masks, blending, and identity when redeveloping.

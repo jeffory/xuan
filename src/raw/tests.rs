@@ -57,7 +57,11 @@ fn validates_settings_and_cancellation() {
         raw.preview(32).camera
     );
     assert!(decode(b"broken camera file").is_err());
-    assert!(is_raw(Path::new("PHOTO.NEF")));
+    for extension in [
+        "NEF", "nrw", "cr2", "CR3", "CrW", "RAF", "raf", "ARW", "aRw",
+    ] {
+        assert!(is_raw(Path::new(&format!("photo.{extension}"))));
+    }
     assert!(!is_raw(Path::new("photo.tiff")));
 }
 
@@ -91,6 +95,8 @@ fn sample_raw_develop_roundtrip() {
         .or_else(|| std::env::var_os("XUAN_TEST_NEF"))
         .expect("Set XUAN_TEST_RAW");
     let (asset, raw) = open(Path::new(&path)).unwrap();
+    assert!(is_raw(Path::new(&path)));
+    assert!(raw.camera.as_raw().iter().all(|v| v.is_finite()));
     println!(
         "Camera metadata: {:?}; white balance: {:?}",
         raw.metadata, raw.as_shot
@@ -128,6 +134,109 @@ fn sample_raw_develop_roundtrip() {
         .unwrap(),
         pixels
     );
+}
+
+fn xtrans_sensor(cfa: rawler::CFA) -> rawler::RawImage {
+    use rawler::{
+        decoders::Camera,
+        rawimage::{BlackLevel, CFAConfig, RawImageData, WhiteLevel},
+    };
+
+    let black: Vec<u32> = (0..36).map(|i| 128 + i * 16).collect();
+    let mut sensor = Vec::new();
+    for y in 0..24 {
+        for x in 0..30 {
+            let value = [0.125, 0.5, 1.25][cfa.color_at(y, x)];
+            let black = black[(y % 6) * 6 + x % 6] as f32;
+            sensor.push(black + value * (4096.0 - black));
+        }
+    }
+    rawler::RawImage::new_with_data(
+        Camera::default(),
+        RawImageData::Float(sensor),
+        30,
+        24,
+        1,
+        [1.0; 4],
+        RawPhotometricInterpretation::Cfa(CFAConfig::new(&cfa, &Default::default())),
+        Some(BlackLevel::new(&black, 6, 6, 1)),
+        Some(WhiteLevel::new(vec![4096])),
+        false,
+    )
+}
+
+#[test]
+fn xtrans_preserves_colors_black_levels_and_highlights_at_every_phase_and_border() {
+    let cfa = rawler::CFA::new("RBGBRGGGRGGBGGBGGRBRGRBGGGBGGRGGRGGB");
+    for y in 0..6 {
+        for x in 0..6 {
+            let raw = xtrans_sensor(cfa.shift(x, y));
+            validate_sensor(&raw).unwrap();
+            let pixels = develop_camera(&raw).unwrap();
+            assert_eq!(pixels.dimensions(), (30, 24));
+            for pixel in pixels.pixels() {
+                for (actual, expected) in pixel.0.into_iter().zip([0.125, 0.5, 1.25]) {
+                    assert!((actual - expected).abs() < 1e-6, "phase {x},{y}: {pixel:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn xtrans_crops_in_sensor_coordinates_and_retains_measured_samples() {
+    use rawler::{
+        imgop::{Dim2, Point, Rect},
+        rawimage::RawImageData,
+    };
+
+    let cfa = rawler::CFA::new("RBGBRGGGRGGBGGBGGRBRGRBGGGBGGRGGRGGB");
+    let mut raw = xtrans_sensor(cfa.clone());
+    // A nonuniform field makes a misplaced crop or CFA phase visible.
+    let RawImageData::Float(sensor) = &mut raw.data else {
+        unreachable!()
+    };
+    for (i, value) in sensor.iter_mut().enumerate() {
+        *value += i as f32;
+    }
+    raw.active_area = Some(Rect::new(Point::new(3, 5), Dim2::new(25, 18)));
+    let active = develop_camera(&raw).unwrap();
+    raw.crop_area = Some(Rect::new(Point::new(7, 8), Dim2::new(17, 12)));
+    let cropped = develop_camera(&raw).unwrap();
+    assert_eq!(
+        cropped,
+        image::imageops::crop_imm(&active, 4, 3, 17, 12).to_image()
+    );
+    let sensor = raw.data.as_f32();
+    let black = raw.blacklevel.as_vec();
+    for (x, y, pixel) in cropped.enumerate_pixels() {
+        let (sx, sy) = (x as usize + 7, y as usize + 8);
+        let black = black[(sy % 6) * 6 + sx % 6];
+        let expected = (sensor[sy * raw.width + sx] - black) / (4096.0 - black);
+        assert_eq!(pixel[cfa.color_at(sy, sx)], expected);
+        assert!(pixel.0.iter().all(|v| v.is_finite()));
+    }
+    raw.crop_area = Some(Rect::new(Point::zero(), Dim2::new(17, 12)));
+    assert!(develop_camera(&raw).is_err());
+    raw.crop_area = None;
+    raw.blacklevel.levels.clear();
+    assert!(develop_camera(&raw).is_err());
+}
+
+#[test]
+fn unsupported_raw_sensor_layouts_still_fail_validation() {
+    let mut raw = xtrans_sensor(rawler::CFA::new("RGGB"));
+    assert!(validate_sensor(&raw).is_ok());
+    raw.cpp = 3;
+    assert!(validate_sensor(&raw).is_err());
+    raw.cpp = 1;
+    raw.photometric = RawPhotometricInterpretation::LinearRaw;
+    assert!(validate_sensor(&raw).is_err());
+    raw.photometric = RawPhotometricInterpretation::Cfa(rawler::rawimage::CFAConfig::new(
+        &rawler::CFA::new("RGBE"),
+        &Default::default(),
+    ));
+    assert!(validate_sensor(&raw).is_err());
 }
 
 #[test]

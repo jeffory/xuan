@@ -2370,6 +2370,8 @@ mod tests {
             "photo.cr2",
             "photo.CR3",
             "photo.CrW",
+            "photo.RAF",
+            "photo.aRw",
         ] {
             // Invalid bytes still enter Develop; decoding errors belong to its worker.
             let path = dir.path().join(filename);

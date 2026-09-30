@@ -17,7 +17,7 @@ sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
     libvulkan1 mesa-vulkan-drivers xdg-desktop-portal
 ```
 
-HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW and Canon CR2/CR3/CRW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
+HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
 
 ### Windows
 
@@ -154,7 +154,7 @@ scales. Automated tests do not certify individual Wacom or Parblo models.
 
 ## RAW sample checks
 
-The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local Nikon or Canon RAW file:
+The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local Nikon, Canon, Fujifilm, or Sony RAW file:
 
 ```sh
 XUAN_TEST_RAW=/path/to/photo.CR3 cargo test --locked sample_raw -- --ignored --nocapture
@@ -162,6 +162,21 @@ cargo run --locked -- /path/to/photo.CR3 --screenshot /tmp/develop.png
 ```
 
 `XUAN_TEST_RAW_PREVIEW=/tmp/preview.png` optionally writes the engine test's default preview. The sample checks cover full-resolution rendering, project save/load, reopening Develop and cancellation. Verified samples include Nikon Z6 III NEF (4032 × 6048 after orientation) and Canon EOS M50 Mark II CR3 (4000 × 6000 after orientation). `XUAN_TEST_NEF` remains accepted as a fallback for existing local test commands.
+
+RAF/ARW verification also covers these seven local samples through both the engine
+roundtrip and the Develop commit/reopen/cancel tests:
+
+| Camera | Samples | Oriented dimensions |
+| --- | --- | --- |
+| Fujifilm X70 (X-Trans) | `DSCF0062.raf`, `DSCF1276.raf`, `DSCF9609.raf` | 4896 × 3264 |
+| Fujifilm X100S (X-Trans) | `DSCF9791.raf` | 4896 × 3264 |
+| Sony ILCE-7M2 | `3307522568.arw` | 4000 × 6000 |
+| Sony DSC-RX100M2 | `RAW_SONY_DSC-RX100M2.arw` | 3648 × 5472 |
+| Sony DSC-RX100 | `RAW_SONY_RX100.arw` | 5472 × 3648 |
+
+Synthetic X-Trans checks exercise all 36 pattern phases, image borders, repeating
+black levels, values above sensor white, and active/default crops with unaligned
+origins. They also verify that demosaicing retains each measured color sample.
 
 ## Screenshots
 

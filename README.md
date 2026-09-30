@@ -13,7 +13,7 @@ This project is inspired by [Compositor](https://github.com/robbietilton/Composi
 - Retouch with selections, brushes, clone stamp, healing, filters, and adjustment layers.
 - Draw with Wacom, Parblo, and other system-supported tablets on Linux and Windows, with pressure, tilt, and eraser-tip support.
 - Smooth mouse and pen strokes with adjustable brush stroke smoothing.
-- Develop Nikon NEF/NRW and Canon CR2/CR3/CRW files and return to their RAW settings at any time.
+- Develop Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW files and return to their RAW settings at any time.
 - Open HEIC/HEIF photos directly on Linux and Windows, without installing a converter.
 - Save editable `.xuan` projects, import Compositor projects, and export PNG, JPEG, TIFF, or WebP.
 
