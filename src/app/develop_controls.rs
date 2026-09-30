@@ -32,6 +32,9 @@ fn percent(ui: &mut egui::Ui, label: &str, value: &mut f32) {
 }
 
 pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
+    if !d.settings.negative.enabled {
+        d.film_base_picker = false;
+    }
     histogram(ui, d);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -52,6 +55,8 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
             .clicked()
         {
             d.settings = DevelopSettings::default();
+            d.picker = false;
+            d.film_base_picker = false;
             d.selected_overlay = None;
         }
         widgets::PopUp::from_id_salt("raw_presets")
@@ -104,6 +109,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
         &mut d.panel,
         &[
             (0, tr("Basic")),
+            (6, tr("Negative")),
             (1, tr("Tone")),
             (2, tr("Detail")),
             (3, tr("Lens")),
@@ -123,6 +129,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
                 2 => detail(ui, d),
                 3 => lens(ui, d),
                 4 => masks(ui, d),
+                6 => negative(ui, d),
                 _ => metadata(ui, d),
             }
             ui.add_space(16.0);
@@ -136,6 +143,46 @@ fn heading(ui: &mut egui::Ui, title: &str) {
 }
 
 fn basic(ui: &mut egui::Ui, d: &mut Develop) {
+    ui.add_enabled_ui(!d.settings.negative.enabled, |ui| white_balance(ui, d));
+    if d.settings.negative.enabled {
+        ui.small(tr(
+            "Use film color balance in the Negative tab instead of camera white balance.",
+        ));
+    }
+    heading(ui, tr("Light"));
+
+    if ui
+        .add_enabled(
+            !d.settings.negative.enabled,
+            widgets::Button::new(tr("Auto exposure")),
+        )
+        .clicked()
+        && let Some(raw) = &d.proxy
+    {
+        d.settings.exposure = raw::auto_exposure(raw);
+    }
+    slider(
+        ui,
+        tr("Exposure"),
+        &mut d.settings.exposure,
+        -10.0..=10.0,
+        " EV",
+    );
+    percent(ui, tr("Brightness"), &mut d.settings.brightness);
+    percent(ui, tr("Contrast"), &mut d.settings.contrast);
+    percent(ui, tr("Highlights"), &mut d.settings.highlights);
+    percent(ui, tr("Shadows"), &mut d.settings.shadows);
+    percent(ui, tr("Whites"), &mut d.settings.whites);
+    percent(ui, tr("Blacks"), &mut d.settings.blacks);
+    heading(ui, tr("Presence"));
+    percent(ui, tr("Clarity"), &mut d.settings.clarity);
+    percent(ui, tr("Texture"), &mut d.settings.texture);
+    percent(ui, tr("Dehaze"), &mut d.settings.dehaze);
+    percent(ui, tr("Vibrance"), &mut d.settings.vibrance);
+    percent(ui, tr("Saturation"), &mut d.settings.saturation);
+}
+
+fn white_balance(ui: &mut egui::Ui, d: &mut Develop) {
     heading(ui, tr("White balance"));
     ui.horizontal(|ui| {
         widgets::PopUp::from_id_salt("raw_wb")
@@ -174,6 +221,7 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
             });
         if widgets::checkbox(ui, &mut d.picker, tr("Pick neutral")).changed() {
             d.draw_overlay = false;
+            d.film_base_picker = false;
         }
     });
     ui.add_enabled_ui(
@@ -189,31 +237,85 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
         },
     );
     slider(ui, tr("Tint"), &mut d.settings.tint, -150.0..=150.0, "");
-    heading(ui, tr("Light"));
-    if widgets::button(ui, tr("Auto exposure")).clicked()
-        && let Some(raw) = &d.proxy
+}
+
+fn negative(ui: &mut egui::Ui, d: &mut Develop) {
+    heading(ui, tr("Film negative"));
+    let unconfigured = d.settings.negative == raw::NegativeSettings::default();
+    if widgets::checkbox(
+        ui,
+        &mut d.settings.negative.enabled,
+        tr("Convert negative to positive"),
+    )
+    .changed()
     {
-        d.settings.exposure = raw::auto_exposure(raw);
+        d.picker = false;
+        d.film_base_picker = false;
+        if d.settings.negative.enabled
+            && unconfigured
+            && let Some(raw) = &d.proxy
+        {
+            d.settings.negative = raw::analyze_negative(raw, &d.settings);
+        }
     }
+    if !d.settings.negative.enabled {
+        return;
+    }
+    ui.small(tr("Crop out the holder and borders, then analyze. Sample an unexposed film edge for a more accurate orange mask."));
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Analyze crop")).clicked()
+            && let Some(raw) = &d.proxy
+        {
+            let calibration = raw::analyze_negative(raw, &d.settings);
+            d.settings.negative.film_base = calibration.film_base;
+            d.settings.negative.density_range = calibration.density_range;
+        }
+        if widgets::checkbox(ui, &mut d.film_base_picker, tr("Pick film base")).changed() {
+            d.picker = false;
+            d.draw_overlay = false;
+            if d.film_base_picker {
+                d.compare = super::develop::Compare::Original;
+            }
+        }
+    });
     slider(
         ui,
-        tr("Exposure"),
-        &mut d.settings.exposure,
-        -10.0..=10.0,
-        " EV",
+        tr("Black point"),
+        &mut d.settings.negative.black_point,
+        -0.5..=0.5,
+        " D",
     );
-    percent(ui, tr("Brightness"), &mut d.settings.brightness);
-    percent(ui, tr("Contrast"), &mut d.settings.contrast);
-    percent(ui, tr("Highlights"), &mut d.settings.highlights);
-    percent(ui, tr("Shadows"), &mut d.settings.shadows);
-    percent(ui, tr("Whites"), &mut d.settings.whites);
-    percent(ui, tr("Blacks"), &mut d.settings.blacks);
-    heading(ui, tr("Presence"));
-    percent(ui, tr("Clarity"), &mut d.settings.clarity);
-    percent(ui, tr("Texture"), &mut d.settings.texture);
-    percent(ui, tr("Dehaze"), &mut d.settings.dehaze);
-    percent(ui, tr("Vibrance"), &mut d.settings.vibrance);
-    percent(ui, tr("Saturation"), &mut d.settings.saturation);
+    slider(
+        ui,
+        tr("Film gamma"),
+        &mut d.settings.negative.gamma,
+        0.5..=4.0,
+        "",
+    );
+    for (c, label) in [tr("Red balance"), tr("Green balance"), tr("Blue balance")]
+        .iter()
+        .enumerate()
+    {
+        slider(
+            ui,
+            label,
+            &mut d.settings.negative.balance[c],
+            -3.0..=3.0,
+            " EV",
+        );
+    }
+    egui::CollapsingHeader::new(tr("Film calibration")).id_salt("film_calibration").show(ui, |ui| {
+        ui.small(tr("Film base is measured in linear camera RGB. Density range controls each channel's white point."));
+        for (c, label) in [tr("Red base"), tr("Green base"), tr("Blue base")].iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(*label);
+                ui.add(egui::DragValue::new(&mut d.settings.negative.film_base[c]).range(0.00001..=16.0).speed(0.001).max_decimals(5));
+            });
+        }
+        for (c, label) in [tr("Red density"), tr("Green density"), tr("Blue density")].iter().enumerate() {
+            slider(ui, label, &mut d.settings.negative.density_range[c], 0.1..=6.0, " D");
+        }
+    });
 }
 
 fn tones(ui: &mut egui::Ui, d: &mut Develop) {
@@ -458,6 +560,7 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
                     d.draw_overlay = true;
                     d.show_mask = true;
                     d.picker = false;
+                    d.film_base_picker = false;
                 }
             }
         });
@@ -477,7 +580,10 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
     };
     ui.separator();
     ui.horizontal(|ui| {
-        widgets::checkbox(ui, &mut d.draw_overlay, tr("Draw mask"));
+        if widgets::checkbox(ui, &mut d.draw_overlay, tr("Draw mask")).changed() {
+            d.picker = false;
+            d.film_base_picker = false;
+        }
         widgets::checkbox(ui, &mut d.show_mask, tr("Show guides"));
     });
     let overlay = &mut d.settings.overlays[index];

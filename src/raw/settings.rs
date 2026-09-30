@@ -59,6 +59,7 @@ impl Default for Overlay {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DevelopSettings {
+    pub negative: super::NegativeSettings,
     pub white_balance: WhiteBalance,
     pub temperature: f32,
     pub tint: f32,
@@ -105,6 +106,7 @@ pub struct DevelopSettings {
 impl Default for DevelopSettings {
     fn default() -> Self {
         Self {
+            negative: Default::default(),
             white_balance: WhiteBalance::AsShot,
             temperature: 6500.0,
             tint: 0.0,
@@ -156,6 +158,7 @@ fn range(value: f32, min: f32, max: f32) -> Result<()> {
 
 impl DevelopSettings {
     pub fn validate(&self) -> Result<()> {
+        self.negative.validate()?;
         range(self.temperature, 2000.0, 25_000.0)?;
         range(self.tint, -150.0, 150.0)?;
         range(self.exposure, -10.0, 10.0)?;

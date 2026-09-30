@@ -1,4 +1,5 @@
 //! Nondestructive camera RAW assets and a floating-point Develop pipeline.
+mod negative;
 mod process;
 mod settings;
 #[cfg(test)]
@@ -21,6 +22,7 @@ use rawler::{
 use serde::{Deserialize, Serialize};
 
 use crate::document::validate_size;
+pub use negative::{NegativeSettings, analyze_negative, sample_film_base};
 pub(crate) use process::white_balance;
 pub use process::{auto_exposure, render, render_16, sample_white_balance, source_point};
 pub use settings::{DevelopSettings, Overlay, OverlayKind, WhiteBalance};

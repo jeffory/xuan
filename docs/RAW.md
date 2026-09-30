@@ -13,6 +13,7 @@ Direct pixel painting and destructive filters require **Rasterize RAW Layer**, w
 ## Controls
 
 - **Basic:** as-shot white balance, temperature/tint and lighting presets, neutral picker, auto exposure, ±10 EV exposure, brightness, contrast, highlights/shadows, white/black points, clarity, texture, dehaze, vibrance, saturation.
+- **Negative:** negative-to-positive conversion, automatic crop analysis, film-base picker, black point, film gamma, RGB balance, and film calibration.
 - **Tone:** draggable five-knot master and RGB curves; eight-band hue/saturation/lightness; monochrome RGB mix; shadow/highlight split toning and balance.
 - **Detail:** edge-aware luminance/chroma noise reduction; luminance sharpening with radius and threshold. Previews start with a 1,600-pixel proxy and select progressively larger resolutions to cover the displayed image, including on high-density displays. At 100% and above they use full source resolution. During adjustment drags, a quick proxy updates continuously and refines after a short pause. Edited and Original comparisons use the same resolution. Choose **100%** for one image pixel per screen pixel to evaluate sharpening and noise reduction, or **Always use full-resolution preview** to process at full resolution even in Fit view. The full-resolution override also applies while adjusting controls. Choosing 100% does not enable that override permanently; returning to Fit can use a smaller preview. Smaller previews are downsampled and can differ in fine detail. Full-resolution preview is available when the image fits the GPU's texture-size limit; larger images still develop/export at full resolution.
 - **Lens:** manual radial distortion, red/cyan and blue/yellow aberration, purple defringing, vignette compensation, rotation, horizontal/vertical perspective, and normalized crop bounds. A crop preserves the placement of surviving pixels when redeveloping an existing layer.
@@ -34,3 +35,40 @@ Decoding, preview processing and analysis, full-resolution development, and TIFF
 This implements the Develop → embedded RAW layer → Develop workflow and the controls listed above. It is not full Affinity feature parity. Camera support follows Rawler 0.7.2's Nikon NEF/NRW and Canon CR2/CR3/CRW decoders and requires an RGB Bayer sensor. Canon CR3 RAW and C-RAW use the same Develop workflow. Reduced-resolution Canon sRAW/mRAW and older non-RGB sensor layouts are not supported. Unsupported/damaged files produce an error. The camera's embedded JPEG is not used as the development source.
 
 Lens correction is manual; there is no automatic lens-profile database. Noise reduction is a conventional local filter, not a learned denoiser. Defringing suppresses purple excess and can affect purple objects. There is no reconstruction of saturated sensor channels, dual-illuminant profile interpolation, custom camera/ICC output profiles, wide-gamut/HDR compositor, RAW spot-healing tool, automatic subject masks, or batch preset development. Use the photo editor's healing tools after developing/rasterizing. RAW metadata remains in the project; the TIFF export currently includes the output color profile but does not copy shooting EXIF.
+
+## Film negatives
+
+For camera scans of color negative film, open the RAW and enable **Negative →
+Convert negative to positive**. Xuan estimates the orange film base and
+channel density ranges, then converts the scan to a positive before applying the
+usual exposure, tone, color, and detail controls. This is a native workflow inspired
+by tools such as Grain2Pixel; Photoshop plugins are not loaded.
+
+1. Use **Lens → Crop** to exclude the film holder, light source and unwanted borders.
+   Click **Analyze crop** to estimate fresh endpoints from that area. Automatic
+   analysis is a starting point; scenes without neutral shadows/highlights can need
+   manual color adjustments.
+2. For a measured orange mask, leave an unexposed film edge visible and enable
+   **Pick film base**. The preview switches to Original. Click a clear section of
+   that edge; Xuan averages a small patch of linear camera RGB and returns to Edited.
+   Crop the edge away afterward. Escape cancels the picker.
+3. Tune **Black point**, **Film gamma**, and the red/green/blue balance sliders.
+   **Film calibration** exposes the measured base RGB and each channel's density
+   range. Increasing density range lowers that channel's white point in the output;
+   increasing gamma darkens midtones. Balance is expressed in positive-image EV.
+4. Finish with the usual positive-image exposure, curves, saturation and detail
+   adjustments. Camera white balance and camera auto exposure are disabled during
+   conversion; use the film color balance instead. Turn conversion off to inspect
+   the normal RAW rendering without losing calibration.
+5. **Develop** and save the `.xuan` project to retain the source and conversion
+   settings, or export a **16-bit TIFF** directly. Preset save/load and Develop
+   Undo/Redo include the conversion parameters, so a measured base can be reused
+   for the same film stock and scanning light.
+
+Inversion uses optical density (`log10(film base / transmission)`) in camera-linear
+RGB, with bounded black/white points and an adjustable transfer curve. It bypasses
+the scanner camera's positive-image color matrix and white balance, and runs in
+both the CPU and GPU pipelines. Preview and full-resolution output use the same
+saved calibration; zooming never reanalyzes the image. This is not a calibrated
+film-stock profile or an exact reproduction of Grain2Pixel. It cannot recover a
+clipped scan, and colored lighting or unusual emulsions can require manual balance.

@@ -304,6 +304,17 @@ fn processing_raw_matches_cpu_at_both_depths() {
         DevelopSettings::default(),
         settings.clone(),
         DevelopSettings {
+            negative: NegativeSettings {
+                enabled: true,
+                film_base: [0.9, 0.5, 0.2],
+                density_range: [1.7, 2.1, 2.4],
+                black_point: -0.07,
+                gamma: 1.8,
+                balance: [0.3, -0.2, 0.1],
+            },
+            ..settings.clone()
+        },
+        DevelopSettings {
             monochrome: true,
             ..settings
         },

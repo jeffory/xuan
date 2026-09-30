@@ -190,7 +190,7 @@ pub(super) fn settings(
     depth: u32,
 ) -> Vec<[f32; 4]> {
     let (sin, cos) = s.rotation.to_radians().sin_cos();
-    let mut p = vec![[0.0; 4]; 32];
+    let mut p = vec![[0.0; 4]; 35];
     p[0] = [
         raw.camera.width() as f32,
         raw.camera.height() as f32,
@@ -230,6 +230,20 @@ pub(super) fn settings(
     {
         p[24 + i] = [s.hsl[i][0], s.hsl[i][1], s.hsl[i][2], *hue];
     }
+    let n = &s.negative;
+    p[32] = [
+        n.film_base[0],
+        n.film_base[1],
+        n.film_base[2],
+        if n.enabled { 1.0 } else { 0.0 },
+    ];
+    p[33] = [
+        n.density_range[0],
+        n.density_range[1],
+        n.density_range[2],
+        n.black_point,
+    ];
+    p[34] = [n.balance[0], n.balance[1], n.balance[2], n.gamma];
     p
 }
 

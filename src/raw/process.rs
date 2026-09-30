@@ -265,10 +265,16 @@ where
                         )[c];
                     }
                 }
-                let mut rgb = matrix(
-                    raw.camera_to_rgb,
-                    std::array::from_fn(|c| camera[c] * wb[c] * exposure),
-                );
+                // Film dyes encode scene density, not the scanner camera's scene
+                // colors. Invert those channels before any positive-image controls.
+                let mut rgb = if s.negative.enabled {
+                    s.negative.convert(camera).map(|v| v * exposure)
+                } else {
+                    matrix(
+                        raw.camera_to_rgb,
+                        std::array::from_fn(|c| camera[c] * wb[c] * exposure),
+                    )
+                };
                 let radial = ((point.x - 0.5).powi(2) + (point.y - 0.5).powi(2)) * 2.0;
                 let gain = 2.0_f32.powf(s.vignette * 0.03 * radial.powi(2));
                 rgb = rgb.map(|v| (v * gain).max(0.0));

@@ -452,6 +452,28 @@ Zooming in loads full detail automatically. Use 100% to judge sharpening and noi
 This image exceeds the GPU's full-resolution preview limit. Develop and TIFF export still use every source pixel.	此图像超出 GPU 全分辨率预览限制。冲洗和 TIFF 导出仍使用全部源像素。
 Click a neutral gray area to set white balance	单击中性灰色区域设置白平衡
 Drag on the image to place the selected mask	在图像上拖动以放置所选蒙版
+Film negative	胶片负片
+Negative	负片
+Convert negative to positive	将负片转换为正片
+Crop out the holder and borders, then analyze. Sample an unexposed film edge for a more accurate orange mask.	先裁去片夹和边框，再分析。取样未曝光的胶片边缘可更准确地校正橙色片基。
+Analyze crop	分析裁剪区域
+Pick film base	取样片基
+Black point	黑场
+Film gamma	胶片伽马
+Red balance	红色平衡
+Green balance	绿色平衡
+Blue balance	蓝色平衡
+Film calibration	胶片校准
+Film base is measured in linear camera RGB. Density range controls each channel's white point.	片基以相机线性 RGB 测量。密度范围控制各通道的白场。
+Red base	红色片基
+Green base	绿色片基
+Blue base	蓝色片基
+Red density	红色密度
+Green density	绿色密度
+Blue density	蓝色密度
+Use film color balance in the Negative tab instead of camera white balance.	请使用“负片”选项卡中的颜色平衡控件调整色彩。
+Click an unexposed film edge to sample the orange mask	单击未曝光的胶片边缘取样橙色片基
+Cannot sample this area. Choose a clear, unexposed film edge.	无法取样此区域。请选择清晰且未曝光的胶片边缘。
 Project saved	项目已保存
 Export cancelled	导出已取消
 Opened image from clipboard	已从剪贴板打开图像

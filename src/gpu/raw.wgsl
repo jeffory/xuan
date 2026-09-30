@@ -43,9 +43,15 @@ fn raw_camera(@builtin(global_invocation_id) id: vec3<u32>) {
     var camera = camera_sample(source);
     camera.r = camera_sample((source - 0.5) * (1.0 + config[2].y * 0.0002) + 0.5).r;
     camera.b = camera_sample((source - 0.5) * (1.0 + config[2].z * 0.0002) + 0.5).b;
-    camera *= config[3].xyz * config[3].w;
-    var rgb =
-        vec3(dot(config[4].xyz, camera), dot(config[5].xyz, camera), dot(config[6].xyz, camera));
+    var rgb: vec3<f32>;
+    if (config[32].w > 0.5) {
+        let density = log2(config[32].xyz / max(camera, vec3(0.00001))) / log2(10.0);
+        let positive = clamp((density - config[33].w) / config[33].xyz, vec3(0.0), vec3(1.0));
+        rgb = pow(positive, vec3(config[34].w)) * exp2(config[34].xyz) * config[3].w;
+    } else {
+        camera *= config[3].xyz * config[3].w;
+        rgb = vec3(dot(config[4].xyz, camera), dot(config[5].xyz, camera), dot(config[6].xyz, camera));
+    }
     let radial = dot(uv - 0.5, uv - 0.5) * 2.0;
     rgb = max(rgb * exp2(config[2].w * 0.03 * radial * radial), vec3(0.0));
     let alpha = select(0.0, 1.0, all(source >= vec2(0.0)) && all(source <= vec2(1.0)));

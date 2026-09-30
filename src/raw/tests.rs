@@ -272,3 +272,172 @@ fn raw_crop_preserves_the_placement_of_surviving_pixels() {
         .point(crate::document::Point::new(0.25, 0.5));
     assert!(center_before.distance(center_after) < 0.001);
 }
+
+fn synthetic_negative() -> (DecodedRaw, NegativeSettings) {
+    let negative = NegativeSettings {
+        enabled: true,
+        film_base: [0.8, 0.42, 0.18],
+        density_range: [1.7, 2.1, 2.4],
+        ..Default::default()
+    };
+    let mut raw = synthetic();
+    raw.camera = Rgb32FImage::from_fn(64, 48, |x, _| {
+        Rgb(std::array::from_fn(|c| {
+            negative.film_base[c] * 10.0_f32.powf(-negative.density_range[c] * x as f32 / 63.0)
+        }))
+    });
+    (raw, negative)
+}
+
+#[test]
+fn negative_removes_orange_base_and_produces_neutral_positive_steps() {
+    let (raw, negative) = synthetic_negative();
+    let mut s = DevelopSettings {
+        negative,
+        color_noise: 0.0,
+        sharpen: 0.0,
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let original = raw.camera.clone();
+    let positive = render(&raw, &s, &cancel).unwrap();
+    assert_eq!(positive.get_pixel(0, 20).0, [0, 0, 0, 255]);
+    assert_eq!(positive.get_pixel(63, 20).0, [255; 4]);
+    for x in 1..64 {
+        let p = positive.get_pixel(x, 20);
+        assert!(p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1);
+        assert!(p[0] >= positive.get_pixel(x - 1, 20)[0]);
+    }
+    let high = render_16(&raw, &s, &cancel).unwrap();
+    for x in 1..64 {
+        assert!(high.get_pixel(x, 20)[0] > high.get_pixel(x - 1, 20)[0]);
+    }
+    // Camera WB is irrelevant to calibrated film density; exposure is positive.
+    s.white_balance = WhiteBalance::Temperature;
+    s.temperature = 2500.0;
+    s.tint = 150.0;
+    assert_eq!(positive, render(&raw, &s, &cancel).unwrap());
+    s.exposure = 1.0;
+    assert!(
+        render(&raw, &s, &cancel).unwrap().get_pixel(30, 20)[0] > positive.get_pixel(30, 20)[0]
+    );
+    s.negative.enabled = false;
+    let disabled = render(&raw, &s, &cancel).unwrap();
+    s.negative = NegativeSettings::default();
+    assert_eq!(disabled, render(&raw, &s, &cancel).unwrap());
+    assert_eq!(raw.camera, original);
+}
+
+#[test]
+fn negative_analysis_respects_crop_and_film_base_sampling() {
+    let (mut raw, expected) = synthetic_negative();
+    let s = DevelopSettings::default();
+    let analyzed = analyze_negative(&raw, &s);
+    for c in 0..3 {
+        assert!((analyzed.film_base[c] - expected.film_base[c]).abs() < 0.0001);
+        assert!((analyzed.density_range[c] - expected.density_range[c]).abs() < 0.0001);
+    }
+    // A bright holder outside the crop must not contaminate the endpoints.
+    raw.camera = Rgb32FImage::from_fn(128, 48, |x, _| {
+        if x >= 64 {
+            Rgb([4.0; 3])
+        } else {
+            Rgb(std::array::from_fn(|c| {
+                expected.film_base[c] * 10.0_f32.powf(-expected.density_range[c] * x as f32 / 63.0)
+            }))
+        }
+    });
+    let cropped = DevelopSettings {
+        crop: [0.0, 0.0, 0.5, 1.0],
+        ..Default::default()
+    };
+    assert_eq!(analyze_negative(&raw, &cropped), analyzed);
+    assert!(analyze_negative(&raw, &s).film_base[0] > analyzed.film_base[0]);
+    raw.camera = Rgb32FImage::from_pixel(20, 20, Rgb(expected.film_base));
+    let base = sample_film_base(&raw, crate::document::Point::new(0.5, 0.5)).unwrap();
+    for (value, expected) in base.iter().zip(expected.film_base) {
+        assert!((value - expected).abs() < 0.00001);
+    }
+    raw.camera.fill(0.0);
+    assert!(sample_film_base(&raw, crate::document::Point::new(0.5, 0.5)).is_none());
+    analyze_negative(&raw, &s).validate().unwrap();
+}
+
+#[test]
+fn negative_settings_are_backward_compatible_and_reject_invalid_values() {
+    let old: DevelopSettings = serde_json::from_str(r#"{"exposure": 1.0}"#).unwrap();
+    assert!(!old.negative.enabled);
+    let (_, negative) = synthetic_negative();
+    let mut s = DevelopSettings {
+        negative,
+        ..Default::default()
+    };
+    assert_eq!(
+        serde_json::from_str::<DevelopSettings>(&serde_json::to_string(&s).unwrap()).unwrap(),
+        s
+    );
+    for value in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        s.negative.film_base[0] = value;
+        assert!(s.validate().is_err());
+    }
+    s.negative = NegativeSettings::default();
+    s.negative.density_range[1] = 0.0;
+    assert!(s.validate().is_err());
+    s.negative = NegativeSettings::default();
+    s.negative.gamma = f32::INFINITY;
+    assert!(s.validate().is_err());
+}
+
+#[test]
+#[ignore = "Set XUAN_TEST_RAW to a camera scan of a film negative"]
+fn sample_negative_raw_develop_roundtrip() {
+    let path = std::env::var_os("XUAN_TEST_RAW").expect("Set XUAN_TEST_RAW");
+    let (mut asset, raw) = open(Path::new(&path)).unwrap();
+    let cancel = AtomicBool::new(false);
+    let proxy = raw.preview(1200);
+    if let Ok(crop) = std::env::var("XUAN_TEST_RAW_CROP") {
+        asset.settings.crop = crop
+            .split(',')
+            .map(|v| v.parse::<f32>().unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        asset.settings.validate().unwrap();
+    }
+    asset.settings.negative = analyze_negative(&proxy, &asset.settings);
+    println!(
+        "{}: {:?}, {:?}",
+        asset.filename, raw.metadata, asset.settings.negative
+    );
+    let pixels = render(&proxy, &asset.settings, &cancel).unwrap();
+    if let Some(output) = std::env::var_os("XUAN_TEST_RAW_PREVIEW") {
+        pixels.save(&output).unwrap();
+        let original = Path::new(&output).with_extension("original.png");
+        render(&proxy, &DevelopSettings::default(), &cancel)
+            .unwrap()
+            .save(original)
+            .unwrap();
+    }
+    assert!(pixels.pixels().any(|p| (25..230).contains(&p[0])));
+    let full = render(&raw, &asset.settings, &cancel).unwrap();
+    let [left, top, right, bottom] =
+        crate::gpu::raw_crop(&asset.settings, [raw.camera.width(), raw.camera.height()]);
+    assert_eq!(full.dimensions(), (right - left, bottom - top));
+    let high = render_16(&proxy, &asset.settings, &cancel).unwrap();
+    for (eight, sixteen) in pixels.as_raw().iter().zip(high.as_raw()) {
+        assert!(eight.abs_diff((f32::from(*sixteen) / 257.0).round() as u8) <= 1);
+    }
+    let mut layer = crate::document::Layer::image("Negative", full);
+    layer.raw = Some(asset.clone());
+    let mut document = crate::document::Document::new(right - left, bottom - top).unwrap();
+    document.select(layer.id, false);
+    document.layers = vec![layer];
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("negative.xuan");
+    crate::io::save(&document, &project).unwrap();
+    let restored = crate::io::load(&project).unwrap();
+    let saved = restored.layers[0].raw.as_ref().unwrap();
+    assert_eq!(saved.settings, asset.settings);
+    assert_eq!(saved.bytes, asset.bytes);
+    assert_eq!(render(&proxy, &saved.settings, &cancel).unwrap(), pixels);
+}

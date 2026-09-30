@@ -227,7 +227,7 @@ allocation/compilation run and include GPU completion plus histogram readback.
 Registration timings exclude window presentation. See the [GPU processing
 audit](GPU_PROCESSING.md) for sample measurements and the remaining decode costs.
 
-### Localization checks
+### Localization and negative conversion checks
 
 UI text uses `xuan::i18n::tr` with the English text as its key. Simplified Chinese
 translations are UTF-8 tab-separated pairs in `assets/locales/zh-CN.tsv`. Keep UI
@@ -236,5 +236,17 @@ The UI test checks the settings shortcut, live language changes and bundled glyp
 coverage. Configuration tests use temporary directories.
 
 ```sh
+cargo test --locked negative
 cargo test --locked settings_shortcut
+cargo test --locked --lib gpu::processing_tests::processing_raw_matches_cpu_at_both_depths -- --ignored
+XUAN_TEST_RAW=/path/to/negative.CR2 XUAN_TEST_RAW_PREVIEW=/tmp/positive.png \
+  cargo test --locked --lib sample_negative_raw -- --ignored --nocapture
 ```
+
+The optional sample check writes positive and original previews, develops the full
+resolution, compares 8/16-bit output and verifies project persistence. Camera files
+are kept outside the repository.
+
+For scans containing a film holder, set `XUAN_TEST_RAW_CROP` to normalized
+`left,top,right,bottom` bounds when running the sample check. This models the
+**crop → Analyze crop** workflow and excludes the holder from calibration.

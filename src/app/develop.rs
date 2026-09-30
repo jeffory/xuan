@@ -117,6 +117,7 @@ pub(super) struct Develop {
     canvas_drag: Option<CanvasDrag>,
     pub fit: bool,
     pub picker: bool,
+    pub film_base_picker: bool,
     pub panel: usize,
     pub curve_channel: usize,
     pub hsl_band: usize,
@@ -172,6 +173,7 @@ impl Develop {
             canvas_drag: None,
             fit: true,
             picker: false,
+            film_base_picker: false,
             panel: 0,
             curve_channel: 0,
             hsl_band: 0,
@@ -867,6 +869,8 @@ impl EditorApp {
                     tr("Decoding RAW sensor data…")
                 } else if d.receiver.is_some() || d.needs_preview(d.preview_side) {
                     tr("Updating preview…")
+                } else if d.film_base_picker {
+                    tr("Click an unexposed film edge to sample the orange mask")
                 } else if d.picker {
                     tr("Click a neutral gray area to set white balance")
                 } else if d.draw_overlay {
@@ -898,8 +902,8 @@ impl EditorApp {
             });
         });
         egui::SidePanel::right("develop_controls")
-            .default_width(330.0)
-            .width_range(330.0..=420.0)
+            .default_width(400.0)
+            .min_width(400.0)
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(12))
             .show(ctx, |ui| {
                 ui.add_enabled_ui(interactive, |ui| {
@@ -1173,7 +1177,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
         // Keep the gesture chosen at its origin, even after leaving the divider.
         d.canvas_drag = if force_pan {
             Some(CanvasDrag::Pan { origin, pan: d.pan })
-        } else if !d.picker && !d.draw_overlay {
+        } else if !d.picker && !d.film_base_picker && !d.draw_overlay {
             Some(if over_divider(origin) {
                 CanvasDrag::Split {
                     pointer_offset: origin.x - split_x,
@@ -1190,7 +1194,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
             Some(CanvasDrag::Pan { .. }) => egui::CursorIcon::Grabbing,
             Some(CanvasDrag::Split { .. }) => egui::CursorIcon::ResizeHorizontal,
             None if force_pan => egui::CursorIcon::Grab,
-            None if d.picker || d.draw_overlay => egui::CursorIcon::Crosshair,
+            None if d.picker || d.film_base_picker || d.draw_overlay => egui::CursorIcon::Crosshair,
             None if response.hover_pos().is_some_and(over_divider) => {
                 egui::CursorIcon::ResizeHorizontal
             }
@@ -1235,19 +1239,37 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
         }
         d.last_brush_point = None;
     } else if !force_pan
-        && d.picker
+        && (d.picker || d.film_base_picker)
         && response.clicked()
-        && let (Some(point), Some(raw)) = (point, &d.proxy)
+        && let (Some(point), Some(raw)) = (point, &d.full)
     {
         let source = raw::source_point(
             point,
             &d.settings,
             raw.camera.width() as f32 / raw.camera.height() as f32,
         );
-        d.settings.custom_wb = raw::sample_white_balance(raw, source);
-        d.settings.white_balance = WhiteBalance::Custom;
-        d.settings.tint = 0.0;
-        d.picker = false;
+        let viewing_original = d.compare == Compare::Original
+            || (d.compare == Compare::Split
+                && response
+                    .interact_pointer_pos()
+                    .is_some_and(|p| p.x < split_x));
+        let source = if viewing_original { point } else { source };
+        if d.film_base_picker {
+            if let Some(base) = raw::sample_film_base(raw, source) {
+                d.settings.negative.film_base = base;
+                d.film_base_picker = false;
+                d.compare = Compare::Edited;
+            } else {
+                d.notice = Some(
+                    tr("Cannot sample this area. Choose a clear, unexposed film edge.").into(),
+                );
+            }
+        } else {
+            d.settings.custom_wb = raw::sample_white_balance(raw, source);
+            d.settings.white_balance = WhiteBalance::Custom;
+            d.settings.tint = 0.0;
+            d.picker = false;
+        }
     } else if !force_pan
         && d.draw_overlay
         && let Some(overlay) = d
@@ -1771,6 +1793,56 @@ mod tests {
     }
 
     #[test]
+    fn negative_controls_are_undoable_and_settings_leave_develop_intact() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        app.develop = Some(ready(&ctx));
+        let original = app.develop.as_ref().unwrap().settings.clone();
+        click_text(&ctx, &mut app, "Negative");
+        click_text(&ctx, &mut app, "Convert negative to positive");
+        let converted = app.develop.as_ref().unwrap().settings.clone();
+        assert!(converted.negative.enabled);
+        assert_eq!(app.develop.as_ref().unwrap().undo.len(), 1);
+        app.command("undo");
+        assert_eq!(app.develop.as_ref().unwrap().settings, original);
+        app.command("redo");
+        assert_eq!(app.develop.as_ref().unwrap().settings, converted);
+
+        app.command("settings");
+        assert!(app.dialog == Some(super::super::Dialog::Settings));
+        click_text(&ctx, &mut app, "Done");
+        assert!(app.dialog.is_none());
+        assert_eq!(app.develop.as_ref().unwrap().settings, converted);
+        click_text(&ctx, &mut app, "Pick film base");
+        assert!(app.develop.as_ref().unwrap().film_base_picker);
+        assert!(app.develop.as_ref().unwrap().compare == Compare::Original);
+        let output = frame(&ctx, &mut app, vec![]);
+        let d = app.develop.as_ref().unwrap();
+        let rect = image_rect(&output, d.before.as_ref().unwrap().id());
+        click(&ctx, &mut app, rect.center());
+        let d = app.develop.as_ref().unwrap();
+        assert!(!d.film_base_picker);
+        assert!(d.compare == Compare::Edited);
+        assert_ne!(d.settings.negative.film_base, converted.negative.film_base);
+        let sampled = d.settings.clone();
+        app.command("undo");
+        assert_eq!(app.develop.as_ref().unwrap().settings, converted);
+        app.command("redo");
+        assert_eq!(app.develop.as_ref().unwrap().settings, sampled);
+        click_text(&ctx, &mut app, "Convert negative to positive");
+        let d = app.develop.as_ref().unwrap();
+        assert!(!d.settings.negative.enabled);
+        assert_eq!(d.settings.negative.film_base, sampled.negative.film_base);
+        click_text(&ctx, &mut app, "Convert negative to positive");
+        app.develop.as_mut().unwrap().settings.negative.gamma = 1.6;
+        app.develop.as_mut().unwrap().settings.negative.balance = [0.2, -0.1, 0.3];
+        click_text(&ctx, &mut app, "Analyze crop");
+        let negative = &app.develop.as_ref().unwrap().settings.negative;
+        assert_eq!(negative.gamma, 1.6);
+        assert_eq!(negative.balance, [0.2, -0.1, 0.3]);
+    }
+
+    #[test]
     fn shared_tabs_preserve_raw_sessions_and_route_menu_commands() {
         let ctx = egui::Context::default();
         let mut app = EditorApp::with_context(&ctx, vec![], false, None);
@@ -2095,7 +2167,7 @@ mod tests {
         d.selected_overlay = Some(0);
         let settings = d.settings.clone();
         settings.validate().unwrap();
-        for panel in 0..6 {
+        for panel in 0..7 {
             app.develop.as_mut().unwrap().panel = panel;
             frame(&ctx, &mut app, vec![]);
         }
@@ -2438,16 +2510,21 @@ mod tests {
             Some(true),
             "start immediately instead of waiting for a pause"
         );
-        let wait = |app: &mut EditorApp| {
+        let wait = |app: &mut EditorApp, editing: bool| {
             let deadline = Instant::now() + Duration::from_secs(10);
             while app.develop.as_ref().unwrap().receiver.is_some() {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(2));
+                if editing {
+                    // Keep the interaction active even if a busy test runner
+                    // takes longer than the preview settlement interval.
+                    app.develop.as_mut().unwrap().last_change = Instant::now();
+                }
                 app.poll_develop(&ctx);
                 assert!(app.develop.as_ref().unwrap().error.is_none());
             }
         };
-        wait(&mut app);
+        wait(&mut app, true);
         let d = app.develop.as_mut().unwrap();
         assert_eq!(d.rendered_revision, Some(d.revision));
         assert_eq!(d.rendered_side, 128);
@@ -2455,7 +2532,7 @@ mod tests {
         d.last_change = Instant::now() - PREVIEW_SETTLE;
         d.last_preview = None;
         app.poll_develop(&ctx);
-        wait(&mut app);
+        wait(&mut app, false);
         let d = app.develop.as_mut().unwrap();
         assert_eq!(d.rendered_side, 256);
         assert_eq!(
@@ -2466,7 +2543,7 @@ mod tests {
         d.show_clipping = true;
         d.last_preview = None;
         app.poll_develop(&ctx);
-        wait(&mut app);
+        wait(&mut app, false);
         let d = app.develop.as_ref().unwrap();
         assert_eq!(d.before_side, 256);
         assert!(d.warning.is_some());
