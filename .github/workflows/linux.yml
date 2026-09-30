@@ -24,7 +24,7 @@ jobs:
       - name: Install Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libvulkan1 mesa-vulkan-drivers desktop-file-utils xvfb dpkg rpm cpio binutils
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libvulkan1 mesa-vulkan-drivers desktop-file-utils xvfb dpkg rpm cpio binutils squashfs-tools
       - name: Set up AppImage packaging
         run: |
           mkdir -p "$RUNNER_TEMP/appimage-tools"

@@ -248,14 +248,27 @@ def check_appimage(temporary):
     )
     destination = temporary / "AppImage with spaces"
     destination.mkdir()
+    appdir = destination / "squashfs-root"
+    # The runtime's --appimage-extract creates private (0700) directories.
+    # Use unsquashfs to check the permissions actually stored in the image.
+    offset = subprocess.check_output(
+        [package, "--appimage-offset"], text=True, timeout=30
+    ).strip()
     subprocess.run(
-        [package, "--appimage-extract"],
-        cwd=destination,
+        [
+            "unsquashfs",
+            "-no-xattrs",  # Host SELinux labels cannot be restored without root.
+            "-no-progress",
+            "-o",
+            offset,
+            "-d",
+            appdir,
+            package,
+        ],
         stdout=subprocess.DEVNULL,
         check=True,
         timeout=60,
     )
-    appdir = destination / "squashfs-root"
     assert {path.name for path in appdir.iterdir()} == {
         "AppRun",
         ".DirIcon",
