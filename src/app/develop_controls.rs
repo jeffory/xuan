@@ -3,6 +3,7 @@ use std::{
     io::{Read, Write},
     ops::RangeInclusive,
 };
+use xuan::i18n::tr;
 
 use egui::{Color32, Sense, Stroke, pos2, vec2};
 use xuan::raw::{self, DevelopSettings, Overlay, OverlayKind, WhiteBalance};
@@ -35,33 +36,33 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(!d.undo.is_empty(), widgets::Button::new("Undo"))
+            .add_enabled(!d.undo.is_empty(), widgets::Button::new(tr("Undo")))
             .clicked()
         {
             d.undo(false);
         }
         if ui
-            .add_enabled(!d.redo.is_empty(), widgets::Button::new("Redo"))
+            .add_enabled(!d.redo.is_empty(), widgets::Button::new(tr("Redo")))
             .clicked()
         {
             d.undo(true);
         }
-        if widgets::button(ui, "Reset")
-            .on_hover_text("Reset all Develop adjustments to defaults")
+        if widgets::button(ui, tr("Reset"))
+            .on_hover_text(tr("Reset all Develop adjustments to defaults"))
             .clicked()
         {
             d.settings = DevelopSettings::default();
             d.selected_overlay = None;
         }
         widgets::PopUp::from_id_salt("raw_presets")
-            .selected_text("Presets")
+            .selected_text(tr("Presets"))
             .width(90.0)
             .show_ui(ui, |ui| {
                 ui.set_min_width(150.0);
                 for (name, preset) in [
-                    ("Natural", DevelopSettings::default()),
+                    (tr("Natural"), DevelopSettings::default()),
                     (
-                        "Landscape",
+                        tr("Landscape"),
                         DevelopSettings {
                             contrast: 12.0,
                             highlights: -30.0,
@@ -72,7 +73,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
                         },
                     ),
                     (
-                        "Black & white",
+                        tr("Black & white"),
                         DevelopSettings {
                             monochrome: true,
                             contrast: 18.0,
@@ -87,11 +88,11 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
                     }
                 }
                 ui.separator();
-                if ui.button("Save settings…").clicked() {
+                if ui.button(tr("Save settings…")).clicked() {
                     save_preset(d);
                     ui.close();
                 }
-                if ui.button("Load settings…").clicked() {
+                if ui.button(tr("Load settings…")).clicked() {
                     load_preset(d);
                     ui.close();
                 }
@@ -102,12 +103,12 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
         ui,
         &mut d.panel,
         &[
-            (0, "Basic"),
-            (1, "Tone"),
-            (2, "Detail"),
-            (3, "Lens"),
-            (4, "Masks"),
-            (5, "Info"),
+            (0, tr("Basic")),
+            (1, tr("Tone")),
+            (2, tr("Detail")),
+            (3, tr("Lens")),
+            (4, tr("Masks")),
+            (5, tr("Info")),
         ],
     );
     ui.separator();
@@ -135,33 +136,33 @@ fn heading(ui: &mut egui::Ui, title: &str) {
 }
 
 fn basic(ui: &mut egui::Ui, d: &mut Develop) {
-    heading(ui, "White balance");
+    heading(ui, tr("White balance"));
     ui.horizontal(|ui| {
         widgets::PopUp::from_id_salt("raw_wb")
             .selected_text(match d.settings.white_balance {
-                WhiteBalance::AsShot => "As shot",
-                WhiteBalance::Temperature => "Temperature",
-                WhiteBalance::Custom => "Sampled neutral",
+                WhiteBalance::AsShot => tr("As shot"),
+                WhiteBalance::Temperature => tr("Temperature"),
+                WhiteBalance::Custom => tr("Sampled neutral"),
             })
             .show_ui(ui, |ui| {
                 widgets::menu_choice(
                     ui,
                     &mut d.settings.white_balance,
                     WhiteBalance::AsShot,
-                    "As shot",
+                    tr("As shot"),
                 );
                 widgets::menu_choice(
                     ui,
                     &mut d.settings.white_balance,
                     WhiteBalance::Temperature,
-                    "Temperature",
+                    tr("Temperature"),
                 );
                 for (name, kelvin) in [
-                    ("Daylight", 5500.0),
-                    ("Cloudy", 6500.0),
-                    ("Shade", 7500.0),
-                    ("Tungsten", 2850.0),
-                    ("Flash", 6000.0),
+                    (tr("Daylight"), 5500.0),
+                    (tr("Cloudy"), 6500.0),
+                    (tr("Shade"), 7500.0),
+                    (tr("Tungsten"), 2850.0),
+                    (tr("Flash"), 6000.0),
                 ] {
                     if ui.button(name).clicked() {
                         d.settings.white_balance = WhiteBalance::Temperature;
@@ -171,7 +172,7 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
                     }
                 }
             });
-        if widgets::checkbox(ui, &mut d.picker, "Pick neutral").changed() {
+        if widgets::checkbox(ui, &mut d.picker, tr("Pick neutral")).changed() {
             d.draw_overlay = false;
         }
     });
@@ -180,70 +181,89 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
         |ui| {
             slider(
                 ui,
-                "Temperature",
+                tr("Temperature"),
                 &mut d.settings.temperature,
                 2000.0..=25_000.0,
                 " K",
             );
         },
     );
-    slider(ui, "Tint", &mut d.settings.tint, -150.0..=150.0, "");
-    heading(ui, "Light");
-    if widgets::button(ui, "Auto exposure").clicked()
+    slider(ui, tr("Tint"), &mut d.settings.tint, -150.0..=150.0, "");
+    heading(ui, tr("Light"));
+    if widgets::button(ui, tr("Auto exposure")).clicked()
         && let Some(raw) = &d.proxy
     {
         d.settings.exposure = raw::auto_exposure(raw);
     }
     slider(
         ui,
-        "Exposure",
+        tr("Exposure"),
         &mut d.settings.exposure,
         -10.0..=10.0,
         " EV",
     );
-    percent(ui, "Brightness", &mut d.settings.brightness);
-    percent(ui, "Contrast", &mut d.settings.contrast);
-    percent(ui, "Highlights", &mut d.settings.highlights);
-    percent(ui, "Shadows", &mut d.settings.shadows);
-    percent(ui, "Whites", &mut d.settings.whites);
-    percent(ui, "Blacks", &mut d.settings.blacks);
-    heading(ui, "Presence");
-    percent(ui, "Clarity", &mut d.settings.clarity);
-    percent(ui, "Texture", &mut d.settings.texture);
-    percent(ui, "Dehaze", &mut d.settings.dehaze);
-    percent(ui, "Vibrance", &mut d.settings.vibrance);
-    percent(ui, "Saturation", &mut d.settings.saturation);
+    percent(ui, tr("Brightness"), &mut d.settings.brightness);
+    percent(ui, tr("Contrast"), &mut d.settings.contrast);
+    percent(ui, tr("Highlights"), &mut d.settings.highlights);
+    percent(ui, tr("Shadows"), &mut d.settings.shadows);
+    percent(ui, tr("Whites"), &mut d.settings.whites);
+    percent(ui, tr("Blacks"), &mut d.settings.blacks);
+    heading(ui, tr("Presence"));
+    percent(ui, tr("Clarity"), &mut d.settings.clarity);
+    percent(ui, tr("Texture"), &mut d.settings.texture);
+    percent(ui, tr("Dehaze"), &mut d.settings.dehaze);
+    percent(ui, tr("Vibrance"), &mut d.settings.vibrance);
+    percent(ui, tr("Saturation"), &mut d.settings.saturation);
 }
 
 fn tones(ui: &mut egui::Ui, d: &mut Develop) {
-    heading(ui, "Tone curve");
+    heading(ui, tr("Tone curve"));
     widgets::segmented(
         ui,
         &mut d.curve_channel,
-        &[(0, "RGB"), (1, "Red"), (2, "Green"), (3, "Blue")],
+        &[
+            (0, "RGB"),
+            (1, tr("Red")),
+            (2, tr("Green")),
+            (3, tr("Blue")),
+        ],
     );
     curve(ui, &mut d.settings.curves[d.curve_channel], d.curve_channel);
     ui.horizontal(|ui| {
-        if widgets::button(ui, "Linear").clicked() {
+        if widgets::button(ui, tr("Linear")).clicked() {
             d.settings.curves[d.curve_channel] = [0.0, 0.25, 0.5, 0.75, 1.0];
         }
-        if widgets::button(ui, "S curve").clicked() {
+        if widgets::button(ui, tr("S curve")).clicked() {
             d.settings.curves[d.curve_channel] = [0.0, 0.18, 0.5, 0.82, 1.0];
         }
-        if widgets::button(ui, "Lift blacks").clicked() {
+        if widgets::button(ui, tr("Lift blacks")).clicked() {
             d.settings.curves[d.curve_channel] = [0.08, 0.28, 0.5, 0.75, 1.0];
         }
     });
-    heading(ui, "Color mixer");
+    heading(ui, tr("Color mixer"));
     widgets::PopUp::from_id_salt("raw_hsl")
         .selected_text(
             [
-                "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+                tr("Red"),
+                tr("Orange"),
+                tr("Yellow"),
+                tr("Green"),
+                tr("Aqua"),
+                tr("Blue"),
+                tr("Purple"),
+                tr("Magenta"),
             ][d.hsl_band],
         )
         .show_ui(ui, |ui| {
             for (i, name) in [
-                "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+                tr("Red"),
+                tr("Orange"),
+                tr("Yellow"),
+                tr("Green"),
+                tr("Aqua"),
+                tr("Blue"),
+                tr("Purple"),
+                tr("Magenta"),
             ]
             .iter()
             .enumerate()
@@ -251,70 +271,79 @@ fn tones(ui: &mut egui::Ui, d: &mut Develop) {
                 widgets::menu_choice(ui, &mut d.hsl_band, i, *name);
             }
         });
-    percent(ui, "Hue", &mut d.settings.hsl[d.hsl_band][0]);
-    percent(ui, "Saturation", &mut d.settings.hsl[d.hsl_band][1]);
-    percent(ui, "Lightness", &mut d.settings.hsl[d.hsl_band][2]);
-    heading(ui, "Black & white");
-    widgets::checkbox(ui, &mut d.settings.monochrome, "Monochrome");
+    percent(ui, tr("Hue"), &mut d.settings.hsl[d.hsl_band][0]);
+    percent(ui, tr("Saturation"), &mut d.settings.hsl[d.hsl_band][1]);
+    percent(ui, tr("Lightness"), &mut d.settings.hsl[d.hsl_band][2]);
+    heading(ui, tr("Black & white"));
+    widgets::checkbox(ui, &mut d.settings.monochrome, tr("Monochrome"));
     ui.add_enabled_ui(d.settings.monochrome, |ui| {
-        for (i, label) in ["Red mix", "Green mix", "Blue mix"].iter().enumerate() {
+        for (i, label) in [tr("Red mix"), tr("Green mix"), tr("Blue mix")]
+            .iter()
+            .enumerate()
+        {
             slider(ui, label, &mut d.settings.bw_mix[i], -1.0..=2.0, "");
         }
     });
-    heading(ui, "Split toning");
+    heading(ui, tr("Split toning"));
     slider(
         ui,
-        "Shadow hue",
+        tr("Shadow hue"),
         &mut d.settings.shadow_tone[0],
         0.0..=360.0,
         "°",
     );
     slider(
         ui,
-        "Shadow amount",
+        tr("Shadow amount"),
         &mut d.settings.shadow_tone[1],
         0.0..=100.0,
         "%",
     );
     slider(
         ui,
-        "Highlight hue",
+        tr("Highlight hue"),
         &mut d.settings.highlight_tone[0],
         0.0..=360.0,
         "°",
     );
     slider(
         ui,
-        "Highlight amount",
+        tr("Highlight amount"),
         &mut d.settings.highlight_tone[1],
         0.0..=100.0,
         "%",
     );
-    percent(ui, "Balance", &mut d.settings.tone_balance);
+    percent(ui, tr("Balance"), &mut d.settings.tone_balance);
 }
 
 fn detail(ui: &mut egui::Ui, d: &mut Develop) {
-    heading(ui, "Noise reduction");
+    heading(ui, tr("Noise reduction"));
     slider(
         ui,
-        "Luminance",
+        tr("Luminance"),
         &mut d.settings.luminance_noise,
         0.0..=100.0,
         "%",
     );
-    slider(ui, "Color", &mut d.settings.color_noise, 0.0..=100.0, "%");
-    heading(ui, "Sharpening");
-    slider(ui, "Amount", &mut d.settings.sharpen, 0.0..=200.0, "%");
     slider(
         ui,
-        "Radius",
+        tr("Color"),
+        &mut d.settings.color_noise,
+        0.0..=100.0,
+        "%",
+    );
+    heading(ui, tr("Sharpening"));
+    slider(ui, tr("Amount"), &mut d.settings.sharpen, 0.0..=200.0, "%");
+    slider(
+        ui,
+        tr("Radius"),
         &mut d.settings.sharpen_radius,
         0.3..=5.0,
         " px",
     );
     slider(
         ui,
-        "Threshold",
+        tr("Threshold"),
         &mut d.settings.sharpen_threshold,
         0.0..=0.2,
         "",
@@ -323,73 +352,79 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
     widgets::checkbox(
         ui,
         &mut d.full_preview,
-        "Always use full-resolution preview",
+        tr("Always use full-resolution preview"),
     );
-    ui.label(egui::RichText::new("Zooming in loads full detail automatically. Use 100% to judge sharpening and noise reduction. Always using full resolution also applies it to Fit view and takes longer to update.").color(theme::MUTED));
+    ui.label(egui::RichText::new(tr("Zooming in loads full detail automatically. Use 100% to judge sharpening and noise reduction. Always using full resolution also applies it to Fit view and takes longer to update.")).color(theme::MUTED));
 }
 
 fn lens(ui: &mut egui::Ui, d: &mut Develop) {
-    heading(ui, "Manual lens correction");
+    heading(ui, tr("Manual lens correction"));
     if let Some(asset) = &d.asset
         && !asset.metadata.lens.is_empty()
     {
         ui.label(&asset.metadata.lens);
     }
-    percent(ui, "Distortion", &mut d.settings.distortion);
-    percent(ui, "Red / cyan", &mut d.settings.chromatic_red);
-    percent(ui, "Blue / yellow", &mut d.settings.chromatic_blue);
-    slider(ui, "Defringe", &mut d.settings.defringe, 0.0..=100.0, "%");
-    percent(ui, "Vignetting", &mut d.settings.vignette);
-    heading(ui, "Geometry");
+    percent(ui, tr("Distortion"), &mut d.settings.distortion);
+    percent(ui, tr("Red / cyan"), &mut d.settings.chromatic_red);
+    percent(ui, tr("Blue / yellow"), &mut d.settings.chromatic_blue);
     slider(
         ui,
-        "Straighten",
+        tr("Defringe"),
+        &mut d.settings.defringe,
+        0.0..=100.0,
+        "%",
+    );
+    percent(ui, tr("Vignetting"), &mut d.settings.vignette);
+    heading(ui, tr("Geometry"));
+    slider(
+        ui,
+        tr("Straighten"),
         &mut d.settings.rotation,
         -45.0..=45.0,
         "°",
     );
-    percent(ui, "Horizontal", &mut d.settings.perspective[0]);
-    percent(ui, "Vertical", &mut d.settings.perspective[1]);
-    heading(ui, "Crop");
+    percent(ui, tr("Horizontal"), &mut d.settings.perspective[0]);
+    percent(ui, tr("Vertical"), &mut d.settings.perspective[1]);
+    heading(ui, tr("Crop"));
     ui.label(
-        egui::RichText::new("Bounds as a fraction of the original image")
+        egui::RichText::new(tr("Bounds as a fraction of the original image"))
             .small()
             .color(theme::MUTED),
     );
     let [left, top, right, bottom] = d.settings.crop;
     slider(
         ui,
-        "Left",
+        tr("Left"),
         &mut d.settings.crop[0],
         0.0..=(right - 0.01),
         "",
     );
     slider(
         ui,
-        "Top",
+        tr("Top"),
         &mut d.settings.crop[1],
         0.0..=(bottom - 0.01),
         "",
     );
     slider(
         ui,
-        "Right",
+        tr("Right"),
         &mut d.settings.crop[2],
         (left + 0.01)..=1.0,
         "",
     );
     slider(
         ui,
-        "Bottom",
+        tr("Bottom"),
         &mut d.settings.crop[3],
         (top + 0.01)..=1.0,
         "",
     );
     ui.horizontal(|ui| {
-        if widgets::button(ui, "Uncrop").clicked() {
+        if widgets::button(ui, tr("Uncrop")).clicked() {
             d.settings.crop = [0.0, 0.0, 1.0, 1.0];
         }
-        if widgets::button(ui, "Square").clicked()
+        if widgets::button(ui, tr("Square")).clicked()
             && let Some(raw) = &d.proxy
         {
             let aspect = raw.camera.width() as f32 / raw.camera.height() as f32;
@@ -405,13 +440,13 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
 }
 
 fn masks(ui: &mut egui::Ui, d: &mut Develop) {
-    heading(ui, "Local adjustments");
+    heading(ui, tr("Local adjustments"));
     ui.add_enabled_ui(d.settings.overlays.len() < 32, |ui| {
         ui.horizontal(|ui| {
             for (name, kind) in [
-                ("Linear", OverlayKind::Linear),
-                ("Radial", OverlayKind::Radial),
-                ("Brush", OverlayKind::Brush),
+                (tr("Linear"), OverlayKind::Linear),
+                (tr("Radial"), OverlayKind::Radial),
+                (tr("Brush"), OverlayKind::Brush),
             ] {
                 if widgets::button(ui, format!("+ {name}")).clicked() {
                     d.settings.overlays.push(Overlay {
@@ -437,30 +472,36 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
         .selected_overlay
         .filter(|i| *i < d.settings.overlays.len())
     else {
-        ui.label("Add a mask, then drag over the photo to place it.");
+        ui.label(tr("Add a mask, then drag over the photo to place it."));
         return;
     };
     ui.separator();
     ui.horizontal(|ui| {
-        widgets::checkbox(ui, &mut d.draw_overlay, "Draw mask");
-        widgets::checkbox(ui, &mut d.show_mask, "Show guides");
+        widgets::checkbox(ui, &mut d.draw_overlay, tr("Draw mask"));
+        widgets::checkbox(ui, &mut d.show_mask, tr("Show guides"));
     });
     let overlay = &mut d.settings.overlays[index];
     ui.text_edit_singleline(&mut overlay.name);
-    widgets::checkbox(ui, &mut overlay.invert, "Invert mask");
+    widgets::checkbox(ui, &mut overlay.invert, tr("Invert mask"));
     if overlay.kind == OverlayKind::Brush {
-        slider(ui, "Brush radius", &mut overlay.radius, 0.005..=0.3, "");
-        if widgets::button(ui, "Clear brush").clicked() {
+        slider(ui, tr("Brush radius"), &mut overlay.radius, 0.005..=0.3, "");
+        if widgets::button(ui, tr("Clear brush")).clicked() {
             overlay.points.clear();
         }
     }
     if overlay.kind != OverlayKind::Linear {
-        slider(ui, "Feather", &mut overlay.feather, 0.01..=1.0, "");
+        slider(ui, tr("Feather"), &mut overlay.feather, 0.01..=1.0, "");
     }
-    slider(ui, "Exposure", &mut overlay.exposure, -10.0..=10.0, " EV");
-    percent(ui, "Warmth", &mut overlay.warmth);
-    percent(ui, "Saturation", &mut overlay.saturation);
-    if widgets::button(ui, "Delete mask").clicked() {
+    slider(
+        ui,
+        tr("Exposure"),
+        &mut overlay.exposure,
+        -10.0..=10.0,
+        " EV",
+    );
+    percent(ui, tr("Warmth"), &mut overlay.warmth);
+    percent(ui, tr("Saturation"), &mut overlay.saturation);
+    if widgets::button(ui, tr("Delete mask")).clicked() {
         d.settings.overlays.remove(index);
         d.selected_overlay = None;
         d.draw_overlay = false;
@@ -472,7 +513,7 @@ fn metadata(ui: &mut egui::Ui, d: &Develop) {
         return;
     };
     let m = &asset.metadata;
-    heading(ui, "Camera information");
+    heading(ui, tr("Camera information"));
     ui.strong(&m.camera);
     if !m.lens.is_empty() {
         ui.label(&m.lens);
@@ -482,16 +523,16 @@ fn metadata(ui: &mut egui::Ui, d: &Develop) {
         .spacing(vec2(14.0, 9.0))
         .show(ui, |ui| {
             for (label, value) in [
-                ("Source", asset.filename.clone()),
-                ("Dimensions", format!("{} × {}", m.width, m.height)),
-                ("Decoded depth", format!("{} bit", m.bits)),
+                (tr("Source"), asset.filename.clone()),
+                (tr("Dimensions"), format!("{} × {}", m.width, m.height)),
+                (tr("Decoded depth"), format!("{} bit", m.bits)),
                 ("ISO", m.iso.map_or("—".into(), |v| v.to_string())),
                 (
-                    "Aperture",
+                    tr("Aperture"),
                     m.aperture.map_or("—".into(), |v| format!("f/{v:.1}")),
                 ),
                 (
-                    "Shutter",
+                    tr("Shutter"),
                     m.shutter.map_or("—".into(), |v| {
                         if v > 0.0 && v < 1.0 {
                             format!("1/{:.0} s", 1.0 / v)
@@ -501,13 +542,14 @@ fn metadata(ui: &mut egui::Ui, d: &Develop) {
                     }),
                 ),
                 (
-                    "Focal length",
+                    tr("Focal length"),
                     m.focal_length.map_or("—".into(), |v| format!("{v:.0} mm")),
                 ),
                 (
-                    "RAW storage",
+                    tr("RAW storage"),
                     format!(
-                        "Embedded · {:.1} MiB",
+                        "{} · {:.1} MiB",
+                        tr("Embedded"),
                         asset.bytes.len() as f64 / 1_048_576.0
                     ),
                 ),
@@ -517,15 +559,15 @@ fn metadata(ui: &mut egui::Ui, d: &Develop) {
                 ui.end_row();
             }
         });
-    heading(ui, "Output");
-    ui.label("Embedded RAW layer with an sRGB photo render. Double-click the layer to return to Develop.");
+    heading(ui, tr("Output"));
+    ui.label(tr("Embedded RAW layer with an sRGB photo render. Double-click the layer to return to Develop."));
     ui.add_space(8.0);
-    ui.label(egui::RichText::new("Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.").color(theme::MUTED));
+    ui.label(egui::RichText::new(tr("Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.")).color(theme::MUTED));
 }
 
 fn histogram(ui: &mut egui::Ui, d: &Develop) {
     ui.horizontal(|ui| {
-        ui.strong("Histogram");
+        ui.strong(tr("Histogram"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new("RGB").small().color(theme::MUTED));
         });
@@ -570,13 +612,13 @@ fn histogram(ui: &mut egui::Ui, d: &Develop) {
     }
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new(format!("Shadows {:.2}%", d.clipping[0]))
+            egui::RichText::new(format!("{} {:.2}%", tr("Shadows"), d.clipping[0]))
                 .small()
                 .color(theme::MUTED),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
-                egui::RichText::new(format!("Highlights {:.2}%", d.clipping[1]))
+                egui::RichText::new(format!("{} {:.2}%", tr("Highlights"), d.clipping[1]))
                     .small()
                     .color(theme::MUTED),
             );
@@ -646,7 +688,7 @@ fn curve(ui: &mut egui::Ui, knots: &mut [f32; 5], channel: usize) {
 
 fn save_preset(d: &mut Develop) {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("RAW settings", &["json"])
+        .add_filter(tr("RAW settings"), &["json"])
         .set_file_name("raw-settings.json")
         .save_file()
     else {
@@ -668,7 +710,7 @@ fn save_preset(d: &mut Develop) {
 
 fn load_preset(d: &mut Develop) {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("RAW settings", &["json"])
+        .add_filter(tr("RAW settings"), &["json"])
         .pick_file()
     else {
         return;
@@ -686,6 +728,6 @@ fn load_preset(d: &mut Develop) {
             d.settings = settings;
             d.selected_overlay = None;
         }
-        Err(error) => d.error = Some(format!("Could not load RAW settings: {error}")),
+        Err(error) => d.error = Some(format!("{}: {error}", tr("Could not load RAW settings"))),
     }
 }

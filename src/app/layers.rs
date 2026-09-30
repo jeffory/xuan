@@ -1,5 +1,6 @@
 use super::widgets;
 use std::sync::{Arc, Weak};
+use xuan::i18n::tr;
 
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, TextureOptions, vec2};
 use uuid::Uuid;
@@ -159,9 +160,11 @@ impl EditorApp {
                                 ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.add_space((height * 0.5 - 48.0).max(10.0));
                                 ui.vertical_centered(|ui| {
-                                    ui.label(RichText::new("No layers yet").color(theme::MUTED));
                                     ui.label(
-                                        RichText::new("Create a canvas or import an image.")
+                                        RichText::new(tr("No layers yet")).color(theme::MUTED),
+                                    );
+                                    ui.label(
+                                        RichText::new(tr("Create a canvas or import an image."))
                                             .size(11.0)
                                             .color(theme::MUTED),
                                     );
@@ -184,7 +187,7 @@ impl EditorApp {
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Layers").strong());
+                    ui.label(RichText::new(tr("Layers")).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let count = self.session().map_or(0, |s| s.document.layers.len());
                         ui.label(RichText::new(count.to_string()).color(theme::MUTED).small());
@@ -203,16 +206,20 @@ impl EditorApp {
                     let mut locked = active.is_some_and(|l| l.locked);
                     let mut changed = false;
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Blend").size(11.0));
+                        ui.label(RichText::new(tr("Blend")).size(11.0));
                         ui.add_enabled_ui(active.is_none_or(|l| !l.standalone_mask), |ui| {
                             widgets::PopUp::from_id_salt("blend_mode")
                                 .width((ui.available_width() - 24.0).max(80.0))
-                                .selected_text(blend.name())
+                                .selected_text(tr(blend.name()))
                                 .show_ui(ui, |ui| {
                                     for mode in BlendMode::ALL {
-                                        changed |=
-                                            widgets::menu_choice(ui, &mut blend, mode, mode.name())
-                                                .changed();
+                                        changed |= widgets::menu_choice(
+                                            ui,
+                                            &mut blend,
+                                            mode,
+                                            tr(mode.name()),
+                                        )
+                                        .changed();
                                     }
                                 });
                         });
@@ -222,7 +229,7 @@ impl EditorApp {
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Opacity").size(11.0));
+                        ui.label(RichText::new(tr("Opacity")).size(11.0));
                         ui.spacing_mut().slider_width =
                             (ui.available_width() - 50.0 - widgets::SLIDER_SPACING).max(40.0);
                         changed |= ui
@@ -329,32 +336,38 @@ impl EditorApp {
                                             name_rect =
                                                 self.layer_name(ui, layer, color, actions).rect;
                                             let detail = if layer.group {
-                                                "Folder".to_owned()
+                                                tr("Folder").to_owned()
                                             } else if layer.standalone_mask {
                                                 if attached {
-                                                    "Mask · Image only"
+                                                    tr("Mask · Image only")
                                                 } else {
-                                                    "Mask · Layers below"
+                                                    tr("Mask · Layers below")
                                                 }
                                                 .to_owned()
                                             } else if let Some(adjustment) = &layer.adjustment {
-                                                adjustment.name().to_owned()
+                                                tr(adjustment.name()).to_owned()
                                             } else if let Some(filter) = &layer.filter {
-                                                filter.name().to_owned()
+                                                tr(filter.name()).to_owned()
                                             } else if layer.raw.is_some() {
-                                                "RAW · Embedded · Double-click to develop"
+                                                tr("RAW · Embedded · Double-click to develop")
                                                     .to_owned()
                                             } else if let Some(text) = &layer.text {
                                                 format!(
-                                                    "Text · {} · {:.0} px",
-                                                    text.family, text.size
+                                                    "{} · {} · {:.0} px",
+                                                    tr("Text"),
+                                                    text.family,
+                                                    text.size
                                                 )
                                             } else {
                                                 format!(
                                                     "{:.0} × {:.0} px{}",
                                                     layer.transform.width,
                                                     layer.transform.height,
-                                                    if layer.locked { " · Locked" } else { "" }
+                                                    if layer.locked {
+                                                        tr(" · Locked")
+                                                    } else {
+                                                        ""
+                                                    }
                                                 )
                                             };
                                             ui.add(
@@ -406,14 +419,14 @@ impl EditorApp {
         response.context_menu(|ui| {
             if layer.raw.is_some() {
                 if ui
-                    .add_enabled(!layer.locked, egui::Button::new("Develop RAW…"))
+                    .add_enabled(!layer.locked, egui::Button::new(tr("Develop RAW…")))
                     .clicked()
                 {
                     actions.edit_raw = Some(layer.id);
                     ui.close();
                 }
                 if ui
-                    .add_enabled(!layer.locked, egui::Button::new("Rasterize RAW Layer"))
+                    .add_enabled(!layer.locked, egui::Button::new(tr("Rasterize RAW Layer")))
                     .clicked()
                 {
                     actions.select = Some((layer.id, false));
@@ -422,30 +435,30 @@ impl EditorApp {
                 }
                 ui.separator();
             }
-            if layer.text.is_some() && ui.button("Edit text…").clicked() {
+            if layer.text.is_some() && ui.button(tr("Edit text…")).clicked() {
                 actions.edit_text = Some(layer.id);
                 ui.close();
             }
-            if layer.adjustment.is_some() && ui.button("Edit adjustment…").clicked() {
+            if layer.adjustment.is_some() && ui.button(tr("Edit adjustment…")).clicked() {
                 actions.edit_adjustment = Some(layer.id);
                 ui.close();
             }
-            if layer.filter.is_some() && ui.button("Edit filter…").clicked() {
+            if layer.filter.is_some() && ui.button(tr("Edit filter…")).clicked() {
                 actions.edit_filter = Some(layer.id);
                 ui.close();
             }
-            if ui.button("Rename…").clicked() {
+            if ui.button(tr("Rename…")).clicked() {
                 actions.rename = Some(layer.id);
                 ui.close();
             }
             for (label, command) in [
-                ("Duplicate", "duplicate"),
-                ("New Group", "group"),
-                ("Move Out of Parent", "move_out"),
-                ("Merge Down / Selected", "merge"),
-                ("Add Mask", "mask"),
-                ("Clipping Mask", "clip"),
-                ("Delete", "delete_layer"),
+                (tr("Duplicate"), "duplicate"),
+                (tr("New Group"), "group"),
+                (tr("Move Out of Parent"), "move_out"),
+                (tr("Merge Down / Selected"), "merge"),
+                (tr("Add Mask"), "mask"),
+                (tr("Clipping Mask"), "clip"),
+                (tr("Delete"), "delete_layer"),
             ] {
                 if layer.standalone_mask && matches!(command, "mask" | "clip") {
                     continue;
@@ -459,9 +472,9 @@ impl EditorApp {
             if layer.mask.is_some() {
                 ui.separator();
                 for (label, command) in [
-                    ("Enable / Disable Mask", "disable_mask"),
-                    ("Link / Unlink Mask", "link_mask"),
-                    ("Delete Mask", "delete_mask"),
+                    (tr("Enable / Disable Mask"), "disable_mask"),
+                    (tr("Link / Unlink Mask"), "link_mask"),
+                    (tr("Delete Mask"), "delete_mask"),
                 ] {
                     if layer.standalone_mask && !attached && command == "link_mask" {
                         continue;
@@ -656,16 +669,16 @@ impl EditorApp {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         for (tip, command) in [
-                            ("New layer (Ctrl+Shift+N)", "new_layer"),
-                            ("Group layers (Ctrl+G)", "group"),
+                            (tr("New layer (Ctrl+Shift+N)"), "new_layer"),
+                            (tr("Group layers (Ctrl+G)"), "group"),
                             (
                                 if self
                                     .session()
                                     .is_some_and(|s| s.document.active().is_none())
                                 {
-                                    "Add mask layer affecting layers below"
+                                    tr("Add mask layer affecting layers below")
                                 } else {
-                                    "Add layer mask"
+                                    tr("Add layer mask")
                                 },
                                 "mask",
                             ),
@@ -678,18 +691,18 @@ impl EditorApp {
                             }
                         }
                         let adjustment = icons::action_button(ui, "adjustment")
-                            .on_hover_text("New adjustment layer");
+                            .on_hover_text(tr("New adjustment layer"));
                         egui::Popup::menu(&adjustment).show(|ui| {
                             actions.adjustment = menus::adjustment_menu(ui);
                         });
-                        let filter =
-                            icons::action_button(ui, "filter").on_hover_text("New filter layer");
+                        let filter = icons::action_button(ui, "filter")
+                            .on_hover_text(tr("New filter layer"));
                         egui::Popup::menu(&filter).show(|ui| {
                             actions.filter = menus::filter_menu(ui);
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if icons::action_button(ui, "delete_layer")
-                                .on_hover_text("Delete layer")
+                                .on_hover_text(tr("Delete layer"))
                                 .clicked()
                             {
                                 actions.command = Some("delete_layer");
@@ -712,7 +725,7 @@ impl EditorApp {
             self.mask_target = false;
         }
         if let Some(id) = actions.visibility {
-            self.edit("Layer Visibility", |doc| {
+            self.edit(tr("Layer Visibility"), |doc| {
                 if let Some(layer) = doc.layers.iter_mut().find(|l| l.id == id) {
                     layer.visible = !layer.visible;
                 }
@@ -733,7 +746,7 @@ impl EditorApp {
             session.collapsed.insert(id);
         }
         if let Some((blend, opacity, locked)) = actions.appearance {
-            self.edit_continuous("Layer Appearance", |doc| {
+            self.edit_continuous(tr("Layer Appearance"), |doc| {
                 if let Some(layer) = doc.active_mut() {
                     layer.blend = blend;
                     layer.opacity = opacity;
@@ -851,7 +864,7 @@ impl EditorApp {
                     .any(|layer| layer.id == rename.layer && layer.name != rename.name)
         });
         if changed {
-            self.edit("Rename Layer", |doc| {
+            self.edit(tr("Rename Layer"), |doc| {
                 if let Some(layer) = doc.layers.iter_mut().find(|layer| layer.id == rename.layer) {
                     layer.name = rename.name;
                 }
@@ -884,7 +897,7 @@ impl EditorApp {
         {
             return;
         }
-        self.edit("Reorder Layer", |doc| {
+        self.edit(tr("Reorder Layer"), |doc| {
             let Some(destination) = doc.layers.iter().find(|l| l.id == target).cloned() else {
                 return Ok(());
             };

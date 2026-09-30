@@ -1,4 +1,5 @@
 use egui::{Color32, Key, Rect, Sense, Stroke, Ui, pos2, vec2};
+use xuan::i18n::tr;
 use xuan::{document::Adjustment, effects};
 
 use super::{theme, widgets};
@@ -14,14 +15,14 @@ pub fn controls(
     handles(ui, range, false);
     ui.horizontal(|ui| {
         let maximum = range[2] - 1.0;
-        field(ui, "Input black", &mut range[0], 0.0..=maximum, 0);
+        field(ui, tr("Input black"), &mut range[0], 0.0..=maximum, 0);
         let gap =
             ((ui.available_width() - 160.0 - ui.spacing().item_spacing.x * 2.0) / 2.0).max(0.0);
         ui.add_space(gap);
-        field(ui, "Gamma", &mut range[1], 0.1..=9.99, 2);
+        field(ui, tr("Gamma"), &mut range[1], 0.1..=9.99, 2);
         ui.add_space(gap);
         let minimum = range[0] + 1.0;
-        field(ui, "Input white", &mut range[2], minimum..=255.0, 0);
+        field(ui, tr("Input white"), &mut range[2], minimum..=255.0, 0);
     });
     ui.add_space(4.0);
     let (ramp, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.0), Sense::hover());
@@ -36,12 +37,12 @@ pub fn controls(
     }
     handles(ui, range, true);
     ui.horizontal(|ui| {
-        field(ui, "Output black", &mut range[3], 0.0..=255.0, 0);
+        field(ui, tr("Output black"), &mut range[3], 0.0..=255.0, 0);
         ui.add_space((ui.available_width() - 80.0 - ui.spacing().item_spacing.x).max(0.0));
-        field(ui, "Output white", &mut range[4], 0.0..=255.0, 0);
+        field(ui, tr("Output white"), &mut range[4], 0.0..=255.0, 0);
     });
     ui.horizontal(|ui| {
-        if widgets::button(ui, "Auto").clicked()
+        if widgets::button(ui, tr("Auto")).clicked()
             && let Adjustment::Levels {
                 black,
                 gamma,
@@ -52,12 +53,12 @@ pub fn controls(
         {
             *range = [black, gamma, white, output_black, output_white];
         }
-        if widgets::button(ui, "Reset").clicked() {
+        if widgets::button(ui, tr("Reset")).clicked() {
             *range = xuan::color::DEFAULT_LEVELS;
         }
     });
     ui.label(
-        egui::RichText::new("Original pixels · alpha-weighted histogram")
+        egui::RichText::new(tr("Original pixels · alpha-weighted histogram"))
             .size(11.0)
             .color(theme::MUTED),
     );
@@ -138,11 +139,11 @@ fn handles(ui: &mut Ui, range: &mut [f32; 5], output: bool) {
             Sense::click_and_drag(),
         );
         let name = [
-            "Input black",
-            "Gamma",
-            "Input white",
-            "Output black",
-            "Output white",
+            tr("Input black"),
+            tr("Gamma"),
+            tr("Input white"),
+            tr("Output black"),
+            tr("Output white"),
         ][index];
         response
             .widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), range[index] as f64, name));

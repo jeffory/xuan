@@ -4323,3 +4323,52 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
             .is_some()
     );
 }
+
+#[test]
+fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
+    let (context, mut app) = app();
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Comma, egui::Modifiers::CTRL)],
+        egui::Modifiers::CTRL,
+    );
+    assert!(app.dialog == Some(Dialog::Settings));
+    app.config.language = xuan::config::Language::SimplifiedChinese;
+    // egui resolves window placement on its first pass.
+    frame(&context, &mut app);
+    let output = frame(&context, &mut app);
+    let text: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text()),
+            _ => None,
+        })
+        .collect();
+    for label in ["设置", "常规", "语言", "简体中文", "文件", "编辑"] {
+        assert!(
+            text.iter().any(|text| text.contains(label)),
+            "Missing {label}: {text:?}"
+        );
+    }
+    context.fonts_mut(|fonts| {
+        for line in include_str!("../../assets/locales/zh-CN.tsv").lines() {
+            let translated = line.split_once('\t').unwrap().1;
+            assert!(
+                fonts.has_glyphs(&egui::FontId::proportional(12.0), translated),
+                "Missing font glyph: {translated}"
+            );
+        }
+    });
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog.is_none());
+    app.config.language = xuan::config::Language::English;
+    frame(&context, &mut app);
+    assert_eq!(Tool::Brush.label(), "Brush");
+}

@@ -1,4 +1,5 @@
 use egui::{Color32, Rect, Stroke, StrokeKind, Ui, Vec2, vec2};
+use xuan::i18n::tr;
 
 use super::{Tool, theme};
 
@@ -87,13 +88,13 @@ pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
             egui::WidgetType::CollapsingHeader,
             ui.is_enabled(),
             !collapsed,
-            "Layer contents",
+            tr("Layer contents"),
         )
     });
     response.on_hover_text(if collapsed {
-        "Expand layers"
+        tr("Expand layers")
     } else {
-        "Collapse layers"
+        tr("Collapse layers")
     })
 }
 
@@ -110,7 +111,7 @@ pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
         Color32::from_gray(80)
     };
     svg(ui, source, rect, color);
-    response.on_hover_text("Toggle visibility")
+    response.on_hover_text(tr("Toggle visibility"))
 }
 
 pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
@@ -151,8 +152,12 @@ pub fn lock(ui: &mut Ui, locked: bool) -> egui::Response {
             egui::WidgetType::Checkbox,
             ui.is_enabled(),
             locked,
-            "Lock layer",
+            tr("Lock layer"),
         )
     });
-    response.on_hover_text(if locked { "Unlock layer" } else { "Lock layer" })
+    response.on_hover_text(if locked {
+        tr("Unlock layer")
+    } else {
+        tr("Lock layer")
+    })
 }

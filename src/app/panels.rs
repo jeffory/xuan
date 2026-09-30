@@ -1,5 +1,6 @@
 use super::widgets;
 use egui::RichText;
+use xuan::i18n::tr;
 use xuan::{
     paint::{PaintMode, ShapeKind},
     selection::SelectionMode,
@@ -55,7 +56,7 @@ impl EditorApp {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new(if self.transforming_mask() {
-                                        "Mask"
+                                        tr("Mask")
                                     } else {
                                         self.tool.label()
                                     })
@@ -65,19 +66,19 @@ impl EditorApp {
                                 ui.add_space(8.0);
                                 match self.tool {
                                     Tool::Move => {
-                                        widgets::checkbox(ui, &mut self.auto_select, "Auto Select");
+                                        widgets::checkbox(ui, &mut self.auto_select, tr("Auto Select"));
                                         widgets::checkbox(
                                             ui,
                                             &mut self.ignore_transparent_pixels,
-                                            "Ignore Transparent Pixels",
+                                            tr("Ignore Transparent Pixels"),
                                         )
                                         .on_hover_text(
-                                            "Select layers only at visible pixels. Uncheck to select anywhere inside a layer's bounds.",
+                                            tr("Select layers only at visible pixels. Uncheck to select anywhere inside a layer's bounds."),
                                         );
                                         widgets::checkbox(
                                             ui,
                                             &mut self.show_controls,
-                                            "Show Controls",
+                                            tr("Show Controls"),
                                         );
                                         ui.separator();
                                         if let Some(t) = &mut transform {
@@ -108,10 +109,10 @@ impl EditorApp {
                                                 }
                                                 changed = true;
                                             }
-                                            widgets::checkbox(ui, &mut self.lock_ratio, "Link");
+                                            widgets::checkbox(ui, &mut self.lock_ratio, tr("Link"));
                                             changed |= value!(
                                                 ui,
-                                                "Angle",
+                                                tr("Angle"),
                                                 &mut t.rotation,
                                                 -360.0..=360.0,
                                                 "°",
@@ -119,7 +120,7 @@ impl EditorApp {
                                             );
                                         } else {
                                             ui.label(
-                                                RichText::new("Select a layer to transform")
+                                                RichText::new(tr("Select a layer to transform"))
                                                     .color(theme::MUTED),
                                             );
                                         }
@@ -130,7 +131,7 @@ impl EditorApp {
                                             if widgets::segmented(
                                                 ui,
                                                 &mut brush_tool,
-                                                &[(Tool::Brush, "Paint"), (Tool::Erase, "Erase")],
+                                                &[(Tool::Brush, tr("Paint")), (Tool::Erase, tr("Erase"))],
                                             )
                                             .changed()
                                             {
@@ -142,8 +143,8 @@ impl EditorApp {
                                                 ui,
                                                 &mut self.blur_mode,
                                                 &[
-                                                    (PaintMode::Blur, "Blur"),
-                                                    (PaintMode::Smudge, "Smudge"),
+                                                    (PaintMode::Blur, tr("Blur")),
+                                                    (PaintMode::Smudge, tr("Smudge")),
                                                 ],
                                             );
                                         }
@@ -151,16 +152,16 @@ impl EditorApp {
                                             widgets::checkbox(
                                                 ui,
                                                 &mut self.clone_aligned,
-                                                "Aligned",
+                                                tr("Aligned"),
                                             );
                                             widgets::segmented(
                                                 ui,
                                                 &mut self.clone_all,
-                                                &[(false, "This Layer"), (true, "All Layers")],
+                                                &[(false, tr("This Layer")), (true, tr("All Layers"))],
                                             );
                                         }
-                                        value!(ui, "Size", &mut self.brush.diameter, 1.0..=2000.0, " px", width = 62.0);
-                                        ui.label("Hardness");
+                                        value!(ui, tr("Size"), &mut self.brush.diameter, 1.0..=2000.0, " px", width = 62.0);
+                                        ui.label(tr("Hardness"));
                                         ui.add(
                                             widgets::Slider::new(
                                                 &mut self.brush.hardness,
@@ -169,7 +170,7 @@ impl EditorApp {
                                             .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
                                             .percentage(),
                                         );
-                                        ui.label("Opacity");
+                                        ui.label(tr("Opacity"));
                                         ui.add(
                                             widgets::Slider::new(
                                                 &mut self.brush.opacity,
@@ -179,19 +180,19 @@ impl EditorApp {
                                             .percentage(),
                                         );
                                         widgets::color_well(ui, &mut self.brush.color);
-                                        ui.menu_button("Pen dynamics", |ui| {
-                                            widgets::checkbox(ui, &mut self.pressure_size, "Pressure: size");
-                                            widgets::checkbox(ui, &mut self.pressure_opacity, "Pressure: opacity");
-                                            widgets::checkbox(ui, &mut self.tilt_shape, "Tilt: shape");
+                                        ui.menu_button(tr("Pen dynamics"), |ui| {
+                                            widgets::checkbox(ui, &mut self.pressure_size, tr("Pressure: size"));
+                                            widgets::checkbox(ui, &mut self.pressure_opacity, tr("Pressure: opacity"));
+                                            widgets::checkbox(ui, &mut self.tilt_shape, tr("Tilt: shape"));
                                         });
-                                        ui.label("Smoothing");
+                                        ui.label(tr("Smoothing"));
                                         ui.add(
                                             widgets::Slider::new(&mut self.brush_smoothing, 0.0..=1.0)
                                                 .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
                                                 .percentage(),
                                         )
                                         .on_hover_text(
-                                            "Reduce hand jitter. Higher values make the brush follow farther behind the pointer. 0% turns smoothing off.",
+                                            tr("Reduce hand jitter. Higher values make the brush follow farther behind the pointer. 0% turns smoothing off."),
                                         );
                                     }
                                     tool if tool.is_selection() => {
@@ -200,9 +201,9 @@ impl EditorApp {
                                             &mut self.selection_mode,
                                             &[
                                                 (SelectionMode::Replace, "New"),
-                                                (SelectionMode::Add, "Add"),
-                                                (SelectionMode::Subtract, "Subtract"),
-                                                (SelectionMode::Intersect, "Intersect"),
+                                                (SelectionMode::Add, tr("Add")),
+                                                (SelectionMode::Subtract, tr("Subtract")),
+                                                (SelectionMode::Intersect, tr("Intersect")),
                                             ],
                                         );
                                         ui.separator();
@@ -211,18 +212,18 @@ impl EditorApp {
                                                 widgets::segmented(
                                                     ui,
                                                     &mut self.ellipse,
-                                                    &[(false, "Rectangle"), (true, "Ellipse")],
+                                                    &[(false, tr("Rectangle")), (true, tr("Ellipse"))],
                                                 );
                                             }
                                             Tool::Lasso => {
                                                 widgets::segmented(
                                                     ui,
                                                     &mut self.polygonal,
-                                                    &[(false, "Freehand"), (true, "Polygonal")],
+                                                    &[(false, tr("Freehand")), (true, tr("Polygonal"))],
                                                 );
                                             }
                                             Tool::Wand => {
-                                                ui.label("Tolerance");
+                                                ui.label(tr("Tolerance"));
                                                 ui.add(
                                                     widgets::Number::new(&mut self.tolerance)
                                                         .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
@@ -231,7 +232,7 @@ impl EditorApp {
                                                 widgets::checkbox(
                                                     ui,
                                                     &mut self.contiguous,
-                                                    "Contiguous",
+                                                    tr("Contiguous"),
                                                 );
                                             }
                                             _ => {}
@@ -241,13 +242,13 @@ impl EditorApp {
                                         widgets::segmented(
                                             ui,
                                             &mut self.radial,
-                                            &[(false, "Linear"), (true, "Radial")],
+                                            &[(false, tr("Linear")), (true, tr("Radial"))],
                                         );
                                         ui.separator();
                                         widgets::color_well(ui, &mut self.brush.color);
                                         ui.label("→");
                                         widgets::color_well(ui, &mut self.background);
-                                        ui.label("Opacity");
+                                        ui.label(tr("Opacity"));
                                         ui.add(
                                             widgets::Slider::new(
                                                 &mut self.brush.opacity,
@@ -262,18 +263,18 @@ impl EditorApp {
                                             ui,
                                             &mut self.shape_kind,
                                             &[
-                                                (ShapeKind::Rectangle, "Rectangle"),
-                                                (ShapeKind::RoundedRectangle, "Rounded"),
-                                                (ShapeKind::Ellipse, "Ellipse"),
+                                                (ShapeKind::Rectangle, tr("Rectangle")),
+                                                (ShapeKind::RoundedRectangle, tr("Rounded")),
+                                                (ShapeKind::Ellipse, tr("Ellipse")),
                                             ],
                                         );
                                         ui.separator();
-                                        ui.label("Fill");
+                                        ui.label(tr("Fill"));
                                         widgets::color_well(ui, &mut self.brush.color);
                                         if self.shape_kind == ShapeKind::RoundedRectangle {
                                             value!(
                                                 ui,
-                                                "Radius",
+                                                tr("Radius"),
                                                 &mut self.corner_radius,
                                                 0.0..=1000.0,
                                                 " px",
@@ -284,19 +285,19 @@ impl EditorApp {
                                     Tool::Crop => {
                                         ui.label(
                                             RichText::new(
-                                                "Drag a crop area, then press Enter to apply",
+                                                tr("Drag a crop area, then press Enter to apply"),
                                             )
                                             .color(theme::MUTED),
                                         );
                                     }
                                     Tool::Dropper => {
-                                        ui.label("Sample: All visible layers");
+                                        ui.label(tr("Sample: All visible layers"));
                                         widgets::color_well(ui, &mut self.brush.color);
                                     }
                                     Tool::Hand | Tool::Zoom => {
                                         ui.label(
                                         RichText::new(
-                                            "Scroll to zoom · Space-drag to pan · Ctrl+0 to fit",
+                                            tr("Scroll to zoom · Space-drag to pan · Ctrl+0 to fit"),
                                         )
                                         .color(theme::MUTED),
                                     );
@@ -309,7 +310,7 @@ impl EditorApp {
             });
         if changed && let Some(transform) = transform {
             let mask_target = self.transforming_mask();
-            self.edit_continuous("Transform", |doc| {
+            self.edit_continuous(tr("Transform"), |doc| {
                 xuan::operations::apply_transform(doc, transform, mask_target)
             });
         }
@@ -340,13 +341,13 @@ impl EditorApp {
                     );
                     ui.separator();
                     ui.label(
-                        RichText::new("sRGB · Transparent")
+                        RichText::new(tr("sRGB · Transparent"))
                             .size(11.0)
                             .color(theme::MUTED),
                     );
                 } else {
                     ui.label(
-                        RichText::new("Ready when you are")
+                        RichText::new(tr("Ready when you are"))
                             .size(11.0)
                             .color(theme::MUTED),
                     );

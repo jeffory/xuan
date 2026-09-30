@@ -38,6 +38,7 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
         "share/licenses/xuan/heic-rs-MIT.txt",
         "share/licenses/xuan/tabler-icons-MIT.txt",
         "share/licenses/xuan/Inter-LICENSE.txt",
+        "share/licenses/xuan/DroidSansFallback-LICENSE.txt",
         "share/licenses/xuan/egui-winit/LICENSE-MIT",
         "share/licenses/xuan/egui-winit/LICENSE-APACHE",
     }

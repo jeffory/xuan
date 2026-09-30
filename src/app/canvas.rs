@@ -1,5 +1,6 @@
 use super::widgets;
 use std::{ops::RangeInclusive, sync::Arc};
+use xuan::i18n::tr;
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use xuan::{
@@ -632,10 +633,10 @@ impl EditorApp {
         let mut open = false;
         let mut import = false;
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-            ui.heading("New canvas");
+            ui.heading(tr("New canvas"));
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new("A blank space for your next composition.")
+                egui::RichText::new(tr("A blank space for your next composition."))
                     .size(14.0)
                     .color(theme::MUTED),
             );
@@ -645,9 +646,9 @@ impl EditorApp {
                 .min_col_width(0.0)
                 .min_row_height(0.0)
                 .show(ui, |ui| {
-                    ui.label("Width");
+                    ui.label(tr("Width"));
                     ui.label("");
-                    ui.label("Height");
+                    ui.label(tr("Height"));
                     ui.end_row();
 
                     ui.add(
@@ -666,14 +667,14 @@ impl EditorApp {
                     ui.end_row();
                 });
             ui.add_space(15.0);
-            ui.label(egui::RichText::new("Transparent canvas · sRGB").color(theme::MUTED));
+            ui.label(egui::RichText::new(tr("Transparent canvas · sRGB")).color(theme::MUTED));
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                open = widgets::button(ui, "Open project").clicked();
-                import = widgets::button(ui, "Import image").clicked();
+                open = widgets::button(ui, tr("Open project")).clicked();
+                import = widgets::button(ui, tr("Import image")).clicked();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     create = ui
-                        .add(widgets::Button::new("Create canvas").primary())
+                        .add(widgets::Button::new(tr("Create canvas")).primary())
                         .clicked();
                 });
             });
@@ -835,7 +836,7 @@ impl EditorApp {
                 let tolerance = self.tolerance;
                 let contiguous = self.contiguous;
                 let mode = self.selection_mode(modifiers);
-                self.edit_selection("Magic Wand", |doc| {
+                self.edit_selection(tr("Magic Wand"), |doc| {
                     let pixels = render::render(doc);
                     selection::combine(
                         doc,
@@ -931,7 +932,7 @@ impl EditorApp {
         }
         let points = std::mem::take(&mut self.polygon);
         let mode = self.selection_mode;
-        self.edit_selection("Polygonal Lasso", |doc| {
+        self.edit_selection(tr("Polygonal Lasso"), |doc| {
             selection::combine(
                 doc,
                 selection::polygon(doc.width, doc.height, &points),
@@ -989,7 +990,7 @@ impl EditorApp {
             return;
         }
         if tool == Tool::Clone && self.clone_source.is_none() {
-            self.status = "Alt-click on the canvas to set a clone source".into();
+            self.status = tr("Alt-click on the canvas to set a clone source").into();
             return;
         }
         if tool == Tool::Move && self.show_controls {
@@ -1056,7 +1057,7 @@ impl EditorApp {
                         self.error = Some(error.to_string());
                         return;
                     }
-                    let mut layer = xuan::document::Layer::image("Selection", pixels);
+                    let mut layer = xuan::document::Layer::image(tr("Selection"), pixels);
                     layer.transform.x = origin.x;
                     layer.transform.y = origin.y;
                     session.document.insert(layer);
@@ -1370,7 +1371,7 @@ impl EditorApp {
         if tool == Tool::Heal {
             let points = gesture.points;
             let brushes = gesture.brushes;
-            self.start_job("Spot Healing", move |document, cancel| {
+            self.start_job(tr("Spot Healing"), move |document, cancel| {
                 xuan::retouch::heal_path_varying(document, &points, &brushes, cancel)
             });
             return;

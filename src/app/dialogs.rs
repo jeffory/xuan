@@ -1,5 +1,6 @@
 use super::widgets;
 use std::{io::Cursor, sync::Arc};
+use xuan::i18n::tr;
 
 use egui::{Color32, RichText, Stroke, vec2};
 use xuan::{
@@ -16,9 +17,9 @@ impl EditorApp {
             widgets::Window::new(&job.name).show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Working…");
+                    ui.label(tr("Working…"));
                 });
-                if widgets::button(ui, "Cancel").clicked() {
+                if widgets::button(ui, tr("Cancel")).clicked() {
                     job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             });
@@ -26,6 +27,7 @@ impl EditorApp {
         }
         if let Some(dialog) = self.dialog {
             match dialog {
+                Dialog::Settings => self.settings_dialog(ctx),
                 Dialog::New | Dialog::CanvasSize | Dialog::ImageSize => {
                     self.size_dialog(ctx, dialog)
                 }
@@ -34,7 +36,7 @@ impl EditorApp {
                 Dialog::Export => self.export_dialog(ctx),
                 Dialog::Shortcuts => {
                     let mut open = true;
-                    widgets::Window::new("Keyboard shortcuts")
+                    widgets::Window::new(tr("Keyboard shortcuts"))
                         .default_width(690.0)
                         .open(&mut open)
                         .show(ctx, |ui| {
@@ -42,38 +44,41 @@ impl EditorApp {
                                 .spacing(vec2(35.0, 10.0))
                                 .show(ui, |ui| {
                                     for (key, label) in [
-                                        ("Ctrl+N / O / S", "New / Open / Save"),
-                                        ("Ctrl+Shift+O", "Import image as layer"),
-                                        ("Ctrl+Alt+Shift+S", "Export image"),
-                                        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / Redo"),
-                                        ("Ctrl+J / Ctrl+E / Ctrl+G", "Duplicate / Merge / Group"),
-                                        ("Ctrl+A / Ctrl+D", "Select all / Deselect"),
-                                        ("Ctrl+C / Ctrl+V", "Copy / Paste image"),
-                                        ("Ctrl+0 / Ctrl+1", "Fit / Actual pixels"),
+                                        ("Ctrl+N / O / S", tr("New / Open / Save")),
+                                        ("Ctrl+Shift+O", tr("Import image as layer")),
+                                        ("Ctrl+Alt+Shift+S", tr("Export image")),
+                                        ("Ctrl+Z / Ctrl+Shift+Z", tr("Undo / Redo")),
+                                        (
+                                            "Ctrl+J / Ctrl+E / Ctrl+G",
+                                            tr("Duplicate / Merge / Group"),
+                                        ),
+                                        ("Ctrl+A / Ctrl+D", tr("Select all / Deselect")),
+                                        ("Ctrl+C / Ctrl+V", tr("Copy / Paste image")),
+                                        ("Ctrl+0 / Ctrl+1", tr("Fit / Actual pixels")),
                                         (
                                             "V / M / L / W / C",
-                                            "Move / Marquee / Lasso / Wand / Crop",
+                                            tr("Move / Marquee / Lasso / Wand / Crop"),
                                         ),
                                         (
                                             "B / E / J / S / R",
-                                            "Brush / Eraser / Heal / Clone / Blur",
+                                            tr("Brush / Eraser / Heal / Clone / Blur"),
                                         ),
                                         (
                                             "G / U / I / H / Z",
-                                            "Gradient / Shape / Eyedropper / Hand / Zoom",
+                                            tr("Gradient / Shape / Eyedropper / Hand / Zoom"),
                                         ),
-                                        ("[ / ] · Shift+[ / ]", "Brush size / Hardness"),
-                                        ("T", "Text"),
-                                        ("1–0", "Brush or layer opacity"),
-                                        ("Alt-click", "Set clone source"),
-                                        ("X / D", "Swap / Reset colors"),
-                                        ("Space-drag", "Pan canvas"),
+                                        ("[ / ] · Shift+[ / ]", tr("Brush size / Hardness")),
+                                        ("T", tr("Text")),
+                                        ("1–0", tr("Brush or layer opacity")),
+                                        ("Alt-click", tr("Set clone source")),
+                                        ("X / D", tr("Swap / Reset colors")),
+                                        ("Space-drag", tr("Pan canvas")),
                                         (
-                                            "Horizontal wheel / Shift+wheel",
-                                            "Pan canvas horizontally",
+                                            tr("Horizontal wheel / Shift+wheel"),
+                                            tr("Pan canvas horizontally"),
                                         ),
-                                        ("Wheel over a slider or number", "Adjust value"),
-                                        ("Enter / Escape", "Apply crop / Cancel gesture"),
+                                        (tr("Wheel over a slider or number"), tr("Adjust value")),
+                                        ("Enter / Escape", tr("Apply crop / Cancel gesture")),
                                     ] {
                                         ui.label(RichText::new(key).strong());
                                         ui.label(label);
@@ -87,17 +92,17 @@ impl EditorApp {
                 }
                 Dialog::About => {
                     let mut open = true;
-                    widgets::Window::new("About Xuan")
+                    widgets::Window::new(tr("About Xuan"))
                         .open(&mut open)
                         .show(ctx, |ui| {
                             ui.heading("Xuan");
-                            ui.label("A space for your next composition.");
+                            ui.label(tr("A space for your next composition."));
                             ui.add_space(12.0);
-                            ui.label("Native image editor · Rust + egui + wgpu");
-                            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                            ui.label(tr("Native image editor · Rust + egui + wgpu"));
+                            ui.label(format!("{} {}", tr("Version"), env!("CARGO_PKG_VERSION")));
                             ui.add_space(12.0);
-                            ui.label("Ported from Compositor by Wonder Assembly LLC.");
-                            ui.label("Free and open source, under the MIT license.");
+                            ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
+                            ui.label(tr("Free and open source, under the MIT license."));
                         });
                     if !open {
                         self.dialog = None;
@@ -108,12 +113,12 @@ impl EditorApp {
         self.close_dialog(ctx);
         if let Some(error) = self.error.clone() {
             let mut dismiss = false;
-            widgets::Window::new("Couldn't complete the operation")
+            widgets::Window::new(tr("Couldn't complete the operation"))
                 .default_width(420.0)
                 .show(ctx, |ui| {
                     ui.label(error);
                     ui.add_space(12.0);
-                    dismiss = widgets::primary_button(ui, "OK").clicked();
+                    dismiss = widgets::primary_button(ui, tr("OK")).clicked();
                 });
             if dismiss {
                 self.error = None;
@@ -123,32 +128,32 @@ impl EditorApp {
 
     fn size_dialog(&mut self, ctx: &egui::Context, dialog: Dialog) {
         let title = match dialog {
-            Dialog::New => "New canvas",
-            Dialog::CanvasSize => "Canvas size",
-            _ => "Image size",
+            Dialog::New => tr("New canvas"),
+            Dialog::CanvasSize => tr("Canvas size"),
+            _ => tr("Image size"),
         };
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        widgets::Window::new(title)
+        widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(410.0)
             .show(ctx, |ui| {
                 ui.add_space(7.0);
                 ui.label(
                     RichText::new(if dialog == Dialog::New {
-                        "A blank space for your next composition."
+                        tr("A blank space for your next composition.")
                     } else if dialog == Dialog::CanvasSize {
-                        "Change the canvas bounds and anchor your composition."
+                        tr("Change the canvas bounds and anchor your composition.")
                     } else {
-                        "Scale the composition while preserving source pixels."
+                        tr("Scale the composition while preserving source pixels.")
                     })
                     .color(theme::MUTED),
                 );
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.label("Width");
+                        ui.label(tr("Width"));
                         ui.add(
                             widgets::Number::new(&mut self.dimensions[0])
                                 .range(1..=30_000)
@@ -158,7 +163,7 @@ impl EditorApp {
                     });
                     ui.add_space(15.0);
                     ui.vertical(|ui| {
-                        ui.label("Height");
+                        ui.label(tr("Height"));
                         ui.add(
                             widgets::Number::new(&mut self.dimensions[1])
                                 .range(1..=30_000)
@@ -169,7 +174,7 @@ impl EditorApp {
                 });
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    ui.label("Resolution");
+                    ui.label(tr("Resolution"));
                     ui.add(
                         widgets::Number::new(&mut self.resolution)
                             .range(1.0..=9600.0)
@@ -178,7 +183,7 @@ impl EditorApp {
                 });
                 if dialog == Dialog::CanvasSize {
                     ui.add_space(12.0);
-                    ui.label("Anchor");
+                    ui.label(tr("Anchor"));
                     egui::Grid::new("anchor_grid")
                         .spacing(vec2(3.0, 3.0))
                         .show(ui, |ui| {
@@ -204,19 +209,19 @@ impl EditorApp {
                 if let Err(error) = &valid {
                     ui.colored_label(Color32::LIGHT_RED, error.to_string());
                 } else {
-                    ui.label(RichText::new("Transparent canvas · sRGB").color(theme::MUTED));
+                    ui.label(RichText::new(tr("Transparent canvas · sRGB")).color(theme::MUTED));
                 }
                 ui.add_space(15.0);
                 ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, "Cancel").clicked();
+                    cancel = widgets::button(ui, tr("Cancel")).clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         apply = ui
                             .add_enabled(
                                 valid.is_ok(),
                                 widgets::Button::new(if dialog == Dialog::New {
-                                    "Create canvas"
+                                    tr("Create canvas")
                                 } else {
-                                    "Apply"
+                                    tr("Apply")
                                 })
                                 .primary(),
                             )
@@ -260,12 +265,12 @@ impl EditorApp {
             .as_ref()
             .map(|a| a.name())
             .or_else(|| edit.filter.as_ref().map(|f| f.name()))
-            .unwrap_or("Adjustment");
+            .unwrap_or(tr("Adjustment"));
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
         let mut changed = false;
-        widgets::Window::new(title)
+        widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(440.0)
             .show(ctx, |ui| {
@@ -299,7 +304,7 @@ impl EditorApp {
                                             -180.0..=180.0
                                         },
                                     )
-                                    .text("Hue")
+                                    .text(tr("Hue"))
                                     .suffix("°"),
                                 )
                                 .changed();
@@ -313,31 +318,36 @@ impl EditorApp {
                                             -100.0..=100.0
                                         },
                                     )
-                                    .text("Saturation")
+                                    .text(tr("Saturation"))
                                     .suffix("%"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(&mut values[2], -100.0..=100.0)
-                                        .text("Lightness")
+                                        .text(tr("Lightness"))
                                         .suffix("%"),
                                 )
                                 .changed();
                             changed |=
-                                widgets::checkbox(ui, &mut settings.colorize, "Colorize").changed();
+                                widgets::checkbox(ui, &mut settings.colorize, tr("Colorize"))
+                                    .changed();
                             if settings.range > 0 {
                                 changed |= widgets::checkbox(
                                     ui,
                                     &mut settings.invert_range,
-                                    "Invert selected color range",
+                                    tr("Invert selected color range"),
                                 )
                                 .changed();
-                                ui.collapsing("Color range falloff", |ui| {
-                                    for (index, label) in
-                                        ["Falloff start", "Range start", "Range end", "Falloff end"]
-                                            .iter()
-                                            .enumerate()
+                                ui.collapsing(tr("Color range falloff"), |ui| {
+                                    for (index, label) in [
+                                        tr("Falloff start"),
+                                        tr("Range start"),
+                                        tr("Range end"),
+                                        tr("Falloff end"),
+                                    ]
+                                    .iter()
+                                    .enumerate()
                                     {
                                         changed |= ui
                                             .add(
@@ -378,25 +388,25 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(hue, -180.0..=180.0)
-                                        .text("Hue")
+                                        .text(tr("Hue"))
                                         .suffix("°"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(saturation, -100.0..=100.0)
-                                        .text("Saturation")
+                                        .text(tr("Saturation"))
                                         .suffix("%"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(lightness, -100.0..=100.0)
-                                        .text("Lightness")
+                                        .text(tr("Lightness"))
                                         .suffix("%"),
                                 )
                                 .changed();
-                            changed |= widgets::checkbox(ui, colorize, "Colorize").changed();
+                            changed |= widgets::checkbox(ui, colorize, tr("Colorize")).changed();
                         }
                         Adjustment::Levels {
                             black,
@@ -423,15 +433,15 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(exposure, -5.0..=5.0)
-                                        .text("Exposure")
+                                        .text(tr("Exposure"))
                                         .suffix(" EV"),
                                 )
                                 .changed();
                             changed |= ui
-                                .add(widgets::Slider::new(offset, -0.5..=0.5).text("Offset"))
+                                .add(widgets::Slider::new(offset, -0.5..=0.5).text(tr("Offset")))
                                 .changed();
                             changed |= ui
-                                .add(widgets::Slider::new(gamma, 0.1..=5.0).text("Gamma"))
+                                .add(widgets::Slider::new(gamma, 0.1..=5.0).text(tr("Gamma")))
                                 .changed();
                         }
                         Adjustment::GradientMap {
@@ -439,9 +449,9 @@ impl EditorApp {
                             highlights,
                         } => {
                             ui.horizontal(|ui| {
-                                ui.label("Shadows");
+                                ui.label(tr("Shadows"));
                                 changed |= widgets::color_well(ui, shadows).changed();
-                                ui.label("Highlights");
+                                ui.label(tr("Highlights"));
                                 changed |= widgets::color_well(ui, highlights).changed();
                             });
                         }
@@ -454,7 +464,7 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(amount, 0.0..=100.0)
-                                        .text("Amount")
+                                        .text(tr("Amount"))
                                         .suffix("%"),
                                 )
                                 .changed();
@@ -462,18 +472,18 @@ impl EditorApp {
                                 .add(
                                     widgets::Slider::new(size, 0.1..=100.0)
                                         .logarithmic(true)
-                                        .text("Size")
+                                        .text(tr("Size"))
                                         .suffix(" px"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(roughness, 0.0..=100.0)
-                                        .text("Roughness")
+                                        .text(tr("Roughness"))
                                         .suffix("%"),
                                 )
                                 .changed();
-                            if widgets::button(ui, "New pattern").clicked() {
+                            if widgets::button(ui, tr("New pattern")).clicked() {
                                 *seed = seed.wrapping_add(1);
                                 changed = true;
                             }
@@ -484,11 +494,12 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(amount, 0.0..=100.0)
-                                        .text("Amount")
+                                        .text(tr("Amount"))
                                         .suffix("%"),
                                 )
                                 .changed();
-                            changed |= widgets::checkbox(ui, monochrome, "Monochromatic").changed();
+                            changed |=
+                                widgets::checkbox(ui, monochrome, tr("Monochromatic")).changed();
                         }
                         Adjustment::Invert => {}
                     }
@@ -499,7 +510,7 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(radius, 0.1..=100.0)
-                                        .text("Radius")
+                                        .text(tr("Radius"))
                                         .suffix(" px"),
                                 )
                                 .changed();
@@ -508,14 +519,14 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(distance, 1.0..=200.0)
-                                        .text("Distance")
+                                        .text(tr("Distance"))
                                         .suffix(" px"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(angle, -180.0..=180.0)
-                                        .text("Angle")
+                                        .text(tr("Angle"))
                                         .suffix("°"),
                                 )
                                 .changed();
@@ -524,11 +535,12 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(amount, 0.0..=100.0)
-                                        .text("Amount")
+                                        .text(tr("Amount"))
                                         .suffix("%"),
                                 )
                                 .changed();
-                            changed |= widgets::checkbox(ui, monochrome, "Monochromatic").changed();
+                            changed |=
+                                widgets::checkbox(ui, monochrome, tr("Monochromatic")).changed();
                         }
                         Filter::LensCorrection {
                             distortion,
@@ -537,14 +549,14 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(distortion, -50.0..=50.0)
-                                        .text("Distortion")
+                                        .text(tr("Distortion"))
                                         .suffix("%"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(vignette, -100.0..=100.0)
-                                        .text("Vignette")
+                                        .text(tr("Vignette"))
                                         .suffix("%"),
                                 )
                                 .changed();
@@ -555,28 +567,29 @@ impl EditorApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(!edit.filter_preview.applying, |ui| {
-                        changed |= widgets::checkbox(ui, &mut edit.preview, "Preview").changed();
+                        changed |=
+                            widgets::checkbox(ui, &mut edit.preview, tr("Preview")).changed();
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_enabled_ui(!edit.filter_preview.applying, |ui| {
-                            apply = widgets::primary_button(ui, "Apply").clicked();
+                            apply = widgets::primary_button(ui, tr("Apply")).clicked();
                         });
-                        cancel = widgets::button(ui, "Cancel").clicked();
+                        cancel = widgets::button(ui, tr("Cancel")).clicked();
                     });
                 });
                 if edit.filter_preview.busy() {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label(if edit.filter_preview.applying {
-                            "Applying…"
+                            tr("Applying…")
                         } else {
-                            "Updating preview…"
+                            tr("Updating preview…")
                         });
                     });
                 }
                 if edit.as_layer {
                     ui.label(
-                        RichText::new("Non-destructive effect layer")
+                        RichText::new(tr("Non-destructive effect layer"))
                             .small()
                             .color(theme::MUTED),
                     );
@@ -704,7 +717,7 @@ impl EditorApp {
         let mut open = true;
         let mut export = false;
         let mut cancel = false;
-        widgets::Window::new("Export image")
+        widgets::Window::new(tr("Export image"))
             .open(&mut open)
             .default_width(650.0)
             .show(ctx, |ui| {
@@ -717,7 +730,7 @@ impl EditorApp {
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    ui.label("Format");
+                    ui.label(tr("Format"));
                     widgets::PopUp::from_id_salt("export_format")
                         .selected_text(self.export_format.to_uppercase())
                         .show_ui(ui, |ui| {
@@ -737,7 +750,7 @@ impl EditorApp {
                         self.export_changed |= ui
                             .add(
                                 widgets::Slider::new(&mut self.jpeg_quality, 1..=100)
-                                    .text("Quality")
+                                    .text(tr("Quality"))
                                     .suffix("%"),
                             )
                             .changed();
@@ -745,16 +758,16 @@ impl EditorApp {
                 });
                 if self.export_format == "jpg" {
                     ui.label(
-                        RichText::new("JPEG preview · transparency is flattened onto white")
+                        RichText::new(tr("JPEG preview · transparency is flattened onto white"))
                             .small()
                             .color(theme::MUTED),
                     );
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, "Cancel").clicked();
+                    cancel = widgets::button(ui, tr("Cancel")).clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        export = widgets::primary_button(ui, "Export…").clicked();
+                        export = widgets::primary_button(ui, tr("Export…")).clicked();
                     });
                 });
             });
@@ -770,7 +783,7 @@ impl EditorApp {
             {
                 match io::export(&session.document, &path, self.jpeg_quality) {
                     Ok(()) => {
-                        self.status = format!("Exported {}", path.display());
+                        self.status = format!("{} {}", tr("Exported"), path.display());
                         self.dialog = None;
                     }
                     Err(error) => self.error = Some(error.to_string()),
@@ -802,24 +815,25 @@ impl EditorApp {
             return;
         }
         let mut choice = None;
-        widgets::Window::new("Save your changes?").show(ctx, |ui| {
+        widgets::Window::new(tr("Save your changes?")).show(ctx, |ui| {
             ui.label(if self.close_app {
-                "Some projects have unsaved changes.".to_owned()
+                tr("Some projects have unsaved changes.").to_owned()
             } else {
                 format!(
-                    "“{}” has unsaved changes.",
-                    self.sessions[self.close_tab.unwrap()].title
+                    "“{}” — {}",
+                    self.sessions[self.close_tab.unwrap()].title,
+                    tr("Unsaved changes")
                 )
             });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if widgets::button(ui, "Cancel").clicked() {
+                if widgets::button(ui, tr("Cancel")).clicked() {
                     choice = Some(0);
                 }
-                if widgets::button(ui, "Discard changes").clicked() {
+                if widgets::button(ui, tr("Discard changes")).clicked() {
                     choice = Some(1);
                 }
-                if widgets::primary_button(ui, "Save").clicked() {
+                if widgets::primary_button(ui, tr("Save")).clicked() {
                     choice = Some(2);
                 }
             });
@@ -863,9 +877,12 @@ impl EditorApp {
 
 fn channel_picker(ui: &mut egui::Ui, channel: &mut usize) {
     widgets::PopUp::from_id_salt("adjustment_channel")
-        .selected_text(["RGB", "Red", "Green", "Blue"][*channel])
+        .selected_text(["RGB", tr("Red"), tr("Green"), tr("Blue")][*channel])
         .show_ui(ui, |ui| {
-            for (index, name) in ["RGB", "Red", "Green", "Blue"].iter().enumerate() {
+            for (index, name) in ["RGB", tr("Red"), tr("Green"), tr("Blue")]
+                .iter()
+                .enumerate()
+            {
                 widgets::menu_choice(ui, channel, index, *name);
             }
         });
@@ -875,8 +892,10 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
     let mut changed = false;
 
     ui.label(
-        RichText::new("Click to add a point · Drag points to reshape the curve")
-            .color(theme::MUTED),
+        RichText::new(tr(
+            "Click to add a point · Drag points to reshape the curve",
+        ))
+        .color(theme::MUTED),
     );
     let (rect, response) =
         ui.allocate_exact_size(vec2(360.0, 220.0), egui::Sense::click_and_drag());

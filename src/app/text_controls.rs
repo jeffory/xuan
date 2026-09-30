@@ -1,5 +1,6 @@
 use egui::RichText;
 use uuid::Uuid;
+use xuan::i18n::tr;
 use xuan::{
     document::{Layer, Point},
     render,
@@ -26,13 +27,16 @@ impl EditorApp {
             .filter(|layer| layer.text.is_some() && !layer.locked)
             .map(|layer| layer.id);
         if ui
-            .add_enabled(active.is_some(), widgets::Button::new("Edit text…"))
+            .add_enabled(active.is_some(), widgets::Button::new(tr("Edit text…")))
             .clicked()
         {
             self.start_text(active, Point::default());
         }
         if ui
-            .add_enabled(self.session().is_some(), widgets::Button::new("Add text…"))
+            .add_enabled(
+                self.session().is_some(),
+                widgets::Button::new(tr("Add text…")),
+            )
             .clicked()
             && let Some(session) = self.session()
         {
@@ -42,7 +46,7 @@ impl EditorApp {
             );
             self.start_text(None, point);
         }
-        ui.label(RichText::new("Click the canvas to place text").color(theme::MUTED));
+        ui.label(RichText::new(tr("Click the canvas to place text")).color(theme::MUTED));
     }
 
     pub(super) fn text_click(&mut self, point: Point) {
@@ -95,13 +99,13 @@ impl EditorApp {
                 return;
             };
             if layer.locked {
-                self.status = "Unlock the text layer to edit it".into();
+                self.status = tr("Unlock the text layer to edit it").into();
                 return;
             }
             (layer, false)
         } else {
             let mut style = self.text_style.clone();
-            style.content = "Text".into();
+            style.content = tr("Text").into();
             style.color = self.brush.color;
             let renderer = self.text_renderer.get_or_insert_with(TextRenderer::default);
             let pixels = match renderer.render(&style) {
@@ -121,7 +125,11 @@ impl EditorApp {
         let session = self.session_mut().unwrap();
         session.history.commit();
         session.history.begin(
-            if is_new { "Add Text" } else { "Edit Text" },
+            if is_new {
+                tr("Add Text")
+            } else {
+                tr("Edit Text")
+            },
             &session.document,
         );
         if is_new {
@@ -199,7 +207,7 @@ impl EditorApp {
             let session = self.session_mut().unwrap();
             session.document.select(edit.target, false);
             session.history.commit();
-            self.status = "Text applied".into();
+            self.status = tr("Text applied").into();
         } else if let Some(session) = self.session_mut() {
             session.history.cancel(&mut session.document);
             session.invalidate();
@@ -220,7 +228,7 @@ impl EditorApp {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        widgets::Window::new("Text")
+        widgets::Window::new(tr("Text"))
             .default_width(440.0)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -252,18 +260,20 @@ impl EditorApp {
                     edit.focus = false;
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Font");
+                    ui.label(tr("Font"));
                     edit.fonts.show(ui, renderer, &mut edit.style.family);
                 });
                 if !renderer.has_family(&edit.style.family) {
                     ui.label(
-                        RichText::new("This font is unavailable. Editing uses a fallback font.")
-                            .color(theme::MUTED)
-                            .small(),
+                        RichText::new(tr(
+                            "This font is unavailable. Editing uses a fallback font.",
+                        ))
+                        .color(theme::MUTED)
+                        .small(),
                     );
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Size");
+                    ui.label(tr("Size"));
                     ui.add(
                         widgets::Number::new(&mut edit.style.size)
                             .range(1.0..=1024.0)
@@ -271,21 +281,21 @@ impl EditorApp {
                             .max_decimals(1),
                     );
                     ui.add_space(12.0);
-                    ui.label("Color");
+                    ui.label(tr("Color"));
                     widgets::color_well(ui, &mut edit.style.color);
                 });
                 ui.horizontal(|ui| {
-                    widgets::checkbox(ui, &mut edit.style.bold, "Bold");
-                    widgets::checkbox(ui, &mut edit.style.italic, "Italic");
-                    widgets::checkbox(ui, &mut edit.style.underline, "Underline");
-                    widgets::checkbox(ui, &mut edit.style.strikethrough, "Strikethrough");
+                    widgets::checkbox(ui, &mut edit.style.bold, tr("Bold"));
+                    widgets::checkbox(ui, &mut edit.style.italic, tr("Italic"));
+                    widgets::checkbox(ui, &mut edit.style.underline, tr("Underline"));
+                    widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
                 });
                 if let Some(error) = &edit.error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Live preview · Ctrl+Enter to apply")
+                        RichText::new(tr("Live preview · Ctrl+Enter to apply"))
                             .small()
                             .color(theme::MUTED),
                     );
@@ -293,10 +303,10 @@ impl EditorApp {
                         apply = ui
                             .add_enabled(
                                 edit.error.is_none(),
-                                widgets::Button::new("Apply").primary(),
+                                widgets::Button::new(tr("Apply")).primary(),
                             )
                             .clicked();
-                        cancel = widgets::button(ui, "Cancel").clicked();
+                        cancel = widgets::button(ui, tr("Cancel")).clicked();
                     });
                 });
             });

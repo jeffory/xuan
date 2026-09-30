@@ -1,4 +1,5 @@
 use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use xuan::i18n::tr;
 
 use super::{EditorApp, theme};
 
@@ -37,15 +38,15 @@ impl EditorApp {
         let (group, _) = ui.allocate_exact_size(vec2(62.0, 22.0), Sense::hover());
         let hovered = ui.rect_contains_pointer(group);
         for (index, color, label) in [
-            (0, Color32::from_rgb(255, 95, 87), "Close window"),
-            (1, Color32::from_rgb(254, 188, 46), "Minimize window"),
+            (0, Color32::from_rgb(255, 95, 87), tr("Close window")),
+            (1, Color32::from_rgb(254, 188, 46), tr("Minimize window")),
             (
                 2,
                 Color32::from_rgb(40, 200, 64),
                 if maximized {
-                    "Restore window"
+                    tr("Restore window")
                 } else {
-                    "Maximize window"
+                    tr("Maximize window")
                 },
             ),
         ] {
@@ -140,7 +141,7 @@ impl EditorApp {
             Sense::click_and_drag(),
         );
         let title = if let Some(develop) = &self.develop {
-            format!("{} — Develop", develop.title)
+            format!("{} — {}", develop.title, tr("Develop"))
         } else {
             self.session().map_or("Xuan".into(), |s| {
                 format!("{}{}", s.title, if s.history.dirty() { "  •" } else { "" })

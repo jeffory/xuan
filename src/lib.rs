@@ -1,10 +1,12 @@
 pub mod blend;
 pub mod color;
+pub mod config;
 pub mod document;
 pub mod effects;
 pub mod geometry;
 pub mod gpu;
 pub mod history;
+pub mod i18n;
 pub mod io;
 pub mod operations;
 pub mod paint;

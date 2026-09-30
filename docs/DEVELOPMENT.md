@@ -177,7 +177,7 @@ The screenshot helper captures the real native window and exits. Inspect the res
 cargo run --release --locked -- --demo --screenshot /tmp/levels.png --screenshot-panel levels
 ```
 
-The helper also supports `hue`, `curves`, `export`, `new`, `brush`, `selection`, `gradient`, `shape`, and `text`. On a Wayland desktop with XWayland available, prefix the command with `env -u WAYLAND_DISPLAY` to capture the X11 path.
+The helper also supports `hue`, `curves`, `export`, `new`, `brush`, `selection`, `gradient`, `shape`, `text`, and `settings`. On a Wayland desktop with XWayland available, prefix the command with `env -u WAYLAND_DISPLAY` to capture the X11 path.
 
 ## Benchmarks
 
@@ -226,3 +226,15 @@ textures. Exposure changes between runs; reported medians exclude the first
 allocation/compilation run and include GPU completion plus histogram readback.
 Registration timings exclude window presentation. See the [GPU processing
 audit](GPU_PROCESSING.md) for sample measurements and the remaining decode costs.
+
+### Localization checks
+
+UI text uses `xuan::i18n::tr` with the English text as its key. Simplified Chinese
+translations are UTF-8 tab-separated pairs in `assets/locales/zh-CN.tsv`. Keep UI
+IDs, command identifiers and user document content independent of translated labels.
+The UI test checks the settings shortcut, live language changes and bundled glyph
+coverage. Configuration tests use temporary directories.
+
+```sh
+cargo test --locked settings_shortcut
+```

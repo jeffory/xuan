@@ -3,6 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver},
 };
+use xuan::i18n::tr;
 
 use xuan::{document::Document, effects::Filter};
 
@@ -85,7 +86,7 @@ impl EditorApp {
                 Ok(result) => Some(result),
                 Err(mpsc::TryRecvError::Empty) => None,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err("The filter worker stopped unexpectedly".into()))
+                    Some(Err(tr("The filter worker stopped unexpectedly").into()))
                 }
             };
             if let Some(result) = result {

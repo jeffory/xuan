@@ -64,6 +64,7 @@ def main():
             "licenses/heic-rs-MIT.txt",
             "licenses/tabler-icons-MIT.txt",
             "assets/fonts/Inter-LICENSE.txt",
+            "assets/fonts/DroidSansFallback-LICENSE.txt",
         ):
             shutil.copy2(ROOT / filename, licenses / Path(filename).name)
         (licenses / "egui-winit").mkdir()

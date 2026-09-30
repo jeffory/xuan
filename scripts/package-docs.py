@@ -22,6 +22,7 @@ LOCAL_LINKS = {
     "licenses/heic-rs-MIT.txt": "../../licenses/xuan/heic-rs-MIT.txt",
     "licenses/tabler-icons-MIT.txt": "../../licenses/xuan/tabler-icons-MIT.txt",
     "assets/fonts/Inter-LICENSE.txt": "../../licenses/xuan/Inter-LICENSE.txt",
+    "assets/fonts/DroidSansFallback-LICENSE.txt": "../../licenses/xuan/DroidSansFallback-LICENSE.txt",
     "vendor/egui-winit/LICENSE-MIT": "../../licenses/xuan/egui-winit/LICENSE-MIT",
     "vendor/egui-winit/LICENSE-APACHE": "../../licenses/xuan/egui-winit/LICENSE-APACHE",
 }

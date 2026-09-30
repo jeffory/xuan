@@ -1,3 +1,4 @@
+use xuan::i18n::tr;
 mod canvas;
 mod chrome;
 mod clipboard;
@@ -14,6 +15,7 @@ mod layers;
 mod levels_controls;
 mod menus;
 mod panels;
+mod settings;
 mod shortcuts;
 mod stroke_smoothing;
 mod tablet;
@@ -86,22 +88,22 @@ impl Tool {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Move => "Move / Transform",
-            Self::Marquee => "Marquee",
-            Self::Lasso => "Lasso",
-            Self::Wand => "Magic Wand",
-            Self::Crop => "Crop",
-            Self::Brush => "Brush",
-            Self::Erase => "Eraser",
-            Self::Heal => "Spot Healing",
-            Self::Clone => "Clone Stamp",
-            Self::Blur => "Blur / Smudge",
-            Self::Gradient => "Gradient",
-            Self::Shape => "Shape",
-            Self::Text => "Text",
-            Self::Dropper => "Eyedropper",
-            Self::Hand => "Hand",
-            Self::Zoom => "Zoom",
+            Self::Move => tr("Move / Transform"),
+            Self::Marquee => tr("Marquee"),
+            Self::Lasso => tr("Lasso"),
+            Self::Wand => tr("Magic Wand"),
+            Self::Crop => tr("Crop"),
+            Self::Brush => tr("Brush"),
+            Self::Erase => tr("Eraser"),
+            Self::Heal => tr("Spot Healing"),
+            Self::Clone => tr("Clone Stamp"),
+            Self::Blur => tr("Blur / Smudge"),
+            Self::Gradient => tr("Gradient"),
+            Self::Shape => tr("Shape"),
+            Self::Text => tr("Text"),
+            Self::Dropper => tr("Eyedropper"),
+            Self::Hand => tr("Hand"),
+            Self::Zoom => tr("Zoom"),
         }
     }
     fn shortcut(self) -> &'static str {
@@ -135,33 +137,35 @@ impl Tool {
     }
     fn hint(self) -> &'static str {
         match self {
-            Self::Move => {
-                "Click to select · Click outside to deselect · Drag to move · Handles to resize · Space to pan"
-            }
+            Self::Move => tr(
+                "Click to select · Click outside to deselect · Drag to move · Handles to resize · Space to pan",
+            ),
             Self::Marquee => {
-                "Drag to select · Shift add · Alt subtract · Ctrl+D deselect · Delete clears"
+                tr("Drag to select · Shift add · Alt subtract · Ctrl+D deselect · Delete clears")
             }
-            Self::Lasso => {
-                "Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels"
-            }
+            Self::Lasso => tr(
+                "Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels",
+            ),
             Self::Wand => {
-                "Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect"
+                tr("Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect")
             }
-            Self::Crop => "Drag to crop · Enter applies · Escape cancels · Space to pan",
-            Self::Brush | Self::Erase => {
-                "Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan"
+            Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
+            Self::Brush | Self::Erase => tr(
+                "Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
+            ),
+            Self::Heal => tr("Paint over blemishes · [ ] size · Space to pan"),
+            Self::Clone => tr("Alt-click to set source · Drag to clone · [ ] size · Space to pan"),
+            Self::Blur => tr("Drag to retouch · [ ] size · 1–0 strength · Space to pan"),
+            Self::Gradient => tr("Drag to draw gradient · Shift locks angle · Escape cancels"),
+            Self::Shape => tr(
+                "Drag to draw a new shape · Shift constrains proportions · Alt draws from center",
+            ),
+            Self::Text => tr("Click to add text · Click text to edit · Use Move to transform"),
+            Self::Dropper => {
+                tr("Click to sample the composition · X swaps foreground and background")
             }
-            Self::Heal => "Paint over blemishes · [ ] size · Space to pan",
-            Self::Clone => "Alt-click to set source · Drag to clone · [ ] size · Space to pan",
-            Self::Blur => "Drag to retouch · [ ] size · 1–0 strength · Space to pan",
-            Self::Gradient => "Drag to draw gradient · Shift locks angle · Escape cancels",
-            Self::Shape => {
-                "Drag to draw a new shape · Shift constrains proportions · Alt draws from center"
-            }
-            Self::Text => "Click to add text · Click text to edit · Use Move to transform",
-            Self::Dropper => "Click to sample the composition · X swaps foreground and background",
-            Self::Hand => "Drag to pan · Scroll to zoom · Ctrl+0 fits canvas",
-            Self::Zoom => "Click to zoom in · Alt-click to zoom out · Ctrl+1 actual pixels",
+            Self::Hand => tr("Drag to pan · Scroll to zoom · Ctrl+0 fits canvas"),
+            Self::Zoom => tr("Click to zoom in · Alt-click to zoom out · Ctrl+1 actual pixels"),
         }
     }
 }
@@ -295,6 +299,7 @@ enum Dialog {
     Export,
     Shortcuts,
     About,
+    Settings,
 }
 
 struct EffectEdit {
@@ -364,6 +369,7 @@ impl Gesture {
 }
 
 pub struct EditorApp {
+    config: xuan::config::Config,
     tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
@@ -455,6 +461,7 @@ impl EditorApp {
         let mut app = xuan::gpu::scope(processor.clone(), || {
             Self::with_context(&cc.egui_ctx, vec![], demo, screenshot)
         });
+        app.load_config();
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
@@ -484,7 +491,7 @@ impl EditorApp {
                 self.export_format = "jpg".into();
                 self.command(name);
             }
-            "levels" | "hue" | "curves" | "new" => self.command(name),
+            "levels" | "hue" | "curves" | "new" | "settings" => self.command(name),
             _ => {}
         }
     }
@@ -495,9 +502,11 @@ impl EditorApp {
         demo: bool,
         screenshot: Option<PathBuf>,
     ) -> Self {
+        xuan::i18n::set_language(xuan::config::Language::English);
         theme::apply(ctx);
         egui_extras::install_image_loaders(ctx);
         let mut app = Self {
+            config: Default::default(),
             tablet: None,
             context: ctx.clone(),
             window_title: String::new(),
@@ -674,7 +683,7 @@ impl EditorApp {
             Ok(mut document) => {
                 document.resolution = self.resolution;
                 self.sessions
-                    .push(Session::new(document, "Untitled".into(), None));
+                    .push(Session::new(document, tr("Untitled").into(), None));
                 self.current = self.sessions.len() - 1;
                 self.dialog = None;
                 self.mask_target = false;
@@ -700,7 +709,7 @@ impl EditorApp {
                             .unwrap_or_default()
                             .to_string_lossy()
                             .to_string();
-                        self.edit("Import Image", |doc| {
+                        self.edit(tr("Import Image"), |doc| {
                             let mut layer = Layer::image(name, image);
                             layer.transform.x = (doc.width as f32 - layer.transform.width) * 0.5;
                             layer.transform.y = (doc.height as f32 - layer.transform.height) * 0.5;
@@ -738,7 +747,7 @@ impl EditorApp {
                         document
                             .layers
                             .first()
-                            .map_or("Untitled".into(), |l| l.name.clone())
+                            .map_or(tr("Untitled").into(), |l| l.name.clone())
                     });
                 self.sessions.push(Session::new(document, title, path));
                 self.current = self.sessions.len() - 1;
@@ -746,7 +755,11 @@ impl EditorApp {
                 self.dialog = None;
             }
             Err(error) => {
-                self.error = Some(format!("Could not open {}\n\n{error:#}", path.display()))
+                self.error = Some(format!(
+                    "{} {}\n\n{error:#}",
+                    tr("Could not open"),
+                    path.display()
+                ))
             }
         }
     }
@@ -769,7 +782,7 @@ impl EditorApp {
         let document = self.sessions[source].document.clone();
         self.cancel_gesture();
         self.current = destination;
-        self.edit("Copy Layers from Project", |target| {
+        self.edit(tr("Copy Layers from Project"), |target| {
             operations::copy_layers(&document, target, id)
         });
         self.mask_target = false;
@@ -787,7 +800,7 @@ impl EditorApp {
             .flat_map(|extension| [extension.to_string(), extension.to_ascii_uppercase()])
             .collect();
         if let Some(paths) = rfd::FileDialog::new()
-            .add_filter("Images and Xuan projects", &extensions)
+            .add_filter(tr("Images and Xuan projects"), &extensions)
             .pick_files()
         {
             for path in paths {
@@ -824,11 +837,11 @@ impl EditorApp {
                     .into();
                 session.path = Some(path);
                 session.history.mark_saved();
-                self.status = "Project saved".into();
+                self.status = tr("Project saved").into();
                 true
             }
             Err(error) => {
-                self.error = Some(format!("Could not save project\n\n{error:#}"));
+                self.error = Some(format!("{}\n\n{error:#}", tr("Could not save project")));
                 false
             }
         }
@@ -977,7 +990,7 @@ impl EditorApp {
         if let Some(develop) = &mut self.develop {
             match command {
                 "new" | "open" | "open_clipboard" | "open_comp" => self.suspend_develop(),
-                "about" | "shortcuts" => {}
+                "about" | "shortcuts" | "settings" => {}
                 "close" => {
                     self.request_develop_close(develop::DevelopClose::Tab);
                     return;
@@ -1003,11 +1016,11 @@ impl EditorApp {
                     self.start_develop_layer(id);
                 }
             }
-            "rasterize_raw" => self.edit("Rasterize RAW Layer", |doc| {
+            "rasterize_raw" => self.edit(tr("Rasterize RAW Layer"), |doc| {
                 let layer = doc
                     .active_mut()
-                    .ok_or_else(|| anyhow::anyhow!("Select a RAW layer"))?;
-                anyhow::ensure!(!layer.locked, "The layer is locked");
+                    .ok_or_else(|| anyhow::anyhow!(tr("Select a RAW layer")))?;
+                anyhow::ensure!(!layer.locked, tr("The layer is locked"));
                 layer.raw = None;
                 Ok(())
             }),
@@ -1032,11 +1045,11 @@ impl EditorApp {
                 false,
             ),
             "content_fill" => {
-                self.start_job("Content-Aware Fill", xuan::retouch::content_aware_fill)
+                self.start_job(tr("Content-Aware Fill"), xuan::retouch::content_aware_fill)
             }
             "remove_background" => {
                 let tolerance = self.tolerance;
-                self.start_job("Remove Background", move |document, cancel| {
+                self.start_job(tr("Remove Background"), move |document, cancel| {
                     xuan::retouch::remove_background(document, tolerance, cancel)
                 });
             }
@@ -1046,7 +1059,7 @@ impl EditorApp {
             "import" => self.open_dialog(true),
             "open_comp" => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("Open Compositor .comp package folder")
+                    .set_title(tr("Open Compositor .comp package folder"))
                     .pick_folder()
                 {
                     self.open_path(&path, false);
@@ -1073,30 +1086,30 @@ impl EditorApp {
                     session.invalidate();
                 }
             }
-            "new_layer" => self.edit("New Layer", |doc| {
+            "new_layer" => self.edit(tr("New Layer"), |doc| {
                 doc.insert(Layer::blank(
-                    format!("Layer {}", doc.layers.len() + 1),
+                    format!("{} {}", tr("Layer"), doc.layers.len() + 1),
                     doc.width,
                     doc.height,
                 ));
                 Ok(())
             }),
-            "duplicate" => self.edit("Duplicate Layers", |doc| {
+            "duplicate" => self.edit(tr("Duplicate Layers"), |doc| {
                 operations::duplicate(doc);
                 Ok(())
             }),
             "delete_layer" => {
-                self.edit("Delete Layers", |doc| {
+                self.edit(tr("Delete Layers"), |doc| {
                     doc.delete_selected();
                     Ok(())
                 });
                 self.mask_target = false;
             }
-            "group" => self.edit("Group Layers", |doc| {
+            "group" => self.edit(tr("Group Layers"), |doc| {
                 operations::group(doc);
                 Ok(())
             }),
-            "move_out" => self.edit("Move Out of Group", |doc| {
+            "move_out" => self.edit(tr("Move Out of Group"), |doc| {
                 let parent = doc.active().and_then(|l| l.parent);
                 let outer = parent
                     .and_then(|id| doc.layers.iter().find(|l| l.id == id))
@@ -1108,21 +1121,23 @@ impl EditorApp {
                 }
                 Ok(())
             }),
-            "ungroup" => self.edit("Ungroup Layers", |doc| {
+            "ungroup" => self.edit(tr("Ungroup Layers"), |doc| {
                 operations::ungroup(doc);
                 Ok(())
             }),
-            "merge" => self.edit("Merge Layers", |doc| operations::merge_selected(doc, true)),
-            "flatten" => self.edit("Flatten Image", |doc| {
+            "merge" => self.edit(tr("Merge Layers"), |doc| {
+                operations::merge_selected(doc, true)
+            }),
+            "flatten" => self.edit(tr("Flatten Image"), |doc| {
                 let layer = Layer::image("Flattened", render::render(doc));
                 doc.select(layer.id, false);
                 doc.layers = vec![layer];
                 Ok(())
             }),
             "mask" | "new_mask_layer" => {
-                self.edit("Add Layer Mask", |doc| {
+                self.edit(tr("Add Layer Mask"), |doc| {
                     if command == "new_mask_layer" || doc.active().is_none() {
-                        let mut layer = Layer::mask("Mask", doc.width, doc.height);
+                        let mut layer = Layer::mask(tr("Mask"), doc.width, doc.height);
                         layer.mask.as_mut().unwrap().pixels =
                             Arc::new(paint::mask_from_selection(doc, &layer));
                         doc.insert(layer);
@@ -1130,7 +1145,7 @@ impl EditorApp {
                     }
                     if let Some(owner) = doc.active().and_then(|l| doc.attachment_owner(l)) {
                         let image = doc.layers.iter().find(|l| l.id == owner).unwrap();
-                        let mut layer = Layer::mask("Mask", doc.width, doc.height);
+                        let mut layer = Layer::mask(tr("Mask"), doc.width, doc.height);
                         layer.transform = image.transform;
                         layer.parent = Some(owner);
                         layer.mask.as_mut().unwrap().pixels =
@@ -1161,7 +1176,7 @@ impl EditorApp {
                 self.background = [0, 0, 0, 255];
             }
             "delete_mask" => {
-                self.edit("Delete Mask", |doc| {
+                self.edit(tr("Delete Mask"), |doc| {
                     if let Some(id) = doc.active().filter(|l| l.standalone_mask).map(|l| l.id) {
                         doc.select(id, false);
                         doc.delete_selected();
@@ -1174,13 +1189,13 @@ impl EditorApp {
                 });
                 self.mask_target = false;
             }
-            "disable_mask" => self.edit("Toggle Mask", |doc| {
+            "disable_mask" => self.edit(tr("Toggle Mask"), |doc| {
                 if let Some(mask) = doc.active_mut().and_then(|l| l.mask.as_mut()) {
                     mask.enabled = !mask.enabled;
                 }
                 Ok(())
             }),
-            "link_mask" => self.edit("Link Mask", |doc| {
+            "link_mask" => self.edit(tr("Link Mask"), |doc| {
                 let attached = doc
                     .active()
                     .is_some_and(|l| l.is_effect() && doc.attachment_owner(l).is_some());
@@ -1195,7 +1210,7 @@ impl EditorApp {
                 }
                 Ok(())
             }),
-            "clip" => self.edit("Clipping Mask", |doc| {
+            "clip" => self.edit(tr("Clipping Mask"), |doc| {
                 if let Some(index) = doc.layers.iter().position(|l| Some(l.id) == doc.active) {
                     let lower = doc.layers[..index]
                         .iter()
@@ -1217,17 +1232,17 @@ impl EditorApp {
                 }
                 Ok(())
             }),
-            "select_all" => self.edit_selection("Select All", |doc| {
+            "select_all" => self.edit_selection(tr("Select All"), |doc| {
                 doc.selection = Some(Arc::new(GrayImage::from_pixel(
                     doc.width,
                     doc.height,
                     image::Luma([255]),
                 )));
             }),
-            "deselect" => self.edit_selection("Deselect", |doc| {
+            "deselect" => self.edit_selection(tr("Deselect"), |doc| {
                 doc.selection = None;
             }),
-            "invert_selection" => self.edit_selection("Invert Selection", |doc| {
+            "invert_selection" => self.edit_selection(tr("Invert Selection"), |doc| {
                 if let Some(selection) = &doc.selection {
                     let mut pixels = (**selection).clone();
                     image::imageops::invert(&mut pixels);
@@ -1236,11 +1251,11 @@ impl EditorApp {
             }),
             "load_selection" => {
                 let mask = self.editing_mask();
-                self.edit_selection("Load Selection", |doc| {
+                self.edit_selection(tr("Load Selection"), |doc| {
                     operations::selection_from_layer(doc, mask);
                 });
             }
-            "feather" => self.edit_selection("Feather Selection", |doc| {
+            "feather" => self.edit_selection(tr("Feather Selection"), |doc| {
                 if let Some(selection) = &doc.selection {
                     doc.selection = Some(Arc::new(xuan::gpu::blur_gray(selection, 3.0)));
                 }
@@ -1254,9 +1269,9 @@ impl EditorApp {
                 let mask = self.editing_mask();
                 self.edit(
                     if command == "clear" {
-                        "Clear Pixels"
+                        tr("Clear Pixels")
                     } else {
-                        "Fill"
+                        tr("Fill")
                     },
                     |doc| paint::fill(doc, color, command == "clear", mask),
                 );
@@ -1267,7 +1282,7 @@ impl EditorApp {
                 };
                 let document = &session.document;
                 if command == "cut" && document.active.is_none() {
-                    self.error = Some("Select a layer before cutting pixels.".into());
+                    self.error = Some(tr("Select a layer before cutting pixels.").into());
                     return;
                 }
                 // A marquee can remain active after the Move tool deselects every layer.
@@ -1276,9 +1291,9 @@ impl EditorApp {
                     || (document.active.is_none() && document.selection.is_some());
                 let Some((pixels, point)) = operations::copy_pixels(document, merged) else {
                     self.error = Some(if document.selection.is_some() {
-                        "The selection is empty.".into()
+                        tr("The selection is empty.").into()
                     } else {
-                        "Select a layer or make a selection before copying.".into()
+                        tr("Select a layer or make a selection before copying.").into()
                     });
                     return;
                 };
@@ -1290,13 +1305,21 @@ impl EditorApp {
                         bytes: std::borrow::Cow::Borrowed(pixels.as_raw()),
                     })
                 {
-                    self.error = Some(format!("Could not copy to the system clipboard\n\n{error}"));
+                    self.error = Some(format!(
+                        "{}\n\n{error}",
+                        tr("Could not copy to the system clipboard")
+                    ));
                     return;
                 }
-                self.status = format!("Copied {} × {} pixels", pixels.width(), pixels.height());
+                self.status = format!(
+                    "{} {} × {} px",
+                    tr("Copied"),
+                    pixels.width(),
+                    pixels.height()
+                );
                 if self.system_clipboard.is_none() {
                     self.status
-                        .push_str(" within Xuan; system clipboard unavailable");
+                        .push_str(tr(" within Xuan; system clipboard unavailable"));
                 }
                 self.clipboard = Some((pixels, point));
                 if command == "cut" {
@@ -1304,7 +1327,7 @@ impl EditorApp {
                 }
             }
             "paste" => self.paste_clipboard(None),
-            "flip_h" | "flip_v" => self.edit("Flip Layer", |doc| {
+            "flip_h" | "flip_v" => self.edit(tr("Flip Layer"), |doc| {
                 if let Some(mut transform) = operations::transform_box(doc, false) {
                     if command == "flip_h" {
                         transform.flip_x = !transform.flip_x;
@@ -1315,7 +1338,7 @@ impl EditorApp {
                 }
                 Ok(())
             }),
-            "flip_canvas_h" | "flip_canvas_v" => self.edit("Flip Canvas", |doc| {
+            "flip_canvas_h" | "flip_canvas_v" => self.edit(tr("Flip Canvas"), |doc| {
                 operations::flip_canvas(doc, command == "flip_canvas_h");
                 Ok(())
             }),
@@ -1353,10 +1376,11 @@ impl EditorApp {
             }
             "invert" => {
                 let mask = self.editing_mask();
-                self.edit("Invert", |doc| {
+                self.edit(tr("Invert"), |doc| {
                     xuan::effects::apply_adjustment(doc, &Adjustment::Invert, mask)
                 });
             }
+            "settings" => self.dialog = Some(Dialog::Settings),
             "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "about" => self.dialog = Some(Dialog::About),
             _ => {}
@@ -1388,6 +1412,7 @@ impl eframe::App for EditorApp {
 
 impl EditorApp {
     fn show(&mut self, ctx: &egui::Context) {
+        xuan::i18n::set_language(self.config.language);
         if self.processor.is_none() {
             self.processor = self
                 .gpu_state
@@ -1468,7 +1493,7 @@ impl EditorApp {
             session.history.commit();
         }
         let title = if let Some(develop) = &self.develop {
-            format!("{} — Develop — Xuan", develop.title)
+            format!("{} — {} — Xuan", develop.title, tr("Develop"))
         } else {
             self.session().map_or("Xuan".to_owned(), |s| {
                 format!(

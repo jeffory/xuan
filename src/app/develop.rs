@@ -7,6 +7,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use xuan::i18n::tr;
 
 use anyhow::{Context, Result, ensure};
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, emath::GuiRounding, pos2, vec2};
@@ -264,7 +265,7 @@ impl Develop {
             ctx.request_repaint();
         }
         if required > limit {
-            self.notice = Some("This image exceeds the GPU's full-resolution preview limit. Develop and TIFF export still use every source pixel.".into());
+            self.notice = Some(tr("This image exceeds the GPU's full-resolution preview limit. Develop and TIFF export still use every source pixel.").into());
         }
     }
 
@@ -478,7 +479,7 @@ impl EditorApp {
             return;
         };
         if layer.locked {
-            self.error = Some("Unlock the RAW layer before developing it".into());
+            self.error = Some(tr("Unlock the RAW layer before developing it").into());
             return;
         }
         let Some(asset) = layer.raw.clone() else {
@@ -556,7 +557,7 @@ impl EditorApp {
                 Ok(result) => Some(result),
                 Err(mpsc::TryRecvError::Empty) => None,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err("The RAW worker stopped unexpectedly".into()))
+                    Some(Err(tr("The RAW worker stopped unexpectedly").into()))
                 }
             });
         if let Some(result) = result {
@@ -628,7 +629,7 @@ impl EditorApp {
                             develop.applying = false;
                         } else {
                             self.status =
-                                "RAW developed · Double-click the RAW layer to edit it again"
+                                tr("RAW developed · Double-click the RAW layer to edit it again")
                                     .into();
                             ctx.request_repaint();
                             return;
@@ -636,7 +637,8 @@ impl EditorApp {
                     }
                     Ok(WorkerResult::Exported(path)) => {
                         develop.exporting = None;
-                        develop.notice = Some(format!("Saved 16-bit TIFF · {}", path.display()));
+                        develop.notice =
+                            Some(format!("{} · {}", tr("Saved 16-bit TIFF"), path.display()));
                     }
                     Err(error) => {
                         develop.error = Some(error);
@@ -657,7 +659,7 @@ impl EditorApp {
                         path.extension().and_then(|v| v.to_str()).is_some_and(|v| v
                             .eq_ignore_ascii_case("tif")
                             || v.eq_ignore_ascii_case("tiff")),
-                        "Save the 16-bit image with a .tif or .tiff extension"
+                        tr("Save the 16-bit image with a .tif or .tiff extension")
                     );
                     let pixels = raw::render_16(&full, &settings, cancel)?;
                     let parent = path.parent().unwrap_or(Path::new("."));
@@ -672,7 +674,7 @@ impl EditorApp {
                         pixels.height(),
                         image::ExtendedColorType::Rgba16,
                     )?;
-                    ensure!(!cancel.load(Ordering::Relaxed), "Export cancelled");
+                    ensure!(!cancel.load(Ordering::Relaxed), tr("Export cancelled"));
                     file.as_file().sync_all()?;
                     file.persist(&path)?;
                     Ok(WorkerResult::Exported(path))
@@ -755,7 +757,7 @@ impl EditorApp {
                     .sessions
                     .iter()
                     .position(|s| s.document.id == *id)
-                    .context("The target project is no longer open")?;
+                    .context(tr("The target project is no longer open"))?;
                 let session = &mut self.sessions[index];
                 let mut document = session.document.clone();
                 match target {
@@ -777,13 +779,13 @@ impl EditorApp {
                             .layers
                             .iter_mut()
                             .find(|l| l.id == *layer)
-                            .context("The RAW layer is no longer available")?;
+                            .context(tr("The RAW layer is no longer available"))?;
                         raw::update_layer(target, asset, pixels)?;
                     }
                     DevelopTarget::New => unreachable!(),
                 }
                 document.validate()?;
-                session.history.begin("Develop RAW", &session.document);
+                session.history.begin(tr("Develop RAW"), &session.document);
                 session.document = document;
                 session.history.commit();
                 session.invalidate();
@@ -825,12 +827,12 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(interactive, |ui| {
-                        apply = widgets::primary_button(ui, "Develop").clicked();
+                        apply = widgets::primary_button(ui, tr("Develop")).clicked();
                     });
                     ui.add_enabled_ui(
                         self.develop_close_requested.is_none() && self.dialog.is_none(),
                         |ui| {
-                            cancel = widgets::button(ui, "Cancel").clicked();
+                            cancel = widgets::button(ui, tr("Cancel")).clicked();
                         },
                     );
                     ui.add_enabled_ui(interactive, |ui| {
@@ -842,13 +844,13 @@ impl EditorApp {
                             ui,
                             &mut d.compare,
                             &[
-                                (Compare::Edited, "Edited"),
-                                (Compare::Original, "Original"),
-                                (Compare::Split, "Split"),
-                                (Compare::SideBySide, "Side by side"),
+                                (Compare::Edited, tr("Edited")),
+                                (Compare::Original, tr("Original")),
+                                (Compare::Split, tr("Split")),
+                                (Compare::SideBySide, tr("Side by side")),
                             ],
                         );
-                        widgets::checkbox(ui, &mut d.show_clipping, "Clipping");
+                        widgets::checkbox(ui, &mut d.show_clipping, tr("Clipping"));
                     });
                 });
             });
@@ -858,21 +860,21 @@ impl EditorApp {
                     ui.spinner();
                 }
                 ui.label(if d.exporting.is_some() {
-                    "Exporting 16-bit TIFF…"
+                    tr("Exporting 16-bit TIFF…")
                 } else if d.applying {
-                    "Developing full-resolution image…"
+                    tr("Developing full-resolution image…")
                 } else if d.full.is_none() && d.error.is_none() {
-                    "Decoding RAW sensor data…"
+                    tr("Decoding RAW sensor data…")
                 } else if d.receiver.is_some() || d.needs_preview(d.preview_side) {
-                    "Updating preview…"
+                    tr("Updating preview…")
                 } else if d.picker {
-                    "Click a neutral gray area to set white balance"
+                    tr("Click a neutral gray area to set white balance")
                 } else if d.draw_overlay {
-                    "Drag on the image to place the selected mask"
+                    tr("Drag on the image to place the selected mask")
                 } else if let Some(notice) = &d.notice {
                     notice
                 } else {
-                    "RAW embedded · 32-bit float processing · sRGB photo layer"
+                    tr("RAW embedded · 32-bit float processing · sRGB photo layer")
                 });
                 if let Some(asset) = &d.asset {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -886,9 +888,9 @@ impl EditorApp {
                                 .is_some_and(|(full, texture)| texture.size_vec2()
                                     == crop_rect(full, &d.settings).size())
                             {
-                                "Full resolution"
+                                tr("Full resolution")
                             } else {
-                                "Preview"
+                                tr("Preview")
                             }
                         ));
                     });
@@ -911,7 +913,7 @@ impl EditorApp {
             .show(ctx, |ui| {
                 if let Some(error) = &d.error {
                     ui.colored_label(Color32::from_rgb(255, 140, 140), error);
-                    if d.full.is_some() && widgets::button(ui, "Retry preview").clicked() {
+                    if d.full.is_some() && widgets::button(ui, tr("Retry preview")).clicked() {
                         d.changed();
                     }
                 }
@@ -920,9 +922,9 @@ impl EditorApp {
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.label(if d.error.is_some() {
-                            "Unable to develop this RAW file"
+                            tr("Unable to develop this RAW file")
                         } else {
-                            "Opening RAW…"
+                            tr("Opening RAW…")
                         });
                     });
                 }
@@ -973,15 +975,15 @@ impl EditorApp {
         if let Some(target) = self.develop_close_requested {
             let mut discard = false;
             let mut keep = false;
-            widgets::Window::new("Finish developing?").show(ctx, |ui| {
+            widgets::Window::new(tr("Finish developing?")).show(ctx, |ui| {
                 ui.label(if matches!(target, DevelopClose::Window) && !self.inactive_develop.is_empty() {
-                    "Develop the images to keep your RAW adjustments in projects, or discard all open Develop sessions."
+                    tr("Develop the images to keep your RAW adjustments in projects, or discard all open Develop sessions.")
                 } else {
-                    "Develop the image to keep your RAW adjustments in a project, or discard this Develop session."
+                    tr("Develop the image to keep your RAW adjustments in a project, or discard this Develop session.")
                 });
                 ui.horizontal(|ui| {
-                    keep = widgets::primary_button(ui, "Keep developing").clicked();
-                    discard = widgets::button(ui, "Discard and close").clicked();
+                    keep = widgets::primary_button(ui, tr("Keep developing")).clicked();
+                    discard = widgets::button(ui, tr("Discard and close")).clicked();
                 });
             });
             if keep {
@@ -1021,7 +1023,7 @@ fn loaded(
     native: bool,
     cancel: &AtomicBool,
 ) -> Result<WorkerResult> {
-    ensure!(!cancel.load(Ordering::Relaxed), "Cancelled");
+    ensure!(!cancel.load(Ordering::Relaxed), tr("Cancelled"));
     let full = Arc::new(decoded);
     let proxy = Arc::new(full.preview_cancellable(1600, cancel)?);
     let preview = worker.render(&proxy, &asset.settings, false, native, cancel)?;

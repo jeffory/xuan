@@ -175,3 +175,26 @@ HEIC/HEIF photos (`.heic`, `.heif`, and `.hif`, including uppercase extensions) 
 The photo editor uses an 8-bit sRGB raster pipeline. RAW Develop uses floating-point camera data and offers direct 16-bit TIFF output with an sRGB profile; its photo-layer render uses the existing 8-bit pipeline. Imported raster ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; Xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.
 
 Remove Background uses a border-color matte, intended for simple backgrounds, instead of Apple's foreground-recognition service. Content-aware fill and healing use a portable texture-matching implementation, so results differ from Compositor. Initial zoomed-out canvas previews are capped at 4096 pixels per side. At 100% zoom and above, the preview uses full document resolution up to the device's texture limit; the pixel grid appears from 800% when individual document pixels can be displayed. Filter Apply uses full layer dimensions and export uses full document dimensions. Imports, saves, and raster adjustments can temporarily occupy the UI thread. Vulkan is the verified rendering path; OpenGL surface availability depends on the driver.
+
+## Language and settings
+
+Open **Edit → Settings…** (Ctrl+,). The sidebar's **General** category contains the
+language selector: **English** or **简体中文**. Changes apply immediately and are
+saved automatically. Chinese glyphs are bundled with the application.
+
+Preferences are separate from projects and window layout:
+
+- Linux: `$XDG_CONFIG_HOME/xuan/config.toml`, or `~/.config/xuan/config.toml` when
+  `XDG_CONFIG_HOME` is unset or not an absolute path.
+- Windows: `%APPDATA%\xuan\config.toml`.
+
+The file is created when a preference changes. For example:
+
+```toml
+language = "zh-CN" # Use "en" for English (the default).
+```
+
+Invalid or unreadable configuration is reported and the app starts with defaults.
+Saving uses an atomic replacement and preserves other TOML options. An invalid
+existing TOML file must be corrected before settings can be saved. Operating-system
+file dialogs and technical diagnostics may follow the system language or English.

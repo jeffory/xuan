@@ -29,7 +29,7 @@ struct Args {
     #[arg(
         long,
         value_name = "PANEL",
-        value_parser = ["levels", "hue", "curves", "export", "brush", "selection", "gradient", "shape", "text", "new"]
+        value_parser = ["levels", "hue", "curves", "export", "brush", "selection", "gradient", "shape", "text", "new", "settings"]
     )]
     screenshot_panel: Option<String>,
 }

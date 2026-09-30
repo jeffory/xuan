@@ -1,4 +1,5 @@
 use egui::{Button, RichText};
+use xuan::i18n::tr;
 use xuan::{
     document::{Adjustment, Point},
     effects::Filter,
@@ -69,7 +70,7 @@ pub(super) fn filter_menu(ui: &mut egui::Ui) -> Option<Filter> {
             vignette: 0.0,
         },
     ] {
-        if ui.button(filter.name()).clicked() {
+        if ui.button(tr(filter.name())).clicked() {
             result = Some(filter);
             ui.close();
         }
@@ -105,7 +106,7 @@ pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
             seed: 1,
         },
     ] {
-        if ui.button(adjustment.name()).clicked() {
+        if ui.button(tr(adjustment.name())).clicked() {
             result = Some(adjustment);
             ui.close();
         }
@@ -136,21 +137,27 @@ impl EditorApp {
                     ui.add_enabled_ui(!blocked, |ui| {
                         // Leave a small gap between the expanded highlights.
                         ui.spacing_mut().item_spacing.x += 2.0;
-                        menu_bar_button(ui, "File", |ui| {
-                            item(ui, "New Canvas…", "Ctrl+N", "new", &mut action);
-                            item(ui, "Open…", "Ctrl+O", "open", &mut action);
+                        menu_bar_button(ui, tr("File"), |ui| {
+                            item(ui, tr("New Canvas…"), "Ctrl+N", "new", &mut action);
+                            item(ui, tr("Open…"), "Ctrl+O", "open", &mut action);
                             item(
                                 ui,
-                                "Open Image from Clipboard",
+                                tr("Open Image from Clipboard"),
                                 "",
                                 "open_clipboard",
                                 &mut action,
                             );
-                            item(ui, "Open Compositor Package…", "", "open_comp", &mut action);
+                            item(
+                                ui,
+                                tr("Open Compositor Package…"),
+                                "",
+                                "open_comp",
+                                &mut action,
+                            );
                             ui.add_enabled_ui(!developing, |ui| {
                                 item(
                                     ui,
-                                    "Import Image as Layer…",
+                                    tr("Import Image as Layer…"),
                                     "Ctrl+Shift+O",
                                     "import",
                                     &mut action,
@@ -158,27 +165,31 @@ impl EditorApp {
                             });
                             ui.separator();
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, "Save", "Ctrl+S", "save", &mut action);
-                                item(ui, "Save As…", "Ctrl+Shift+S", "save_as", &mut action);
+                                item(ui, tr("Save"), "Ctrl+S", "save", &mut action);
+                                item(ui, tr("Save As…"), "Ctrl+Shift+S", "save_as", &mut action);
                                 item(
                                     ui,
-                                    "Export Image…",
+                                    tr("Export Image…"),
                                     "Ctrl+Alt+Shift+S",
                                     "export",
                                     &mut action,
                                 );
                                 ui.separator();
-                                item(ui, "Close Project", "Ctrl+W", "close", &mut action);
+                                item(ui, tr("Close Project"), "Ctrl+W", "close", &mut action);
                             });
                             if developing {
-                                item(ui, "Close RAW Develop", "Ctrl+W", "close", &mut action);
+                                item(ui, tr("Close RAW Develop"), "Ctrl+W", "close", &mut action);
                             }
                         });
-                        menu_bar_button(ui, "Edit", |ui| {
+                        menu_bar_button(ui, tr("Edit"), |ui| {
+                            item(ui, tr("Settings…"), "Ctrl+,", "settings", &mut action);
+                            ui.separator();
                             let (undo, redo) = if let Some(d) = &self.develop {
                                 (
-                                    (d.ready() && !d.undo.is_empty()).then_some("RAW adjustment"),
-                                    (d.ready() && !d.redo.is_empty()).then_some("RAW adjustment"),
+                                    (d.ready() && !d.undo.is_empty())
+                                        .then_some(tr("RAW adjustment")),
+                                    (d.ready() && !d.redo.is_empty())
+                                        .then_some(tr("RAW adjustment")),
                                 )
                             } else {
                                 (
@@ -189,7 +200,7 @@ impl EditorApp {
                             ui.add_enabled_ui(undo.is_some(), |ui| {
                                 item(
                                     ui,
-                                    &format!("Undo {}", undo.unwrap_or("")),
+                                    &format!("{} {}", tr("Undo"), tr(undo.unwrap_or(""))),
                                     "Ctrl+Z",
                                     "undo",
                                     &mut action,
@@ -198,7 +209,7 @@ impl EditorApp {
                             ui.add_enabled_ui(redo.is_some(), |ui| {
                                 item(
                                     ui,
-                                    &format!("Redo {}", redo.unwrap_or("")),
+                                    &format!("{} {}", tr("Redo"), tr(redo.unwrap_or(""))),
                                     "Ctrl+Shift+Z",
                                     "redo",
                                     &mut action,
@@ -206,80 +217,98 @@ impl EditorApp {
                             });
                             ui.separator();
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, "Cut", "Ctrl+X", "cut", &mut action);
-                                item(ui, "Copy", "Ctrl+C", "copy", &mut action);
+                                item(ui, tr("Cut"), "Ctrl+X", "cut", &mut action);
+                                item(ui, tr("Copy"), "Ctrl+C", "copy", &mut action);
                                 item(
                                     ui,
-                                    "Copy Merged",
+                                    tr("Copy Merged"),
                                     "Ctrl+Shift+C",
                                     "copy_merged",
                                     &mut action,
                                 );
                             });
                             ui.add_enabled_ui(!developing, |ui| {
-                                item(ui, "Paste", "Ctrl+V", "paste", &mut action);
+                                item(ui, tr("Paste"), "Ctrl+V", "paste", &mut action);
                             });
                             ui.add_enabled_ui(has_doc, |ui| {
                                 ui.separator();
                                 item(
                                     ui,
-                                    "Fill Foreground",
+                                    tr("Fill Foreground"),
                                     "Alt+Backspace",
                                     "fill_fg",
                                     &mut action,
                                 );
                                 item(
                                     ui,
-                                    "Fill Background",
+                                    tr("Fill Background"),
                                     "Ctrl+Backspace",
                                     "fill_bg",
                                     &mut action,
                                 );
-                                item(ui, "Clear Pixels", "Delete", "clear", &mut action);
+                                item(ui, tr("Clear Pixels"), "Delete", "clear", &mut action);
                                 item(
                                     ui,
-                                    "Content-Aware Fill",
+                                    tr("Content-Aware Fill"),
                                     "Shift+F5",
                                     "content_fill",
                                     &mut action,
                                 );
                             });
                         });
-                        menu_bar_button(ui, "Image", |ui| {
+                        menu_bar_button(ui, tr("Image"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
-                                ui.menu_button("Adjustments", |ui| {
+                                ui.menu_button(tr("Adjustments"), |ui| {
                                     adjustment = adjustment_menu(ui);
                                     ui.separator();
-                                    item(ui, "Invert", "Ctrl+I", "invert", &mut action);
+                                    item(ui, tr("Invert"), "Ctrl+I", "invert", &mut action);
                                 });
                                 ui.separator();
-                                item(ui, "Image Size…", "", "image_size", &mut action);
-                                item(ui, "Canvas Size…", "", "canvas_size", &mut action);
+                                item(ui, tr("Image Size…"), "", "image_size", &mut action);
+                                item(ui, tr("Canvas Size…"), "", "canvas_size", &mut action);
                                 ui.separator();
                                 item(
                                     ui,
-                                    "Flip Canvas Horizontal",
+                                    tr("Flip Canvas Horizontal"),
                                     "",
                                     "flip_canvas_h",
                                     &mut action,
                                 );
-                                item(ui, "Flip Canvas Vertical", "", "flip_canvas_v", &mut action);
+                                item(
+                                    ui,
+                                    tr("Flip Canvas Vertical"),
+                                    "",
+                                    "flip_canvas_v",
+                                    &mut action,
+                                );
                             });
                         });
-                        menu_bar_button(ui, "Layer", |ui| {
+                        menu_bar_button(ui, tr("Layer"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, "New Layer", "Ctrl+Shift+N", "new_layer", &mut action);
-                                item(ui, "Duplicate Layers", "Ctrl+J", "duplicate", &mut action);
-                                item(ui, "Delete Layers", "", "delete_layer", &mut action);
+                                item(
+                                    ui,
+                                    tr("New Layer"),
+                                    "Ctrl+Shift+N",
+                                    "new_layer",
+                                    &mut action,
+                                );
+                                item(
+                                    ui,
+                                    tr("Duplicate Layers"),
+                                    "Ctrl+J",
+                                    "duplicate",
+                                    &mut action,
+                                );
+                                item(ui, tr("Delete Layers"), "", "delete_layer", &mut action);
                                 ui.add_enabled_ui(
                                     self.session()
                                         .and_then(|s| s.document.active())
                                         .is_some_and(|l| l.raw.is_some() && !l.locked),
                                     |ui| {
-                                        item(ui, "Develop RAW…", "", "develop", &mut action);
+                                        item(ui, tr("Develop RAW…"), "", "develop", &mut action);
                                         item(
                                             ui,
-                                            "Rasterize RAW Layer",
+                                            tr("Rasterize RAW Layer"),
                                             "",
                                             "rasterize_raw",
                                             &mut action,
@@ -287,58 +316,94 @@ impl EditorApp {
                                     },
                                 );
                                 ui.separator();
-                                item(ui, "Group Layers", "Ctrl+G", "group", &mut action);
-                                item(ui, "Ungroup Layers", "Ctrl+Shift+G", "ungroup", &mut action);
-                                item(ui, "Merge Down / Selected", "Ctrl+E", "merge", &mut action);
-                                item(ui, "Flatten Image", "", "flatten", &mut action);
+                                item(ui, tr("Group Layers"), "Ctrl+G", "group", &mut action);
+                                item(
+                                    ui,
+                                    tr("Ungroup Layers"),
+                                    "Ctrl+Shift+G",
+                                    "ungroup",
+                                    &mut action,
+                                );
+                                item(
+                                    ui,
+                                    tr("Merge Down / Selected"),
+                                    "Ctrl+E",
+                                    "merge",
+                                    &mut action,
+                                );
+                                item(ui, tr("Flatten Image"), "", "flatten", &mut action);
                                 ui.separator();
-                                ui.menu_button("New Adjustment Layer", |ui| {
+                                ui.menu_button(tr("New Adjustment Layer"), |ui| {
                                     adjustment = adjustment_menu(ui);
                                     adjustment_layer = true;
                                 });
-                                ui.menu_button("New Filter Layer", |ui| {
+                                ui.menu_button(tr("New Filter Layer"), |ui| {
                                     filter = filter_menu(ui);
                                     filter_layer = true;
                                 });
-                                ui.menu_button("Layer Mask", |ui| {
-                                    item(ui, "New Mask Layer", "", "new_mask_layer", &mut action);
-                                    item(ui, "Add Mask from Selection", "", "mask", &mut action);
-                                    item(ui, "Enable / Disable", "", "disable_mask", &mut action);
-                                    item(ui, "Link / Unlink", "", "link_mask", &mut action);
-                                    item(ui, "Delete Mask", "", "delete_mask", &mut action);
+                                ui.menu_button(tr("Layer Mask"), |ui| {
+                                    item(
+                                        ui,
+                                        tr("New Mask Layer"),
+                                        "",
+                                        "new_mask_layer",
+                                        &mut action,
+                                    );
+                                    item(
+                                        ui,
+                                        tr("Add Mask from Selection"),
+                                        "",
+                                        "mask",
+                                        &mut action,
+                                    );
+                                    item(
+                                        ui,
+                                        tr("Enable / Disable"),
+                                        "",
+                                        "disable_mask",
+                                        &mut action,
+                                    );
+                                    item(ui, tr("Link / Unlink"), "", "link_mask", &mut action);
+                                    item(ui, tr("Delete Mask"), "", "delete_mask", &mut action);
                                 });
                                 item(
                                     ui,
-                                    "Create / Release Clipping Mask",
+                                    tr("Create / Release Clipping Mask"),
                                     "Ctrl+Alt+G",
                                     "clip",
                                     &mut action,
                                 );
                                 ui.separator();
-                                item(ui, "Flip Horizontal", "", "flip_h", &mut action);
-                                item(ui, "Flip Vertical", "", "flip_v", &mut action);
+                                item(ui, tr("Flip Horizontal"), "", "flip_h", &mut action);
+                                item(ui, tr("Flip Vertical"), "", "flip_v", &mut action);
                             });
                         });
-                        menu_bar_button(ui, "Select", |ui| {
+                        menu_bar_button(ui, tr("Select"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, "All", "Ctrl+A", "select_all", &mut action);
-                                item(ui, "Deselect", "Ctrl+D", "deselect", &mut action);
+                                item(ui, tr("All"), "Ctrl+A", "select_all", &mut action);
+                                item(ui, tr("Deselect"), "Ctrl+D", "deselect", &mut action);
                                 item(
                                     ui,
-                                    "Inverse",
+                                    tr("Inverse"),
                                     "Ctrl+Shift+I",
                                     "invert_selection",
                                     &mut action,
                                 );
-                                item(ui, "Load Layer / Mask", "", "load_selection", &mut action);
-                                item(ui, "Feather 3 px", "", "feather", &mut action);
+                                item(
+                                    ui,
+                                    tr("Load Layer / Mask"),
+                                    "",
+                                    "load_selection",
+                                    &mut action,
+                                );
+                                item(ui, tr("Feather 3 px"), "", "feather", &mut action);
                             });
                         });
-                        menu_bar_button(ui, "Filter", |ui| {
+                        menu_bar_button(ui, tr("Filter"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
                                 item(
                                     ui,
-                                    "Remove Background (edge colors)",
+                                    tr("Remove Background (edge colors)"),
                                     "",
                                     "remove_background",
                                     &mut action,
@@ -359,33 +424,37 @@ impl EditorApp {
                                         vignette: 0.0,
                                     },
                                 ] {
-                                    if ui.button(format!("{}…", f.name())).clicked() {
+                                    if ui.button(format!("{}…", tr(f.name()))).clicked() {
                                         filter = Some(f);
                                         ui.close();
                                     }
                                 }
                             });
                         });
-                        menu_bar_button(ui, "View", |ui| {
+                        menu_bar_button(ui, tr("View"), |ui| {
                             ui.add_enabled_ui(can_view, |ui| {
-                                item(ui, "Fit Canvas", "Ctrl+0", "fit", &mut action);
-                                item(ui, "Actual Pixels", "Ctrl+1", "actual", &mut action);
-                                item(ui, "Zoom In", "Ctrl++", "zoom_in", &mut action);
-                                item(ui, "Zoom Out", "Ctrl+−", "zoom_out", &mut action);
+                                item(ui, tr("Fit Canvas"), "Ctrl+0", "fit", &mut action);
+                                item(ui, tr("Actual Pixels"), "Ctrl+1", "actual", &mut action);
+                                item(ui, tr("Zoom In"), "Ctrl++", "zoom_in", &mut action);
+                                item(ui, tr("Zoom Out"), "Ctrl+−", "zoom_out", &mut action);
                             });
                             ui.separator();
                             ui.add_enabled_ui(!developing, |ui| {
                                 widgets::checkbox(
                                     ui,
                                     &mut self.show_controls,
-                                    "Show Transform Controls",
+                                    tr("Show Transform Controls"),
                                 );
-                                widgets::checkbox(ui, &mut self.snap, "Snap to Canvas and Layers");
+                                widgets::checkbox(
+                                    ui,
+                                    &mut self.snap,
+                                    tr("Snap to Canvas and Layers"),
+                                );
                             });
                         });
-                        menu_bar_button(ui, "Help", |ui| {
-                            item(ui, "Keyboard Shortcuts", "F1", "shortcuts", &mut action);
-                            item(ui, "About Xuan", "", "about", &mut action);
+                        menu_bar_button(ui, tr("Help"), |ui| {
+                            item(ui, tr("Keyboard Shortcuts"), "F1", "shortcuts", &mut action);
+                            item(ui, tr("About Xuan"), "", "about", &mut action);
                         });
                     });
                     self.titlebar_drag(ui);
@@ -432,7 +501,7 @@ impl EditorApp {
                     ui.horizontal(|ui| {
                         if ui
                             .add(widgets::Button::new("+").min_size(egui::vec2(28.0, 28.0)))
-                            .on_hover_text("New canvas (Ctrl+N)")
+                            .on_hover_text(tr("New canvas (Ctrl+N)"))
                             .clicked()
                         {
                             action = Some("new");
@@ -451,7 +520,9 @@ impl EditorApp {
                                             && !developing
                                             && self.inactive_develop.is_empty()
                                         {
-                                            ui.label(RichText::new("Untitled").color(theme::MUTED));
+                                            ui.label(
+                                                RichText::new(tr("Untitled")).color(theme::MUTED),
+                                            );
                                         }
                                         for (index, session) in self.sessions.iter().enumerate() {
                                             let (response, close) = widgets::project_tab(
@@ -528,17 +599,22 @@ impl EditorApp {
                             ui.add_enabled_ui(
                                 self.develop.as_ref().is_none_or(|d| d.ready()),
                                 |ui| {
-                                    if widgets::button(ui, "−").on_hover_text("Zoom out").clicked()
+                                    if widgets::button(ui, "−")
+                                        .on_hover_text(tr("Zoom out"))
+                                        .clicked()
                                     {
                                         action = Some("zoom_out");
                                     }
-                                    if widgets::button(ui, "+").on_hover_text("Zoom in").clicked() {
+                                    if widgets::button(ui, "+")
+                                        .on_hover_text(tr("Zoom in"))
+                                        .clicked()
+                                    {
                                         action = Some("zoom_in");
                                     }
                                     if widgets::button(ui, "100%").clicked() {
                                         action = Some("actual");
                                     }
-                                    if widgets::button(ui, "Fit").clicked() {
+                                    if widgets::button(ui, tr("Fit")).clicked() {
                                         action = Some("fit");
                                     }
                                 },

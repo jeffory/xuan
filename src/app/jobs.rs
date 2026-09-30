@@ -3,6 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver},
 };
+use xuan::i18n::tr;
 
 use anyhow::Result;
 use uuid::Uuid;
@@ -60,7 +61,7 @@ impl EditorApp {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return,
             Err(mpsc::TryRecvError::Disconnected) => {
-                Err("The editing worker stopped unexpectedly".into())
+                Err(tr("The editing worker stopped unexpectedly").into())
             }
         };
         let job = self.job.take().unwrap();
@@ -79,7 +80,7 @@ impl EditorApp {
                 result => {
                     session.history.cancel(&mut session.document);
                     if job.cancel.load(Ordering::Relaxed) {
-                        self.status = "Cancelled".into();
+                        self.status = tr("Cancelled").into();
                     } else if let Err(error) = result {
                         self.error = Some(error);
                     }

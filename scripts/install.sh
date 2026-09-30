@@ -26,6 +26,7 @@ else
     install -Dm644 "$xuan_root/licenses/rawler-LGPL-2.1.txt" "$xuan_prefix/share/licenses/xuan/rawler-LGPL-2.1.txt"
     install -Dm644 "$xuan_root/licenses/tabler-icons-MIT.txt" "$xuan_prefix/share/licenses/xuan/tabler-icons-MIT.txt"
     install -Dm644 "$xuan_root/assets/fonts/Inter-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/Inter-LICENSE.txt"
+    install -Dm644 "$xuan_root/assets/fonts/DroidSansFallback-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/DroidSansFallback-LICENSE.txt"
     for xuan_license in LICENSE-MIT LICENSE-APACHE; do
         install -Dm644 "$xuan_root/vendor/egui-winit/$xuan_license" "$xuan_prefix/share/licenses/xuan/egui-winit/$xuan_license"
     done

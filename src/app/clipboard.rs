@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use xuan::i18n::tr;
 
 use anyhow::{Context, Result, ensure};
 use image::RgbaImage;
@@ -53,7 +54,10 @@ fn native_file_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
             if let Ok(local) = path.strip_prefix("localhost") {
                 path = PathBuf::from("/").join(local);
             }
-            ensure!(path.is_absolute(), "Only local image files can be pasted");
+            ensure!(
+                path.is_absolute(),
+                tr("Only local image files can be pasted")
+            );
             Ok(path)
         })
         .collect()
@@ -86,11 +90,11 @@ fn read_clipboard(
             let height = u32::try_from(data.height)?;
             validate_size(width, height)?;
             let pixels = RgbaImage::from_raw(width, height, data.bytes.into_owned())
-                .context("Invalid clipboard image pixels")?;
+                .context(tr("Invalid clipboard image pixels"))?;
             return Ok(ClipboardContent::Image(pixels));
         }
         Err(arboard::Error::ContentNotAvailable) => {}
-        Err(error) => return Err(error).context("Could not read the clipboard image"),
+        Err(error) => return Err(error).context(tr("Could not read the clipboard image")),
     }
     if let Ok(text) = clipboard.get_text()
         && let Some(paths) = file_paths(&text)
@@ -151,28 +155,28 @@ impl EditorApp {
             ClipboardContent::Unavailable => match &self.clipboard {
                 Some((pixels, _)) => pixels.clone(),
                 None => {
-                    self.status = "The system clipboard is unavailable".into();
+                    self.status = tr("The system clipboard is unavailable").into();
                     return Ok(());
                 }
             },
             ClipboardContent::Empty => {
                 self.clipboard = None;
-                self.status = "The clipboard does not contain an image or image file".into();
+                self.status = tr("The clipboard does not contain an image or image file").into();
                 return Ok(());
             }
         };
 
         let mut document = Document::new(pixels.width(), pixels.height())?;
-        let layer = Layer::image("Clipboard image", pixels);
+        let layer = Layer::image(tr("Clipboard image"), pixels);
         document.select(layer.id, false);
         document.layers = vec![layer];
-        let mut session = Session::new(document, "Clipboard".into(), None);
+        let mut session = Session::new(document, tr("Clipboard").into(), None);
         session.history.mark_modified();
         self.sessions.push(session);
         self.current = self.sessions.len() - 1;
         self.mask_target = false;
         self.dialog = None;
-        self.status = "Opened image from clipboard".into();
+        self.status = tr("Opened image from clipboard").into();
         Ok(())
     }
 
@@ -187,7 +191,7 @@ impl EditorApp {
                 if point.is_none() {
                     self.clipboard = None;
                 }
-                vec![("Pasted image".to_owned(), pixels, point)]
+                vec![(tr("Pasted image").to_owned(), pixels, point)]
             }
             ClipboardContent::Files(paths) => {
                 self.clipboard = None;
@@ -219,15 +223,15 @@ impl EditorApp {
                 }
             }
             ClipboardContent::Unavailable => match self.clipboard.clone() {
-                Some((pixels, point)) => vec![("Pasted image".into(), pixels, Some(point))],
+                Some((pixels, point)) => vec![(tr("Pasted image").into(), pixels, Some(point))],
                 None => {
-                    self.status = "The system clipboard is unavailable".into();
+                    self.status = tr("The system clipboard is unavailable").into();
                     return;
                 }
             },
             ClipboardContent::Empty => {
                 self.clipboard = None;
-                self.status = "The clipboard does not contain an image or image file".into();
+                self.status = tr("The clipboard does not contain an image or image file").into();
                 return;
             }
         };
@@ -249,7 +253,7 @@ impl EditorApp {
             ];
             self.new_document();
         }
-        self.edit("Paste", |doc| {
+        self.edit(tr("Paste"), |doc| {
             for (name, pixels, point) in images {
                 let mut layer = Layer::image(name, pixels);
                 let point = point.unwrap_or_else(|| {

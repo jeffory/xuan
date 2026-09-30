@@ -1,6 +1,7 @@
 //! AppKit-like controls. Keep egui's input, focus and accessibility behavior where
 //! possible, and paint the small details its stock theme cannot express.
 use std::ops::RangeInclusive;
+use xuan::i18n::tr;
 
 use egui::{
     Color32, CornerRadius, FontId, Rect, Response, Sense, Stroke, StrokeKind, Ui, Widget, pos2,
@@ -689,7 +690,7 @@ impl PopUp {
 pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, 20.0), Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), "Color")
+        egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tr("Color"))
     });
     ui.painter().rect_filled(rect, 4.0, Color32::BLACK);
     checkerboard(ui, rect.shrink(2.0), 4.0);
@@ -864,6 +865,7 @@ pub struct Window<'a> {
     title: String,
     open: Option<&'a mut bool>,
     width: f32,
+    id: Option<egui::Id>,
 }
 impl<'a> Window<'a> {
     pub fn new(title: impl ToString) -> Self {
@@ -871,7 +873,12 @@ impl<'a> Window<'a> {
             title: title.to_string(),
             open: None,
             width: 410.0,
+            id: None,
         }
+    }
+    pub fn id(mut self, id: impl std::hash::Hash) -> Self {
+        self.id = Some(egui::Id::new(id));
+        self
     }
     pub fn open(mut self, open: &'a mut bool) -> Self {
         self.open = Some(open);
@@ -887,6 +894,7 @@ impl<'a> Window<'a> {
         }
         let mut close = false;
         egui::Window::new(&self.title)
+            .id(self.id.unwrap_or_else(|| egui::Id::new(&self.title)))
             .title_bar(false)
             .auto_sized()
             .pivot(egui::Align2::CENTER_CENTER)
@@ -941,7 +949,7 @@ impl<'a> Window<'a> {
                             Stroke::new(1.0_f32, theme::PANEL),
                         );
                     }
-                    close = response.on_hover_text("Close panel").clicked();
+                    close = response.on_hover_text(tr("Close panel")).clicked();
                 }
                 egui::Frame::new().inner_margin(24).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 12.0;
@@ -966,12 +974,12 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
         (
             vec2(12.0, 12.0),
             background as &mut [u8; 4],
-            "Background color",
+            tr("Background color"),
         ),
         (
             vec2(0.0, 0.0),
             foreground as &mut [u8; 4],
-            "Foreground color",
+            tr("Foreground color"),
         ),
     ] {
         let swatch = Rect::from_min_size(rect.min + offset, vec2(24.0, 24.0));
@@ -999,7 +1007,7 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
     let swap_rect = Rect::from_min_size(rect.min + vec2(26.0, -4.0), vec2(13.0, 13.0));
     let swap = ui
         .interact(swap_rect, ui.id().with("swap_colors"), Sense::click())
-        .on_hover_text("Swap colors (X)");
+        .on_hover_text(tr("Swap colors (X)"));
     let c = swap_rect.center();
     let stroke = Stroke::new(1.0_f32, theme::MUTED);
     ui.painter().add(egui::Shape::line(
@@ -1020,7 +1028,7 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
     let reset_rect = Rect::from_min_size(rect.min + vec2(-1.0, 27.0), vec2(12.0, 12.0));
     let reset = ui
         .interact(reset_rect, ui.id().with("reset_colors"), Sense::click())
-        .on_hover_text("Default colors (D)");
+        .on_hover_text(tr("Default colors (D)"));
     ui.painter().rect_filled(
         reset_rect.shrink(3.0).translate(vec2(1.5, 1.5)),
         1.0,

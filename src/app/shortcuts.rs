@@ -1,5 +1,6 @@
 use super::{EditorApp, Tool};
 use egui::{Event, Key, Modifiers};
+use xuan::i18n::tr;
 
 impl EditorApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -56,6 +57,7 @@ impl EditorApp {
             (shift, Key::G, "ungroup"),
             (shift, Key::I, "invert_selection"),
             (ctrl | Modifiers::ALT, Key::G, "clip"),
+            (ctrl, Key::Comma, "settings"),
             (ctrl, Key::N, "new"),
             (ctrl, Key::O, "open"),
             (ctrl, Key::S, "save"),
@@ -120,7 +122,7 @@ impl EditorApp {
         }
         if pressed(Key::Enter) {
             if let Some((start, end)) = self.crop_rect.take() {
-                self.edit("Crop", |doc| xuan::operations::crop(doc, start, end));
+                self.edit(tr("Crop"), |doc| xuan::operations::crop(doc, start, end));
                 if let Some(s) = self.session_mut() {
                     s.fit = true;
                 }
@@ -214,7 +216,7 @@ impl EditorApp {
                 if self.tool.is_brush() || self.tool == Tool::Gradient {
                     self.brush.opacity = opacity;
                 } else {
-                    self.edit("Layer Opacity", |doc| {
+                    self.edit(tr("Layer Opacity"), |doc| {
                         let selected = doc.selected.clone();
                         for l in &mut doc.layers {
                             if selected.contains(&l.id) && !l.group {
@@ -243,7 +245,7 @@ impl EditorApp {
         }
         if dx != 0.0 || dy != 0.0 {
             let mask_target = self.transforming_mask();
-            self.edit("Nudge", |doc| {
+            self.edit(tr("Nudge"), |doc| {
                 if let Some(mut transform) = xuan::operations::transform_box(doc, mask_target) {
                     transform.x += dx;
                     transform.y += dy;

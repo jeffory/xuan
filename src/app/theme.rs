@@ -30,6 +30,20 @@ pub fn apply(ctx: &egui::Context) {
         .get_mut(&egui::FontFamily::Proportional)
         .unwrap()
         .insert(0, "Inter".into());
+    fonts.font_data.insert(
+        "Droid Sans Fallback".into(),
+        egui::FontData::from_static(include_bytes!(
+            "../../assets/fonts/DroidSansFallbackFull.ttf"
+        ))
+        .into(),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("Droid Sans Fallback".into());
+    }
     ctx.set_fonts(fonts);
 
     let mut style = (*ctx.style()).clone();

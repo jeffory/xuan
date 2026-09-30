@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use xuan::i18n::tr;
 
 use egui::{Color32, Context, Id, Key, Modifiers, Popup, Rect, Sense, TextureHandle, Ui, vec2};
 use xuan::text::{TextRenderer, TextStyle};
@@ -101,7 +102,7 @@ impl FontPicker {
                     egui::TextEdit::singleline(&mut self.filter)
                         .id_salt("font_search")
                         .desired_width(f32::INFINITY)
-                        .hint_text("Search installed fonts"),
+                        .hint_text(tr("Search installed fonts")),
                 );
                 if !was_open {
                     search.request_focus();
@@ -109,7 +110,7 @@ impl FontPicker {
                 }
                 let families = self.matching_families(renderer.families());
                 if families.is_empty() {
-                    ui.label("No matching fonts");
+                    ui.label(tr("No matching fonts"));
                     return;
                 }
                 ui.spacing_mut().item_spacing.y = 0.0;

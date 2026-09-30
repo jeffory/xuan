@@ -41,6 +41,7 @@ install -m644 licenses/rawler-LGPL-2.1.txt "$xuan_licenses/"
 install -m644 licenses/heic-rs-MIT.txt "$xuan_licenses/"
 install -m644 licenses/tabler-icons-MIT.txt "$xuan_licenses/"
 install -m644 assets/fonts/Inter-LICENSE.txt "$xuan_licenses/"
+install -m644 assets/fonts/DroidSansFallback-LICENSE.txt "$xuan_licenses/"
 for xuan_license in LICENSE-MIT LICENSE-APACHE; do
     install -Dm644 "vendor/egui-winit/$xuan_license" "$xuan_licenses/egui-winit/$xuan_license"
 done
