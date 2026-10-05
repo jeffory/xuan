@@ -1014,6 +1014,12 @@ fn real_canon_cr3_decodes() {
 }
 
 #[test]
+fn real_canon_cr3_apsc_crop_decodes() {
+    // rawler 0.7.2 panicked on the crop area of APS-C crop-mode CR3 files (#29).
+    check_real_raw("canon-r5m2-apsc-craw-cr3");
+}
+
+#[test]
 fn real_canon_crw_decodes() {
     check_real_raw("canon-d30-crw");
 }
@@ -1031,6 +1037,8 @@ fn real_fuji_raf_xtrans_decodes() {
 
 #[test]
 fn real_sony_arw_decodes() {
+    // An APS-C crop-mode capture: the camera stored a 2816x1872 sensor area and
+    // reports 2768x1848 (Sony FullImageSize), not the full-frame 4240x2832.
     check_real_raw("sony-a7s-arw");
 }
 

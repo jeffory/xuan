@@ -2,7 +2,7 @@
 name = "xuan"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A native image compositor for Linux and Windows, built with Rust, wgpu and egui"
 license = "MIT"
 
@@ -18,7 +18,7 @@ egui_extras = { version = "0.33.3", default-features = false, features = ["svg"]
 heic-rs = "0.1.1"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
 png = "0.18"
-rawler = "=0.7.2"
+rawler = "=0.8.0"
 rayon = "1.11"
 raw-window-handle = "0.6"
 rfd = "0.15.4"

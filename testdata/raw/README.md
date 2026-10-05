@@ -13,9 +13,10 @@ Every file comes from the [raw.pixls.us](https://raw.pixls.us/) sample archive a
 | NEF | Nikon D70 | `Nikon/D70/20170902_0047.NEF` | 5.2 MB | Nikon Bayer |
 | CR2 | Canon EOS Digital Rebel XT | `Canon/EOS Digital Rebel XT/IMG_8728.CR2` | 7.1 MB | Canon CR2, portrait orientation |
 | CR3 | Canon EOS R6 Mark III | `Canon/Canon EOS R6 Mark III/IMG_4244.CR3` | 6.7 MB | Canon CR3 (CRAW) |
+| CR3 | Canon EOS R5 Mark II (APS-C crop, CRAW) | `Canon/Canon EOS R5m2/APS-C_CRAW.CR3` | 7.2 MB | Canon CR3 crop-mode capture (panicked before rawler 0.8.0) |
 | CRW | Canon EOS D30 | `Canon/EOS D30/CRW_2444.CRW` | 2.9 MB | Canon CIFF |
 | RAF | Fujifilm X20 | `Fujifilm/X20/DSCF7451.RAF` | 18.6 MB | Fujifilm X-Trans (6x6) |
-| ARW | Sony ILCE-7S | `Sony/ILCE-7S/DSC04126.ARW` | 5.9 MB | Sony Bayer |
+| ARW | Sony ILCE-7S | `Sony/ILCE-7S/DSC04126.ARW` | 5.9 MB | Sony Bayer; shot in APS-C crop mode, so it decodes to 2768x1848 rather than the full-frame 4240x2832 |
 | CR2 | Canon EOS 5D Mark II (sRAW2) | `Canon/EOS 5D Mark II/10.canon.sraw2.cr2` | 10.9 MB | Unsupported layout, must be rejected |
 
 All files are served from `https://raw.pixls.us/data/<Make>/<Model>/<file>`. The sRAW file is the negative test: Canon sRAW/mRAW is intentionally unsupported, and the test only asserts that decoding fails.

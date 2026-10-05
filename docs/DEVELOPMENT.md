@@ -4,7 +4,7 @@ Run the commands below from the repository root. For installation and editing, s
 
 ## Prerequisites
 
-Requires Rust **1.88+** and a C toolchain.
+Requires Rust **1.89+** and a C toolchain.
 
 ### Linux
 
