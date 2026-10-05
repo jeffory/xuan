@@ -39,6 +39,10 @@ wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
 x11rb = { version = "0.13", features = ["xinput"] }
+# Blocking the network for plugins (src/plugins/sandbox.rs). Pinned: its
+# `apply_filter` runs between fork and exec and was audited for this version.
+seccompiler = "=0.5.0"
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "27.0.1", default-features = false, features = ["dx12"] }

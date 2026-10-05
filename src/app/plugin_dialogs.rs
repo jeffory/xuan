@@ -6,6 +6,7 @@ use xuan::{
     i18n::tr,
     plugins::{
         manifest::{Input, InputKind, Manifest, ResultInto},
+        sandbox,
         ui::Node,
     },
 };
@@ -349,6 +350,10 @@ impl EditorApp {
             .cloned();
         // The title names the plugin's id too: its name is its own choice.
         let source = self.plugins.source(&plugin);
+        let blocked = sandbox::blocks_network(
+            self.config.block_undeclared_network(),
+            &manifest.permissions,
+        );
         let title = if manifest.permissions.is_empty() {
             format!("{} {source}?", tr("Run"))
         } else {
@@ -363,7 +368,11 @@ impl EditorApp {
                     egui::Label::new(format!(
                         "{source} {} {}",
                         manifest.plugin.version,
-                        tr("runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it. The plugin can still read your files and contact any server, whatever it declares. Only run plugins you trust."),
+                        if blocked {
+                            tr("runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it, and blocks its network. The plugin can still read your files. Only run plugins you trust.")
+                        } else {
+                            tr("runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it. The plugin can still read your files and contact any server, whatever it declares. Only run plugins you trust.")
+                        },
                     ))
                     .wrap(),
                 );
@@ -380,7 +389,7 @@ impl EditorApp {
                     .color(theme::MUTED),
                 );
                 ui.add_space(8.0);
-                permissions_list(ui, &manifest);
+                permissions_list(ui, &manifest, blocked);
                 if let Some(previous) = &previous {
                     ui.add_space(8.0);
                     ui.label(RichText::new(tr("Changed since you allowed it:")).strong());
@@ -456,6 +465,7 @@ impl EditorApp {
         let mut setting_changed: Option<(String, String, Value)> = None;
         let mut ask_again: Option<String> = None;
         let mut offline = self.config.disable_network_plugins;
+        let mut block = self.config.block_undeclared_network();
         let plugin_dir = self
             .config_path
             .as_ref()
@@ -551,7 +561,7 @@ impl EditorApp {
                         ui.add_space(8.0);
                         {
                             ui.label(RichText::new(tr("Permissions")).strong());
-                            permissions_list(ui, manifest);
+                            permissions_list(ui, manifest, self.plugin_network_blocked(&id));
                             ui.horizontal(|ui| {
                                 if self.plugin_granted(&id) {
                                     ui.label(RichText::new(tr("Allowed")).color(theme::MUTED));
@@ -649,7 +659,11 @@ impl EditorApp {
                 }
                 ui.separator();
                 widgets::checkbox(ui, &mut offline, tr("Disable plugins that use the network"))
-                    .on_hover_text(tr("Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect."));
+                    .on_hover_text(super::plugin_consent::offline_mode_note(&self.config));
+                if sandbox::SUPPORTED {
+                    widgets::checkbox(ui, &mut block, tr("Block network for plugins that don't declare it"))
+                        .on_hover_text(tr("Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
+                }
                 ui.horizontal(|ui| {
                     if let Some(dir) = &plugin_dir {
                         ui.label(RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display())).small().color(theme::MUTED));
@@ -680,6 +694,9 @@ impl EditorApp {
         }
         if offline != self.config.disable_network_plugins {
             self.set_network_plugins_disabled(offline);
+        }
+        if block != self.config.block_undeclared_network() {
+            self.set_block_undeclared_network(block);
         }
         if reload {
             self.load_plugins();
@@ -840,9 +857,25 @@ impl EditorApp {
     }
 }
 
-fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest) {
+/// The permissions a plugin declares. `blocked` says whether it starts with
+/// its network blocked ([`xuan::plugins::sandbox`]).
+fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
     let mut any = false;
+    if blocked {
+        ui.label(format!("• {}", tr("Network blocked by Xuan (Linux)")));
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "  {}",
+                    tr("It cannot open network sockets, not even to this computer.")
+                ))
+                .small()
+                .color(theme::MUTED),
+            )
+            .wrap(),
+        );
+    }
     if !permissions.network.is_empty() {
         any = true;
         ui.add(

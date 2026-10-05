@@ -2,6 +2,7 @@ use super::{EditorApp, theme, widgets};
 use xuan::{
     config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, TitleBar},
     i18n::{self, tr},
+    plugins::sandbox,
 };
 
 /// The pages of the Settings window.
@@ -160,12 +161,17 @@ impl EditorApp {
             let keys_changed = config.keybindings != self.config.keybindings;
             let network_changed =
                 config.disable_network_plugins != self.config.disable_network_plugins;
+            let blocking_changed =
+                config.block_undeclared_network() != self.config.block_undeclared_network();
             self.config = config;
             if keys_changed {
                 self.rebuild_keymap();
             }
             if network_changed {
                 self.apply_network_plugins_setting();
+            }
+            if blocking_changed {
+                self.apply_block_network_setting();
             }
             self.config_dirty = true;
             ctx.request_repaint();
@@ -276,9 +282,36 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
     );
     ui.add(
         egui::Label::new(
-            egui::RichText::new(tr(
-                "Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect.",
-            ))
+            egui::RichText::new(super::plugin_consent::offline_mode_note(config))
+                .small()
+                .color(theme::MUTED),
+        )
+        .wrap(),
+    );
+    ui.add_space(12.0);
+    let mut block = config.block_undeclared_network();
+    let changed = ui
+        .add_enabled_ui(sandbox::SUPPORTED, |ui| {
+            widgets::checkbox(
+                ui,
+                &mut block,
+                tr("Block network for plugins that don't declare it"),
+            )
+        })
+        .inner
+        .changed();
+    if changed {
+        config.block_undeclared_network = Some(block);
+    }
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(if sandbox::SUPPORTED {
+                tr(
+                    "Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked.",
+                )
+            } else {
+                tr("Only available on Linux.")
+            })
             .small()
             .color(theme::MUTED),
         )

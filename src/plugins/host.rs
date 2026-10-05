@@ -176,11 +176,13 @@ pub struct Process {
 impl Process {
     /// Start the manifest's command in the plugin folder with extra environment.
     /// `wake` is called from a background thread whenever the plugin sends
-    /// something.
+    /// something. With `block_network` it starts under the filter of
+    /// [`super::sandbox`], or not at all when the filter cannot be installed.
     pub fn spawn(
         manifest: &Manifest,
         env: &[(String, String)],
         wake: Option<Wake>,
+        block_network: bool,
     ) -> Result<Self> {
         let wake: Wake = wake.unwrap_or_else(|| Arc::new(|| {}));
         let (program, args) = manifest
@@ -203,11 +205,21 @@ impl Process {
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         tree::prepare(&mut command);
+        if block_network {
+            super::sandbox::block_network(&mut command).with_context(|| {
+                format!("Cannot block the network for plugin {}", manifest.plugin.id)
+            })?;
+        }
         let mut child = command.spawn().with_context(|| {
             format!(
-                "Cannot start `{}` for plugin {}",
+                "Cannot start `{}` for plugin {}{}",
                 program.display(),
-                manifest.plugin.id
+                manifest.plugin.id,
+                if block_network {
+                    " with its network blocked"
+                } else {
+                    ""
+                }
             )
         })?;
         let tree = tree::Tree::attach(&child);
@@ -294,6 +306,13 @@ impl Process {
                     }
                 })
                 .context("plugin log thread")?;
+        }
+        if block_network {
+            push_log(
+                &log,
+                "Network blocked by Xuan: opening sockets other than Unix sockets fails with EACCES"
+                    .into(),
+            );
         }
         Ok(Self {
             child: Some(child),
@@ -683,7 +702,7 @@ done
     fn exchanges_messages_with_a_child_process_and_logs_stderr() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = mock(dir.path());
-        let mut process = Process::spawn(&manifest, &[], None).unwrap();
+        let mut process = Process::spawn(&manifest, &[], None, false).unwrap();
         assert!(process.alive());
         let id = process
             .request("initialize", json!({"protocol": 1}))
@@ -753,7 +772,7 @@ done
             dir.path(),
         )
         .unwrap();
-        let mut process = Process::spawn(&manifest, &[], None).unwrap();
+        let mut process = Process::spawn(&manifest, &[], None, false).unwrap();
         let id = process.request("format/import", json!({})).unwrap();
         let error = process
             .wait_for(&id, std::time::Duration::from_secs(10))
@@ -776,8 +795,8 @@ done
     fn request_ids_are_unique_across_processes() {
         let dir = tempfile::tempdir().unwrap();
         let manifest = mock(dir.path());
-        let mut first = Process::spawn(&manifest, &[], None).unwrap();
-        let mut second = Process::spawn(&manifest, &[], None).unwrap();
+        let mut first = Process::spawn(&manifest, &[], None, false).unwrap();
+        let mut second = Process::spawn(&manifest, &[], None, false).unwrap();
         let a = first.request("ping", Value::Null).unwrap();
         let b = second.request("ping", Value::Null).unwrap();
         let c = first.request("ping", Value::Null).unwrap();
@@ -828,7 +847,7 @@ done
             dir.path(),
         )
         .unwrap();
-        let process = Process::spawn(&manifest, &[], None).unwrap();
+        let process = Process::spawn(&manifest, &[], None, false).unwrap();
         process.note("é".repeat(MAX_NOTE));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !process.log().iter().any(|l| l == "done") {
@@ -875,7 +894,7 @@ done
         let wake: Wake = Arc::new(move || {
             counter.fetch_add(1, Ordering::Relaxed);
         });
-        let mut process = Process::spawn(&manifest, &[], Some(wake)).unwrap();
+        let mut process = Process::spawn(&manifest, &[], Some(wake), false).unwrap();
         // Without polling, the reader stops at the budget.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while process.queued_bytes() + (1 << 20) < QUEUE_BYTES {
@@ -942,7 +961,7 @@ done
                 &folder,
             )
             .unwrap();
-            let mut process = Process::spawn(&manifest, &[], None).unwrap();
+            let mut process = Process::spawn(&manifest, &[], None, false).unwrap();
             let pid_file = folder.join("child.pid");
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let pid = loop {
@@ -982,7 +1001,7 @@ done
         )
         .unwrap();
         let processes: Vec<Process> = (0..3)
-            .map(|_| Process::spawn(&manifest, &[], None).unwrap())
+            .map(|_| Process::spawn(&manifest, &[], None, false).unwrap())
             .collect();
         let started = std::time::Instant::now();
         Process::stop_all(processes, Duration::from_millis(200));
@@ -998,11 +1017,178 @@ done
             dir.path(),
         )
         .unwrap();
-        assert!(Process::spawn(&manifest, &[], None).is_err());
+        assert!(Process::spawn(&manifest, &[], None, false).is_err());
         assert_eq!(
             resolve("python3", dir.path()),
             std::path::PathBuf::from("python3")
         );
         assert_eq!(resolve("bin/run", dir.path()), dir.path().join("bin/run"));
+    }
+
+    /// Plugins started with their network blocked, on Linux.
+    #[cfg(target_os = "linux")]
+    mod network {
+        use super::*;
+        use crate::plugins::sandbox;
+
+        /// A Python plugin that answers `initialize`, and `probe` with the
+        /// errno (0 for success) of each attempt to open a socket, also from
+        /// a process it starts.
+        const PROBE: &str = r#"
+import ctypes, json, os, platform, socket, subprocess, sys
+
+libc = ctypes.CDLL(None, use_errno=True)
+
+def attempt(make):
+    try:
+        made = make()
+    except OSError as error:
+        return error.errno
+    for s in made if isinstance(made, tuple) else (made,):
+        s.close()
+    return 0
+
+def syscall(number, *args):
+    result = libc.syscall(ctypes.c_long(number), *[ctypes.c_long(a) for a in args])
+    if result < 0:
+        return ctypes.get_errno()
+    os.close(result)
+    return 0
+
+def unix_pair_works():
+    a, b = socket.socketpair(socket.AF_UNIX)
+    a.sendall(b"ping")
+    ok = b.recv(4) == b"ping"
+    a.close()
+    b.close()
+    return 0 if ok else -1
+
+CHILD = "import socket\ntry:\n socket.socket(socket.AF_INET, socket.SOCK_STREAM).close(); print(0)\nexcept OSError as e:\n print(e.errno)"
+
+def probe():
+    result = {
+        "inet": attempt(lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM)),
+        "inet_udp": attempt(lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM)),
+        "inet6": attempt(lambda: socket.socket(socket.AF_INET6, socket.SOCK_STREAM)),
+        "packet": attempt(lambda: socket.socket(socket.AF_PACKET, socket.SOCK_RAW, 0)),
+        "unix": attempt(lambda: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)),
+        "unix_pair": unix_pair_works(),
+        "inet_pair": attempt(lambda: socket.socketpair(socket.AF_INET)),
+        "netlink": attempt(lambda: socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 0)),
+        "io_uring": syscall(425, 1, 0),
+        "child_inet": int(subprocess.run([sys.executable, "-c", CHILD], capture_output=True, text=True).stdout.strip() or -1),
+    }
+    if platform.machine() == "x86_64":
+        # socket() through the x32 ABI's syscall number.
+        result["x32_inet"] = syscall(0x40000000 | 41, socket.AF_INET, socket.SOCK_STREAM, 0)
+    return result
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        result = {"protocol": 1}
+    elif method == "probe":
+        result = probe()
+    else:
+        result = None
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+    if method == "shutdown":
+        break
+"#;
+
+        fn probe_plugin(dir: &Path, network: &str) -> Manifest {
+            std::fs::write(dir.join("probe.py"), PROBE).unwrap();
+            Manifest::parse(
+                &format!(
+                    "[plugin]\nid = \"probe\"\nname = \"Probe\"\nversion = \"1\"\ncommand = [\"python3\", \"probe.py\"]\n\n[permissions]\nnetwork = [{network}]\n"
+                ),
+                dir,
+            )
+            .unwrap()
+        }
+
+        /// Start the plugin, check that it talks JSON-RPC, and return its
+        /// probe and its log.
+        fn run(manifest: &Manifest, block: bool) -> (Value, Vec<String>) {
+            let mut process = Process::spawn(manifest, &[], None, block).unwrap();
+            let id = process.initialize(json!({"protocol": 1})).unwrap();
+            let (result, _) = process
+                .wait_for(&id, Duration::from_secs(20))
+                .unwrap_or_else(|e| panic!("{e:#}: {:?}", process.log()));
+            assert_eq!(result, json!({"protocol": 1}));
+            process.set_ready().unwrap();
+            let id = process.request("probe", Value::Null).unwrap();
+            let (probe, _) = process
+                .wait_for(&id, Duration::from_secs(20))
+                .unwrap_or_else(|e| panic!("{e:#}: {:?}", process.log()));
+            let id = process.request("shutdown", Value::Null).unwrap();
+            process.wait_for(&id, Duration::from_secs(20)).unwrap();
+            (probe, process.log())
+        }
+
+        /// Whether this kernel and container let a process install a
+        /// filter, which testing a blocked plugin needs.
+        fn filters_allowed() -> bool {
+            match sandbox::available() {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("skipped: seccomp filters are not available here: {error:#}");
+                    false
+                }
+            }
+        }
+
+        const EACCES: i64 = 13;
+
+        #[test]
+        fn a_plugin_without_hosts_cannot_open_network_sockets_when_blocked() {
+            if !filters_allowed() {
+                return;
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let manifest = probe_plugin(dir.path(), "");
+            assert!(sandbox::blocks_network(true, &manifest.permissions));
+            let (probe, log) = run(&manifest, true);
+            for blocked in [
+                "inet",
+                "inet_udp",
+                "inet6",
+                "packet",
+                "inet_pair",
+                "io_uring",
+                "child_inet",
+            ] {
+                assert_eq!(probe[blocked], EACCES, "{blocked}: {probe}");
+            }
+            if cfg!(target_arch = "x86_64") {
+                assert_eq!(probe["x32_inet"], EACCES, "{probe}");
+            }
+            for allowed in ["unix", "unix_pair", "netlink"] {
+                assert_eq!(probe[allowed], 0, "{allowed}: {probe}");
+            }
+            assert!(
+                log.iter().any(|l| l.starts_with("Network blocked by Xuan")),
+                "{log:?}"
+            );
+        }
+
+        #[test]
+        fn plugins_open_sockets_when_not_blocked_or_declaring_hosts() {
+            for (network, setting) in [("", false), ("\"localhost\"", true)] {
+                let dir = tempfile::tempdir().unwrap();
+                let manifest = probe_plugin(dir.path(), network);
+                let block = sandbox::blocks_network(setting, &manifest.permissions);
+                assert!(!block, "{network} {setting}");
+                let (probe, log) = run(&manifest, block);
+                for allowed in ["inet", "unix", "unix_pair", "child_inet"] {
+                    assert_eq!(probe[allowed], 0, "{allowed}: {probe}");
+                }
+                assert!(
+                    !log.iter().any(|l| l.contains("Network blocked")),
+                    "{log:?}"
+                );
+            }
+        }
     }
 }

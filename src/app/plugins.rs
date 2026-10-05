@@ -627,7 +627,18 @@ impl EditorApp {
             ];
             let context = self.context.clone();
             let wake: plugins::host::Wake = Arc::new(move || context.request_repaint());
-            let mut process = Process::spawn(&manifest, &env, Some(wake))?;
+            let blocked = self.plugin_network_blocked(plugin);
+            let mut process = match Process::spawn(&manifest, &env, Some(wake), blocked) {
+                Ok(process) => process,
+                Err(error) if blocked => {
+                    return Err(error.context(format!(
+                        "{} {}",
+                        self.plugins.source(plugin),
+                        tr("did not start with its network blocked, and Xuan does not run it unfiltered while “Block network for plugins that don't declare it” is on in Settings")
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
             let (settings, secrets) = self.plugin_settings(&manifest);
             // Started without waiting: the answer arrives with the other
             // messages, and what is sent meanwhile waits in the process.

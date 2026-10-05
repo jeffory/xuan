@@ -788,3 +788,11 @@ Gets document data without asking	无需询问即可获取文档数据
 Ask Again	重新询问
 Disable plugins that use the network	禁用使用网络的插件
 Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect.	声明了网络主机的插件不会启动，其操作也不可用。未声明网络主机的插件仍可能连接网络。
+Block network for plugins that don't declare it	为未声明网络的插件阻止网络
+Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked.	未声明网络主机的插件无法打开网络套接字，即使是连接本机（localhost）也不行。正在运行的插件会重新启动以应用此设置。声明了主机的插件不受阻止。
+Only available on Linux.	仅在 Linux 上可用。
+Plugins that declare network hosts do not start and their actions are unavailable. Xuan blocks the network of the others.	声明了网络主机的插件不会启动，其操作也不可用。其他插件的网络由 Xuan 阻止。
+runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it, and blocks its network. The plugin can still read your files. Only run plugins you trust.	会以你的权限作为程序运行。下列权限只约束 Xuan 自己发送给插件以及替它执行的操作，此外 Xuan 会阻止它访问网络。插件仍然可以读取你的文件。请只运行你信任的插件。
+Network blocked by Xuan (Linux)	网络已被 Xuan 阻止（Linux）
+It cannot open network sockets, not even to this computer.	它无法打开网络套接字，即使是连接本机也不行。
+did not start with its network blocked, and Xuan does not run it unfiltered while “Block network for plugins that don't declare it” is on in Settings	无法在阻止网络的情况下启动；设置中的“为未声明网络的插件阻止网络”开启时，Xuan 不会在不受限制的情况下运行它

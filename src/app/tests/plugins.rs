@@ -2378,6 +2378,84 @@ done
         assert!(app.plugins.running("mock"));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn blocking_the_network_restarts_plugins_without_hosts_under_the_filter() {
+        if let Err(error) = xuan::plugins::sandbox::available() {
+            eprintln!("skipped: seccomp filters are not available here: {error:#}");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let plain_dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        app.config_path = Some(config.path().join("config.toml"));
+        install_network_mock(&mut app, dir.path());
+        std::fs::copy(
+            dir.path().join("plugin.sh"),
+            plain_dir.path().join("plugin.sh"),
+        )
+        .unwrap();
+        let plain = Manifest::parse(
+            &MANIFEST
+                .replace("id = \"mock\"", "id = \"plain\"")
+                .replace("shortcut = \"Ctrl+Shift+E\"\n", ""),
+            plain_dir.path(),
+        )
+        .unwrap();
+        let network = app.plugins.manifest("mock").unwrap().clone();
+        app.install_plugins(vec![network, plain], vec![]);
+        app.grant_plugin("plain", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let panes_open = |app: &EditorApp| {
+            ["plugin:mock/info", "plugin:plain/info"].iter().all(|key| {
+                app.plugins
+                    .panes
+                    .get(*key)
+                    .is_some_and(|p| p.tree.is_some())
+            })
+        };
+        let blocked_note = |app: &EditorApp, plugin| {
+            app.plugins
+                .log(plugin)
+                .iter()
+                .any(|l| l.starts_with("Network blocked by Xuan"))
+        };
+        run_until(&context, &mut app, panes_open);
+        assert!(!app.plugin_network_blocked("plain"));
+        assert!(!blocked_note(&app, "plain"));
+
+        // Turned on, the plugin without hosts restarts under the filter and
+        // the one with hosts keeps running unfiltered.
+        app.set_block_undeclared_network(true);
+        assert!(!app.plugins.running("plain"));
+        assert!(app.plugins.running("mock"));
+        run_until(&context, &mut app, panes_open);
+        assert!(app.plugin_network_blocked("plain") && blocked_note(&app, "plain"));
+        assert!(!app.plugin_network_blocked("mock") && !blocked_note(&app, "mock"));
+        let text = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+        assert!(text.contains("block_undeclared_network = true"), "{text}");
+        // Its actions run as before.
+        app.start_plugin_action("plain", "echo");
+        assert!(
+            app.plugins.action.is_some(),
+            "{:?} {}",
+            app.error,
+            app.status
+        );
+        app.close_plugin_action();
+
+        // Turned off, it restarts without the filter.
+        app.set_block_undeclared_network(false);
+        assert!(!app.plugins.running("plain"));
+        run_until(&context, &mut app, panes_open);
+        assert!(!app.plugin_network_blocked("plain") && !blocked_note(&app, "plain"));
+        let text = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+        assert!(text.contains("block_undeclared_network = false"), "{text}");
+    }
+
     #[test]
     fn the_send_prompt_works_through_the_ui() {
         use crate::app::tests::ui::UiTest;

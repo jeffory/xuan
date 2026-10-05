@@ -1,10 +1,11 @@
 //! Asking before document data goes to a plugin that declares network hosts,
-//! and offline mode, which keeps such plugins from starting at all.
+//! offline mode, which keeps such plugins from starting at all, and blocking
+//! the network of plugins that declare none (Linux only).
 //!
-//! Xuan cannot stop a plugin process from opening sockets, so these rules
-//! cover what Xuan itself hands over: the source image of an action, its
-//! regions and text inputs, and the layer, composite and selection exports a
-//! plugin asks for. See "Network" in `docs/PLUGINS.md`.
+//! Xuan cannot stop a plugin that declares hosts from connecting anywhere, so
+//! these rules cover what Xuan itself hands over: the source image of an
+//! action, its regions and text inputs, and the layer, composite and
+//! selection exports a plugin asks for. See "Network" in `docs/PLUGINS.md`.
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
@@ -12,6 +13,7 @@ use xuan::{
     plugins::{
         manifest::{Action, ActionKind, InputKind, SourceKind},
         protocol::{self, Request, RpcError},
+        sandbox,
     },
 };
 
@@ -20,6 +22,19 @@ use super::{Dialog, EditorApp, plugins::one_line, theme, widgets};
 /// Requests that hand a plugin pixels outside the source of an action.
 pub(super) const EXPORT_METHODS: [&str; 3] =
     ["layer/export", "document/export", "selection/export"];
+
+/// What offline mode means for the plugins it does not stop.
+pub(super) fn offline_mode_note(config: &xuan::config::Config) -> &'static str {
+    if sandbox::SUPPORTED && config.block_undeclared_network() {
+        tr(
+            "Plugins that declare network hosts do not start and their actions are unavailable. Xuan blocks the network of the others.",
+        )
+    } else {
+        tr(
+            "Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect.",
+        )
+    }
+}
 
 /// Document data waiting for the user's answer before it is sent.
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +60,15 @@ impl EditorApp {
     /// Whether offline mode keeps this plugin from starting.
     pub(super) fn plugin_offline(&self, plugin: &str) -> bool {
         self.config.disable_network_plugins && self.plugin_uses_network(plugin)
+    }
+
+    /// Whether the plugin starts with its network blocked: "Block network
+    /// for plugins that don't declare it" is on, it declares no network
+    /// hosts, and this is Linux.
+    pub(super) fn plugin_network_blocked(&self, plugin: &str) -> bool {
+        self.plugins.manifest(plugin).is_some_and(|m| {
+            sandbox::blocks_network(self.config.block_undeclared_network(), &m.permissions)
+        })
     }
 
     /// Enabled, and not held back by offline mode.
@@ -81,29 +105,62 @@ impl EditorApp {
             .filter(|id| self.plugin_offline(id))
             .collect();
         for plugin in &offline {
-            self.stop_plugin(plugin);
-            let prefix = format!("plugin:{plugin}/");
-            self.plugins
-                .panes
-                .retain(|key, _| !key.starts_with(&prefix));
-            if self
-                .plugins
-                .action
-                .as_ref()
-                .is_some_and(|e| &e.plugin == plugin)
-            {
-                self.close_plugin_action();
-            }
-            if self
-                .plugins
-                .consent
-                .as_ref()
-                .is_some_and(|c| &c.plugin == plugin)
-            {
-                self.plugins.consent = None;
-                if self.dialog == Some(Dialog::PluginConsent) {
-                    self.dialog = None;
-                }
+            self.shut_down_plugin(plugin);
+        }
+    }
+
+    /// Turn "Block network for plugins that don't declare it" on or off.
+    pub(super) fn set_block_undeclared_network(&mut self, block: bool) {
+        let changed = self.config.block_undeclared_network() != block;
+        self.config.block_undeclared_network = Some(block);
+        self.save_config();
+        if changed {
+            self.apply_block_network_setting();
+        }
+    }
+
+    /// The filter is set when a plugin starts, so stop the running plugins
+    /// it applies to, with their panes and open action dialog. They start
+    /// again with the new setting when next used, their panes at once.
+    pub(super) fn apply_block_network_setting(&mut self) {
+        if !sandbox::SUPPORTED {
+            return;
+        }
+        let affected: Vec<String> = (self.plugins.manifests.iter())
+            .filter(|m| m.permissions.network.is_empty())
+            .map(|m| m.plugin.id.clone())
+            .filter(|id| self.plugins.running(id))
+            .collect();
+        for plugin in &affected {
+            self.shut_down_plugin(plugin);
+        }
+    }
+
+    /// Stop a plugin with its panes, open action dialog and pending prompts.
+    /// Panes that are shown open, and start it, again.
+    fn shut_down_plugin(&mut self, plugin: &str) {
+        self.stop_plugin(plugin);
+        let prefix = format!("plugin:{plugin}/");
+        self.plugins
+            .panes
+            .retain(|key, _| !key.starts_with(&prefix));
+        if self
+            .plugins
+            .action
+            .as_ref()
+            .is_some_and(|e| e.plugin == plugin)
+        {
+            self.close_plugin_action();
+        }
+        if self
+            .plugins
+            .consent
+            .as_ref()
+            .is_some_and(|c| c.plugin == plugin)
+        {
+            self.plugins.consent = None;
+            if self.dialog == Some(Dialog::PluginConsent) {
+                self.dialog = None;
             }
         }
     }

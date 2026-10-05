@@ -110,7 +110,21 @@ pub struct Config {
     /// network hosts do not start and their actions are unavailable.
     #[serde(default)]
     pub disable_network_plugins: bool,
+    /// "Block network for plugins that don't declare it": on Linux, plugins
+    /// whose manifest declares no network hosts start under a seccomp filter
+    /// that keeps them from opening network sockets (see
+    /// [`crate::plugins::sandbox`]). `None` until the user changes it, so it
+    /// follows [`BLOCK_UNDECLARED_NETWORK_DEFAULT`]; read it with
+    /// [`Config::block_undeclared_network`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_undeclared_network: Option<bool>,
 }
+
+/// "Block network for plugins that don't declare it" for users who never
+/// changed it. Off while the setting is opt-in. Making it the default is a
+/// matter of setting this to `true`: configurations only store the setting
+/// once the user changes it, so everyone else gets the new default.
+pub const BLOCK_UNDECLARED_NETWORK_DEFAULT: bool = false;
 
 impl Default for Config {
     fn default() -> Self {
@@ -131,6 +145,7 @@ impl Default for Config {
             keybindings: toml::Table::new(),
             recent_commands: Vec::new(),
             disable_network_plugins: false,
+            block_undeclared_network: None,
         }
     }
 }
@@ -272,6 +287,13 @@ impl Config {
         )
     }
 
+    /// "Block network for plugins that don't declare it", with the release
+    /// default for users who never changed it.
+    pub fn block_undeclared_network(&self) -> bool {
+        self.block_undeclared_network
+            .unwrap_or(BLOCK_UNDECLARED_NETWORK_DEFAULT)
+    }
+
     pub fn path() -> Result<PathBuf> {
         let variable = if cfg!(windows) {
             "APPDATA"
@@ -326,6 +348,17 @@ impl Config {
             "disable_network_plugins".into(),
             toml::Value::Boolean(self.disable_network_plugins),
         );
+        match self.block_undeclared_network {
+            Some(block) => {
+                table.insert(
+                    "block_undeclared_network".into(),
+                    toml::Value::Boolean(block),
+                );
+            }
+            None => {
+                table.remove("block_undeclared_network");
+            }
+        }
         if self.keybindings.is_empty() {
             table.remove("keybindings");
         } else {
@@ -480,6 +513,50 @@ mod tests {
             !fs::read_to_string(&path)
                 .unwrap()
                 .contains("send_without_asking")
+        );
+    }
+
+    #[test]
+    fn blocking_the_network_is_stored_only_once_chosen() {
+        // Older files, and files of users who never changed it, follow the
+        // release default.
+        let old: Config =
+            toml::from_str("language = 'en'\ndisable_network_plugins = true\n").unwrap();
+        assert_eq!(old.block_undeclared_network, None);
+        assert_eq!(
+            old.block_undeclared_network(),
+            BLOCK_UNDECLARED_NETWORK_DEFAULT
+        );
+        assert!(!Config::default().block_undeclared_network());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        old.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("block_undeclared_network"), "{text}");
+        assert_eq!(Config::load(&path).unwrap(), old);
+
+        for chosen in [true, false] {
+            let config = Config {
+                block_undeclared_network: Some(chosen),
+                ..old.clone()
+            };
+            config.save(&path).unwrap();
+            let text = fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("block_undeclared_network = {chosen}")),
+                "{text}"
+            );
+            let loaded = Config::load(&path).unwrap();
+            assert_eq!(loaded, config);
+            assert_eq!(loaded.block_undeclared_network(), chosen);
+        }
+        // Going back to "not chosen" removes it from the file.
+        old.save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("block_undeclared_network")
         );
     }
 

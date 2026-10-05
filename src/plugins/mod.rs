@@ -5,6 +5,7 @@ pub mod host;
 pub mod jobs;
 pub mod manifest;
 pub mod protocol;
+pub mod sandbox;
 pub mod ui;
 
 use std::{

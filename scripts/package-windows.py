@@ -62,6 +62,7 @@ def main():
             "LICENSE",
             "licenses/rawler-LGPL-2.1.txt",
             "licenses/heic-rs-MIT.txt",
+            "licenses/seccompiler-BSD-3-Clause.txt",
             "licenses/tabler-icons-MIT.txt",
             "assets/fonts/Inter-LICENSE.txt",
             "assets/fonts/DroidSansFallback-LICENSE.txt",
