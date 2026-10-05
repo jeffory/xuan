@@ -35,6 +35,7 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
         Tool::Wand => egui::include_image!("../../assets/svg/wand.svg"),
         Tool::Crop => egui::include_image!("../../assets/svg/crop.svg"),
         Tool::Brush => egui::include_image!("../../assets/svg/brush.svg"),
+        Tool::Pencil => egui::include_image!("../../assets/svg/pencil.svg"),
         Tool::Erase => egui::include_image!("../../assets/svg/eraser.svg"),
         Tool::Heal => egui::include_image!("../../assets/svg/bandage.svg"),
         Tool::Clone => egui::include_image!("../../assets/svg/stamp.svg"),

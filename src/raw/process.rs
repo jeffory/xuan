@@ -132,19 +132,52 @@ fn sample(image: &Rgb32FImage, x: f32, y: f32) -> [f32; 3] {
     })
 }
 
+/// Inverse lens/geometry mapping with the loop-invariant parts (rotation
+/// sin/cos, aspect, perspective and distortion coefficients) computed once.
+/// `source_point` is defined in terms of this, so batch callers cannot diverge,
+/// and the GPU uniforms (`gpu::raw::RawUniforms`) are built from these fields;
+/// `raw.wgsl` (`source_point`) evaluates the same expression.
+#[derive(Clone, Copy)]
+pub(crate) struct SourceMap {
+    pub sin: f32,
+    pub cos: f32,
+    pub aspect: f32,
+    pub perspective: [f32; 2],
+    pub distortion: f32,
+}
+
+impl SourceMap {
+    pub(crate) fn new(s: &DevelopSettings, aspect: f32) -> Self {
+        let (sin, cos) = s.rotation.to_radians().sin_cos();
+        Self {
+            sin,
+            cos,
+            aspect,
+            perspective: s.perspective,
+            distortion: s.distortion,
+        }
+    }
+
+    pub(crate) fn apply(&self, point: Point) -> Point {
+        let aspect = self.aspect;
+        let (sin, cos) = (self.sin, self.cos);
+        let mut x = (point.x - 0.5) * 2.0;
+        let mut y = (point.y - 0.5) * 2.0 / aspect;
+        (x, y) = (cos * x + sin * y, -sin * x + cos * y);
+        y *= aspect;
+        let perspective =
+            (1.0 + self.perspective[0] * x * 0.004 + self.perspective[1] * y * 0.004).max(0.2);
+        x /= perspective;
+        y /= perspective;
+        let r2 = (x * x + y * y) * 0.5;
+        let scale = 1.0 + self.distortion * 0.003 * r2;
+        Point::new(0.5 + x * scale * 0.5, 0.5 + y * scale * 0.5)
+    }
+}
+
 /// Inverse lens/geometry mapping, shared by rendering and the WB eyedropper.
 pub fn source_point(point: Point, s: &DevelopSettings, aspect: f32) -> Point {
-    let mut x = (point.x - 0.5) * 2.0;
-    let mut y = (point.y - 0.5) * 2.0 / aspect;
-    let (sin, cos) = s.rotation.to_radians().sin_cos();
-    (x, y) = (cos * x + sin * y, -sin * x + cos * y);
-    y *= aspect;
-    let perspective = (1.0 + s.perspective[0] * x * 0.004 + s.perspective[1] * y * 0.004).max(0.2);
-    x /= perspective;
-    y /= perspective;
-    let r2 = (x * x + y * y) * 0.5;
-    let scale = 1.0 + s.distortion * 0.003 * r2;
-    Point::new(0.5 + x * scale * 0.5, 0.5 + y * scale * 0.5)
+    SourceMap::new(s, aspect).apply(point)
 }
 
 fn overlay_weight(overlay: &Overlay, point: Point, aspect: f32) -> f32 {
@@ -269,6 +302,8 @@ where
     };
     wb[1] *= 2.0_f32.powf(-s.tint / 150.0);
     let exposure = 2.0_f32.powf(s.exposure);
+    let geometry = SourceMap::new(s, aspect);
+    let negative = s.negative.enabled.then(|| s.negative.inversion());
     let mut pixels = vec![0.0_f32; width as usize * height as usize * 3];
     pixels
         .par_chunks_mut(width as usize * 3)
@@ -280,7 +315,7 @@ where
                     (x as f32 + 0.5) / width as f32,
                     (y as f32 + 0.5) / height as f32,
                 );
-                let source = source_point(point, s, aspect);
+                let source = geometry.apply(point);
                 let mut camera = sample(
                     &raw.camera,
                     source.x * width as f32 - 0.5,
@@ -298,8 +333,8 @@ where
                 }
                 // Film dyes encode scene density, not the scanner camera's scene
                 // colors. Invert those channels before any positive-image controls.
-                let mut rgb = if s.negative.enabled {
-                    s.negative.convert(camera).map(|v| v * exposure)
+                let mut rgb = if let Some(negative) = &negative {
+                    negative.convert(camera).map(|v| v * exposure)
                 } else {
                     matrix(
                         raw.camera_to_rgb,
@@ -391,8 +426,8 @@ where
         }
     }
     cancelled(cancel)?;
-    let [left, top, right, bottom] = s.crop_pixels([width, height]);
-    let [out_width, out_height] = s.output_size([width, height]);
+    let map = s.output_map([width, height]);
+    let [out_width, out_height] = map.size;
     let mut output = ImageBuffer::<Rgba<T>, Vec<T>>::new(out_width, out_height);
     let out_width = output.width() as usize;
     output
@@ -402,19 +437,15 @@ where
         .try_for_each(|(y, row)| -> Result<()> {
             cancelled(cancel)?;
             for (x, p) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let [x, y] = s.crop_source_pixel(x as u32, y as u32, [right - left, bottom - top]);
-                let rgb = image.get_pixel(left + x, top + y);
+                let [x, y] = map.source_pixel(x as u32, y as u32);
+                let rgb = image.get_pixel(x, y);
                 for c in 0..3 {
                     p[c] = encode(rgb[c].clamp(0.0, 1.0));
                 }
-                let point = source_point(
-                    Point::new(
-                        (left as f32 + x as f32 + 0.5) / width as f32,
-                        (top as f32 + y as f32 + 0.5) / height as f32,
-                    ),
-                    s,
-                    aspect,
-                );
+                let point = geometry.apply(Point::new(
+                    (x as f32 + 0.5) / width as f32,
+                    (y as f32 + 0.5) / height as f32,
+                ));
                 p[3] = encode(
                     if (0.0..=1.0).contains(&point.x) && (0.0..=1.0).contains(&point.y) {
                         1.0

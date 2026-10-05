@@ -1,0 +1,20 @@
+# Real camera files used by the RAW decode tests (src/raw/tests.rs).
+# They are downloaded by scripts/fetch-raw-fixtures.sh and are never committed.
+# Both the script and the tests read this file; CI caches on its hash.
+#
+# One fixture per line, fields separated by " | ":
+#   id | file | sha256 | bytes | format | camera | width | height | expect | url
+#
+# width/height are the decoded, EXIF-oriented dimensions (height > width means a
+# portrait frame). camera is RawMetadata::camera. expect is "ok" (must decode)
+# or "reject" (must fail to decode, e.g. unsupported Canon sRAW). All files are
+# CC0 on raw.pixls.us; see testdata/raw/README.md.
+nikon-d70-nef | 20170902_0047.NEF | dd6405aeb33b0cd5bf66c98ba98ccbb478a765450cfd130810e470dab8d1f4b4 | 5488179 | NEF | Nikon D70 | 3008 | 2000 | ok | https://raw.pixls.us/data/Nikon/D70/20170902_0047.NEF
+canon-rebel-xt-cr2-portrait | IMG_8728.CR2 | 4b47ba27c0090efa091aaf99babc76d9a3e6f6f121b443d6c58c3ce7275cd770 | 7456886 | CR2 | Canon EOS Digital Rebel XT | 2304 | 3456 | ok | https://raw.pixls.us/data/Canon/EOS%20Digital%20Rebel%20XT/IMG_8728.CR2
+canon-r6m3-cr3 | IMG_4244.CR3 | 7e1a5d84297a52853b0bbe5a5c03a5d4f5b93e00b7020271523240f9cabfe50e | 7065300 | CR3 | Canon EOS R6 Mark III | 4320 | 2880 | ok | https://raw.pixls.us/data/Canon/Canon%20EOS%20R6%20Mark%20III/IMG_4244.CR3
+canon-r5m2-apsc-craw-cr3 | APS-C_CRAW.CR3 | 6a597497776a6abbfab8fcf12d0086ac7a3f8afea2879d61accf6bbf48d357d7 | 7564960 | CR3 | Canon EOS R5 Mark II | 5088 | 3392 | ok | https://raw.pixls.us/data/Canon/Canon%20EOS%20R5m2/APS-C_CRAW.CR3
+canon-d30-crw | CRW_2444.CRW | 4ee482f2b6f9f1a8d370703ea04e9f2abaa49356973a7f56b229af93a78e8a2e | 2993260 | CRW | Canon EOS D30 | 2176 | 1450 | ok | https://raw.pixls.us/data/Canon/EOS%20D30/CRW_2444.CRW
+fuji-x20-raf-xtrans | DSCF7451.RAF | ccb4fad836f1561b52859c3ee01db0fef7db770980d4a84e95595da1eda72b2a | 19453440 | RAF | Fujifilm X20 | 4000 | 3000 | ok | https://raw.pixls.us/data/Fujifilm/X20/DSCF7451.RAF
+sony-a7s-arw | DSC04126.ARW | a35ebb2fbec929daa5beb20d1ce5c15a8aac7b1a7a231455387f3df8a7442e07 | 6160384 | ARW | Sony ILCE-7S | 2768 | 1848 | ok | https://raw.pixls.us/data/Sony/ILCE-7S/DSC04126.ARW
+canon-5d2-sraw-reject | 10.canon.sraw2.cr2 | e8a31e7dfa7d5739f26da1049b1bbe78982d25004e0e857209f32d2e308c4a0c | 11425647 | CR2 | Canon EOS 5D Mark II | 0 | 0 | reject | https://raw.pixls.us/data/Canon/EOS%205D%20Mark%20II/10.canon.sraw2.cr2
+nikon-d1h-unknown-reject | DSC_3671.NEF | d110b80a8b10a3a67b5cd1c15ef33f1a6397557b73d5d3f4e565739f0c072571 | 4082468 | NEF | Nikon D1H | 0 | 0 | reject | https://raw.pixls.us/data/Nikon/D1H/DSC_3671.NEF

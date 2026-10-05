@@ -20,6 +20,8 @@ pub use raw_preview::{RawPreview, RawPreviewRenderer};
 #[cfg(test)]
 mod filter_layer_tests;
 #[cfg(test)]
+mod goldens;
+#[cfg(test)]
 mod processing_tests;
 pub use motion_blur::GpuMotionBlur;
 pub(crate) use processor::cancelled;

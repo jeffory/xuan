@@ -82,7 +82,6 @@ Actual Pixels	实际像素
 Zoom In	放大
 Zoom Out	缩小
 Show Transform Controls	显示变换控件
-Snap to Canvas and Layers	吸附到画布与图层
 Keyboard Shortcuts	键盘快捷键
 About Xuan	关于 Xuan
 Close window	关闭窗口
@@ -102,6 +101,7 @@ Lasso	套索
 Magic Wand	魔棒
 Crop	裁剪
 Brush	画笔
+Pencil	铅笔
 Eraser	橡皮擦
 Spot Healing	污点修复
 Clone Stamp	仿制图章
@@ -166,7 +166,12 @@ Radial	径向
 Blur	模糊
 Smudge	涂抹
 Aligned	对齐
-Sample: All visible layers	取样：所有可见图层
+Sample	取样
+Current layer	当前图层
+All visible layers	所有可见图层
+Point	单点
+3×3	3×3 平均
+5×5	5×5 平均
 Alt-click on the canvas to set a clone source	在画布上 Alt 单击设置仿制来源
 This Layer	当前图层
 All Layers	所有图层
@@ -432,6 +437,10 @@ Vertical	垂直
 Bounds as a fraction of the rotated image	以旋转后图像的比例设置边界
 Uncrop	取消裁剪
 Square	正方形
+Round	圆形
+Tip	笔尖
+Switch between Brush and Pencil	在画笔与铅笔之间切换
+Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan	拖动绘制硬边像素 · [ ] 大小 · Shift 单击绘制直线 · 1–0 不透明度 · 空格平移
 Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.	镜头校正需手动调整。照片编辑器目前使用 8 位 sRGB；RAW 数据和冲洗设置保留原始精度。
 Local adjustments	局部调整
 Add a mask, then drag over the photo to place it.	添加蒙版后，在照片上拖动以放置蒙版。
@@ -573,3 +582,49 @@ Insert the dropped file as a layer, or open it as a new document?	将拖入的�
 Insert the dropped files as layers, or open them as new documents?	将拖入的文件插入为图层，还是作为新文档打开？
 Open as new document	作为新文档打开
 Insert as layer	插入为图层
+Pixel Grid	像素网格
+Show pixel grid above	显示像素网格的缩放比例高于
+Outlines individual pixels when zoomed in past this level, between 200% and 6400%.	放大超过此比例时勾勒出每个像素，范围为 200% 至 6400%。
+Content-Aware	内容识别
+Create Texture	创建纹理
+Proximity Match	近似匹配
+Spot Healing works on layer pixels, not masks	污点修复只能用于图层像素，不能用于蒙版
+Navigator	导航器
+Show	显示
+Grid	网格
+Guides	参考线
+Grid Settings…	网格设置…
+Grid Settings	网格设置
+Rulers	标尺
+Snap	对齐
+Snap To	对齐到
+Document Bounds	文档边界
+Lock Guides	锁定参考线
+Clear Guides	清除参考线
+New Guide	新建参考线
+Move Guide	移动参考线
+Delete Guide	删除参考线
+Style	样式
+Gridline every	网格线间隔
+pixels	像素
+Subdivisions	子网格
+A subdivision every	每隔
+pixels.	像素一条子网格线。
+Use no more subdivisions than the pixels between gridlines.	子网格数不能超过网格线之间的像素数。
+Restore Defaults	恢复默认值
+Choose a custom grid color	选择自定义网格颜色
+Light Gray	浅灰色
+Light Blue	浅蓝色
+Light Red	浅红色
+Medium Blue	中蓝色
+Cyan	青色
+Black	黑色
+Custom	自定义
+Lines	直线
+Dashed Lines	虚线
+Dots	点线
+Rulers / Grid / Guides	标尺 / 网格 / 参考线
+Snap / Lock guides	对齐 / 锁定参考线
+Drag from a ruler	从标尺拖动
+New guide	新建参考线
+No document open	未打开文档

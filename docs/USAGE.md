@@ -79,19 +79,21 @@ To compile the application or produce a release archive, see the [development gu
 
 Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
 
-The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default. The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
+The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
 ## Editing tools
 
+- **Navigator:** a sidebar pane, above Layers by default, shows a thumbnail of the whole composited document with a blue box marking the part currently visible on the canvas; it follows panning and zooming live. Drag the box to pan, or click anywhere on the thumbnail to centre the view there. Below it, type a zoom percentage into the field and press Enter, use the **−** / **+** buttons, or drag the slider (logarithmic, 1% to 6400%); all zoom about the centre of the canvas. Like every pane it can be collapsed from its header, resized, moved, or hidden from the **Window** menu, and the arrangement is remembered between sessions. The thumbnail is cached and refreshes shortly after you stop editing, switch tabs, or undo/redo. The Navigator is not shown in the RAW Develop workspace, which has its own view controls.
 - **Layers:** folders, 13 blend modes, opacity, visibility, locks, drag reordering/nesting, duplication, merge, clipping masks, linked or independent raster masks, and copying layers to another project tab.
-- **Transforms:** move, scale, rotate, flip, free perspective distortion, numeric controls, shared transforms for several layers or folders, and snapping to edges and centers. Original source pixels remain available during transforms. Move / Transform has **Ignore Transparent Pixels** checked by default to select only at visible pixels; uncheck it to select and drag anywhere inside a layer's bounds.
+- **Transforms:** move, scale, rotate, flip, free perspective distortion, numeric controls, shared transforms for several layers or folders, and snapping to guides, the grid, layers and the canvas (see [Rulers, guides and grid](#rulers-guides-and-grid)). Original source pixels remain available during transforms. Move / Transform has **Ignore Transparent Pixels** checked by default to select only at visible pixels; uncheck it to select and drag anywhere inside a layer's bounds.
 - **Selections:** rectangle, ellipse, freehand/polygonal lasso, contiguous/global magic wand, add/subtract/intersect, inverse, feather, outline movement, and moving or duplicating selected pixels.
-- **Paint:** brush, eraser, aligned/unaligned clone stamp with layer/all-layer sampling, spot healing, blur/smudge, gradients, rectangles, rounded rectangles, ellipses, and eyedropper. Live shapes redraw at the new size until their pixels are edited.
+- **Paint:** brush, pencil, eraser, aligned/unaligned clone stamp with layer/all-layer sampling, spot healing, blur/smudge, gradients, rectangles, rounded rectangles, ellipses, and eyedropper. Live shapes redraw at the new size until their pixels are edited.
+- **Eyedropper (I):** a bubble beside the pointer shows the colour under it (top half) over the current brush colour (bottom half), and flips away from the canvas edges. Press and drag to sample continuously; the brush colour updates live and the release keeps it. **Esc** while dragging restores the colour from before the press. The tool options choose the source (current layer or all visible layers) and the sample size (single pixel, 3×3 or 5×5 average). Documents with filter layers are rendered once per edit and reused, so dragging stays smooth.
 - **Text:** editable multiline text layers, searchable installed font families, size and color, bold, italic, underline, and strikethrough. Click with the Text tool (T) to place or edit text; double-click a text layer to reopen its live preview. Move and transform text with the Move tool.
 - **Adjustments:** editable Hue/Saturation color ranges, per-channel Levels and Curves, Exposure, Gradient Map, Grain, and Invert. Apply directly or add an adjustment layer, with live preview and selection coverage.
 - **Filters:** Gaussian and Motion Blur with expanded bounds, Add Noise, Lens Correction, content-aware fill, and edge-color background removal. Filtering and expensive retouching run in cancellable workers.
 - **RAW Develop:** Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW open in a dedicated Develop workspace. Adjust white balance, exposure, tone curves, HSL, monochrome and split toning, noise reduction, sharpening, manual lens correction, crop, and brush/gradient masks. Compare before/after and inspect clipping or full-resolution detail. Develop creates an embedded RAW layer; double-click it to edit the original RAW again. Save `.xuan` to retain the source and adjustments, or export a 16-bit sRGB TIFF directly from Develop. See [RAW workflow and limits](RAW.md).
-- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
+- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, rulers, guides and a layout grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
 
 Double-click a layer name to rename it inline. Press Enter or click elsewhere to
 save, or Escape to cancel. **Rename…** in the layer's context menu opens the same
@@ -99,6 +101,67 @@ inline editor. Double-click elsewhere on a text, RAW, filter, or adjustment row
 to reopen its settings.
 
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
+
+### Rulers, guides and grid
+
+**View → Rulers** (Ctrl+R) shows rulers along the top and left of the canvas,
+measured in document pixels from the image's top-left corner. Numbered ticks are
+roughly 70 points apart at any zoom, in steps of 1, 2, 5, 10, 20, 25, 50, 100 pixels
+and so on, with ten small ticks between them.
+
+Drag from the top ruler to create a horizontal guide, or from the left ruler for a
+vertical one. With the Move tool, drag a guide to move it (the pointer changes over
+it; transform handles take priority), or drag it back onto a ruler to delete it.
+Escape cancels the drag. Guides are cyan lines across the whole view, including the
+area around the canvas. **View → Show → Guides** (Ctrl+;) hides and shows them,
+**View → Lock Guides** (Ctrl+Alt+;) stops them from being created or moved, and
+**View → Clear Guides** removes them all. Creating, moving, deleting and clearing
+guides are undo steps, and guides follow the canvas through Crop, Canvas Size,
+Image Size and Flip Canvas. Guides are saved in `.xuan` projects.
+
+**View → Show → Grid** (Ctrl+') draws a non-printing layout grid over the
+document: a major line every 64 pixels split into eight subdivisions by default.
+**View → Grid Settings…** sets the color (Light Gray by default, eight other presets
+or a custom color from the swatch), the style of the major lines (lines, dashed
+lines or dots), their opacity (45% by default; subdivisions are fainter), the pixels
+between gridlines (2–4096) and the subdivisions (1–64, no finer than a pixel). The
+grid shows while the dialog is open and changes preview live; **Cancel** puts the
+previous grid back and **Restore Defaults** returns to 64 pixels, eight
+subdivisions, Light Gray lines at 45%. **OK** saves the grid in the current project
+(an undo step) and makes it the default for projects without a grid of their own.
+Subdivisions closer than 4 points on screen are left out. The layout grid is
+separate from the pixel grid: both can be on, and the layout grid is drawn on top,
+on the same physical screen pixels, so where both mark a pixel boundary they share
+one line.
+
+**View → Snap** (Ctrl+Shift+;) turns snapping on and off, and **View → Snap To**
+chooses the targets: **Guides**, **Grid**, **Layers** (the edges and centres of
+other visible layers) and **Document Bounds** (the canvas edges and centre). All but
+the grid are on by default; hidden guides or a hidden grid never snap. Snapping
+applies when moving layers and selected pixels, dragging resize handles (of an
+unrotated layer), drawing marquees, shapes and crops (their start and dragged
+corner), moving a selection outline, and dragging guides. A target pulls when it is
+within 10 screen points, whatever the zoom; the nearest one wins, and a guide wins
+a tie over the canvas, layers and grid. A magenta line marks what the drag snapped
+to. Hold Ctrl while dragging to move freely.
+
+The rulers, grid and guide visibility, Lock Guides, the snap settings and the
+default grid are app preferences, saved in the configuration file.
+
+### Pencil
+
+The Pencil paints hard-edged, non-antialiased pixels. Each dab covers exactly the
+pixels whose centres fall inside the tip at full coverage times the opacity, so
+there is no feathering and no partial-alpha edge. Choose a **Round** or **Square**
+tip in the contextual header; size is in whole pixels. Size 1 paints a single pixel.
+Odd sizes are centred on the pixel under the pointer and even sizes on the nearest
+pixel corner. Strokes are drawn as Bresenham lines between pointer samples, so they
+have no gaps, and a pixel is applied at most once per stroke, so overlapping dabs
+do not darken at opacity below 100%. Shift-click draws a straight line from the last
+point. Pressure scales the size in whole pixels. The Pencil works on layer pixels,
+layer masks and mask layers and respects selections, locked layers and undo. Press
+Shift+B to switch between the Brush and the Pencil. It pairs well with the pixel grid
+shown at high zoom.
 
 ### Brush stroke smoothing
 
@@ -208,7 +271,7 @@ protocol and the SDKs.
 
 The photo editor uses an 8-bit sRGB raster pipeline. RAW Develop uses floating-point camera data and offers direct 16-bit TIFF output with an sRGB profile; its photo-layer render uses the existing 8-bit pipeline. Imported raster ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; Xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.
 
-Remove Background uses a border-color matte, intended for simple backgrounds, instead of Apple's foreground-recognition service. Content-aware fill and healing use a portable texture-matching implementation, so results differ from Compositor. Initial zoomed-out canvas previews are capped at 4096 pixels per side. At 100% zoom and above, the preview uses full document resolution up to the device's texture limit; the pixel grid appears from 800% when individual document pixels can be displayed. Filter Apply uses full layer dimensions and export uses full document dimensions. Imports, saves, and raster adjustments can temporarily occupy the UI thread. Vulkan is the verified rendering path; OpenGL surface availability depends on the driver.
+Remove Background uses a border-color matte, intended for simple backgrounds, instead of Apple's foreground-recognition service. Content-aware fill uses a portable texture-matching implementation, so its results differ from Compositor. Spot healing follows Compositor's algorithm and offers the same Content-Aware, Create Texture and Proximity Match modes. Initial zoomed-out canvas previews are capped at 4096 pixels per side. At 100% zoom and above, the preview uses full document resolution up to the device's texture limit; the pixel grid (see below) appears when individual document pixels can be displayed. Filter Apply uses full layer dimensions and export uses full document dimensions. Imports, saves, and raster adjustments can temporarily occupy the UI thread. Vulkan is the verified rendering path; OpenGL surface availability depends on the driver.
 
 ## Language and settings
 
@@ -229,6 +292,20 @@ The title bar changes immediately. Compact and macOS windows have rounded corner
 which need a window created with transparency: after switching from **System**,
 corners stay square until Xuan restarts.
 
+The **Pixel grid** settings control the overlay: zoomed in past a threshold (500% by default), Xuan outlines individual image
+pixels with a thin, semi-transparent grey grid that stays visible on light and
+dark content. It fades in over the first quarter of the threshold above it, so it
+does not pop on. Lines follow the document's pixel boundaries at any pan, zoom, and
+display scale, and are snapped to physical screen pixels. The grid is only a screen
+overlay: it is never part of exports, copies, or saved files. It also appears in the
+RAW Develop canvas, where one image pixel is one RAW output pixel, for pixel peeping.
+
+Turn it on or off with **View → Pixel Grid** (on by default). Set the zoom level in
+**Settings → Appearance → Show pixel grid above** (200% to 6400%, default 500%).
+Both settings are saved. There is no keyboard shortcut. A canvas whose preview is
+limited by the graphics card's texture size cannot show one texel per pixel, so
+the grid is hidden there.
+
 Quit with **File → Quit** (Ctrl+Q). It asks about unsaved changes and open Develop
 sessions, like closing the window.
 
@@ -243,7 +320,28 @@ The file is created when a preference changes. For example:
 ```toml
 language = "zh-CN" # Use "en" for English (the default).
 title_bar = "system" # Or "compact" (the default) or "macos".
+rulers = true # View → Rulers (off by default).
+show_grid = false # View → Show → Grid.
+show_guides = true # View → Show → Guides.
+lock_guides = false # View → Lock Guides.
+
+[snap] # View → Snap and Snap To.
+enabled = true
+guides = true
+grid = false
+layers = true
+bounds = true
+
+[grid] # The default layout grid (View → Grid Settings…).
+spacing = 64
+subdivisions = 8
+color = "light_gray" # Or light_blue, light_red, green, medium_blue, yellow, magenta, cyan, black, custom.
+custom_color = [179, 179, 179]
+style = "lines" # Or "dashed_lines" or "dots".
+opacity = 45
 ```
+
+Missing options keep their defaults, so files from older releases still load.
 
 Invalid or unreadable configuration is reported and the app starts with defaults.
 Saving uses an atomic replacement and preserves other TOML options. An invalid

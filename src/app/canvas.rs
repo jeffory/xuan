@@ -5,6 +5,7 @@ use xuan::i18n::tr;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use xuan::{
     document::Point,
+    layout::GuideAxis,
     operations,
     paint::{self, PaintMode},
     render,
@@ -27,6 +28,22 @@ const HANDLES: [Point; 8] = [
 pub(super) enum ZoomAnchor {
     Pointer,
     Center,
+}
+
+/// Smallest and largest zoom factor the editor allows.
+pub(super) const ZOOM_LIMITS: RangeInclusive<f32> = 0.01..=64.0;
+
+/// Screen position of the image's top-left corner: the image is centred in
+/// `viewport` and then offset by `pan`. Every image/screen mapping derives from this.
+pub(super) fn image_origin(viewport: Rect, image_size: Vec2, zoom: f32, pan: Vec2) -> Pos2 {
+    viewport.center() - image_size * zoom * 0.5 + pan
+}
+
+/// Change `zoom` to `new_zoom` keeping the point `focus` (an offset from the
+/// viewport centre) stationary. A zero `focus` zooms about the centre.
+pub(super) fn zoom_about(zoom: &mut f32, pan: &mut Vec2, new_zoom: f32, focus: Vec2) {
+    *pan += (focus - *pan) * (1.0 - new_zoom / *zoom);
+    *zoom = new_zoom;
 }
 
 /// Pan horizontally and zoom using the unpanned image center.
@@ -52,11 +69,29 @@ pub(super) fn scroll_canvas(
             ZoomAnchor::Pointer => ui.input(|i| i.pointer.hover_pos()).unwrap_or(center),
             ZoomAnchor::Center => center,
         };
-        *pan += (focus - center - *pan) * (1.0 - new_zoom / *zoom);
-        *zoom = new_zoom;
+        zoom_about(zoom, pan, new_zoom, focus - center);
     }
     pan.x += scroll.x;
     true
+}
+
+/// Whether a press at `point` (document pixels) grabs one of the Move tool's handles for `t`,
+/// which take precedence over guides beneath them.
+pub(super) fn near_transform_handle(t: xuan::document::Transform, point: Point, zoom: f32) -> bool {
+    if HANDLES
+        .iter()
+        .any(|unit| t.point(*unit).distance(point) * zoom < 9.0)
+    {
+        return true;
+    }
+    let top = t.point(Point::new(0.5, 0.0));
+    let center = t.center();
+    let distance = top.distance(center).max(0.01);
+    let rotate = Point::new(
+        top.x + (top.x - center.x) / distance * 23.0 / zoom,
+        top.y + (top.y - center.y) / distance * 23.0 / zoom,
+    );
+    rotate.distance(point) * zoom < 9.0
 }
 
 fn drag_transform(
@@ -145,12 +180,26 @@ impl EditorApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(theme::CANVAS))
             .show(ctx, |ui| {
-                let (viewport, response) =
-                    ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+                let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
                 if self.sessions.is_empty() {
-                    self.welcome(ui, viewport);
+                    self.welcome(ui, area);
                     return;
                 }
+                // View → Rulers takes a strip along the top and left of the canvas area.
+                let rulers = self
+                    .config
+                    .rulers
+                    .then(|| super::rulers::RulerLayout::new(area));
+                let viewport = rulers.map_or(area, |layout| layout.canvas);
+                let response =
+                    ui.interact(viewport, ui.id().with("canvas"), Sense::click_and_drag());
+                let ruler_responses = rulers.map(|layout| {
+                    (
+                        ui.interact(layout.top, ui.id().with("ruler_top"), Sense::drag()),
+                        ui.interact(layout.left, ui.id().with("ruler_left"), Sense::drag()),
+                    )
+                });
+                self.release_sample_caches();
                 let mask_target = self.transforming_mask();
                 let session = &mut self.sessions[self.current];
                 if session.fit {
@@ -166,9 +215,32 @@ impl EditorApp {
                     session.document.width as f32,
                     session.document.height as f32,
                 ) * zoom;
-                let origin = viewport.center() - size * 0.5 + session.pan;
+                let origin = image_origin(
+                    viewport,
+                    vec2(
+                        session.document.width as f32,
+                        session.document.height as f32,
+                    ),
+                    zoom,
+                    session.pan,
+                );
+                self.canvas_viewport = Some(viewport);
                 let canvas = Rect::from_min_size(origin, size);
                 self.canvas_rect = Some(canvas);
+                let guide_cursor = self.guide_interaction(
+                    ctx,
+                    &response,
+                    rulers.as_ref().zip(ruler_responses.as_ref()),
+                    origin,
+                    zoom,
+                );
+                let layout_grid = self.showing_grid().then(|| self.grid_settings());
+                let shown_guides = if self.config.show_guides {
+                    self.displayed_guides()
+                } else {
+                    Vec::new()
+                };
+                let session = &self.sessions[self.current];
                 let visible = canvas.intersect(viewport);
                 let painter = ui.painter().with_clip_rect(viewport);
                 painter.rect_filled(canvas.expand(3.0), 0.0, Color32::from_black_alpha(60));
@@ -213,35 +285,29 @@ impl EditorApp {
                 );
                 let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
                 // A hardware-limited preview cannot represent individual document pixels.
-                if zoom >= 8.0
+                if self.config.pixel_grid
                     && session.preview_size == [session.document.width, session.document.height]
                 {
-                    let start = ((visible.left() - origin.x) / zoom).floor().max(0.0) as u32;
-                    let end = ((visible.right() - origin.x) / zoom)
-                        .ceil()
-                        .min(session.document.width as f32) as u32;
-                    for x in start..=end {
-                        painter.line_segment(
-                            [
-                                pos2(origin.x + x as f32 * zoom, visible.top()),
-                                pos2(origin.x + x as f32 * zoom, visible.bottom()),
-                            ],
-                            Stroke::new(0.5_f32, Color32::from_white_alpha(28)),
-                        );
-                    }
-                    let start = ((visible.top() - origin.y) / zoom).floor().max(0.0) as u32;
-                    let end = ((visible.bottom() - origin.y) / zoom)
-                        .ceil()
-                        .min(session.document.height as f32) as u32;
-                    for y in start..=end {
-                        painter.line_segment(
-                            [
-                                pos2(visible.left(), origin.y + y as f32 * zoom),
-                                pos2(visible.right(), origin.y + y as f32 * zoom),
-                            ],
-                            Stroke::new(0.5_f32, Color32::from_white_alpha(28)),
-                        );
-                    }
+                    super::pixel_grid::draw(
+                        &painter,
+                        origin,
+                        Vec2::splat(zoom),
+                        [session.document.width, session.document.height],
+                        visible,
+                        zoom * 100.0,
+                        self.config.pixel_grid_percent(),
+                    );
+                }
+                // The layout grid goes over the pixel grid, on the same physical pixels.
+                if let Some(grid) = &layout_grid {
+                    super::layout_grid::paint(
+                        &painter,
+                        grid,
+                        origin,
+                        zoom,
+                        [session.document.width, session.document.height],
+                        visible,
+                    );
                 }
                 if let Some(mask) = &session.document.selection {
                     let step = (1.0 / zoom).ceil().max(1.0) as usize;
@@ -341,20 +407,24 @@ impl EditorApp {
                         hover_handle = Some(TransformDrag::Rotate);
                     }
                 }
-                for (horizontal, coordinate) in &self.guides {
-                    let line = if *horizontal {
-                        [
+                super::guides::paint(&painter, &shown_guides, origin, zoom, viewport);
+                // What the current drag snapped to.
+                for (axis, coordinate) in &self.snap_lines {
+                    let line = match axis {
+                        GuideAxis::Vertical => [
                             pos2(origin.x + coordinate * zoom, viewport.top()),
                             pos2(origin.x + coordinate * zoom, viewport.bottom()),
-                        ]
-                    } else {
-                        [
+                        ],
+                        GuideAxis::Horizontal => [
                             pos2(viewport.left(), origin.y + coordinate * zoom),
                             pos2(viewport.right(), origin.y + coordinate * zoom),
-                        ]
+                        ],
                     };
                     painter
                         .line_segment(line, Stroke::new(1.0_f32, Color32::from_rgb(219, 115, 213)));
+                }
+                if let Some(layout) = &rulers {
+                    super::rulers::paint(ui.painter(), layout, origin, zoom);
                 }
                 if let Some((start, end)) = self.crop_rect {
                     let rect = Rect::from_two_pos(map(start), map(end));
@@ -528,12 +598,14 @@ impl EditorApp {
                         ZoomAnchor::Pointer,
                         &mut session.zoom,
                         &mut session.pan,
-                        0.01..=64.0,
+                        ZOOM_LIMITS,
                     ) {
                         session.fit = false;
                     }
                     let cursor = if panning {
                         egui::CursorIcon::Grab
+                    } else if let Some(cursor) = guide_cursor {
+                        cursor
                     } else if hover_handle.is_some() {
                         egui::CursorIcon::ResizeNwSe
                     } else if self.tool == Tool::Move {
@@ -576,16 +648,44 @@ impl EditorApp {
                             1.0
                         };
                         let radius = self.brush.diameter * zoom * pressure * 0.5;
-                        let outline: Vec<_> = (0..48)
-                            .map(|i| {
-                                let angle = i as f32 * std::f32::consts::TAU / 48.0;
-                                let (sin, cos) = angle.sin_cos();
-                                p + vec2(
-                                    axis.x * cos - axis.y * sin * aspect,
-                                    axis.y * cos + axis.x * sin * aspect,
-                                ) * radius
-                            })
-                            .collect();
+                        let outline: Vec<_> = if self.tool == Tool::Pencil {
+                            // Pixel-exact tip: whole-pixel size, snapped to the pixel grid.
+                            let size = (self.brush.diameter * pressure).round().max(1.0);
+                            let half = size * zoom * 0.5;
+                            let doc = Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom);
+                            let centre = if size % 2.0 == 1.0 {
+                                Point::new(doc.x.floor() + 0.5, doc.y.floor() + 0.5)
+                            } else {
+                                Point::new(doc.x.round(), doc.y.round())
+                            };
+                            let centre = origin + vec2(centre.x, centre.y) * zoom;
+                            if self.brush.square {
+                                vec![
+                                    centre + vec2(-half, -half),
+                                    centre + vec2(half, -half),
+                                    centre + vec2(half, half),
+                                    centre + vec2(-half, half),
+                                ]
+                            } else {
+                                (0..48)
+                                    .map(|i| {
+                                        let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                                        centre + vec2(angle.cos(), angle.sin()) * half
+                                    })
+                                    .collect()
+                            }
+                        } else {
+                            (0..48)
+                                .map(|i| {
+                                    let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                                    let (sin, cos) = angle.sin_cos();
+                                    p + vec2(
+                                        axis.x * cos - axis.y * sin * aspect,
+                                        axis.y * cos + axis.x * sin * aspect,
+                                    ) * radius
+                                })
+                                .collect()
+                        };
                         painter.add(egui::Shape::closed_line(
                             outline.clone(),
                             Stroke::new(2.5_f32, Color32::from_black_alpha(130)),
@@ -621,7 +721,49 @@ impl EditorApp {
                         || (!panning && self.tool.is_brush() && self.brush_smoothing > 0.0))
                 {
                     self.paint_smoothed_mouse_samples(ctx, &response, canvas, modifiers);
-                } else {
+                } else if self.tool == Tool::Dropper && !panning && self.gesture.is_none() {
+                    let (pressed, down) =
+                        ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+                    if pressed && response.hovered() {
+                        if let Some(point) = doc_point {
+                            self.dropper_press(point);
+                        }
+                    } else if self.dropper.is_some() {
+                        if down {
+                            if let Some(point) = doc_point {
+                                self.dropper_update(point);
+                            }
+                        } else {
+                            self.dropper_release();
+                        }
+                    }
+                    let inside = doc_point.is_some_and(|p| {
+                        p.x >= 0.0
+                            && p.y >= 0.0
+                            && p.x < self.sessions[self.current].document.width as f32
+                            && p.y < self.sessions[self.current].document.height as f32
+                    });
+                    if let (Some(screen), Some(point)) = (pointer, doc_point)
+                        && (response.hovered() || self.dropper.is_some())
+                    {
+                        let new = if self.dropper.is_some() {
+                            Some(self.brush.color)
+                        } else if inside {
+                            self.sample_color(point)
+                        } else {
+                            None
+                        };
+                        if let Some(new) = new {
+                            let current = self.dropper.map_or(self.brush.color, |g| g.previous);
+                            let rect = super::eyedropper::bubble_rect(
+                                screen,
+                                super::eyedropper::BUBBLE_SIZE,
+                                viewport,
+                            );
+                            super::eyedropper::paint_bubble(&painter, rect, new, current);
+                        }
+                    }
+                } else if self.guide_drag.is_none() {
                     let started = response.drag_started()
                         || response.drag_started_by(egui::PointerButton::Middle);
                     if started {
@@ -675,6 +817,14 @@ impl EditorApp {
                         Stroke::new(2.0_f32, theme::ACCENT),
                         StrokeKind::Inside,
                     );
+                }
+                // The Navigator is drawn before the canvas, so it saw last frame's view.
+                // A collapsed or hidden Navigator draws nothing and needs no repaint.
+                if let Some(session) = self.session()
+                    && self.pane_open(xuan::panes::NAVIGATOR)
+                    && self.navigator_view != Some((viewport, session.zoom, session.pan))
+                {
+                    ctx.request_repaint();
                 }
             });
     }
@@ -899,15 +1049,10 @@ impl EditorApp {
                     );
                 });
             }
-            Tool::Dropper => {
-                if let Some(session) = self.session() {
-                    let pixel = render::pixel_at(&session.document, point);
-                    self.brush.color = pixel.map(|v| (v * 255.0).round() as u8);
-                }
-            }
             Tool::Zoom => {
                 if let Some(s) = self.session_mut() {
-                    s.zoom = (s.zoom * if modifiers.alt { 0.8 } else { 1.25 }).clamp(0.01, 64.0);
+                    s.zoom = (s.zoom * if modifiers.alt { 0.8 } else { 1.25 })
+                        .clamp(*ZOOM_LIMITS.start(), *ZOOM_LIMITS.end());
                 }
             }
             Tool::Lasso if self.polygonal => {
@@ -1032,6 +1177,7 @@ impl EditorApp {
                 clone_offset: Point::default(),
                 source: None,
                 reference: None,
+                selection_bounds: None,
             });
             return;
         }
@@ -1061,12 +1207,18 @@ impl EditorApp {
                 clone_offset: Point::default(),
                 source: None,
                 reference: None,
+                selection_bounds: None,
             });
             return;
         }
         if tool == Tool::Clone && modifiers.alt {
             self.clone_source = Some(point);
             self.clone_offset = None;
+            return;
+        }
+        if tool == Tool::Heal && self.editing_mask() {
+            // As upstream: Spot Healing reworks image pixels and has nothing to do on a mask.
+            self.status = tr("Spot Healing works on layer pixels, not masks").into();
             return;
         }
         if tool == Tool::Clone && self.clone_source.is_none() {
@@ -1111,6 +1263,11 @@ impl EditorApp {
             return;
         }
         let mask_target = self.transforming_mask();
+        // A marquee, shape or crop starts on a nearby Snap To target; Ctrl starts it freely.
+        let snapping = self
+            .snap_options()
+            .filter(|_| !modifiers.ctrl && matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop))
+            .map(|options| (options, self.displayed_guides()));
         let session = &mut self.sessions[self.current];
         if tool == Tool::Move && session.document.active.is_none() {
             return;
@@ -1175,6 +1332,36 @@ impl EditorApp {
         if tool == Tool::Clone {
             self.clone_offset = Some(offset);
         }
+        self.snap_lines.clear();
+        let mut point = point;
+        if matches!(kind, TransformDrag::Move)
+            && let Some((options, guides)) = &snapping
+        {
+            let targets = super::snap::SnapTargets::new(
+                &session.document,
+                guides,
+                options,
+                &Default::default(),
+                false,
+            );
+            (point, self.snap_lines) =
+                targets.snap_point(point, super::snap::tolerance(session.zoom));
+        }
+        let selection_bounds = matches!(kind, TransformDrag::Selection)
+            .then(|| {
+                session
+                    .document
+                    .selection
+                    .as_deref()
+                    .and_then(selection::bounds)
+            })
+            .flatten()
+            .map(|(x0, y0, x1, y1)| {
+                [
+                    Point::new(x0 as f32, y0 as f32),
+                    Point::new(x1 as f32, y1 as f32),
+                ]
+            });
         self.gesture = Some(Gesture {
             tool,
             brush: brush.clone(),
@@ -1200,6 +1387,7 @@ impl EditorApp {
             clone_offset: offset,
             source,
             reference: operations::transform_box(&session.document, mask_target),
+            selection_bounds,
         });
     }
 
@@ -1227,6 +1415,33 @@ impl EditorApp {
         if let Some(smoothing) = &mut gesture.smoothing {
             point = smoothing.update(point);
         }
+        let shaped = matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop)
+            && matches!(gesture.kind, TransformDrag::Move);
+        let moving = tool == Tool::Move
+            || matches!(
+                gesture.kind,
+                TransformDrag::Selection | TransformDrag::Pixels
+            );
+        // View → Snap To, unless Ctrl is held.
+        let snapping = if shaped || moving {
+            self.snap_lines.clear();
+            self.snap_options()
+                .filter(|_| !modifiers.ctrl)
+                .map(|options| (options, self.displayed_guides()))
+        } else {
+            None
+        };
+        let tolerance = super::snap::tolerance(self.sessions[self.current].zoom);
+        if shaped && let Some((options, guides)) = &snapping {
+            let targets = super::snap::SnapTargets::new(
+                &gesture.original,
+                guides,
+                options,
+                &Default::default(),
+                false,
+            );
+            (point, self.snap_lines) = targets.snap_point(point, tolerance);
+        }
         if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop) {
             let dx = point.x - gesture.start.x;
             let dy = point.y - gesture.start.y;
@@ -1241,10 +1456,30 @@ impl EditorApp {
         let session = &mut self.sessions[self.current];
         let result = if matches!(gesture.kind, TransformDrag::Selection) && tool.is_selection() {
             if let Some(mask) = &gesture.original.selection {
+                let mut offset = Point::new(
+                    (point.x - gesture.start.x).round(),
+                    (point.y - gesture.start.y).round(),
+                );
+                // The outline's edges or middle meet targets, as a drawn marquee's corner does.
+                if let (Some((options, guides)), Some(bounds)) =
+                    (&snapping, gesture.selection_bounds)
+                {
+                    let targets = super::snap::SnapTargets::new(
+                        &gesture.original,
+                        guides,
+                        options,
+                        &Default::default(),
+                        false,
+                    );
+                    let snapped;
+                    (snapped, self.snap_lines) =
+                        targets.snap_box(bounds, offset, [false; 2], tolerance);
+                    offset = Point::new(snapped.x.round(), snapped.y.round());
+                }
                 session.document.selection = Some(Arc::new(selection::translate(
                     mask,
-                    (point.x - gesture.start.x).round() as i32,
-                    (point.y - gesture.start.y).round() as i32,
+                    offset.x as i32,
+                    offset.y as i32,
                 )));
             }
             Ok(())
@@ -1258,6 +1493,7 @@ impl EditorApp {
                 tool if tool.is_brush() => {
                     let mode = match tool {
                         Tool::Erase => PaintMode::Erase,
+                        Tool::Pencil => PaintMode::Pencil,
                         Tool::Clone => PaintMode::Clone,
                         Tool::Heal => PaintMode::Heal,
                         Tool::Blur => self.blur_mode,
@@ -1285,68 +1521,14 @@ impl EditorApp {
                 _ if tool == Tool::Move || matches!(gesture.kind, TransformDrag::Pixels) => {
                     let mut dx = point.x - gesture.start.x;
                     let mut dy = point.y - gesture.start.y;
+                    let mut lock = [false; 2];
                     if modifiers.shift && matches!(gesture.kind, TransformDrag::Move) {
                         if dx.abs() > dy.abs() {
                             dy = 0.0;
+                            lock[1] = true;
                         } else {
                             dx = 0.0;
-                        }
-                    }
-                    self.guides.clear();
-                    if self.snap
-                        && !modifiers.ctrl
-                        && matches!(gesture.kind, TransformDrag::Move)
-                        && let Some(t) = gesture.reference
-                    {
-                        let mut xs = vec![
-                            0.0,
-                            session.document.width as f32 * 0.5,
-                            session.document.width as f32,
-                        ];
-                        let mut ys = vec![
-                            0.0,
-                            session.document.height as f32 * 0.5,
-                            session.document.height as f32,
-                        ];
-                        for l in &gesture.original.layers {
-                            if !gesture.original.selected.contains(&l.id) && l.visible {
-                                xs.extend([
-                                    l.transform.x,
-                                    l.transform.center().x,
-                                    l.transform.x + l.transform.width,
-                                ]);
-                                ys.extend([
-                                    l.transform.y,
-                                    l.transform.center().y,
-                                    l.transform.y + l.transform.height,
-                                ]);
-                            }
-                        }
-                        let snap = |guides: [f32; 3], targets: &[f32]| -> Option<(f32, f32)> {
-                            let mut best = None;
-                            let mut distance = 6.0 / session.zoom;
-                            for g in guides {
-                                for target in targets {
-                                    let d = *target - g;
-                                    if d.abs() < distance {
-                                        distance = d.abs();
-                                        best = Some((d, *target));
-                                    }
-                                }
-                            }
-                            best
-                        };
-                        if let Some((delta, x)) =
-                            snap([t.x + dx, t.center().x + dx, t.x + t.width + dx], &xs)
-                        {
-                            dx += delta;
-                            self.guides.push((true, x));
-                        }
-                        if let Some((delta, y)) =
-                            snap([t.y + dy, t.center().y + dy, t.y + t.height + dy], &ys)
-                        {
-                            dy += delta;
-                            self.guides.push((false, y));
+                            lock[0] = true;
                         }
                     }
                     let targets = if transform_mask {
@@ -1354,6 +1536,57 @@ impl EditorApp {
                     } else {
                         gesture.original.movement_targets()
                     };
+                    if let Some((options, guides)) = &snapping
+                        && let Some(t) = gesture.reference
+                    {
+                        let snap_targets = super::snap::SnapTargets::new(
+                            &gesture.original,
+                            guides,
+                            options,
+                            &targets,
+                            true,
+                        );
+                        match gesture.kind {
+                            TransformDrag::Move | TransformDrag::Pixels => {
+                                let offset;
+                                (offset, self.snap_lines) = snap_targets.snap_box(
+                                    super::snap::bounds(t),
+                                    Point::new(dx, dy),
+                                    lock,
+                                    tolerance,
+                                );
+                                (dx, dy) = (offset.x, offset.y);
+                            }
+                            // A turned or distorted box's edges don't run along the targets.
+                            TransformDrag::Scale(index)
+                                if t.rotation == 0.0 && t.warp.is_none() =>
+                            {
+                                let (start, kind, lock_ratio) =
+                                    (gesture.start, gesture.kind, self.lock_ratio);
+                                let snapped;
+                                (snapped, self.snap_lines) = snap_targets.snap_resize(
+                                    Point::new(start.x + dx, start.y + dy),
+                                    start,
+                                    HANDLES[index],
+                                    t.point(HANDLES[index]),
+                                    lock_ratio != modifiers.shift,
+                                    tolerance,
+                                    |p| {
+                                        drag_transform(
+                                            t,
+                                            start,
+                                            p,
+                                            kind,
+                                            lock_ratio,
+                                            modifiers.shift,
+                                        )
+                                    },
+                                );
+                                (dx, dy) = (snapped.x - start.x, snapped.y - start.y);
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Some(reference) = gesture.reference {
                         let moved = Point::new(gesture.start.x + dx, gesture.start.y + dy);
                         let transformed = drag_transform(
@@ -1444,6 +1677,7 @@ impl EditorApp {
         let Some(gesture) = self.gesture.take() else {
             return;
         };
+        self.snap_lines.clear();
         let tool = gesture.tool;
         if gesture.panning {
             return;
@@ -1455,8 +1689,9 @@ impl EditorApp {
         if tool == Tool::Heal {
             let points = gesture.points;
             let brushes = gesture.brushes;
+            let mode = self.heal_mode;
             self.start_job(tr("Spot Healing"), move |document, cancel| {
-                xuan::retouch::heal_path_varying(document, &points, &brushes, cancel)
+                xuan::retouch::heal_path_varying(document, &points, &brushes, mode, cancel)
             });
             return;
         }
@@ -1552,7 +1787,7 @@ impl EditorApp {
             }
         }
         session.invalidate();
-        self.guides.clear();
+        self.snap_lines.clear();
         if tool.is_brush() {
             self.last_brush = Some(end);
         }

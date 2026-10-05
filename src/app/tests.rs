@@ -3,6 +3,15 @@ use super::*;
 #[path = "tests/canvas_preview.rs"]
 mod canvas_preview;
 
+#[path = "tests/eyedropper.rs"]
+mod eyedropper;
+
+#[path = "tests/navigator.rs"]
+mod navigator;
+
+#[path = "tests/snapping.rs"]
+mod snapping;
+
 #[path = "tests/stroke_smoothing.rs"]
 mod stroke_smoothing;
 
@@ -11,6 +20,9 @@ mod plugins;
 
 #[path = "tests/plugin_examples.rs"]
 mod plugin_examples;
+
+#[path = "tests/ui.rs"]
+mod ui;
 
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -811,7 +823,7 @@ fn benchmark_large_image_editing() {
             None,
         )];
         app.tool = tool;
-        app.snap = false;
+        app.config.snap.enabled = false;
         for _ in 0..3 {
             frame(&context, &mut app);
         }
@@ -1088,6 +1100,8 @@ fn native_clipboard_shortcuts_copy_cut_and_paste_selected_pixels() {
     app.sessions
         .push(Session::new(document, "Clipboard".into(), None));
     app.set_tool(Tool::Marquee);
+    // At this zoom the 1 px margin is within the snap reach of the canvas edge.
+    app.config.snap.enabled = false;
     drag(
         &context,
         &mut app,
@@ -2370,7 +2384,7 @@ fn canvas_layers(app: &mut EditorApp) -> [Uuid; 2] {
     let document = &mut app.session_mut().unwrap().document;
     document.layers = vec![bottom, top];
     document.select(ids[0], false);
-    app.snap = false;
+    app.config.snap.enabled = false;
     ids
 }
 
@@ -2842,7 +2856,7 @@ fn transform_handles_and_control_drag_distortion_change_geometry() {
     app.dimensions = [64, 48];
     app.new_document();
     app.command("fill_fg");
-    app.snap = false;
+    app.config.snap.enabled = false;
     app.lock_ratio = false;
     drag(
         &context,
@@ -3629,6 +3643,32 @@ fn menu_bar_hover_switches_only_while_a_menu_is_open() {
     pointer_frame(&context, &mut app, help, None, egui::Modifiers::NONE);
     assert!(egui::Popup::is_id_open(&context, unrelated));
     egui::Popup::close_all(&context);
+}
+
+#[test]
+fn view_menu_pixel_grid_toggle_applies_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    assert!(app.config.pixel_grid);
+    let view = layer_label(&context, &mut app, "View") + Vec2::splat(5.0);
+    for expected in [false, true] {
+        pointer_frame(&context, &mut app, view, None, egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, view, Some(true), egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, view, Some(false), egui::Modifiers::NONE);
+        let item = layer_label(&context, &mut app, "Pixel Grid") + Vec2::splat(5.0);
+        click(&context, &mut app, item);
+        assert_eq!(app.config.pixel_grid, expected);
+        assert_eq!(
+            xuan::config::Config::load(&path).unwrap().pixel_grid,
+            expected
+        );
+        assert!(app.error.is_none());
+        // Keep the menu from lingering into the next round.
+        egui::Popup::close_all(&context);
+        frame(&context, &mut app);
+    }
 }
 
 #[test]
@@ -4563,6 +4603,80 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
     );
 }
 
+/// Open Settings on the Appearance page and return the threshold field's position.
+fn settings_threshold_field(context: &egui::Context, app: &mut EditorApp) -> Pos2 {
+    app.dialog = Some(Dialog::Settings);
+    context.data_mut(|d| d.insert_temp(egui::Id::new("settings_page"), true));
+    frame(context, app);
+    layer_label(context, app, "500%") + Vec2::new(8.0, 6.0)
+}
+
+#[test]
+fn dragging_the_pixel_grid_threshold_saves_once_after_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    let field = settings_threshold_field(&context, &mut app);
+    pointer_frame(&context, &mut app, field, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, field, Some(true), egui::Modifiers::NONE);
+    for step in 1..=6 {
+        let pos = field + Vec2::new(25.0 * step as f32, 0.0);
+        pointer_frame(&context, &mut app, pos, None, egui::Modifiers::NONE);
+        // Applied live while dragging, but nothing is written yet.
+        assert!(!path.exists(), "written mid-drag at step {step}");
+    }
+    assert!(app.config.pixel_grid_percent > 500, "live update");
+    let live = app.config.pixel_grid_percent;
+    let end = field + Vec2::new(150.0, 0.0);
+    pointer_frame(&context, &mut app, end, Some(false), egui::Modifiers::NONE);
+    frame(&context, &mut app);
+    let saved = xuan::config::Config::load(&path).unwrap();
+    assert_eq!(saved.pixel_grid_percent, app.config.pixel_grid_percent);
+    assert!(saved.pixel_grid_percent >= live);
+    // Idle frames do not write again.
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+    assert!(!app.config_dirty && app.error.is_none());
+}
+
+#[test]
+fn closing_settings_mid_drag_still_saves_the_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    let field = settings_threshold_field(&context, &mut app);
+    pointer_frame(&context, &mut app, field, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, field, Some(true), egui::Modifiers::NONE);
+    for step in 1..=4 {
+        let pos = field + Vec2::new(25.0 * step as f32, 0.0);
+        pointer_frame(&context, &mut app, pos, None, egui::Modifiers::NONE);
+    }
+    assert!(!path.exists());
+    let dragged = app.config.pixel_grid_percent;
+    assert!(dragged > 500);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog.is_none());
+    assert_eq!(
+        xuan::config::Config::load(&path)
+            .unwrap()
+            .pixel_grid_percent,
+        dragged
+    );
+}
+
 #[test]
 fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
     let (context, mut app) = app();
@@ -4766,4 +4880,78 @@ fn drops_wait_while_develop_is_open() {
     app.cancel_develop();
     app.process_drops();
     assert!(app.dialog == Some(Dialog::DropChoice));
+}
+
+#[test]
+fn spot_healing_is_one_undo_step_and_leaves_masks_alone() {
+    let (context, mut app) = app();
+    app.dimensions = [64, 48];
+    app.new_document();
+    let original = image::RgbaImage::from_fn(64, 48, |x, y| {
+        let (dx, dy) = (x as f32 - 32.0, y as f32 - 24.0);
+        if dx.hypot(dy) < 3.0 {
+            image::Rgba([250, 0, 0, 255])
+        } else {
+            image::Rgba([(3 * x) as u8, (4 * y) as u8, 90, 255])
+        }
+    });
+    let session = app.session_mut().unwrap();
+    session.document.layers[0].pixels = Some(std::sync::Arc::new(original.clone()));
+    let transform = session.document.layers[0].transform;
+    let steps = session.history.names().count();
+    app.set_tool(Tool::Heal);
+    app.brush.diameter = 12.0;
+    app.brush.hardness = 1.0;
+    app.brush.opacity = 1.0;
+    let wait = |app: &mut EditorApp| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.job.is_some() {
+            app.poll_job();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    };
+    drag(
+        &context,
+        &mut app,
+        Point::new(31.0, 24.0),
+        Point::new(33.0, 24.0),
+        egui::Modifiers::NONE,
+    );
+    wait(&mut app);
+    let session = app.session().unwrap();
+    assert_eq!(app.error, None);
+    assert_eq!(session.history.undo_name(), Some("Spot Healing"));
+    assert_eq!(session.history.names().count(), steps + 1);
+    let layer = &session.document.layers[0];
+    assert_eq!(layer.transform, transform);
+    let healed = layer.pixels.as_ref().unwrap();
+    assert_eq!(healed.dimensions(), (64, 48));
+    assert!(healed.get_pixel(32, 24)[0] < 200);
+    assert_eq!(healed.get_pixel(5, 5), original.get_pixel(5, 5));
+    app.command("undo");
+    let layer = &app.session().unwrap().document.layers[0];
+    assert_eq!(**layer.pixels.as_ref().unwrap(), original);
+    assert_eq!(layer.transform, transform);
+
+    // As upstream, Spot Healing has nothing to do on a mask.
+    let session = app.session_mut().unwrap();
+    session.document.layers[0].mask = Some(xuan::document::Mask::white());
+    let steps = session.history.names().count();
+    app.mask_target = true;
+    drag(
+        &context,
+        &mut app,
+        Point::new(31.0, 24.0),
+        Point::new(33.0, 24.0),
+        egui::Modifiers::NONE,
+    );
+    wait(&mut app);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps);
+    assert_eq!(
+        **session.document.layers[0].pixels.as_ref().unwrap(),
+        original
+    );
+    assert_eq!(app.status, "Spot Healing works on layer pixels, not masks");
 }

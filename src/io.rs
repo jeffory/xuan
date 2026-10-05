@@ -104,6 +104,8 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
         let manifest = Manifest {
             format: "me.silverl.xuan".into(),
             version: if document.layers.iter().any(|l| l.generated.is_some()) {
+                6
+            } else if !document.guides.is_empty() || document.grid.is_some() {
                 5
             } else if document.layers.iter().any(|l| {
                 l.filter.is_some()
@@ -188,7 +190,7 @@ pub fn load(path: &Path) -> Result<Document> {
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
-        manifest.format == "me.silverl.xuan" && (1..=5).contains(&manifest.version),
+        manifest.format == "me.silverl.xuan" && (1..=6).contains(&manifest.version),
         "Unsupported xuan project version"
     );
     let mut used_pixels = 0;
@@ -458,6 +460,10 @@ pub fn load_compositor(path: &Path) -> Result<Document> {
     let version = manifest["version"]
         .as_u64()
         .context("Project version missing")?;
+    // TODO(#1): Compositor 8+ adds a `guides` array ({id, axis: "horizontal"|"vertical", position})
+    // to the manifest and folder opacity. When the importer accepts version 8, map the guides onto
+    // `Document::guides` with `crate::layout::Guide` and check them with `validate_guides`. The
+    // layout grid is an app preference upstream, so packages carry no grid to import.
     ensure!(
         (1..=7).contains(&version),
         "Unsupported Compositor project version {version}"
@@ -733,6 +739,130 @@ mod tests {
         doc.width = 0;
         assert!(save(&doc, &path).is_err());
         assert_eq!(load(&path).unwrap().width, 3);
+    }
+
+    fn manifest_json(path: &Path) -> Value {
+        let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
+        serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn guides_and_grid_round_trip_as_version_5() {
+        use crate::layout::{GridColor, GridSettings, GridStyle, Guide, GuideAxis};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("guides.xuan");
+        let mut doc = Document::new(40, 30).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::new(40, 30)));
+        save(&doc, &path).unwrap();
+        // Without guides or a grid of its own, a project keeps the older version and keys.
+        let plain = manifest_json(&path);
+        assert_eq!(plain["version"], 1);
+        assert!(plain["document"].get("guides").is_none());
+        assert!(plain["document"].get("grid").is_none());
+
+        doc.guides = vec![
+            Guide::new(GuideAxis::Vertical, 12.5),
+            Guide::new(GuideAxis::Horizontal, -4.0),
+        ];
+        let grid = GridSettings {
+            spacing: 100,
+            subdivisions: 4,
+            color: GridColor::Custom,
+            custom_color: [10, 20, 30],
+            style: GridStyle::DashedLines,
+            opacity: 70,
+        };
+        doc.grid = Some(grid);
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 5);
+        assert_eq!(manifest["document"]["guides"][0]["axis"], "vertical");
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.guides, doc.guides);
+        assert_eq!(loaded.grid, Some(grid));
+
+        // Guides alone also need version 5.
+        doc.grid = None;
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 5);
+        assert_eq!(load(&path).unwrap().grid, None);
+    }
+
+    fn write_manifest(path: &Path, manifest: &Value) {
+        let mut archive = ZipWriter::new(File::create(path).unwrap());
+        archive
+            .start_file("manifest.json", SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(&serde_json::to_vec(manifest).unwrap())
+            .unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn projects_from_before_guides_still_load() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old.xuan");
+        for version in 1..=4 {
+            // Written as a release before format version 5 wrote it: no guide or grid keys.
+            write_manifest(
+                &path,
+                &serde_json::json!({
+                    "format": "me.silverl.xuan",
+                    "version": version,
+                    "document": {"id": Uuid::new_v4(), "width": 8, "height": 6,
+                        "resolution": 72.0, "layers": [], "active": null},
+                    "pixel_layers": [],
+                }),
+            );
+            let loaded = load(&path).unwrap();
+            assert_eq!((loaded.width, loaded.height), (8, 6));
+            assert!(loaded.guides.is_empty() && loaded.grid.is_none());
+        }
+    }
+
+    #[test]
+    fn invalid_guides_or_grid_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bad.xuan");
+        let document = |guides: Value, grid: Value| {
+            serde_json::json!({
+                "format": "me.silverl.xuan",
+                "version": 5,
+                "document": {"id": Uuid::new_v4(), "width": 8, "height": 6, "resolution": 72.0,
+                    "layers": [], "active": null, "guides": guides, "grid": grid},
+                "pixel_layers": [],
+            })
+        };
+        let id = Uuid::new_v4();
+        let guide = serde_json::json!({"id": id, "axis": "vertical", "position": 3.0});
+        write_manifest(&path, &document(serde_json::json!([guide]), Value::Null));
+        assert_eq!(load(&path).unwrap().guides.len(), 1);
+        for (guides, grid) in [
+            (serde_json::json!([guide, guide]), Value::Null),
+            (
+                serde_json::json!([{"id": id, "axis": "vertical", "position": 5.0e7}]),
+                Value::Null,
+            ),
+            (
+                serde_json::json!([{"id": id, "axis": "diagonal", "position": 1.0}]),
+                Value::Null,
+            ),
+            (
+                serde_json::json!([]),
+                serde_json::json!({"spacing": 4, "subdivisions": 8}),
+            ),
+            (serde_json::json!([]), serde_json::json!({"opacity": 0})),
+        ] {
+            write_manifest(&path, &document(guides.clone(), grid.clone()));
+            assert!(load(&path).is_err(), "{guides} {grid}");
+        }
+        // A future version is refused rather than half read.
+        let mut future = document(serde_json::json!([]), Value::Null);
+        future["version"] = serde_json::json!(7);
+        write_manifest(&path, &future);
+        assert!(load(&path).is_err());
     }
 
     #[test]

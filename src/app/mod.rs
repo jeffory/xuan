@@ -7,21 +7,29 @@ mod develop_controls;
 mod develop_preview;
 mod dialogs;
 mod drops;
+mod eyedropper;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;
+mod grid_settings;
+mod guides;
 mod icons;
 mod jobs;
 mod layers;
+mod layout_grid;
 mod levels_controls;
 mod menus;
+mod navigator;
 mod panels;
 mod panes;
+mod pixel_grid;
 mod plugin_dialogs;
 mod plugin_panes;
 mod plugins;
+mod rulers;
 mod settings;
 mod shortcuts;
+mod snap;
 mod stroke_smoothing;
 mod tablet;
 #[cfg(test)]
@@ -59,6 +67,7 @@ pub enum Tool {
     Wand,
     Crop,
     Brush,
+    Pencil,
     Erase,
     Heal,
     Clone,
@@ -74,13 +83,14 @@ pub enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
         Self::Wand,
         Self::Crop,
         Self::Brush,
+        Self::Pencil,
         Self::Erase,
         Self::Heal,
         Self::Clone,
@@ -102,6 +112,7 @@ impl Tool {
             Self::Wand => tr("Magic Wand"),
             Self::Crop => tr("Crop"),
             Self::Brush => tr("Brush"),
+            Self::Pencil => tr("Pencil"),
             Self::Erase => tr("Eraser"),
             Self::Heal => tr("Spot Healing"),
             Self::Clone => tr("Clone Stamp"),
@@ -123,6 +134,7 @@ impl Tool {
             Self::Wand => "W",
             Self::Crop => "C",
             Self::Brush => "B",
+            Self::Pencil => "Shift+B",
             Self::Erase => "E",
             Self::Heal => "J",
             Self::Clone => "S",
@@ -139,7 +151,7 @@ impl Tool {
     fn is_brush(self) -> bool {
         matches!(
             self,
-            Self::Brush | Self::Erase | Self::Heal | Self::Clone | Self::Blur
+            Self::Brush | Self::Pencil | Self::Erase | Self::Heal | Self::Clone | Self::Blur
         )
     }
     fn is_selection(self) -> bool {
@@ -160,6 +172,9 @@ impl Tool {
                 tr("Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect")
             }
             Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
+            Self::Pencil => tr(
+                "Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
+            ),
             Self::Brush | Self::Erase => tr(
                 "Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
             ),
@@ -198,7 +213,11 @@ struct Session {
     preview_size: [u32; 2],
     composite: Option<Arc<RgbaImage>>,
     thumbnails: HashMap<(Uuid, bool), layers::LayerThumbnail>,
+    navigator: navigator::ThumbnailCache,
     collapsed: HashSet<Uuid>,
+    sample_cache: Option<eyedropper::SampleCache>,
+    /// Full renders made for eyedropper sampling; lets tests check the cache.
+    sample_renders: usize,
 }
 
 impl Session {
@@ -220,12 +239,16 @@ impl Session {
             preview_size: [0, 0],
             composite: None,
             thumbnails: HashMap::new(),
+            navigator: navigator::ThumbnailCache::default(),
             collapsed: HashSet::new(),
+            sample_cache: None,
+            sample_renders: 0,
         }
     }
 
     fn invalidate(&mut self) {
         self.dirty_preview = true;
+        self.sample_cache = None;
     }
 
     fn refresh(&mut self, ctx: &egui::Context, state: Option<&eframe::egui_wgpu::RenderState>) {
@@ -317,6 +340,7 @@ enum Dialog {
     PluginPermissions,
     Plugins,
     PluginProposal,
+    GridSettings,
 }
 
 struct EffectEdit {
@@ -366,6 +390,8 @@ struct Gesture {
     clone_offset: Point,
     source: Option<Arc<RgbaImage>>,
     reference: Option<Transform>,
+    /// The selection's bounds when the drag moves a selection outline: [min, max].
+    selection_bounds: Option<[Point; 2]>,
 }
 
 impl Gesture {
@@ -376,6 +402,7 @@ impl Gesture {
                     tool,
                     Tool::Move
                         | Tool::Brush
+                        | Tool::Pencil
                         | Tool::Erase
                         | Tool::Clone
                         | Tool::Blur
@@ -387,7 +414,11 @@ impl Gesture {
 
 pub struct EditorApp {
     config: xuan::config::Config,
+    /// Where preferences are saved. `None` (headless sessions and tests) keeps
+    /// them in memory only.
     config_path: Option<PathBuf>,
+    /// Settings changed in memory (a field mid-drag) but not yet written.
+    config_dirty: bool,
     pane_drag: Option<panes::PaneDrag>,
     plugins: plugins::PluginState,
     tablet: Option<tablet::TabletInput>,
@@ -405,6 +436,8 @@ pub struct EditorApp {
     tool: Tool,
     brush: Brush,
     brush_smoothing: f32,
+    /// The tool plain B selects: Brush or Pencil, whichever was used last.
+    brush_variant: Tool,
     pressure_size: bool,
     pressure_opacity: bool,
     tilt_shape: bool,
@@ -426,19 +459,27 @@ pub struct EditorApp {
     text_renderer: Option<xuan::text::TextRenderer>,
     text_edit: Option<text_controls::TextEdit>,
     blur_mode: PaintMode,
+    heal_mode: xuan::retouch::HealMode,
     auto_select: bool,
     ignore_transparent_pixels: bool,
     show_controls: bool,
-    snap: bool,
     lock_ratio: bool,
     clone_source: Option<Point>,
     clone_offset: Option<Point>,
     clone_aligned: bool,
     clone_all: bool,
+    dropper: Option<eyedropper::DropperGesture>,
+    dropper_size: eyedropper::SampleSize,
+    dropper_source: eyedropper::SampleSource,
     last_brush: Option<Point>,
     gesture: Option<Gesture>,
     crop_rect: Option<(Point, Point)>,
-    guides: Vec<(bool, f32)>,
+    /// Lines a drag has snapped to, drawn across the canvas while it lasts.
+    snap_lines: Vec<snap::SnapLine>,
+    /// A guide being dragged out of a ruler or moved.
+    guide_drag: Option<guides::GuideDrag>,
+    /// View → Grid Settings… while it is open.
+    grid_edit: Option<grid_settings::GridEdit>,
     dialog: Option<Dialog>,
     dimensions: [u32; 2],
     resolution: f32,
@@ -452,6 +493,9 @@ pub struct EditorApp {
     drop_prompt: Option<drops::DropPrompt>,
     pending_drops: std::collections::VecDeque<Vec<PathBuf>>,
     allow_close: bool,
+    /// When set, `command` only records its name here (UI tests avoid native dialogs this way).
+    #[cfg(test)]
+    command_trace: Option<Vec<String>>,
     /// Whether the native window was created transparent (needed for rounded corners).
     transparent_window: bool,
     /// The decorations last requested from the window system.
@@ -468,6 +512,10 @@ pub struct EditorApp {
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
+    /// Area the canvas occupied last frame, for the Navigator's viewport box.
+    canvas_viewport: Option<egui::Rect>,
+    /// Viewport, zoom and pan the Navigator last drew; a change schedules a repaint.
+    navigator_view: Option<(egui::Rect, f32, Vec2)>,
 }
 
 impl EditorApp {
@@ -537,6 +585,7 @@ impl EditorApp {
         let mut app = Self {
             config: Default::default(),
             config_path: None,
+            config_dirty: false,
             pane_drag: None,
             plugins: Default::default(),
             tablet: None,
@@ -554,6 +603,7 @@ impl EditorApp {
             tool: Tool::Move,
             brush: Brush::default(),
             brush_smoothing: 0.0,
+            brush_variant: Tool::Brush,
             pressure_size: true,
             pressure_opacity: false,
             tilt_shape: false,
@@ -575,19 +625,24 @@ impl EditorApp {
             text_renderer: None,
             text_edit: None,
             blur_mode: PaintMode::Blur,
+            heal_mode: xuan::retouch::HealMode::ContentAware,
             auto_select: true,
             ignore_transparent_pixels: true,
             show_controls: true,
-            snap: true,
             lock_ratio: true,
             clone_source: None,
             clone_offset: None,
             clone_aligned: true,
             clone_all: true,
+            dropper: None,
+            dropper_size: eyedropper::SampleSize::default(),
+            dropper_source: eyedropper::SampleSource::AllLayers,
             last_brush: None,
             gesture: None,
             crop_rect: None,
-            guides: Vec::new(),
+            snap_lines: Vec::new(),
+            guide_drag: None,
+            grid_edit: None,
             dialog: None,
             dimensions: [1920, 1080],
             resolution: 72.0,
@@ -601,6 +656,8 @@ impl EditorApp {
             drop_prompt: None,
             pending_drops: Default::default(),
             allow_close: false,
+            #[cfg(test)]
+            command_trace: None,
             transparent_window: true,
             decorated: false,
             button_layout: Default::default(),
@@ -615,6 +672,8 @@ impl EditorApp {
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
+            canvas_viewport: None,
+            navigator_view: None,
         };
         if demo {
             app.add_demo();
@@ -962,12 +1021,17 @@ impl EditorApp {
     fn set_tool(&mut self, tool: Tool) {
         self.cancel_gesture();
         self.tool = tool;
+        self.release_sample_caches();
+        if matches!(tool, Tool::Brush | Tool::Pencil) {
+            self.brush_variant = tool;
+        }
         self.polygon.clear();
         self.crop_rect = None;
     }
 
     fn cancel_gesture(&mut self) {
         self.pen_stroke = false;
+        self.dropper_cancel();
         if let Some(gesture) = self.gesture.take()
             && !gesture.panning
             && let Some(session) = self.session_mut()
@@ -975,7 +1039,8 @@ impl EditorApp {
             session.history.cancel(&mut session.document);
             session.invalidate();
         }
-        self.guides.clear();
+        self.snap_lines.clear();
+        self.cancel_guide_drag();
     }
 
     fn start_adjustment(&mut self, adjustment: Adjustment, as_layer: bool) {
@@ -1052,50 +1117,20 @@ impl EditorApp {
     }
 
     fn add_demo(&mut self) {
-        let mut document = Document::new(1200, 900).unwrap();
-        document.layers.clear();
-        let sky = RgbaImage::from_fn(1200, 900, |x, y| {
-            let t = y as f32 / 900.0;
-            let grain = ((x.wrapping_mul(73) ^ y.wrapping_mul(137)) % 7) as f32 - 3.0;
-            image::Rgba([
-                (221.0 - t * 53.0 + grain) as u8,
-                (183.0 - t * 65.0 + grain) as u8,
-                (143.0 - t * 56.0 + grain) as u8,
-                255,
-            ])
-        });
-        document.layers.push(Layer::image("Warm paper", sky));
-        document.layers.push(
-            paint::shape(
-                Point::new(758.0, 142.0),
-                Point::new(944.0, 328.0),
-                ShapeKind::Ellipse,
-                [248, 222, 162, 255],
-                0.0,
-            )
-            .unwrap(),
-        );
-        document.layers.last_mut().unwrap().name = "Afternoon sun".into();
-        for (name, base, amplitude, phase, color) in [
-            ("Distant ridge", 435.0, 80.0, 0.4, [173, 115, 84, 255]),
-            ("Sandstone", 550.0, 130.0, 2.6, [137, 80, 60, 255]),
-            ("Foreground dune", 695.0, 105.0, 4.4, [84, 58, 53, 255]),
-        ] {
-            let pixels = RgbaImage::from_fn(1200, 900, |x, y| {
-                let line = base + (x as f32 / 420.0 + phase).sin() * amplitude;
-                let mut c = color;
-                c[3] = ((y as f32 - line).clamp(0.0, 1.0) * 255.0) as u8;
-                image::Rgba(c)
-            });
-            document.layers.push(Layer::image(name, pixels));
-        }
-        document.select(document.layers[1].id, false);
-        self.sessions
-            .push(Session::new(document, "Dune study".into(), None));
+        self.sessions.push(Session::new(
+            xuan::demo::document(),
+            xuan::demo::TITLE.into(),
+            None,
+        ));
         self.current = self.sessions.len() - 1;
     }
 
     fn command(&mut self, command: &str) {
+        #[cfg(test)]
+        if let Some(trace) = &mut self.command_trace {
+            trace.push(command.to_owned());
+            return;
+        }
         if command == "quit" {
             // Ctrl+Q and the close button reach this while a job runs.
             self.request_quit();
@@ -1490,7 +1525,7 @@ impl EditorApp {
             "zoom_in" | "zoom_out" => {
                 if let Some(session) = self.session_mut() {
                     session.zoom = (session.zoom * if command == "zoom_in" { 1.25 } else { 0.8 })
-                        .clamp(0.01, 64.0);
+                        .clamp(*canvas::ZOOM_LIMITS.start(), *canvas::ZOOM_LIMITS.end());
                     session.fit = false;
                 }
             }
@@ -1500,6 +1535,21 @@ impl EditorApp {
                     xuan::effects::apply_adjustment(doc, &Adjustment::Invert, mask)
                 });
             }
+            "toggle_rulers" => self.set_view_option(|config| config.rulers = !config.rulers),
+            "toggle_grid" => self.set_view_option(|config| config.show_grid = !config.show_grid),
+            "toggle_guides" => {
+                self.cancel_guide_drag();
+                self.set_view_option(|config| config.show_guides = !config.show_guides);
+            }
+            "toggle_snap" => {
+                self.set_view_option(|config| config.snap.enabled = !config.snap.enabled)
+            }
+            "lock_guides" => {
+                self.cancel_guide_drag();
+                self.set_view_option(|config| config.lock_guides = !config.lock_guides);
+            }
+            "clear_guides" => self.clear_guides(),
+            "grid_settings" => self.open_grid_settings(),
             "settings" => self.dialog = Some(Dialog::Settings),
             "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "about" => self.dialog = Some(Dialog::About),

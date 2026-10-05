@@ -38,6 +38,7 @@ impl EditorApp {
                 Dialog::PluginPermissions => self.plugin_permissions_dialog(ctx),
                 Dialog::Plugins => self.plugin_manager_dialog(ctx),
                 Dialog::PluginProposal => self.plugin_proposal_dialog(ctx),
+                Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::Shortcuts => {
                     let mut open = true;
                     widgets::Window::new(tr("Keyboard shortcuts"))
@@ -60,6 +61,9 @@ impl EditorApp {
                                         ("Ctrl+A / Ctrl+D", tr("Select all / Deselect")),
                                         ("Ctrl+C / Ctrl+V", tr("Copy / Paste image")),
                                         ("Ctrl+0 / Ctrl+1", tr("Fit / Actual pixels")),
+                                        ("Ctrl+R / Ctrl+' / Ctrl+;", tr("Rulers / Grid / Guides")),
+                                        ("Ctrl+Shift+; / Ctrl+Alt+;", tr("Snap / Lock guides")),
+                                        (tr("Drag from a ruler"), tr("New guide")),
                                         (
                                             "V / M / L / W / C",
                                             tr("Move / Marquee / Lasso / Wand / Crop"),
@@ -68,6 +72,7 @@ impl EditorApp {
                                             "B / E / J / S / R",
                                             tr("Brush / Eraser / Heal / Clone / Blur"),
                                         ),
+                                        ("Shift+B", tr("Switch between Brush and Pencil")),
                                         (
                                             "G / U / I / H / Z",
                                             tr("Gradient / Shape / Eyedropper / Hand / Zoom"),

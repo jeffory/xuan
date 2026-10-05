@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// The built-in Layers pane.
 pub const LAYERS: &str = "layers";
+/// The built-in Navigator pane, above Layers by default.
+pub const NAVIGATOR: &str = "navigator";
 /// Smallest body height a pane can be resized to.
 pub const MIN_HEIGHT: f32 = 72.0;
 /// Body height for a pane the user has not resized.
@@ -57,7 +59,7 @@ pub struct Layout(pub Vec<Pane>);
 
 impl Default for Layout {
     fn default() -> Self {
-        Self(vec![Pane::new(LAYERS)])
+        Self(vec![Pane::new(NAVIGATOR), Pane::new(LAYERS)])
     }
 }
 
@@ -66,7 +68,8 @@ impl Layout {
         *self = Self::default();
     }
 
-    /// Drop duplicates and invalid sizes, and keep the Layers pane present.
+    /// Drop duplicates and invalid sizes, and keep the built-in panes present.
+    /// A layout saved before the Navigator existed gains it above Layers.
     pub fn sanitize(&mut self) {
         let mut seen = std::collections::HashSet::new();
         self.0
@@ -76,7 +79,10 @@ impl Layout {
                 pane.height = 0.0;
             }
         }
-        self.ensure(LAYERS);
+        let layers = self.ensure(LAYERS);
+        if self.get(NAVIGATOR).is_none() {
+            self.0.insert(layers, Pane::new(NAVIGATOR));
+        }
     }
 
     /// Add a pane at the bottom when the layout does not know it yet.
@@ -184,9 +190,9 @@ mod tests {
         layout.set_hidden("histogram", true);
         assert_eq!(layout.fill_pane(&all), None);
         assert_eq!(layout.visible(&all).count(), 1);
-        layout.set_hidden("navigator", false);
-        assert_eq!(ids(&layout), ["histogram", LAYERS, "navigator"]);
-        let known = |id: &str| id != "navigator";
+        layout.set_hidden("jobs", false);
+        assert_eq!(ids(&layout), ["histogram", LAYERS, "jobs"]);
+        let known = |id: &str| id != "jobs";
         assert_eq!(layout.visible(&known).count(), 1);
     }
 
@@ -207,13 +213,23 @@ mod tests {
             Pane::new(""),
         ]);
         layout.sanitize();
-        assert_eq!(ids(&layout), ["a", "b", LAYERS]);
+        assert_eq!(ids(&layout), ["a", "b", NAVIGATOR, LAYERS]);
         assert!(layout.0.iter().all(|pane| pane.height == 0.0));
         assert_eq!(layout.get("b").unwrap().body_height(), DEFAULT_HEIGHT);
         layout.set_height("b", 10.0);
         assert_eq!(layout.get("b").unwrap().body_height(), MIN_HEIGHT);
         layout.reset();
         assert_eq!(layout, Layout::default());
+        assert_eq!(ids(&layout), [NAVIGATOR, LAYERS]);
+        // A hidden or moved Navigator stays where the user put it.
+        let mut layout = Layout(vec![Pane::new(LAYERS), Pane::new("x")]);
+        layout.sanitize();
+        assert_eq!(ids(&layout), [NAVIGATOR, LAYERS, "x"]);
+        layout.set_hidden(NAVIGATOR, true);
+        assert!(layout.move_pane(0, 3));
+        let saved = layout.clone();
+        layout.sanitize();
+        assert_eq!(layout, saved);
     }
 
     #[test]
@@ -228,7 +244,9 @@ mod tests {
         assert!(text.contains("[[panes]]"), "{text}");
         let back: Holder = toml::from_str(&text).unwrap();
         assert_eq!(back.panes, layout);
-        let partial: Holder = toml::from_str("[[panes]]\nid = 'layers'\n").unwrap();
+        // A layout saved before the Navigator existed gains it on load.
+        let mut partial: Holder = toml::from_str("[[panes]]\nid = 'layers'\n").unwrap();
+        partial.panes.sanitize();
         assert_eq!(partial.panes, Layout::default());
     }
 

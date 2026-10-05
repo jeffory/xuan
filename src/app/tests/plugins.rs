@@ -251,7 +251,7 @@ fn plugin_action_proposes_a_masked_layer_that_records_its_origin() {
     assert_eq!(app.session().unwrap().document.layers.len(), 2);
     assert_eq!(app.session().unwrap().history.names().count(), 2);
 
-    // Provenance survives the project file, which becomes version 5.
+    // Provenance survives the project file, which becomes version 6.
     let path = dir.path().join("project.xuan");
     io::save(&app.session().unwrap().document, &path).unwrap();
     let loaded = io::load(&path).unwrap();
@@ -605,7 +605,7 @@ fn reset_panel_layout_keeps_the_installed_plugin_panes() {
     app.config.panes.ensure("plugin:gone/pane");
     app.command("reset_panels");
     let ids: Vec<_> = app.config.panes.0.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, [xuan::panes::LAYERS, key]);
+    assert_eq!(ids, [xuan::panes::NAVIGATOR, xuan::panes::LAYERS, key]);
     let pane = app.config.panes.get(key).unwrap();
     assert!(!pane.hidden && !pane.collapsed && pane.height == 0.0);
     assert!(!app.config.panes.get(xuan::panes::LAYERS).unwrap().collapsed);
@@ -701,6 +701,42 @@ fn a_proposal_is_never_accepted_without_the_accept_button() {
     assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
 }
 
+#[cfg(unix)]
+#[test]
+fn plugin_menus_panes_and_chords_work_through_the_ui() {
+    use super::ui::UiTest;
+    let dir = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::with_document();
+    ui.isolate_config(dir.path());
+    install_mock(ui.app_mut(), dir.path());
+    ui.app_mut().command("fill_fg");
+    ui.settle();
+
+    // The pane is listed in the Window menu after the built-in panes.
+    ui.open_menu("Window");
+    assert!(ui.has_role(egui::accesskit::Role::CheckBox, "Mock info"));
+    ui.key(egui::Key::Escape);
+    let ids: Vec<_> = ui.app().pane_entries().into_iter().map(|e| e.0).collect();
+    assert_eq!(
+        ids,
+        [
+            xuan::panes::NAVIGATOR,
+            xuan::panes::LAYERS,
+            "plugin:mock/info"
+        ]
+    );
+
+    // The menu item shows the chord, and the chord opens the action dialog
+    // instead of running Merge (Ctrl+E).
+    ui.open_menu("Filter");
+    assert!(ui.has("Echo Source… Ctrl+Shift+E"));
+    ui.key(egui::Key::Escape);
+    let steps = ui.app().session().unwrap().history.names().count();
+    ui.press(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::E);
+    assert!(ui.app().plugins.action.is_some(), "{:?}", ui.app().error);
+    assert_eq!(ui.app().session().unwrap().history.names().count(), steps);
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::{builtin_for, consume_exact};
@@ -730,6 +766,12 @@ fn shortcuts_match_their_modifiers_exactly() {
     assert_eq!(builtin_for(Modifiers::CTRL, Key::E), Some("merge"));
     assert_eq!(builtin_for(Modifiers::CTRL, Key::H), Some("hide_controls"));
     assert_eq!(builtin_for(Modifiers::NONE, Key::F1), Some("shortcuts"));
+    assert_eq!(builtin_for(Modifiers::CTRL, Key::R), Some("toggle_rulers"));
+    assert_eq!(
+        builtin_for(Modifiers::CTRL, Key::Semicolon),
+        Some("toggle_guides")
+    );
+    assert_eq!(builtin_for(ctrl_shift, Key::Quote), Some("toggle_grid"));
     assert_eq!(builtin_for(ctrl_shift, Key::E), None);
     assert_eq!(builtin_for(Modifiers::CTRL | Modifiers::ALT, Key::I), None);
 }

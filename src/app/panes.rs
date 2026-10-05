@@ -34,6 +34,7 @@ impl EditorApp {
     pub(super) fn pane_title(&self, id: &str) -> Option<String> {
         match id {
             panes::LAYERS => Some(tr("Layers").into()),
+            panes::NAVIGATOR => Some(tr("Navigator").into()),
             _ => self.plugin_pane_title(id),
         }
     }
@@ -43,8 +44,19 @@ impl EditorApp {
             panes::LAYERS => self
                 .session()
                 .map(|session| session.document.layers.len().to_string()),
+            panes::NAVIGATOR => self
+                .session()
+                .map(|session| super::navigator::format_zoom_percent(session.zoom)),
             _ => None,
         }
+    }
+
+    /// Whether the pane's body is drawn: shown and expanded.
+    pub(super) fn pane_open(&self, id: &str) -> bool {
+        self.config
+            .panes
+            .get(id)
+            .is_some_and(|pane| !pane.hidden && !pane.collapsed)
     }
 
     /// Known panes in layout order with their visibility, for the Window menu.
@@ -271,10 +283,10 @@ impl EditorApp {
     }
 
     fn pane_body(&mut self, ui: &mut egui::Ui, id: &str, enabled: bool) {
-        if id == panes::LAYERS {
-            self.layers_pane(ui, enabled);
-        } else {
-            self.plugin_pane(ui, id, enabled);
+        match id {
+            panes::LAYERS => self.layers_pane(ui, enabled),
+            panes::NAVIGATOR => self.navigator_pane(ui, enabled),
+            _ => self.plugin_pane(ui, id, enabled),
         }
     }
 }

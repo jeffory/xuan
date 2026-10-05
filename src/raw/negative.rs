@@ -2,7 +2,10 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{DecodedRaw, DevelopSettings, process::sample_camera_patch, source_point};
+use super::{
+    DecodedRaw, DevelopSettings,
+    process::{SourceMap, sample_camera_patch},
+};
 use crate::document::Point;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,11 +55,37 @@ impl NegativeSettings {
         Ok(())
     }
 
+    /// The per-image inversion coefficients. Both the CPU path and the GPU
+    /// uniforms are built from this, so they cannot disagree on parameters.
+    pub(crate) fn inversion(&self) -> NegativeInversion {
+        NegativeInversion {
+            film_base: self.film_base,
+            density_range: self.density_range,
+            black_point: self.black_point,
+            gamma: self.gamma,
+            gain: self.balance.map(|stops| 2.0_f32.powf(stops)),
+        }
+    }
+}
+
+/// Loop-invariant film inversion parameters. `raw.wgsl` (`raw_camera`) mirrors
+/// [`NegativeInversion::convert`] using exactly these values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NegativeInversion {
+    pub film_base: [f32; 3],
+    pub density_range: [f32; 3],
+    pub black_point: f32,
+    pub gamma: f32,
+    /// Linear channel compensation, `2^balance`.
+    pub gain: [f32; 3],
+}
+
+impl NegativeInversion {
     pub(crate) fn convert(&self, camera: [f32; 3]) -> [f32; 3] {
         std::array::from_fn(|c| {
             let density = (self.film_base[c] / camera[c].max(0.00001)).log10();
             let positive = ((density - self.black_point) / self.density_range[c]).clamp(0.0, 1.0);
-            positive.powf(self.gamma) * 2.0_f32.powf(self.balance[c])
+            positive.powf(self.gamma) * self.gain[c]
         })
     }
 }
@@ -73,16 +102,16 @@ pub fn analyze_negative(raw: &DecodedRaw, settings: &DevelopSettings) -> Negativ
     let ny = ((bottom - top) * raw.camera.height() as f32)
         .ceil()
         .clamp(1.0, 256.0) as u32;
+    let map = SourceMap::new(
+        settings,
+        raw.camera.width() as f32 / raw.camera.height() as f32,
+    );
     for y in 0..ny {
         for x in 0..nx {
-            let point = source_point(
-                Point::new(
-                    left + (x as f32 + 0.5) / nx as f32 * (right - left),
-                    top + (y as f32 + 0.5) / ny as f32 * (bottom - top),
-                ),
-                settings,
-                raw.camera.width() as f32 / raw.camera.height() as f32,
-            );
+            let point = map.apply(Point::new(
+                left + (x as f32 + 0.5) / nx as f32 * (right - left),
+                top + (y as f32 + 0.5) / ny as f32 * (bottom - top),
+            ));
             if !(0.0..1.0).contains(&point.x) || !(0.0..1.0).contains(&point.y) {
                 continue;
             }

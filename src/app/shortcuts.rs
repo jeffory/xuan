@@ -18,6 +18,13 @@ const COMMANDS: &[(Modifiers, Key, &str)] = &[
     (CTRL_SHIFT, Key::G, "ungroup"),
     (CTRL_SHIFT, Key::I, "invert_selection"),
     (CTRL_ALT, Key::G, "clip"),
+    // Shift+; types a colon on many layouts, so either key toggles snapping.
+    (CTRL_SHIFT, Key::Semicolon, "toggle_snap"),
+    (CTRL_SHIFT, Key::Colon, "toggle_snap"),
+    (CTRL_ALT, Key::Semicolon, "lock_guides"),
+    (CTRL, Key::Semicolon, "toggle_guides"),
+    (CTRL, Key::Quote, "toggle_grid"),
+    (CTRL, Key::R, "toggle_rulers"),
     (CTRL, Key::Comma, "settings"),
     (CTRL, Key::N, "new"),
     (CTRL, Key::O, "open"),
@@ -57,9 +64,9 @@ const OTHER_CHORDS: &[(Modifiers, Key, &str)] = &[
 ];
 
 /// Whether pressed modifiers match a chord exactly. Shift is ignored for keys
-/// that need it on common layouts, such as `+`.
+/// that need it on some common layouts, such as `+` and `'`.
 fn chord_matches(pressed: Modifiers, mods: Modifiers, key: Key) -> bool {
-    if key == Key::Plus {
+    if matches!(key, Key::Plus | Key::Quote) {
         pressed.matches_logically(mods)
     } else {
         pressed.matches_exact(mods)
@@ -230,6 +237,16 @@ impl EditorApp {
             (Key::Z, Tool::Zoom),
         ] {
             if pressed(key) {
+                // B selects the last-used of Brush and Pencil; Shift+B switches between them.
+                let tool = if key != Key::B {
+                    tool
+                } else if !modifiers.shift {
+                    self.brush_variant
+                } else if self.tool == Tool::Brush {
+                    Tool::Pencil
+                } else {
+                    Tool::Brush
+                };
                 if modifiers.shift && tool == Tool::Marquee {
                     self.ellipse = !self.ellipse;
                 }

@@ -856,6 +856,10 @@ impl EditorApp {
         let mut apply = false;
         let mut export = false;
         let mut cancel = false;
+        let grid_percent = self
+            .config
+            .pixel_grid
+            .then(|| self.config.pixel_grid_percent());
         let interactive =
             d.ready() && self.develop_close_requested.is_none() && self.dialog.is_none();
         egui::TopBottomPanel::top("develop_toolbar")
@@ -977,7 +981,7 @@ impl EditorApp {
                     }
                 }
                 if let Some(texture) = d.texture.clone() {
-                    draw_canvas(ui, &mut d, texture, interactive);
+                    draw_canvas(ui, &mut d, texture, interactive, grid_percent);
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.label(if d.error.is_some() {
@@ -1128,7 +1132,13 @@ fn draw_rotated_original(
     painter.add(mesh);
 }
 
-fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, interactive: bool) {
+fn draw_canvas(
+    ui: &mut egui::Ui,
+    d: &mut Develop,
+    texture: PreviewTexture,
+    interactive: bool,
+    grid_percent: Option<u32>,
+) {
     let (viewport, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let before = d.before.as_ref().unwrap_or(&texture);
     let full = d.full.as_ref().unwrap();
@@ -1240,6 +1250,27 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
             painter.line_segment(
                 [pos2(x, rect.top()), pos2(x, rect.bottom())],
                 Stroke::new(1.5_f32, Color32::WHITE),
+            );
+        }
+    }
+    // Overlay only: never rendered into the developed layer. One image pixel is
+    // `d.zoom` physical pixels here, so the threshold compares against it directly.
+    if let Some(threshold) = grid_percent {
+        let mut panes = vec![(rect, edited_viewport)];
+        if side_by_side {
+            let original_viewport =
+                Rect::from_min_max(viewport.min, pos2(viewport.center().x, viewport.bottom()));
+            panes.push((rect.translate(vec2(-available.x, 0.0)), original_viewport));
+        }
+        for (pane, clip) in panes {
+            super::pixel_grid::draw(
+                &painter,
+                pane.min,
+                pane.size() / vec2(width as f32, height as f32),
+                [width, height],
+                pane.intersect(clip),
+                d.zoom * 100.0,
+                threshold,
             );
         }
     }
@@ -1439,7 +1470,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::app) mod tests {
     use super::*;
 
     fn fixture() -> (RawAsset, Arc<DecodedRaw>) {
@@ -1463,7 +1494,7 @@ mod tests {
         (asset, raw)
     }
 
-    fn ready(ctx: &egui::Context) -> Develop {
+    pub(in crate::app) fn ready(ctx: &egui::Context) -> Develop {
         ready_with_resolution(ctx, [64, 48], 64)
     }
 
@@ -1548,7 +1579,7 @@ mod tests {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_canvas(ui, d, d.texture.clone().unwrap(), true);
+                    draw_canvas(ui, d, d.texture.clone().unwrap(), true, None);
                 });
                 d.update_preview_resolution(ctx);
             },

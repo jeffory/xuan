@@ -1,6 +1,6 @@
 use super::{EditorApp, theme, widgets};
 use xuan::{
-    config::{Config, Language, TitleBar},
+    config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, TitleBar},
     i18n::{self, tr},
 };
 
@@ -23,7 +23,33 @@ impl EditorApp {
         i18n::set_language(self.config.language);
     }
 
-    /// Write the current preferences. Headless sessions have no path and keep them in memory.
+    /// View → Pixel Grid: apply immediately and remember the choice.
+    pub(super) fn set_pixel_grid(&mut self, enabled: bool) {
+        if self.config.pixel_grid == enabled {
+            return;
+        }
+        let mut config = self.config.clone();
+        config.pixel_grid = enabled;
+        self.store_config(config);
+    }
+
+    /// A View menu preference (rulers, grid, guides, snapping): apply now and remember it.
+    pub(super) fn set_view_option(&mut self, change: impl FnOnce(&mut Config)) {
+        let mut config = self.config.clone();
+        change(&mut config);
+        if config != self.config {
+            self.store_config(config);
+        }
+    }
+
+    /// Keep `config` in memory and write it to the configuration file.
+    fn store_config(&mut self, config: Config) {
+        self.config = config;
+        self.save_config();
+    }
+
+    /// Write the current preferences. Headless sessions (tests) have no path
+    /// and keep them in memory, so they never touch the user's file.
     pub(super) fn save_config(&mut self) {
         if let Some(path) = &self.config_path
             && let Err(error) = self.config.save(path)
@@ -36,6 +62,8 @@ impl EditorApp {
         let mut open = true;
         let mut done = false;
         let mut config = self.config.clone();
+        // A numeric field is being dragged or typed into: apply, but do not write yet.
+        let mut editing = false;
         let page_id = egui::Id::new("settings_page");
         let mut appearance = ctx.data(|d| d.get_temp::<bool>(page_id).unwrap_or(false));
         widgets::Window::new(tr("Settings"))
@@ -67,7 +95,7 @@ impl EditorApp {
                     ui.vertical(|ui| {
                         ui.set_min_width(365.0);
                         if appearance {
-                            self.appearance_settings(ui, &mut config);
+                            editing = self.appearance_settings(ui, &mut config);
                         } else {
                             general_settings(ui, &mut config);
                         }
@@ -86,15 +114,22 @@ impl EditorApp {
         if config != self.config {
             i18n::set_language(config.language);
             self.config = config;
-            self.save_config();
+            self.config_dirty = true;
             ctx.request_repaint();
         }
-        if !open || done || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        let closing = !open || done || ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if self.config_dirty && (!editing || closing) {
+            self.config_dirty = false;
+            self.save_config();
+        }
+        if closing {
             self.dialog = None;
         }
     }
 
-    fn appearance_settings(&self, ui: &mut egui::Ui, config: &mut Config) {
+    /// Returns whether a numeric field is mid-edit, so saving should wait.
+    fn appearance_settings(&self, ui: &mut egui::Ui, config: &mut Config) -> bool {
+        let mut editing = false;
         ui.heading(tr("Appearance"));
         ui.add_space(16.0);
         ui.horizontal(|ui| {
@@ -128,6 +163,36 @@ impl EditorApp {
             tr("Title bar changes apply immediately.")
         };
         ui.add(egui::Label::new(egui::RichText::new(note).color(theme::MUTED)).wrap());
+        ui.add_space(24.0);
+        ui.horizontal(|ui| {
+            widgets::checkbox(ui, &mut config.pixel_grid, tr("Pixel Grid"));
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(tr("Show pixel grid above"));
+            let mut percent = config.pixel_grid_percent();
+            let response = ui.add(
+                egui::DragValue::new(&mut percent)
+                    .range(PIXEL_GRID_PERCENT_RANGE)
+                    .speed(10.0)
+                    .suffix("%"),
+            );
+            editing = response.dragged() || response.has_focus();
+            if percent != config.pixel_grid_percent() {
+                config.pixel_grid_percent = percent;
+            }
+        });
+        ui.add_space(8.0);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(tr(
+                    "Outlines individual pixels when zoomed in past this level, between 200% and 6400%.",
+                ))
+                .color(theme::MUTED),
+            )
+            .wrap(),
+        );
+        editing
     }
 }
 

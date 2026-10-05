@@ -20,8 +20,11 @@
 | Fit / Actual pixels | Ctrl+0 / Ctrl+1 |
 | Zoom in / out | Ctrl+Plus / Ctrl+Minus, or mouse wheel |
 | Show transform / Hide controls | Ctrl+T / Ctrl+H |
+| Rulers / Grid / Guides | Ctrl+R / Ctrl+' / Ctrl+; |
+| Snap / Lock guides | Ctrl+Shift+; / Ctrl+Alt+; |
 | Move / Marquee / Lasso / Wand / Crop | V / M / L / W / C |
 | Brush / Eraser / Heal / Clone / Blur | B / E / J / S / R |
+| Switch between Brush and Pencil | Shift+B (B selects whichever you used last) |
 | Gradient / Shape / Eyedropper / Hand / Zoom | G / U / I / H / Z |
 | Text / Apply text / Cancel text | T / Ctrl+Enter / Escape |
 | Brush size / Hardness | [ and ] / Shift+[ and Shift+] |
@@ -34,6 +37,8 @@
 | Apply crop or polygon / Cancel | Enter / Escape |
 | Shortcut reference | F1 |
 
+Shortcuts match their modifiers exactly: Ctrl+Shift+I inverts the selection and never also runs Ctrl+I. Plugins can give their actions a shortcut, shown next to the action in its menu. A plugin shortcut always includes Ctrl or Alt (or is one of F1–F24) and never replaces a shortcut in the table above; a clashing one is ignored and reported in **Plugins → Manage Plugins…**. The panes in the right sidebar are shown or hidden from the **Window** menu.
+
 Copy an image in another app, or copy one or more image files in a file manager, then use Ctrl+V (or Edit → Paste) to add them as layers. External images are centered on the canvas; a new document is created if none is open. Local file URLs and absolute file paths can also be pasted. Multiple files are imported together in one undo step, without changing the source files. When a text field has focus, Ctrl+V pastes text into that field.
 
 Use **File → Open Image from Clipboard** to open copied pixels in a new document sized to the image, even when another document is open. Copied image files open in separate tabs. Clipboard images preserve transparency and prompt to save when closed.
@@ -41,6 +46,8 @@ Use **File → Open Image from Clipboard** to open copied pixels in a new docume
 For a marquee selection, Ctrl+C copies the active layer's selected pixels. If no layer is active, it copies the visible canvas within the selection. Ctrl+V places those pixels on a new layer at their original position. Ctrl+Shift+C always copies the visible composite; Ctrl+X requires an active layer. Successful copies show the copied dimensions in the status bar.
 
 Shift with a selection adds coverage, Alt subtracts, and Shift+Alt intersects. Drag inside a selection to move its outline; hold Ctrl to move selected pixels, or Ctrl+Alt to duplicate them. The contextual header also offers explicit selection modes.
+
+Drag from the top or left ruler (View → Rulers) to create a guide. With the Move tool, drag a guide to move it, or drop it on a ruler to delete it; Escape cancels the drag. Hold Ctrl while dragging layers, handles, marquees, shapes, selections or guides to bypass View → Snap To.
 
 Move handles scale the selected layers, the circular handle rotates them, and Ctrl-dragging a corner applies perspective distortion. Shift constrains movement or rotation; the Link control toggles the size ratio. Alt-drag duplicates a layer. The mask thumbnail targets the mask for painting and transformations. Its context menu controls linking and visibility.
 
@@ -56,4 +63,4 @@ Drag a layer row or thumbnail to reorder it. Drop on the upper or lower half of 
 
 Supported RAW files (NEF/NRW, CR2/CR3/CRW, RAF, and ARW) enter RAW Develop before becoming layers. In Develop, Ctrl+Z / Ctrl+Shift+Z undo and redo RAW settings; Escape exits the white-balance picker or mask drawing. Drag pans, wheel zooms, and the Fit / 100% buttons set the inspection scale. In Split view, drag near the comparison divider to move it; drag elsewhere or Alt-drag to pan. Space-drag or middle-button drag pans in every view, including with a picker or mask tool active. Side by side zooms both images around their pane centers and pans them together. Double-click a RAW layer (or its image with Move selected) to reopen Develop. Use Develop to commit, or Cancel to retain the previous layer state.
 
-**Ctrl+,** opens Settings in both the photo editor and RAW Develop. **Escape** closes Settings or cancels a Develop eyedropper.
+**Ctrl+,** opens Settings in both the photo editor and RAW Develop. **Escape** closes Settings or cancels a Develop eyedropper. **Escape** while dragging with the Eyedropper restores the previous colour.
