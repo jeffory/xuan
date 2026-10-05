@@ -163,6 +163,32 @@ ui.drop_files(&[&path]);                // injects `dropped_files`
 - Snapshot images are not used: kittest snapshots need a wgpu renderer.
 - `egui_kittest` turns on egui's `accesskit` feature, which is why the vendored `egui-winit` reads `accesskit_update` by field access (see `vendor/egui-winit/PATCH.md`).
 
+## Golden images
+
+Rendering regressions are caught by golden-image tests in [`src/goldens.rs`](../src/goldens.rs). Each scene is rendered through the real CPU compositor or RAW Develop pipeline and compared with a checked-in PNG in [`testdata/goldens`](../testdata/goldens):
+
+| Scene | Covers |
+| --- | --- |
+| `demo` | the `--demo` document, downscaled to 256 × 192 |
+| `blend_modes` | one strip per blend mode, top to bottom in menu order, over a gradient |
+| `layer_mask` | a radial layer mask and an unlinked, independently placed mask |
+| `clipping_mask` | layers clipped to an ellipse, one with Screen blending |
+| `adjustment_layers` | masked Hue/Saturation, Levels at partial opacity, Invert clipped to a shape |
+| `text_and_shapes` | every shape kind (one rotated) and text in the bundled Inter font |
+| `raw_default`, `raw_negative`, `raw_quarter_turn` | Develop of the Nikon D70 [RAW fixture](#raw-test-fixtures) with default settings, negative conversion and a quarter turn |
+
+```sh
+cargo test --locked goldens                         # compare (CPU)
+XUAN_UPDATE_GOLDENS=1 cargo test --locked goldens   # rewrite goldens after an intended change
+cargo test --locked --lib gpu::goldens -- --ignored # the same scenes on the GPU
+```
+
+The CPU output is the source of truth: the update command only rewrites goldens from the CPU renderer, and only files whose pixels changed. Review the PNG changes like any other diff before committing them. Fetch the RAW fixtures first, or the three RAW scenes are skipped and their goldens left untouched.
+
+A scene passes when at most a small fraction of its pixels differ from the golden by more than a per-channel tolerance. The CPU allows 2 levels on 0.2% of the pixels (3 levels on 0.5% for RAW Develop), which absorbs one-ulp differences between the Linux and Windows maths libraries while failing on any visible change. The GPU test, run by `scripts/check.sh --gpu`, compares against the same goldens with looser limits (4 levels on 0.5% of the pixels, 6 levels on 1% for RAW Develop), because GPU arithmetic, shader maths and mipmapped downscaling differ from the CPU reference. On Mesa lavapipe every scene is within one level. Text uses only the bundled font, never system fonts, so it renders identically on every platform.
+
+On a mismatch the test writes `expected.png`, `actual.png` and `diff.png` (red: over the tolerance, yellow: within it) to `target/golden-failures/<cpu|gpu>/<scene>/`; set `XUAN_GOLDEN_FAILURES` to use another directory. CI uploads that directory as the `golden-failures-linux` or `golden-failures-windows` artifact when the job fails.
+
 ## Tablet input checks
 
 Tablet regression checks run with `cargo test --locked tablet`. They cover native

@@ -1,9 +1,12 @@
 pub mod blend;
 pub mod color;
 pub mod config;
+pub mod demo;
 pub mod document;
 pub mod effects;
 pub mod geometry;
+#[cfg(test)]
+mod goldens;
 pub mod gpu;
 pub mod history;
 pub mod i18n;
