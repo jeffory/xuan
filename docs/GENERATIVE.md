@@ -19,7 +19,8 @@ and **#7** (MCP server and client).
    Done in #39 for the cheap part: the grant dialog says `permissions.network`
    is not enforced, a per-run prompt asks before document data goes to a plugin
    that declares hosts, and offline mode disables such plugins. OS-level
-   enforcement is a separate step; see the spike in section 5.
+   enforcement for plugins that declare no hosts is done on Linux (#43, opt-in
+   for now); see the spike in section 5.
 3. **Add three small host features that every generative plugin needs:** a
    result that declares its placed size (upscale), canvas extension (outpaint)
    and a `mask` output kind that becomes a selection (segmentation, #5).
@@ -182,9 +183,13 @@ local job with no network.
 
 **Missing or weak.**
 
-- **`permissions.network` is only a label.** The plugin process can contact any
-  host. Since #39 the grant dialog says so in plain words. Real enforcement
-  needs OS sandboxing; see the spike below.
+- **`permissions.network` is only a label for plugins that declare hosts.**
+  Such a plugin can contact any host, not only those; the grant dialog says
+  so in plain words (#39). For plugins that declare **no** hosts, Linux
+  enforcement is done (#43): with "Block network for plugins that don't
+  declare it" on, they start under a seccomp filter (see "Blocking the
+  network" in [PLUGINS.md](PLUGINS.md#blocking-the-network)). Windows has
+  nothing yet; see the spike below.
 - **"Pixels leave this machine" prompt.** Done in #39 (see "Network" in
   [PLUGINS.md](PLUGINS.md#network)): for a plugin that declares network hosts,
   each run that sends document data names the hosts and lists what is sent
@@ -195,7 +200,8 @@ local job with no network.
   plugin, not per host: the host cannot tell which declared host data goes to.
 - **Offline mode.** Done in #39: "Disable plugins that use the network" keeps
   plugins that declare hosts from starting. It relies on the declaration, so it
-  is a guarantee only together with OS enforcement for the others.
+  is a guarantee only together with OS enforcement for the others, which
+  Linux has since #43.
 - **Keyring.** Secrets are in a 0600 file (#33 F18). The keyring crates need a
   desktop secret service that headless sessions lack, so a file fallback must
   stay. Treat the keyring as an optional front end, later.
@@ -212,8 +218,8 @@ local job with no network.
 
 ### Spike: enforcing network access in the OS (#39)
 
-No code yet; this compares the options for making `permissions.network`
-real. Two goals are possible: **no network at all** for plugins that declare no
+This compares the options for making `permissions.network` real. The Linux
+step of the recommendation below is done (#43); the Windows step is open. Two goals are possible: **no network at all** for plugins that declare no
 hosts, and **only the declared hosts** for the others. The second is much
 harder everywhere: hosts are names, the OS filters addresses, and CDNs share
 and rotate them, so an allow-list really needs a filtering HTTP(S) proxy that
@@ -234,11 +240,22 @@ a plugin that talks to a local ComfyUI or Ollama would have to declare
 
 1. Do not attempt per-host allow-lists. Keep the per-run prompt for plugins
    that declare hosts; they stay unsandboxed and the prompt is the control.
-2. Enforce "no network" for plugins that declare **no** hosts on Linux with a
-   seccomp filter applied in the child before `exec`. It is unprivileged, adds
-   no dependency, works in every package format, and turns offline mode into
-   a real guarantee on Linux. Ship it first behind a setting, report a blocked
-   `socket()` in the plugin log, and make it the default after a release.
+2. **Done (#43).** Enforce "no network" for plugins that declare **no** hosts
+   on Linux with a seccomp filter applied in the child before `exec`. It is
+   unprivileged, adds no runtime dependency, works in every package format,
+   and turns offline mode into a real guarantee on Linux. It shipped behind
+   the opt-in setting "Block network for plugins that don't declare it",
+   built with `seccompiler`. The filter is an allow-list rather than the
+   deny-list in the table: `socket()` and `socketpair()` fail with `EACCES`
+   for every family but `AF_UNIX` and `AF_NETLINK` (so `AF_SMC`, `AF_VSOCK`
+   and the like are covered), `io_uring_setup()` fails too, other syscall
+   ABIs are killed and x32 numbers are covered. The plugin log notes that
+   the network is blocked; a blocked call itself is not logged, since
+   `SECCOMP_RET_ERRNO` leaves no trace. It needs Linux 4.14, and a plugin
+   whose filter cannot be installed does not start. To make it the default
+   after a release, set `BLOCK_UNDECLARED_NETWORK_DEFAULT` in
+   `src/config.rs` to `true`: configurations store the setting only once
+   the user changes it.
 3. On Windows, prototype AppContainer for the same "no network" case only once
    the Linux path has proven the UX; ship it opt-in and document that
    interpreters must be installed for all users. Skip WFP.

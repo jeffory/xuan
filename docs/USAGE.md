@@ -270,7 +270,8 @@ settings are edited in the same window.
 
 A plugin is a program that runs with your rights. Xuan controls what it sends
 the plugin and what it does for it, but it cannot stop the plugin itself from
-reading your files or contacting a server, so install plugins you trust. When
+reading your files, or from contacting a server unless it blocks the
+plugin's network (below), so install plugins you trust. When
 a plugin that says it uses the network is about to receive your image,
 regions or text, Xuan names the hosts it declared, lists what will be sent and
 waits for **Send** or **Cancel**; **Don't ask again for this plugin** skips
@@ -279,6 +280,15 @@ press **Ask Again** in **Plugins → Manage Plugins…**. To keep such plugins
 from running at all, turn on **Disable plugins that use the network** in
 **Settings → General** or at the bottom of **Plugins → Manage Plugins…**:
 their panes show why they are empty and their actions are greyed out.
+
+On Linux, **Block network for plugins that don't declare it**, next to it,
+keeps every plugin that declares no network hosts from opening network
+connections, `localhost` included; the permission dialog and **Manage
+Plugins…** then show **Network blocked by Xuan (Linux)** for it. It is off by
+default for now. A plugin that talks to a server on your own machine, such as
+ComfyUI or Ollama, has to declare it as a host to keep working. If Xuan cannot
+block a plugin's network, it does not start the plugin. See
+[Blocking the network](PLUGINS.md#blocking-the-network).
 
 A plugin action opens a dialog built from the inputs it declared. Actions that
 work on marked parts of the image switch to the **Region** tool: drag boxes

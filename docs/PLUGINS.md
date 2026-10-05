@@ -55,13 +55,14 @@ Xuan enforces the permissions for what it does on a plugin's behalf: it edits
 documents only for plugins that declare `document = "edit"` (see
 [What `document` allows](#what-document-allows)), hands over only
 the declared secrets, and reads and writes files only in the plugin's own
-folders (see [Files](#files)) unless `filesystem` allows more. It cannot
+folders (see [Files](#files)) unless `filesystem` allows more. It does not
 limit what the plugin process itself does, which runs with the user's rights:
-it can read any file the user can and contact any server, whatever its
-manifest declares. `permissions.network` in particular is not enforced. The
-permission dialog says so, and Xuan asks before it hands document data to a
-plugin that declares network hosts (see [Network](#network)). Install
-plugins you trust.
+it can read any file the user can. A plugin that declares network hosts can
+contact any server, not only those; the permission dialog says so, and Xuan
+asks before it hands such a plugin document data. On Linux, a plugin that
+declares no hosts can be kept off the network altogether (see
+[Network](#network)); elsewhere, or with that setting off, nothing stops it
+from connecting either. Install plugins you trust.
 
 ### What `document` allows
 
@@ -80,8 +81,9 @@ plugin can propose a selection. Changing the selection directly with
 ### Network
 
 A plugin that lists hosts under `permissions.network` is treated as one that
-sends data off the machine. A plugin that lists none gets no prompts, but
-nothing stops it from connecting either.
+sends data off the machine. A plugin that lists none gets no prompts; on
+Linux, Xuan can block its network (see [Blocking the
+network](#blocking-the-network)), otherwise nothing stops it from connecting.
 
 **Asking before sending.** When an action of such a plugin would send
 document data, Xuan shows **Send to *Plugin (plugin id)*?** before anything
@@ -128,6 +130,62 @@ that declare network hosts are stopped and never started: their panes say
 why they are empty, their actions are disabled in the menus, the command
 palette and shortcuts, and their file formats are not offered. Plugins that
 declare no hosts keep working. Turning it off starts their panes again.
+Offline mode relies on the declaration, so together with blocking the network
+of the other plugins (below) it is a guarantee on Linux; without it, a
+plugin that declares no hosts could still connect.
+
+#### Blocking the network
+
+**Block network for plugins that don't declare it**, in **Settings →
+General** and at the bottom of **Plugins → Manage Plugins…**, is off by
+default for now. Once changed it is stored as `block_undeclared_network =
+true` (or `false`) in `config.toml`; while the key is absent the release's
+default applies, so a later release can turn it on for everyone who never
+chose. It works on Linux only (x86_64 and aarch64); elsewhere it is shown
+greyed out and has no effect.
+
+While it is on, a plugin whose manifest lists no `permissions.network` hosts
+starts under a seccomp filter that Xuan installs in the plugin process just
+before it runs the plugin's command. The filter cannot be removed and is
+inherited by every process the plugin starts. In it:
+
+- `socket()` and `socketpair()` fail with `EACCES` (Python raises
+  `PermissionError`) for every address family except `AF_UNIX` and
+  `AF_NETLINK`: TCP and UDP over IPv4 and IPv6, raw and packet sockets,
+  Bluetooth, VSOCK and the rest. **This includes `localhost`**: a plugin that
+  talks to a server on the same machine, such as ComfyUI or Ollama, must
+  declare it, for example `network = ["localhost"]`, and is then
+  treated as a network plugin.
+- Unix sockets (`AF_UNIX`) keep working, for local IPC and
+  `multiprocessing`; the standard input and output pipes Xuan talks to the
+  plugin over are not sockets and are not affected. Netlink sockets only talk to
+  the local kernel, never to another machine, and C libraries use them to
+  list network interfaces, so they stay allowed too.
+- `io_uring_setup()` fails with `EACCES`, since an io_uring can open sockets
+  without calling `socket()`.
+- The plugin and its subprocesses cannot gain privileges, for example through
+  setuid programs such as `sudo` or `ping` (`no_new_privs`).
+- System calls through another ABI than the native 64-bit one (i386 `int
+  0x80`, arm32 compat) kill the process, so 32-bit plugin programs do not run
+  under the filter. The x32 syscall numbers are blocked like the native ones.
+
+Running plugins that declare no hosts restart when the setting changes. The
+permission dialog and Manage Plugins show **Network blocked by Xuan (Linux)**
+for such plugins, and the plugin's log starts with a note saying the network
+is blocked. A blocked call is not reported otherwise.
+
+If the filter cannot be used, because the kernel is older than Linux 4.14 or
+was built without seccomp, or because a container or another sandbox
+forbids it, the plugin does not start and the error says why. It is never
+run unfiltered while the setting is on.
+
+The filter keeps a plugin from opening network connections itself; it is
+not a full sandbox. The plugin still runs with your rights, and a program it
+reaches over a Unix socket (the D-Bus session bus, the systemd user manager,
+a local proxy or the Docker socket) can still connect, or start an
+unfiltered process, on its behalf. Plugins that declare hosts are never
+filtered: Xuan cannot limit them to their hosts, and the send prompt is
+their control.
 
 ## Manifest
 
@@ -141,7 +199,7 @@ command = ["python3", "main.py"]  # run inside the plugin folder
 protocol = 1                      # protocol version this plugin speaks
 
 [permissions]
-network = ["cloud.comfy.org"]     # hosts it says it connects to; not enforced, see "Network"
+network = ["cloud.comfy.org"]     # hosts it says it connects to (not enforced); see "Network"
 secrets = ["api_key"]             # settings of type "secret" it receives
 document = "edit"                 # "read" (default) or "edit"
 filesystem = "none"               # "none" (default), "read" or "write": where the host reads and writes for it
@@ -503,9 +561,9 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
   prompts, errors and proposals name the plugin with its id, for example
   `Mock (plugin mock)`.
 - Pixels never leave the user's machine unless the plugin sends them somewhere.
-  Xuan cannot prevent that; it asks before handing document data to a plugin
-  that declares network hosts, and offline mode keeps such plugins from
-  running (see [Network](#network)).
+  Xuan asks before handing document data to a plugin that declares network
+  hosts, offline mode keeps such plugins from running, and on Linux Xuan can
+  block the network of plugins that declare none (see [Network](#network)).
 - `host/run` may call the view commands `fit`, `actual`, `zoom_in` and
   `zoom_out`. A plugin that declares `document = "edit"` may also call
   commands that make one undoable document edit: `undo`, `redo`, `new_layer`,
