@@ -1,0 +1,60 @@
+[plugin]
+id = "select-bright"
+name = "Select Bright Areas"
+version = "0.1.0"
+description = "Select the bright parts of the image on this machine. A pure-Python placeholder for an ML segmentation model such as Select Subject."
+command = ["python3", "main.py"]
+protocol = 1
+
+# No network, no secrets, no document edits: the result is a mask the user
+# accepts as the selection, and changing the selection needs only "read".
+[permissions]
+document = "read"
+filesystem = "none"
+
+[[settings]]
+id = "backend"
+type = "text"
+label = "Backend"
+help = "luminance is built in. A name such as u2net loads backend_u2net.py from the plugin folder (see README.md)."
+default = "luminance"
+
+[[actions]]
+id = "select-bright"
+label = "Select Bright Areas…"
+menu = "Select"
+kind = "edit"
+source = { from = "composite", max_side = 1024 }
+description = "Select the parts of the image brighter than a threshold, with a soft edge. Everything stays on this computer."
+
+[[actions.inputs]]
+id = "threshold"
+type = "number"
+label = "Threshold"
+help = "Brightness, in percent, from which a pixel counts as selected."
+default = 60
+min = 0
+max = 100
+step = 1
+
+[[actions.inputs]]
+id = "softness"
+type = "number"
+label = "Softness"
+help = "Width of the partly selected band around the threshold, in percent. 0 gives a hard edge."
+default = 10
+min = 0
+max = 50
+step = 1
+
+[[actions.inputs]]
+id = "mode"
+type = "enum"
+label = "Selection"
+values = [
+  { id = "replace", label = "New selection" },
+  { id = "add", label = "Add to selection" },
+  { id = "subtract", label = "Subtract from selection" },
+  { id = "intersect", label = "Intersect with selection" },
+]
+default = "replace"

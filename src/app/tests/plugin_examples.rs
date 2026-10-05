@@ -19,6 +19,7 @@ fn bundled_plugins_load_with_their_shortcuts() {
         "histogram",
         "invert-regions",
         "local-upscale",
+        "select-bright",
     ]
     .map(example);
     app.install_plugins(manifests.to_vec(), vec![]);
@@ -129,6 +130,50 @@ mod unix {
         );
         app.stop_plugin("histogram");
         assert!(app.error.is_none(), "{:?}", app.error);
+    }
+
+    #[test]
+    fn select_bright_areas_proposes_a_selection_through_the_python_sdk() {
+        if !python() {
+            eprintln!("python3 not available; skipping");
+            return;
+        }
+        let (context, mut app) = app();
+        app.install_plugins(vec![example("select-bright")], vec![]);
+        app.grant_plugin("select-bright", true);
+        app.dimensions = [40, 30];
+        app.new_document();
+        // White on the left, black on the right.
+        app.brush.color = [255, 255, 255, 255];
+        app.command("fill_fg");
+        app.edit_selection("Right", |document| {
+            document.selection = Some(std::sync::Arc::new(image::GrayImage::from_fn(
+                40,
+                30,
+                |x, _| image::Luma([if x >= 20 { 255 } else { 0 }]),
+            )));
+        });
+        app.brush.color = [0, 0, 0, 255];
+        app.command("fill_fg");
+        let pixels = app.session().unwrap().document.layers[0].pixels.clone();
+        app.command("deselect");
+        app.start_plugin_action("select-bright", "select-bright");
+        app.run_plugin_action();
+        assert!(app.error.is_none(), "{:?}", app.error);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let selection = app.session().unwrap().document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(5, 15)[0], 255);
+        assert_eq!(selection.get_pixel(35, 15)[0], 0);
+        let message = app.plugins.proposal.as_ref().unwrap().message.clone();
+        assert_eq!(message.as_deref(), Some("Selected about 50% of the image"));
+        app.resolve_proposal(true);
+        let session = app.session().unwrap();
+        assert_eq!(session.history.undo_name(), Some("Select Bright Areas"));
+        assert_eq!(session.document.layers.len(), 1);
+        assert_eq!(session.document.layers[0].pixels, pixels);
+        app.stop_plugin("select-bright");
     }
 
     /// Needs `cargo build --release` in `plugins/invert-regions` first.
