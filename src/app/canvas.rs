@@ -798,7 +798,15 @@ impl EditorApp {
                 } else if self.tool == Tool::Dropper && !panning && self.gesture.is_none() {
                     let (pressed, down) =
                         ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
-                    if pressed && response.hovered() {
+                    if self.color_range.is_some() {
+                        // Select → Color Range picks its colours instead of the brush's.
+                        if pressed
+                            && response.hovered()
+                            && let Some(point) = doc_point
+                        {
+                            self.sample_color_range(point, modifiers);
+                        }
+                    } else if pressed && response.hovered() {
                         if let Some(point) = doc_point {
                             self.dropper_press(point);
                         }

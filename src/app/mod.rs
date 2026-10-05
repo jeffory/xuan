@@ -2,6 +2,7 @@ use xuan::i18n::tr;
 mod canvas;
 mod chrome;
 mod clipboard;
+mod color_range;
 mod commands;
 mod develop;
 mod develop_controls;
@@ -458,6 +459,9 @@ pub struct EditorApp {
     selection_amount: Option<selection_dialogs::AmountEdit>,
     expand_amount: u32,
     contract_amount: u32,
+    /// Select → Color Range…, while open; and the Fuzziness it remembers.
+    color_range: Option<color_range::ColorRangeEdit>,
+    color_range_fuzziness: u32,
     contiguous: bool,
     radial: bool,
     shape_kind: ShapeKind,
@@ -636,6 +640,8 @@ impl EditorApp {
             selection_amount: None,
             expand_amount: 2,
             contract_amount: 2,
+            color_range: None,
+            color_range_fuzziness: xuan::selection_ops::ColorRange::DEFAULT_FUZZINESS,
             contiguous: true,
             radial: false,
             shape_kind: ShapeKind::Rectangle,
@@ -1453,6 +1459,7 @@ impl EditorApp {
             "select_mask_black" => self.edit_selection(tr("Load Mask Selection"), |doc| {
                 operations::selection_from_mask_black(doc);
             }),
+            "color_range" => self.open_color_range(),
             "expand_selection" => {
                 self.open_selection_amount(selection_dialogs::AmountOperation::Expand)
             }
@@ -1696,6 +1703,7 @@ impl EditorApp {
             self.sidebar(ctx);
             self.canvas(ctx);
             self.plugin_action_dialog(ctx);
+            self.color_range_dialog(ctx);
             self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
@@ -1707,6 +1715,7 @@ impl EditorApp {
         }
         if self.gesture.is_none()
             && self.effect.is_none()
+            && self.color_range.is_none()
             && self.layer_effects.is_none()
             && self.text_edit.is_none()
             && self.job.is_none()

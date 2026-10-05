@@ -352,7 +352,7 @@ fn not_developing(app: &EditorApp) -> bool {
 }
 /// A document is open in the editor.
 fn editing(app: &EditorApp) -> bool {
-    app.develop.is_none() && app.session().is_some()
+    app.develop.is_none() && app.session().is_some() && app.color_range.is_none()
 }
 fn develop_ready(app: &EditorApp) -> bool {
     app.develop.as_ref().is_some_and(|d| d.ready())
@@ -665,6 +665,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .when(image_layer)
         .aliases(&["alpha", "opacity", "transparency"]),
     cmd("select_mask_black", "Select Mask's Black Areas", C::Select).when(masked_layer),
+    cmd("color_range", "Color Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
     cmd("expand_selection", "Expand Selection…", C::Select)
         .when(has_selection)
         .aliases(&["grow", "dilate"]),

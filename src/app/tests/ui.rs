@@ -993,3 +993,83 @@ mod about {
         ui.click("Copy version");
     }
 }
+
+mod color_range {
+    use super::*;
+
+    fn halves() -> UiTest {
+        let mut ui = UiTest::with_document();
+        let pixels = RgbaImage::from_fn(20, 16, |x, _| {
+            image::Rgba(if x < 10 {
+                [220, 20, 20, 255]
+            } else {
+                [20, 20, 220, 255]
+            })
+        });
+        ui.app_mut()
+            .session_mut()
+            .unwrap()
+            .document
+            .insert(Layer::image("Halves", pixels));
+        ui.settle();
+        ui
+    }
+
+    fn at(ui: &UiTest, x: f32, y: f32) -> egui::Pos2 {
+        let session = ui.app().session().unwrap();
+        ui.app().canvas_rect.unwrap().min + Vec2::new(x, y) * session.zoom
+    }
+
+    fn selected(ui: &UiTest) -> Option<Vec<u8>> {
+        let session = ui.app().session().unwrap();
+        session
+            .document
+            .selection
+            .as_ref()
+            .map(|s| s.as_raw().clone())
+    }
+
+    #[test]
+    fn picking_a_colour_previews_the_selection_and_ok_keeps_it() {
+        let mut ui = halves();
+        let revision = ui.app().session().unwrap().history.revision;
+        ui.open_menu("Select");
+        ui.click("Color Range…");
+        assert!(ui.app().color_range.is_some());
+        assert!(ui.has("Fuzziness"));
+        // The menus' commands wait while the dialog is open.
+        assert!(!(commands::find("select_all").unwrap().enabled)(ui.app()));
+        let pos = at(&ui, 3.5, 4.5);
+        ui.click_at(pos);
+        let left: Vec<u8> = (0..20 * 16)
+            .map(|i| if i % 20 < 10 { 255 } else { 0 })
+            .collect();
+        assert_eq!(selected(&ui), Some(left.clone()));
+        ui.click_role(Role::CheckBox, "Invert");
+        let right: Vec<u8> = left.iter().map(|v| 255 - v).collect();
+        assert_eq!(selected(&ui), Some(right.clone()));
+        ui.click("OK");
+        assert!(ui.app().color_range.is_none());
+        assert_eq!(selected(&ui), Some(right));
+        assert_eq!(ui.app().session().unwrap().history.revision, revision + 1);
+        // The tool from before is back.
+        assert_ne!(ui.app().tool, Tool::Dropper);
+    }
+
+    #[test]
+    fn cancel_puts_back_the_old_selection() {
+        let mut ui = halves();
+        ui.open_menu("Select");
+        ui.click("Color Range…");
+        let pos = at(&ui, 15.5, 4.5);
+        ui.click_at(pos);
+        assert!(selected(&ui).is_some());
+        ui.click("Cancel");
+        assert!(ui.app().color_range.is_none());
+        assert_eq!(selected(&ui), None);
+        assert_ne!(
+            ui.app().session().unwrap().history.undo_name(),
+            Some("Color Range")
+        );
+    }
+}

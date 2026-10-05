@@ -51,7 +51,7 @@ impl EditorApp {
             .min_height(42.0)
             .frame(theme::frame())
             .show(ctx, |ui| {
-                ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
+                ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none() && self.color_range.is_none(), |ui| {
                     egui::ScrollArea::horizontal()
                         .id_salt("options_scroll")
                         .show(ui, |ui| {
@@ -416,28 +416,35 @@ impl EditorApp {
                     .inner_margin(egui::Margin::symmetric(10, 16)),
             )
             .show(ctx, |ui| {
-                ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
-                    egui::ScrollArea::vertical()
-                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.y = 5.0;
-                            for t in Tool::ALL {
-                                if t == Tool::Region && self.plugins.action.is_none() {
-                                    continue;
+                ui.add_enabled_ui(
+                    self.dialog.is_none() && self.job.is_none() && self.color_range.is_none(),
+                    |ui| {
+                        egui::ScrollArea::vertical()
+                            .scroll_bar_visibility(
+                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                            )
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 5.0;
+                                for t in Tool::ALL {
+                                    if t == Tool::Region && self.plugins.action.is_none() {
+                                        continue;
+                                    }
+                                    let shortcut = super::commands::tool_command(t)
+                                        .map(|id| self.keymap.shortcut(id))
+                                        .unwrap_or_default();
+                                    if icons::tool_button(ui, t, self.tool == t, &shortcut)
+                                        .clicked()
+                                    {
+                                        tool = Some(t);
+                                    }
                                 }
-                                let shortcut = super::commands::tool_command(t)
-                                    .map(|id| self.keymap.shortcut(id))
-                                    .unwrap_or_default();
-                                if icons::tool_button(ui, t, self.tool == t, &shortcut).clicked() {
-                                    tool = Some(t);
-                                }
-                            }
-                            ui.add_space(8.0);
-                            ui.separator();
-                            ui.add_space(5.0);
-                            widgets::palette(ui, &mut self.brush.color, &mut self.background);
-                        });
-                });
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(5.0);
+                                widgets::palette(ui, &mut self.brush.color, &mut self.background);
+                            });
+                    },
+                );
             });
         if let Some(tool) = tool {
             self.set_tool(tool);

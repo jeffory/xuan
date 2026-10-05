@@ -882,3 +882,12 @@ Select Layer's Pixels	选择图层像素
 Select Mask's Black Areas	选择蒙版黑色区域
 Expand Selection…	扩展选区…
 Contract Selection…	收缩选区…
+Color Range	色彩范围
+Color Range…	色彩范围…
+Pick	拾取
+Remove	移除
+Fuzziness	容差
+Shift-click adds a colour, Alt-click takes one away.	按住 Shift 点按添加颜色，按住 Alt 点按移除颜色。
+Click the image to pick the colour to select.	点按图像以拾取要选择的颜色。
+How far a colour may be from the picked ones and still be selected	颜色与所拾取颜色相差多少仍会被选中
+Select everything except those colours, such as all but a green screen	选择这些颜色以外的全部内容，例如绿幕以外的部分

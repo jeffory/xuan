@@ -274,21 +274,33 @@ impl ColorRange {
 
     /// The selection over `image` (straight RGBA): fully transparent pixels never match.
     pub fn mask(&self, image: &RgbaImage) -> GrayImage {
+        use rayon::prelude::*;
         let mut output = GrayImage::new(image.width(), image.height());
-        for (pixel, out) in image.pixels().zip(output.as_mut()) {
-            let [r, g, b, a] = pixel.0;
-            let mut value = if a == 0 || self.include.is_empty() {
-                0.0
-            } else {
-                let rgb = [r, g, b];
-                self.closeness(rgb, &self.include) * (1.0 - self.closeness(rgb, &self.exclude))
-            };
-            if self.invert {
-                value = 1.0 - value;
-            }
-            *out = (value * 255.0).round() as u8;
-        }
+        let width = image.width().max(1) as usize;
         output
+            .as_mut()
+            .par_chunks_mut(width)
+            .zip(image.as_raw().par_chunks(width * 4))
+            .for_each(|(row, pixels)| {
+                for (out, pixel) in row.iter_mut().zip(pixels.as_chunks::<4>().0) {
+                    *out = self.value(*pixel);
+                }
+            });
+        output
+    }
+
+    /// The selection level of one straight RGBA pixel.
+    pub fn value(&self, [r, g, b, a]: [u8; 4]) -> u8 {
+        let mut value = if a == 0 || self.include.is_empty() {
+            0.0
+        } else {
+            let rgb = [r, g, b];
+            self.closeness(rgb, &self.include) * (1.0 - self.closeness(rgb, &self.exclude))
+        };
+        if self.invert {
+            value = 1.0 - value;
+        }
+        (value * 255.0).round() as u8
     }
 }
 

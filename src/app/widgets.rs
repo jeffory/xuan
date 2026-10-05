@@ -903,6 +903,8 @@ pub struct Window<'a> {
     open: Option<&'a mut bool>,
     width: f32,
     id: Option<egui::Id>,
+    /// Where the window first shows: centred unless set.
+    place: Option<(egui::Align2, egui::Pos2)>,
 }
 impl<'a> Window<'a> {
     pub fn new(title: impl ToString) -> Self {
@@ -911,7 +913,14 @@ impl<'a> Window<'a> {
             open: None,
             width: 410.0,
             id: None,
+            place: None,
         }
+    }
+    /// Shows the window first with its `pivot` corner at `pos`, for panels that leave
+    /// the canvas free to click on.
+    pub fn default_place(mut self, pivot: egui::Align2, pos: egui::Pos2) -> Self {
+        self.place = Some((pivot, pos));
+        self
     }
     pub fn id(mut self, id: impl std::hash::Hash) -> Self {
         self.id = Some(egui::Id::new(id));
@@ -934,8 +943,8 @@ impl<'a> Window<'a> {
             .id(self.id.unwrap_or_else(|| egui::Id::new(&self.title)))
             .title_bar(false)
             .auto_sized()
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.content_rect().center())
+            .pivot(self.place.map_or(egui::Align2::CENTER_CENTER, |p| p.0))
+            .default_pos(self.place.map_or(ctx.content_rect().center(), |p| p.1))
             .default_width(self.width)
             .frame(egui::Frame::window(&ctx.style()).inner_margin(0))
             .show(ctx, |ui| {

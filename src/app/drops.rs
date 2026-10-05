@@ -18,6 +18,7 @@ impl EditorApp {
     /// True while something else owns the window and keyboard shortcuts and drops must wait.
     pub(super) fn drops_blocked(&self) -> bool {
         self.dialog.is_some()
+            || self.color_range.is_some()
             || !self.photoshop_imports.is_empty()
             || self.develop_close_requested.is_some()
             || self.job.is_some()

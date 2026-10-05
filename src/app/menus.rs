@@ -420,6 +420,7 @@ impl EditorApp {
                                     "select_mask_black",
                                     &mut action,
                                 );
+                                item(ui, &items, "color_range", &mut action);
                                 item(ui, &items, "load_selection", &mut action);
                                 ui.separator();
                                 labelled(

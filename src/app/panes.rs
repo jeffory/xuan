@@ -73,7 +73,7 @@ impl EditorApp {
     }
 
     pub(super) fn sidebar(&mut self, ctx: &egui::Context) {
-        let enabled = self.dialog.is_none() && self.job.is_none();
+        let enabled = self.dialog.is_none() && self.job.is_none() && self.color_range.is_none();
         let known = |id: &str| self.pane_title(id).is_some();
         let fill = self.config.panes.fill_pane(&known).map(str::to_owned);
         let entries: Vec<Entry> = self
