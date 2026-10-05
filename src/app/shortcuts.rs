@@ -1,6 +1,111 @@
 use super::{EditorApp, Tool};
-use egui::{Event, Key, Modifiers};
-use xuan::i18n::tr;
+use egui::{Event, InputState, Key, Modifiers};
+use xuan::{i18n::tr, plugins::manifest::Shortcut};
+
+const CTRL: Modifiers = Modifiers::CTRL;
+const CTRL_SHIFT: Modifiers = Modifiers::CTRL.plus(Modifiers::SHIFT);
+const CTRL_ALT: Modifiers = Modifiers::CTRL.plus(Modifiers::ALT);
+
+/// Built-in command chords. Each is matched with its exact modifiers, so the
+/// order does not matter and Ctrl+Shift+I never runs Ctrl+I's command.
+const COMMANDS: &[(Modifiers, Key, &str)] = &[
+    (CTRL_ALT.plus(Modifiers::SHIFT), Key::S, "export"),
+    (CTRL_SHIFT, Key::N, "new_layer"),
+    (CTRL_SHIFT, Key::O, "import"),
+    (CTRL_SHIFT, Key::S, "save_as"),
+    (CTRL_SHIFT, Key::Z, "redo"),
+    (CTRL_SHIFT, Key::C, "copy_merged"),
+    (CTRL_SHIFT, Key::G, "ungroup"),
+    (CTRL_SHIFT, Key::I, "invert_selection"),
+    (CTRL_ALT, Key::G, "clip"),
+    (CTRL, Key::Comma, "settings"),
+    (CTRL, Key::N, "new"),
+    (CTRL, Key::O, "open"),
+    (CTRL, Key::S, "save"),
+    (CTRL, Key::W, "close"),
+    (CTRL, Key::Q, "quit"),
+    (CTRL, Key::Z, "undo"),
+    (CTRL, Key::Y, "redo"),
+    (CTRL, Key::J, "duplicate"),
+    (CTRL, Key::G, "group"),
+    (CTRL, Key::E, "merge"),
+    (CTRL, Key::A, "select_all"),
+    (CTRL, Key::D, "deselect"),
+    (CTRL, Key::I, "invert"),
+    (CTRL, Key::L, "levels"),
+    (CTRL, Key::U, "hue"),
+    (CTRL, Key::M, "curves"),
+    (CTRL, Key::C, "copy"),
+    (CTRL, Key::X, "cut"),
+    (CTRL, Key::V, "paste"),
+    (CTRL, Key::Num0, "fit"),
+    (CTRL, Key::Num1, "actual"),
+    (CTRL, Key::Plus, "zoom_in"),
+    (CTRL, Key::Equals, "zoom_in"),
+    (CTRL, Key::Minus, "zoom_out"),
+    (Modifiers::ALT, Key::Backspace, "fill_fg"),
+    (CTRL, Key::Backspace, "fill_bg"),
+];
+
+/// Built-in chords handled outside [`COMMANDS`], with what they do.
+const OTHER_CHORDS: &[(Modifiers, Key, &str)] = &[
+    (CTRL, Key::H, "hide_controls"),
+    (CTRL, Key::T, "show_transform"),
+    (CTRL, Key::Enter, "apply_text"),
+    (Modifiers::SHIFT, Key::F5, "content_fill"),
+    (Modifiers::NONE, Key::F1, "shortcuts"),
+];
+
+/// Whether pressed modifiers match a chord exactly. Shift is ignored for keys
+/// that need it on common layouts, such as `+`.
+fn chord_matches(pressed: Modifiers, mods: Modifiers, key: Key) -> bool {
+    if key == Key::Plus {
+        pressed.matches_logically(mods)
+    } else {
+        pressed.matches_exact(mods)
+    }
+}
+
+/// Like [`InputState::consume_key`], but extra Shift or Alt makes a different chord.
+pub(super) fn consume_exact(input: &mut InputState, mods: Modifiers, key: Key) -> bool {
+    let mut found = false;
+    input.events.retain(|event| {
+        let hit = !found
+            && matches!(
+                event,
+                Event::Key { key: k, modifiers: m, pressed: true, .. }
+                    if *k == key && chord_matches(*m, mods, key)
+            );
+        found |= hit;
+        !hit
+    });
+    found
+}
+
+/// The egui chord for a plugin shortcut, or `None` for a key egui does not know.
+pub(super) fn plugin_chord(shortcut: &Shortcut) -> Option<(Modifiers, Key)> {
+    let key = Key::from_name(&shortcut.key)?;
+    let mut mods = Modifiers::NONE;
+    if shortcut.ctrl {
+        mods = mods.plus(CTRL);
+    }
+    if shortcut.shift {
+        mods = mods.plus(Modifiers::SHIFT);
+    }
+    if shortcut.alt {
+        mods = mods.plus(Modifiers::ALT);
+    }
+    Some((mods, key))
+}
+
+/// The built-in command that already owns this chord, if any.
+pub(super) fn builtin_for(mods: Modifiers, key: Key) -> Option<&'static str> {
+    COMMANDS
+        .iter()
+        .chain(OTHER_CHORDS)
+        .find(|&&(m, k, _)| k == key && chord_matches(mods, m, key))
+        .map(|(_, _, command)| *command)
+}
 
 impl EditorApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -44,48 +149,8 @@ impl EditorApp {
 
         let pressed = |key| ctx.input(|i| i.key_pressed(key));
         let modifiers = ctx.input(|i| i.modifiers);
-        let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
-        let ctrl = Modifiers::CTRL;
-        let shift = Modifiers::CTRL | Modifiers::SHIFT;
-        for (mods, key, command) in [
-            (ctrl | Modifiers::ALT | Modifiers::SHIFT, Key::S, "export"),
-            (shift, Key::N, "new_layer"),
-            (shift, Key::O, "import"),
-            (shift, Key::S, "save_as"),
-            (shift, Key::Z, "redo"),
-            (shift, Key::C, "copy_merged"),
-            (shift, Key::G, "ungroup"),
-            (shift, Key::I, "invert_selection"),
-            (ctrl | Modifiers::ALT, Key::G, "clip"),
-            (ctrl, Key::Comma, "settings"),
-            (ctrl, Key::N, "new"),
-            (ctrl, Key::O, "open"),
-            (ctrl, Key::S, "save"),
-            (ctrl, Key::W, "close"),
-            (ctrl, Key::Q, "quit"),
-            (ctrl, Key::Z, "undo"),
-            (ctrl, Key::Y, "redo"),
-            (ctrl, Key::J, "duplicate"),
-            (ctrl, Key::G, "group"),
-            (ctrl, Key::E, "merge"),
-            (ctrl, Key::A, "select_all"),
-            (ctrl, Key::D, "deselect"),
-            (ctrl, Key::I, "invert"),
-            (ctrl, Key::L, "levels"),
-            (ctrl, Key::U, "hue"),
-            (ctrl, Key::M, "curves"),
-            (ctrl, Key::C, "copy"),
-            (ctrl, Key::X, "cut"),
-            (ctrl, Key::V, "paste"),
-            (ctrl, Key::Num0, "fit"),
-            (ctrl, Key::Num1, "actual"),
-            (ctrl, Key::Plus, "zoom_in"),
-            (ctrl, Key::Equals, "zoom_in"),
-            (ctrl, Key::Minus, "zoom_out"),
-            (Modifiers::ALT, Key::Backspace, "fill_fg"),
-            (ctrl, Key::Backspace, "fill_bg"),
-        ] {
-            if consume(mods, key) {
+        for &(mods, key, command) in COMMANDS {
+            if ctx.input_mut(|i| consume_exact(i, mods, key)) {
                 self.command(command);
                 return;
             }

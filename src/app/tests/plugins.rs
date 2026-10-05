@@ -366,3 +366,103 @@ fn ungranted_plugins_ask_for_permission_before_running() {
     assert!(app.pane_title("plugin:mock/info").is_none());
     assert!(app.plugin_menu_items().is_empty());
 }
+
+#[test]
+fn shortcuts_match_their_modifiers_exactly() {
+    use super::shortcuts::{builtin_for, consume_exact};
+    use egui::{Key, Modifiers};
+    let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
+    let press = |modifiers: Modifiers, key: Key| {
+        let mut input = egui::InputState::default();
+        input.events.push(text_key(key, modifiers));
+        input
+    };
+    // Ctrl+Shift+I is not Ctrl+I, and Ctrl+E is not Ctrl+Shift+E.
+    let mut input = press(ctrl_shift, Key::I);
+    assert!(!consume_exact(&mut input, Modifiers::CTRL, Key::I));
+    assert!(consume_exact(&mut input, ctrl_shift, Key::I));
+    assert!(input.events.is_empty());
+    let mut input = press(Modifiers::CTRL, Key::E);
+    assert!(!consume_exact(&mut input, ctrl_shift, Key::E));
+    assert!(consume_exact(&mut input, Modifiers::CTRL, Key::E));
+    let mut input = press(Modifiers::CTRL | Modifiers::ALT, Key::E);
+    assert!(!consume_exact(&mut input, Modifiers::CTRL, Key::E));
+    // `+` needs Shift on many layouts.
+    let mut input = press(ctrl_shift, Key::Plus);
+    assert!(consume_exact(&mut input, Modifiers::CTRL, Key::Plus));
+
+    assert_eq!(builtin_for(ctrl_shift, Key::I), Some("invert_selection"));
+    assert_eq!(builtin_for(Modifiers::CTRL, Key::I), Some("invert"));
+    assert_eq!(builtin_for(Modifiers::CTRL, Key::E), Some("merge"));
+    assert_eq!(builtin_for(Modifiers::CTRL, Key::H), Some("hide_controls"));
+    assert_eq!(builtin_for(Modifiers::NONE, Key::F1), Some("shortcuts"));
+    assert_eq!(builtin_for(ctrl_shift, Key::E), None);
+    assert_eq!(builtin_for(Modifiers::CTRL | Modifiers::ALT, Key::I), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_shortcuts_are_not_swallowed_by_builtins_and_collisions_are_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    assert!(app.plugins.errors.is_empty(), "{:?}", app.plugins.errors);
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    let steps = app.session().unwrap().history.names().count();
+    let ctrl_shift = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+
+    // Ctrl+Shift+E reaches the plugin instead of Merge (Ctrl+E).
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::E, ctrl_shift)],
+        ctrl_shift,
+    );
+    assert!(app.plugins.action.is_some(), "{:?}", app.error);
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+    app.close_plugin_action();
+
+    // A plugin chord that Xuan already uses is reported and left out.
+    let colliding = MANIFEST.replace("Ctrl+Shift+E", "Ctrl+Shift+I");
+    std::fs::write(dir.path().join("plugin.toml"), colliding).unwrap();
+    app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+    assert!(app.plugins.shortcuts.is_empty());
+    assert_eq!(app.plugins.errors.len(), 1);
+    let error = &app.plugins.errors[0].error;
+    assert!(
+        error.contains("Ctrl+Shift+I") && error.contains("invert_selection"),
+        "{error}"
+    );
+    let items = app.plugin_menu_items();
+    assert_eq!(items[&xuan::plugins::manifest::Menu::Filter][0].3, "");
+
+    // The built-in keeps working and the plugin does not start.
+    app.command("select_all");
+    let steps = app.session().unwrap().history.names().count();
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::I, ctrl_shift)],
+        ctrl_shift,
+    );
+    assert!(app.plugins.action.is_none());
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    assert_eq!(session.history.undo_name(), Some("Invert Selection"));
+
+    // Two plugins cannot share a chord either.
+    let other = tempfile::tempdir().unwrap();
+    let first = Manifest::parse(&MANIFEST.replace("Ctrl+Shift+E", "Ctrl+Alt+E"), dir.path());
+    let second = Manifest::parse(
+        &MANIFEST
+            .replace("Ctrl+Shift+E", "Ctrl+Alt+E")
+            .replace("id = \"mock\"", "id = \"mock2\""),
+        other.path(),
+    );
+    app.install_plugins(vec![first.unwrap(), second.unwrap()], vec![]);
+    assert_eq!(app.plugins.shortcuts.len(), 1);
+    assert!(app.plugins.errors[0].error.contains("mock/echo"));
+}

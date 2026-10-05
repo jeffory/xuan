@@ -10,7 +10,7 @@ command = ["target/release/invert-regions"]
 id = "invert"
 label = "Invert Regions…"
 menu = "Filter"
-shortcut = "Ctrl+Shift+I"
+shortcut = "Ctrl+Alt+I"
 description = "Draw boxes over the parts to invert. With no boxes, the whole layer is inverted."
 source = { from = "layer", crop_to_regions = true, padding = 0.1 }
 result = { into = "layer", mask_to_regions = true }

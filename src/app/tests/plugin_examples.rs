@@ -48,6 +48,20 @@ fn find<'a>(node: &'a Node, wanted: &str) -> Option<&'a Node> {
     }
 }
 
+#[test]
+fn bundled_plugins_load_with_their_shortcuts() {
+    let (_context, mut app) = app();
+    let manifests = ["comfy-cloud", "histogram", "invert-regions"].map(example);
+    app.install_plugins(manifests.to_vec(), vec![]);
+    assert!(app.plugins.errors.is_empty(), "{:?}", app.plugins.errors);
+    assert!(
+        app.plugins
+            .shortcuts
+            .iter()
+            .any(|(_, plugin, _)| plugin == "invert-regions")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn histogram_pane_renders_through_the_python_sdk() {

@@ -78,7 +78,7 @@ max = 8192
 id = "precise-edit"
 label = "Ideogram Precise Edit…"
 menu = "Filter"                   # File, Edit, Image, Layer, Select, Filter or Plugins (default)
-shortcut = "Ctrl+Shift+E"         # optional default; the user can change it later
+shortcut = "Ctrl+Alt+E"           # optional; see "Shortcuts" below
 kind = "edit"                     # "edit" needs an image, "generate" does not, "command" returns nothing
 source = { from = "layer", max_side = 2048, crop_to_regions = true, padding = 0.25 }
 result = { into = "layer", mask_to_regions = true }
@@ -127,6 +127,16 @@ never implements that dialog. Types: `text`, `multiline`, `integer`, `number`,
 Xuan creates with owner-only permissions on Unix. A plugin receives its settings
 with `initialize` and again through `settings/changed`; secrets are included
 only when the manifest lists them under `permissions.secrets`.
+
+### Shortcuts
+
+An action's `shortcut` names `Ctrl`, `Shift` and `Alt` modifiers and one key,
+such as `Ctrl+Alt+E`. Letters, digits and other keys need Ctrl or Alt; only the
+function keys `F1`–`F24` may be used alone or with Shift. Chords match their
+modifiers exactly, so `Ctrl+Shift+E` and `Ctrl+E` are different shortcuts. A
+shortcut Xuan already uses (see [SHORTCUTS.md](SHORTCUTS.md)), or that an
+earlier plugin claimed, is ignored and reported in **Plugins → Manage
+Plugins…**; the action stays available from its menu.
 
 ### Action inputs
 

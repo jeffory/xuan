@@ -25,7 +25,7 @@ use xuan::{
     },
 };
 
-use super::{Dialog, EditorApp, Session, Tool};
+use super::{Dialog, EditorApp, Session, Tool, shortcuts};
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -155,15 +155,8 @@ impl PluginState {
         self.processes
             .retain(|id, _| manifests.iter().any(|m| &m.plugin.id == id));
         self.panes.clear();
-        self.shortcuts = manifests
-            .iter()
-            .flat_map(|manifest| {
-                manifest.actions.iter().filter_map(|action| {
-                    let shortcut = Shortcut::parse(action.shortcut.as_deref()?).ok()?;
-                    Some((shortcut, manifest.plugin.id.clone(), action.id.clone()))
-                })
-            })
-            .collect();
+        let mut errors = errors;
+        self.shortcuts = plugin_shortcuts(&manifests, &mut errors);
         self.manifests = manifests;
         self.errors = errors;
     }
@@ -718,11 +711,12 @@ impl EditorApp {
                 continue;
             }
             for action in &manifest.actions {
-                let shortcut = action
-                    .shortcut
-                    .as_deref()
-                    .and_then(|s| Shortcut::parse(s).ok())
-                    .map(|s| s.to_string())
+                let shortcut = self
+                    .plugins
+                    .shortcuts
+                    .iter()
+                    .find(|(_, p, a)| *p == manifest.plugin.id && *a == action.id)
+                    .map(|(s, ..)| s.to_string())
                     .unwrap_or_default();
                 items.entry(action.menu).or_default().push((
                     action.label.clone(),
@@ -1584,20 +1578,61 @@ impl EditorApp {
     /// A plugin shortcut pressed this frame, if any.
     pub(super) fn plugin_shortcut(&self, ctx: &egui::Context) -> Option<(String, String)> {
         for (shortcut, plugin, action) in &self.plugins.shortcuts {
-            let Some(key) = egui::Key::from_name(&shortcut.key) else {
+            if !self.plugin_enabled(plugin) {
+                continue;
+            }
+            let Some((mods, key)) = shortcuts::plugin_chord(shortcut) else {
                 continue;
             };
-            let mut modifiers = egui::Modifiers::NONE;
-            modifiers.ctrl = shortcut.ctrl;
-            modifiers.command = shortcut.ctrl;
-            modifiers.shift = shortcut.shift;
-            modifiers.alt = shortcut.alt;
-            if ctx.input_mut(|i| i.consume_key(modifiers, key)) {
+            if ctx.input_mut(|i| shortcuts::consume_exact(i, mods, key)) {
                 return Some((plugin.clone(), action.clone()));
             }
         }
         None
     }
+}
+
+/// The usable action shortcuts of the plugins. Shortcuts that name an unknown
+/// key or a chord Xuan or an earlier plugin already uses are left out and
+/// reported with the plugins' load errors.
+fn plugin_shortcuts(
+    manifests: &[Manifest],
+    errors: &mut Vec<LoadError>,
+) -> Vec<(Shortcut, String, String)> {
+    let mut taken: Vec<((egui::Modifiers, egui::Key), String)> = Vec::new();
+    let mut shortcuts = Vec::new();
+    for manifest in manifests {
+        for action in &manifest.actions {
+            let Some(Ok(shortcut)) = action.shortcut.as_deref().map(Shortcut::parse) else {
+                continue;
+            };
+            // Like the manifest errors beside it, this is plugin-author facing.
+            let mut report = |problem: String| {
+                errors.push(LoadError {
+                    dir: manifest.dir.clone(),
+                    error: format!(
+                        "action `{}`: shortcut {shortcut} {problem}; it is ignored",
+                        action.id
+                    ),
+                })
+            };
+            let Some(chord) = shortcuts::plugin_chord(&shortcut) else {
+                report("names a key Xuan does not know".into());
+                continue;
+            };
+            if let Some(command) = shortcuts::builtin_for(chord.0, chord.1) {
+                report(format!("is already used by Xuan ({command})"));
+                continue;
+            }
+            if let Some((_, owner)) = taken.iter().find(|(c, _)| *c == chord) {
+                report(format!("is already used by {owner}"));
+                continue;
+            }
+            taken.push((chord, format!("{}/{}", manifest.plugin.id, action.id)));
+            shortcuts.push((shortcut, manifest.plugin.id.clone(), action.id.clone()));
+        }
+    }
+    shortcuts
 }
 
 /// Regions stored on a generated layer: document coordinates plus fields.
