@@ -395,10 +395,7 @@ impl Shortcut {
                 }
             } else {
                 ensure!(!part.is_empty(), "shortcut `{text}` has no key");
-                let function_key = part.len() <= 3
-                    && part.starts_with(['f', 'F'])
-                    && part[1..].bytes().all(|b| b.is_ascii_digit());
-                shortcut.key = if part.chars().count() == 1 || function_key {
+                shortcut.key = if part.chars().count() == 1 || function_key(part).is_some() {
                     part.to_ascii_uppercase()
                 } else {
                     part.to_owned()
@@ -406,11 +403,26 @@ impl Shortcut {
             }
         }
         ensure!(
-            shortcut.ctrl || shortcut.alt || shortcut.key.starts_with('F'),
+            shortcut.ctrl || shortcut.alt || shortcut.is_function_key(),
             "shortcut `{text}` needs Ctrl or Alt"
         );
         Ok(shortcut)
     }
+
+    /// Whether the key is one of F1–F24, the only keys usable without Ctrl or Alt.
+    pub fn is_function_key(&self) -> bool {
+        function_key(&self.key).is_some()
+    }
+}
+
+/// The number of a function key name `F1`–`F24` (either case).
+fn function_key(name: &str) -> Option<u8> {
+    let digits = name.strip_prefix(['f', 'F'])?;
+    if digits.is_empty() || digits.len() > 2 || digits.starts_with('0') {
+        return None;
+    }
+    let number: u8 = digits.parse().ok()?;
+    (1..=24).contains(&number).then_some(number)
 }
 
 impl std::fmt::Display for Shortcut {
@@ -673,6 +685,41 @@ import = true
         assert_eq!(Shortcut::parse("f5").unwrap().key, "F5");
         assert!(Shortcut::parse("E").is_err());
         assert!(Shortcut::parse("Meta+E").is_err());
+    }
+
+    #[test]
+    fn shortcuts_need_ctrl_or_alt_unless_they_are_function_keys() {
+        for (text, expected) in [
+            ("F1", Some("F1")),
+            ("f5", Some("F5")),
+            ("Shift+F12", Some("Shift+F12")),
+            ("F24", Some("F24")),
+            ("Ctrl+F", Some("Ctrl+F")),
+            ("Alt+f", Some("Alt+F")),
+            ("Ctrl+Shift+F", Some("Ctrl+Shift+F")),
+            ("Ctrl+F25", Some("Ctrl+F25")),
+            // Bare letters and digits, with or without Shift, would steal tool keys.
+            ("f", None),
+            ("F", None),
+            ("Shift+F", None),
+            ("Shift+f", None),
+            ("E", None),
+            ("1", None),
+            // Only F1–F24 are function keys.
+            ("F0", None),
+            ("F25", None),
+            ("F01", None),
+            ("F100", None),
+            ("Fx", None),
+            ("Shift+Fn", None),
+            ("", None),
+            ("Ctrl+", None),
+        ] {
+            let parsed = Shortcut::parse(text).ok().map(|s| s.to_string());
+            assert_eq!(parsed.as_deref(), expected, "{text:?}");
+        }
+        assert!(Shortcut::parse("F7").unwrap().is_function_key());
+        assert!(!Shortcut::parse("Ctrl+F").unwrap().is_function_key());
     }
 
     #[test]
