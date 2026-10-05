@@ -61,7 +61,9 @@
 //!   there if the interpreter cannot run.
 //! - read, write and delete ([`share`]): its data folder, its scratch
 //!   folder, which is also its `TEMP` and `TMP` ([`temp_env`]), and the
-//!   `work_dir` of each job, import and export.
+//!   `work_dir` of each job, import and export. A file-format plugin cannot
+//!   open the user's file itself, so the editor copies it into the import's
+//!   `work_dir`, and an export's file out of it.
 //!
 //! The entries stay, so a later start finds them and changes nothing, and so
 //! does the container profile.

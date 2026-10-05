@@ -155,10 +155,11 @@ folders (see [Files](#files)) unless `filesystem` allows more. It does not
 limit what the plugin process itself does, which runs with the user's rights:
 it can read any file the user can. A plugin that declares network hosts can
 contact any server, not only those; the permission dialog says so, and Xuan
-asks before it hands such a plugin document data. On Linux, a plugin that
-declares no hosts can be kept off the network altogether (see
-[Network](#network)); elsewhere, or with that setting off, nothing stops it
-from connecting either. Install plugins you trust.
+asks before it hands such a plugin document data. On Linux and Windows, a
+plugin that declares no hosts can be kept off the network altogether (see
+[Network](#network)), and on Windows that also keeps it out of your files;
+elsewhere, or with that setting off, nothing stops it from connecting either.
+Install plugins you trust.
 
 ### What `document` allows
 
@@ -192,7 +193,7 @@ changing `document` in a manifest asks the user to review the plugin again.
 
 A plugin that lists hosts under `permissions.network` is treated as one that
 sends data off the machine. A plugin that lists none gets no prompts; on
-Linux, Xuan can block its network (see [Blocking the
+Linux and Windows, Xuan can block its network (see [Blocking the
 network](#blocking-the-network)), otherwise nothing stops it from connecting.
 
 **Asking before sending.** When an action of such a plugin would send
@@ -243,7 +244,7 @@ why they are empty, their actions are disabled in the menus, the command
 palette and shortcuts, and their file formats are not offered. Plugins that
 declare no hosts keep working. Turning it off starts their panes again.
 Offline mode relies on the declaration, so together with blocking the network
-of the other plugins (below) it is a guarantee on Linux; without it, a
+of the other plugins (below) it is a guarantee on Linux and Windows; without it, a
 plugin that declares no hosts could still connect.
 
 #### Blocking the network
@@ -253,26 +254,43 @@ General** and at the bottom of **Plugins → Manage Plugins…**, is off by
 default for now. Once changed it is stored as `block_undeclared_network =
 true` (or `false`) in `config.toml`; while the key is absent the release's
 default applies, so a later release can turn it on for everyone who never
-chose. It works on Linux only (x86_64 and aarch64); elsewhere it is shown
-greyed out and has no effect.
+chose. It works on Linux (x86_64 and aarch64) and Windows; elsewhere it is
+shown greyed out and has no effect.
 
 While it is on, a plugin whose manifest lists no `permissions.network` hosts
-starts under a seccomp filter that Xuan installs in the plugin process just
-before it runs the plugin's command. The filter cannot be removed and is
-inherited by every process the plugin starts. In it:
+starts so that the operating system keeps it, and every process it starts,
+off the network. **This includes `localhost`**: a plugin that talks to a
+server on the same machine, such as ComfyUI or Ollama, must declare it, for
+example `network = ["localhost"]`, and is then treated as a network plugin.
+The standard input and output pipes Xuan talks to the plugin over are not
+network connections and keep working.
+
+Running plugins that declare no hosts restart when the setting changes. The
+permission dialog and Manage Plugins show **Network blocked by Xuan
+(Linux)** or **Network blocked by Xuan (Windows)** for such plugins, and the
+plugin's log starts with a note saying the network is blocked. A blocked
+connection is not reported otherwise.
+
+If Xuan cannot block a plugin's network, the plugin does not start and the
+error says why. It is never run unblocked while the setting is on.
+
+Plugins that declare hosts are never blocked: Xuan cannot limit them to
+their hosts, and the send prompt is their control.
+
+##### Linux
+
+The plugin starts under a seccomp filter that Xuan installs in the plugin
+process just before it runs the plugin's command. The filter cannot be
+removed and is inherited by every process the plugin starts. In it:
 
 - `socket()` and `socketpair()` fail with `EACCES` (Python raises
   `PermissionError`) for every address family except `AF_UNIX` and
   `AF_NETLINK`: TCP and UDP over IPv4 and IPv6, raw and packet sockets,
-  Bluetooth, VSOCK and the rest. **This includes `localhost`**: a plugin that
-  talks to a server on the same machine, such as ComfyUI or Ollama, must
-  declare it, for example `network = ["localhost"]`, and is then
-  treated as a network plugin.
+  Bluetooth, VSOCK and the rest, to `localhost` too.
 - Unix sockets (`AF_UNIX`) keep working, for local IPC and
-  `multiprocessing`; the standard input and output pipes Xuan talks to the
-  plugin over are not sockets and are not affected. Netlink sockets only talk to
-  the local kernel, never to another machine, and C libraries use them to
-  list network interfaces, so they stay allowed too.
+  `multiprocessing`. Netlink sockets only talk to the local kernel, never to
+  another machine, and C libraries use them to list network interfaces, so
+  they stay allowed too.
 - `io_uring_setup()` fails with `EACCES`, since an io_uring can open sockets
   without calling `socket()`.
 - The plugin and its subprocesses cannot gain privileges, for example through
@@ -281,23 +299,74 @@ inherited by every process the plugin starts. In it:
   0x80`, arm32 compat) kill the process, so 32-bit plugin programs do not run
   under the filter. The x32 syscall numbers are blocked like the native ones.
 
-Running plugins that declare no hosts restart when the setting changes. The
-permission dialog and Manage Plugins show **Network blocked by Xuan (Linux)**
-for such plugins, and the plugin's log starts with a note saying the network
-is blocked. A blocked call is not reported otherwise.
-
-If the filter cannot be used, because the kernel is older than Linux 4.14 or
-was built without seccomp, or because a container or another sandbox
-forbids it, the plugin does not start and the error says why. It is never
-run unfiltered while the setting is on.
+The filter cannot be used when the kernel is older than Linux 4.14 or was
+built without seccomp, or when a container or another sandbox forbids it.
 
 The filter keeps a plugin from opening network connections itself; it is
 not a full sandbox. The plugin still runs with your rights, and a program it
 reaches over a Unix socket (the D-Bus session bus, the systemd user manager,
 a local proxy or the Docker socket) can still connect, or start an
-unfiltered process, on its behalf. Plugins that declare hosts are never
-filtered: Xuan cannot limit them to their hosts, and the send prompt is
-their control.
+unfiltered process, on its behalf.
+
+##### Windows
+
+The plugin runs in an **AppContainer**, the sandbox of Microsoft Store apps,
+named `Xuan.Plugin.<id>` (a long id is shortened and followed by a hash).
+Xuan creates it the first time the plugin starts blocked, without any
+capabilities: neither `internetClient` nor `privateNetworkClientServer`.
+Windows then refuses the plugin's connections to other machines and to
+`localhost` alike (an AppContainer reaches loopback only with a firewall
+exemption, which needs administrator rights), and every process the plugin
+starts is in the same container. Creating a socket still works; connecting
+or sending fails, usually with `WSAEACCES` (10013). The plugin process is
+created suspended and joins the plugin's Job Object before it runs.
+
+An AppContainer also cannot open files the user can: only what its own SID,
+or **ALL APPLICATION PACKAGES**, is allowed in the files' access control
+lists. Before the plugin starts, Xuan adds inheritable entries for the
+container to:
+
+| Folder | Access |
+| --- | --- |
+| The plugin folder | Read and execute |
+| The folder of the program the command runs, if it is outside the plugin folder. For `python3`, the folder of the `python3.exe` found on `PATH`, which also holds the standard library (`Lib`, `DLLs`) | Read and execute |
+| For a virtual environment's `python.exe`, the base interpreter's folder (`home` in `pyvenv.cfg`) | Read and execute |
+| The plugin's data folder (`data_dir`) | Read, write and delete |
+| Its scratch folder, which is also its `TEMP` and `TMP` | Read, write and delete |
+| The `work_dir` of each job, import and export | Read, write and delete |
+
+A folder that already allows the container or ALL APPLICATION PACKAGES is
+left alone. That is the case for `C:\Windows` and `C:\Program Files`, so a
+Python installed for all users (under `C:\Program Files`) needs no change,
+and Xuan could not make one there without administrator rights. A Python
+installed for one user, under `%LOCALAPPDATA%\Programs\Python`, is given
+access to its folder; when that fails, the plugin still starts, its log
+says which folder could not be opened up, and the interpreter fails to run.
+The Microsoft Store Python and the `py` launcher do not work in the
+container; name the interpreter itself in the command. Batch files (`.bat`,
+`.cmd`) cannot be the command either.
+
+The entries stay after the plugin stops, so the next start changes nothing.
+The container profile stays too, also when the plugin is removed: it holds
+nothing, and its SID is allowed only into the folders above (an entry on a
+deleted plugin or work folder goes with the folder). Removing a profile by
+hand needs the `DeleteAppContainerProfile` API.
+
+In the container a plugin cannot:
+
+- read your documents or other files outside the folders above. For a
+  [file format](#file-formats) plugin, Xuan copies the file to open into a
+  folder of the import's `work_dir` and passes the copy as `path`; for an
+  export it passes a `path` of the same name there, and copies the file to
+  where you chose once the plugin answers.
+- write to its own folder: Python cannot cache bytecode (`__pycache__`)
+  there, which only slows its start, and a plugin that keeps state next to
+  its code must use `data_dir` instead.
+- reach the SDK outside its folder. The examples in this repository add
+  `../../sdk/python` to `sys.path`, which the container cannot read, so with
+  the setting on they fail with `ModuleNotFoundError: No module named
+  'xuan_plugin'` in their log. Copy `sdk/python/xuan_plugin.py` into the plugin folder
+  (next to `main.py`) to run them blocked.
 
 ## Manifest
 
@@ -920,7 +989,7 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
   size and SHA-256 before the plugin gets their path (see [Models](#models)).
 - Pixels never leave the user's machine unless the plugin sends them somewhere.
   Xuan asks before handing document data to a plugin that declares network
-  hosts, offline mode keeps such plugins from running, and on Linux Xuan can
+  hosts, offline mode keeps such plugins from running, and on Linux and Windows Xuan can
   block the network of plugins that declare none (see [Network](#network)).
 - `host/run` may call the view commands `fit`, `actual`, `zoom_in` and
   `zoom_out`. A plugin that declares `document = "edit"` may also call

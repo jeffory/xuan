@@ -161,8 +161,16 @@ pub(super) struct FormatJob {
 }
 
 enum FormatKind {
-    Import { path: PathBuf, as_layer: bool },
-    Export { path: PathBuf },
+    Import {
+        path: PathBuf,
+        as_layer: bool,
+    },
+    /// `staged` is where the plugin writes the file when it cannot write
+    /// `path` itself ([`EditorApp::staged_file`]); it is copied there after.
+    Export {
+        path: PathBuf,
+        staged: Option<PathBuf>,
+    },
 }
 
 /// Layers a job added that the user has not accepted yet.
@@ -643,6 +651,21 @@ impl EditorApp {
             sandbox::share(plugin, dir.path())?;
         }
         Ok(dir)
+    }
+
+    /// Where a plugin in an AppContainer, which cannot open the user's
+    /// files, reads or writes the file `path` of an import or export: a
+    /// file of the same name in a folder of the job's `work_dir`. `None`
+    /// for a plugin that opens `path` itself.
+    fn staged_file(&self, plugin: &str, work_dir: &Path, path: &Path) -> Result<Option<PathBuf>> {
+        if !(sandbox::CONFINES_FILES && self.plugin_network_blocked(plugin)) {
+            return Ok(None);
+        }
+        // A folder of its own: the work_dir already holds `image.png`.
+        let dir = work_dir.join("file");
+        std::fs::create_dir(&dir)?;
+        let name = path.file_name().context("The file has no name")?;
+        Ok(Some(dir.join(name)))
     }
 
     /// Start the plugin process if needed. Fails when it is not granted.
@@ -2324,7 +2347,13 @@ impl EditorApp {
             );
         }
         let work_dir = self.plugin_work_dir(plugin, "xuan-import-")?;
-        let params = json!({"format": format, "path": path, "work_dir": work_dir.path()});
+        let staged = self.staged_file(plugin, work_dir.path(), path)?;
+        if let Some(staged) = &staged {
+            std::fs::copy(path, staged)
+                .with_context(|| format!("Cannot read {}", path.display()))?;
+        }
+        let plugin_path = staged.as_deref().unwrap_or(path);
+        let params = json!({"format": format, "path": plugin_path, "work_dir": work_dir.path()});
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let label = format!("{} {name}", tr("Opening"));
         self.start_format_job(
@@ -2359,9 +2388,10 @@ impl EditorApp {
         }
         let work_dir = self.plugin_work_dir(plugin, "xuan-export-")?;
         let export = edits::export_composite(&document, None, work_dir.path(), "image.png")?;
+        let staged = self.staged_file(plugin, work_dir.path(), path)?;
         let params = json!({
             "format": format,
-            "path": path,
+            "path": staged.as_deref().unwrap_or(path),
             "image": export.path,
             "document": edits::describe(&document),
         });
@@ -2374,6 +2404,7 @@ impl EditorApp {
             label,
             FormatKind::Export {
                 path: path.to_path_buf(),
+                staged,
             },
             work_dir,
         )
@@ -2466,8 +2497,14 @@ impl EditorApp {
                     }
                 }
             }
-            FormatKind::Export { path } => match result {
-                Ok(_) => self.status = format!("{} {}", tr("Exported"), path.display()),
+            FormatKind::Export { path, staged } => match result.and_then(|_| {
+                staged.map_or(Ok(()), |staged| {
+                    std::fs::copy(&staged, &path)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                })
+            }) {
+                Ok(()) => self.status = format!("{} {}", tr("Exported"), path.display()),
                 Err(error) => {
                     self.error = Some(format!(
                         "{} {}\n\n{error}",

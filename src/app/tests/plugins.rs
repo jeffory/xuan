@@ -3567,3 +3567,118 @@ done
         assert!(!ui.app().plugins.running("mock"));
     }
 }
+
+/// A Python file-format plugin started in its AppContainer on Windows. It
+/// needs the Python of the CI job (`pythonLocation`); elsewhere it is skipped.
+#[cfg(windows)]
+mod windows {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    const MANIFEST: &str = r#"
+[plugin]
+id = "contained-format"
+name = "Contained"
+version = "0.1.0"
+command = ['PYTHON', "plugin.py"]
+
+[[formats]]
+id = "foo"
+label = "Foo image"
+extensions = ["foo"]
+import = true
+export = true
+"#;
+
+    /// Imports a `.foo` file, which holds a PNG, as one layer, and exports by
+    /// copying the image Xuan hands it. Both need the file the user chose,
+    /// which the container cannot open where it is.
+    const PLUGIN: &str = r#"
+import json, os, shutil, sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method, params = message.get("method"), message.get("params") or {}
+    if "id" not in message:
+        continue
+    if method == "initialize":
+        result = {"protocol": 1}
+    elif method == "format/import":
+        layer = os.path.join(params["work_dir"], "layer.png")
+        shutil.copyfile(params["path"], layer)
+        result = {"width": 8, "height": 8, "layers": [{"name": "Imported", "image": layer}]}
+    elif method == "format/export":
+        shutil.copyfile(params["image"], params["path"])
+        result = None
+    else:
+        result = None
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+    if method == "shutdown":
+        break
+"#;
+
+    fn run_until(
+        context: &egui::Context,
+        app: &mut EditorApp,
+        mut done: impl FnMut(&EditorApp) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done(app) {
+            assert!(
+                Instant::now() < deadline,
+                "timed out; error: {:?}; log: {:?}",
+                app.error,
+                app.plugins.log("contained-format")
+            );
+            frame(context, app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_blocked_format_plugin_opens_and_saves_files_it_cannot_reach() {
+        let Some(python) = std::env::var_os("pythonLocation")
+            .map(|dir| std::path::PathBuf::from(dir).join("python.exe"))
+            .filter(|path| path.is_file())
+        else {
+            assert!(std::env::var_os("CI").is_none(), "setup-python is missing");
+            eprintln!("skipped: no Python from setup-python (pythonLocation)");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("plugin.py"), PLUGIN).unwrap();
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            MANIFEST.replace("PYTHON", &python.display().to_string()),
+        )
+        .unwrap();
+        let (context, mut app) = app();
+        app.config.block_undeclared_network = Some(true);
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("contained-format", true);
+        assert!(app.plugin_network_blocked("contained-format"));
+
+        let file = files.path().join("picture.foo");
+        RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
+            .save_with_format(&file, image::ImageFormat::Png)
+            .unwrap();
+        app.open_path(&file, false);
+        run_until(&context, &mut app, |app| app.plugins.formats.is_empty());
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert_eq!(app.session().unwrap().title, "picture");
+        let log = app.plugins.log("contained-format");
+        assert_eq!(
+            log.first().map(String::as_str),
+            Some(xuan::plugins::sandbox::LOG_NOTE),
+            "{log:?}"
+        );
+
+        let out = files.path().join("out.foo");
+        app.start_plugin_export("contained-format", "foo", &out)
+            .unwrap();
+        run_until(&context, &mut app, |app| app.plugins.formats.is_empty());
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert_eq!(xuan::io::import_image(&out).unwrap().dimensions(), (8, 8));
+    }
+}

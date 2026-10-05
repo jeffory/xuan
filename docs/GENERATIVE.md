@@ -19,8 +19,8 @@ and **#7** (MCP server and client).
    Done in #39 for the cheap part: the grant dialog says `permissions.network`
    is not enforced, a per-run prompt asks before document data goes to a plugin
    that declares hosts, and offline mode disables such plugins. OS-level
-   enforcement for plugins that declare no hosts is done on Linux (#43, opt-in
-   for now); see the spike in section 5.
+   enforcement for plugins that declare no hosts is done on Linux (#43) and
+   Windows (#44), opt-in for now; see the spike in section 5.
 3. **Add three small host features that every generative plugin needs:** a
    result that declares its placed size (upscale), canvas extension (outpaint)
    and a `mask` output kind that becomes a selection (segmentation, #5).
@@ -201,9 +201,9 @@ local job with no network.
   Such a plugin can contact any host, not only those; the grant dialog says
   so in plain words (#39). For plugins that declare **no** hosts, Linux
   enforcement is done (#43): with "Block network for plugins that don't
-  declare it" on, they start under a seccomp filter (see "Blocking the
-  network" in [PLUGINS.md](PLUGINS.md#blocking-the-network)). Windows has
-  nothing yet; see the spike below.
+  declare it" on, they start under a seccomp filter, and on Windows (#44)
+  in an AppContainer without network capabilities (see "Blocking the
+  network" in [PLUGINS.md](PLUGINS.md#blocking-the-network)).
 - **"Pixels leave this machine" prompt.** Done in #39 (see "Network" in
   [PLUGINS.md](PLUGINS.md#network)): for a plugin that declares network hosts,
   each run that sends document data names the hosts and lists what is sent
@@ -215,7 +215,7 @@ local job with no network.
 - **Offline mode.** Done in #39: "Disable plugins that use the network" keeps
   plugins that declare hosts from starting. It relies on the declaration, so it
   is a guarantee only together with OS enforcement for the others, which
-  Linux has since #43.
+  Linux has since #43 and Windows since #44.
 - **Keyring.** Secrets are in a 0600 file (#33 F18). The keyring crates need a
   desktop secret service that headless sessions lack, so a file fallback must
   stay. Treat the keyring as an optional front end, later.
@@ -235,7 +235,8 @@ local job with no network.
 ### Spike: enforcing network access in the OS (#39)
 
 This compares the options for making `permissions.network` real. The Linux
-step of the recommendation below is done (#43); the Windows step is open. Two goals are possible: **no network at all** for plugins that declare no
+step of the recommendation below is done (#43), and so is the Windows step
+(#44). Two goals are possible: **no network at all** for plugins that declare no
 hosts, and **only the declared hosts** for the others. The second is much
 harder everywhere: hosts are names, the OS filters addresses, and CDNs share
 and rotate them, so an allow-list really needs a filtering HTTP(S) proxy that
@@ -272,14 +273,27 @@ a plugin that talks to a local ComfyUI or Ollama would have to declare
    after a release, set `BLOCK_UNDECLARED_NETWORK_DEFAULT` in
    `src/config.rs` to `true`: configurations store the setting only once
    the user changes it.
-3. On Windows, prototype AppContainer for the same "no network" case only once
-   the Linux path has proven the UX; ship it opt-in and document that
-   interpreters must be installed for all users. Skip WFP.
+3. **Done (#44).** On Windows, the same setting starts a plugin that declares
+   no hosts in a per-plugin AppContainer, `Xuan.Plugin.<id>`, created
+   without capabilities (no `internetClient`, no
+   `privateNetworkClientServer`), so its connections fail, loopback
+   included. `std::process::Command` cannot pass `SECURITY_CAPABILITIES`
+   on stable Rust (`spawn_with_attributes` is unstable), so Xuan calls
+   `CreateProcessW` with a `STARTUPINFOEX` holding the capabilities and a
+   handle list of the three stdio pipes, creates the process suspended,
+   puts it in the existing Job Object and then resumes it. The container's
+   SID gets inheritable read/execute entries on the plugin folder and the
+   interpreter's folder (plus a venv's base interpreter from
+   `pyvenv.cfg`), unless they already allow it or ALL APPLICATION PACKAGES
+   (as `C:\Program Files` does), and read/write entries on the data,
+   scratch (also its `TEMP`) and work folders. A file-format plugin gets
+   copies of the files it opens and saves inside its `work_dir`. The
+   entries and the profile are left in place. Skip WFP.
 4. Leave bubblewrap and Landlock aside: bubblewrap adds a dependency and does
    not work in all the places Xuan is packaged, and Landlock cannot express
    what is needed on the kernels users have.
 
-Track the Linux and Windows steps as separate tickets.
+The Linux and Windows steps were tracked as #43 and #44.
 
 ## 6. Format
 
