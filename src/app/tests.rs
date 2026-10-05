@@ -21,6 +21,9 @@ mod plugins;
 #[path = "tests/plugin_examples.rs"]
 mod plugin_examples;
 
+#[path = "tests/plugin_models.rs"]
+mod plugin_models;
+
 #[path = "tests/ui.rs"]
 mod ui;
 

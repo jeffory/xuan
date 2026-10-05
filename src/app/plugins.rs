@@ -88,6 +88,15 @@ pub(super) struct PluginState {
     pub export_answers: HashMap<String, bool>,
     /// Export requests waiting for that answer.
     pub held: Vec<(String, Request)>,
+    /// Model downloads and verifications running in the background.
+    pub model_jobs: Vec<super::plugin_models::ModelJob>,
+    /// The confirmation before downloading models, while it is open.
+    pub model_request: Option<super::plugin_models::ModelRequest>,
+    /// A plugin action that runs once its models are downloaded or verified,
+    /// with its inputs.
+    pub awaiting_models: Option<(String, (String, Option<Value>))>,
+    /// How models are downloaded: https, or a fake in tests.
+    pub transport: Option<Arc<dyn plugins::models::Transport>>,
 }
 
 enum Pending {
@@ -267,20 +276,27 @@ impl PluginState {
         Ok(self.scratch[plugin].path().to_path_buf())
     }
 
+    /// The data folder made for the plugin this session when there is no
+    /// configuration folder.
+    pub(super) fn data_fallback_path(&self, plugin: &str) -> Option<PathBuf> {
+        self.data_fallback
+            .get(plugin)
+            .map(|d| d.path().to_path_buf())
+    }
+
     /// Where the host may read and write files for this plugin: its folder,
     /// its data folder and the scratch and job folders made for it, unless
-    /// the manifest's `filesystem` permission allows more.
+    /// the manifest's `filesystem` permission allows more. Its models folder
+    /// is read only: only Xuan puts files there.
     pub(super) fn access(&self, plugin: &str) -> edits::Access {
         let Some(manifest) = self.manifest(plugin) else {
             return edits::Access::default();
         };
         let data = match &self.config_dir {
             Some(config_dir) => Some(plugins::data_dir(config_dir, plugin)),
-            None => self
-                .data_fallback
-                .get(plugin)
-                .map(|d| d.path().to_path_buf()),
+            None => self.data_fallback_path(plugin),
         };
+        let models = data.as_deref().map(plugins::models::models_dir);
         let roots = [Some(manifest.dir.clone()), data]
             .into_iter()
             .flatten()
@@ -295,7 +311,11 @@ impl PluginState {
                     .filter(|job| job.plugin == plugin)
                     .map(|job| job.work_dir.path().to_path_buf()),
             );
-        edits::Access::new(roots, manifest.permissions.filesystem)
+        let access = edits::Access::new(roots, manifest.permissions.filesystem);
+        match models {
+            Some(models) => access.read_only(&models),
+            None => access,
+        }
     }
 
     /// Write the secrets file, unless it failed to load: saving then would
@@ -640,9 +660,14 @@ impl EditorApp {
                 tr("uses the network, and plugins that use the network are disabled")
             );
             let data_dir = self.plugins.data_dir(plugin)?;
+            let models_dir = self.plugins.models_dir(plugin)?;
             let env = vec![
                 ("XUAN_PLUGIN_ID".to_owned(), plugin.to_owned()),
                 ("XUAN_DATA_DIR".to_owned(), data_dir.display().to_string()),
+                (
+                    "XUAN_MODELS_DIR".to_owned(),
+                    models_dir.display().to_string(),
+                ),
                 ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
             ];
             let context = self.context.clone();
@@ -660,6 +685,8 @@ impl EditorApp {
                 Err(error) => return Err(error),
             };
             let (settings, secrets) = self.plugin_settings(&manifest);
+            // Only files unchanged since they were verified.
+            let models = self.model_paths(plugin);
             // Started without waiting: the answer arrives with the other
             // messages, and what is sent meanwhile waits in the process.
             let id = process.initialize(json!({
@@ -667,6 +694,8 @@ impl EditorApp {
                 "host": {"name": "Xuan", "version": env!("CARGO_PKG_VERSION")},
                 "plugin_dir": manifest.dir,
                 "data_dir": data_dir,
+                "models_dir": models_dir,
+                "models": models,
                 "settings": settings,
                 "secrets": secrets,
             }))?;
@@ -695,7 +724,9 @@ impl EditorApp {
         self.check_format_jobs();
         self.apply_completed_results();
         self.refresh_panes_for_changes();
+        self.poll_model_jobs();
         if !self.plugins.jobs.is_empty()
+            || !self.plugins.model_jobs.is_empty()
             || !self.plugins.starting.is_empty()
             || !self.plugins.formats.is_empty()
             || !self.plugins.completed.is_empty()
@@ -1281,6 +1312,9 @@ impl EditorApp {
             self.plugins.permission_request =
                 Some((plugin.into(), PendingStart::Action(action.into())));
             self.dialog = Some(Dialog::PluginPermissions);
+            return;
+        }
+        if !self.action_models_ready(plugin, action, inputs) {
             return;
         }
         if self

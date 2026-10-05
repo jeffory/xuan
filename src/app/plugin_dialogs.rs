@@ -620,6 +620,7 @@ impl EditorApp {
                             }
                             ui.add_space(8.0);
                         }
+                        self.plugin_models_section(ui, manifest);
                         let summary = format!(
                             "{} {} · {} {} · {} {}",
                             manifest.actions.len(),
@@ -755,6 +756,17 @@ impl EditorApp {
                     .map(|job| (job.id, job.label.clone(), None, String::new())),
             )
             .collect();
+        let jobs: Vec<_> = jobs
+            .into_iter()
+            .chain((self.plugins.model_jobs.iter()).map(|job| {
+                let message = format!(
+                    "{} / {}",
+                    super::plugin_models::format_size(job.progress.done()),
+                    super::plugin_models::format_size(job.size)
+                );
+                (job.id, job.label(), Some(job.fraction()), message)
+            }))
+            .collect();
         let mut cancel = None;
         for (index, (id, label, progress, message)) in jobs.iter().enumerate() {
             egui::Window::new(label)
@@ -797,7 +809,9 @@ impl EditorApp {
                 });
         }
         if let Some(id) = cancel {
-            if self.plugins.formats.iter().any(|job| job.id == id) {
+            if self.plugins.model_jobs.iter().any(|job| job.id == id) {
+                self.cancel_model_job(id);
+            } else if self.plugins.formats.iter().any(|job| job.id == id) {
                 self.cancel_format_job(id);
             } else {
                 self.cancel_plugin_job(id);
@@ -906,6 +920,27 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
                 .small()
                 .color(theme::MUTED),
             )
+            .wrap(),
+        );
+    }
+    if !manifest.models.is_empty() {
+        any = true;
+        let models = (manifest.models.iter())
+            .map(|model| {
+                format!(
+                    "{} ({}, {})",
+                    model.id,
+                    super::plugin_models::format_size(model.size),
+                    super::plugins::one_line(&model.host(), 120)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        ui.add(
+            egui::Label::new(format!(
+                "• {} {models}",
+                tr("Uses models that Xuan downloads, after asking you:")
+            ))
             .wrap(),
         );
     }

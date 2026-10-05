@@ -107,6 +107,7 @@ impl EditorApp {
                 Dialog::PluginConsent => self.plugin_consent_dialog(ctx),
                 Dialog::Plugins => self.plugin_manager_dialog(ctx),
                 Dialog::PluginInstall => self.plugin_install_dialog(ctx),
+                Dialog::PluginModels => self.plugin_models_dialog(ctx),
                 Dialog::PluginProposal => self.plugin_proposal_dialog(ctx),
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),

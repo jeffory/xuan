@@ -832,3 +832,34 @@ Its folder, command or permissions differ from what you allowed, so Xuan asks ag
 There is no configuration folder to install plugins into.	没有可用于安装插件的配置文件夹。
 is being updated	正在更新
 Install a plugin from a folder or a .zip archive. You can also drop one on this window.	从文件夹或 .zip 压缩包安装插件。也可以把它拖放到此窗口。
+Models are not downloaded while plugins that use the network are disabled	禁用使用网络的插件时不会下载模型
+Xuan downloads them over https into the plugin's models folder and checks each against the size and SHA-256 the plugin declares. It never runs or unpacks them; the plugin loads them.	Xuan 通过 https 将它们下载到插件的模型文件夹，并按插件声明的大小和 SHA-256 逐一校验。Xuan 从不运行或解压它们，由插件自行加载。
+does not match the size or SHA-256 its plugin declares. Download it again from Plugins → Manage Plugins… → Models.	与插件声明的大小或 SHA-256 不符。请在“插件 → 管理插件… → 模型”中重新下载。
+Cancelled; nothing was downloaded	已取消；未下载任何内容
+Corrupt	已损坏
+Could not download	无法下载
+Delete All Models	删除全部模型
+Deleted model	已删除模型
+Deleted the models of	已删除模型：
+Download	下载
+Download Models?	下载模型？
+Downloading	正在下载
+License:	许可证：
+Models	模型
+Not downloaded	未下载
+Not verified	未校验
+Ready	就绪
+Size:	大小：
+Source:	来源：
+The download stopped	下载已停止
+The plugin gives no license or source.	插件未提供许可证或来源。
+Total:	合计：
+Verify	校验
+Verifying	正在校验
+Waiting for the plugin's models…	正在等待插件的模型…
+Xuan downloads these models for	Xuan 将下载这些模型，用于
+downloaded and verified	已下载并校验
+from	来自
+needs these models from	需要这些模型，来自
+verified	已校验
+Uses models that Xuan downloads, after asking you:	使用 Xuan 在询问你之后下载的模型：

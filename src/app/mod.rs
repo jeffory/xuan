@@ -31,6 +31,7 @@ mod pixel_grid;
 mod plugin_consent;
 mod plugin_dialogs;
 mod plugin_install;
+mod plugin_models;
 mod plugin_panes;
 mod plugins;
 mod rulers;
@@ -328,6 +329,8 @@ enum Dialog {
     Plugins,
     /// Plugins → Install from Folder or Zip…: choose, review and install.
     PluginInstall,
+    /// Confirm downloading models a plugin declares.
+    PluginModels,
     PluginProposal,
     GridSettings,
     /// Layer → Layer Effects…; not `Effect`, which edits adjustments and filters.
