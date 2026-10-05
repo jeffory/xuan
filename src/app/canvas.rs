@@ -566,7 +566,8 @@ impl EditorApp {
                 }
                 if let Some(gesture) = &self.gesture {
                     let rect = Rect::from_two_pos(map(gesture.start), map(gesture.last));
-                    if matches!(self.tool, Tool::Marquee | Tool::Shape)
+                    if (matches!(self.tool, Tool::Marquee | Tool::Shape)
+                        || (self.tool == Tool::Wand && self.wand_object))
                         && !matches!(gesture.kind, TransformDrag::Selection)
                     {
                         if (self.tool == Tool::Marquee && self.ellipse)
@@ -1117,6 +1118,16 @@ impl EditorApp {
                 if self.auto_select || modifiers.ctrl {
                     self.select_canvas_layer(point, modifiers.shift, false);
                 }
+            }
+            Tool::Wand if self.wand_object => {
+                let mode = self.selection_mode(modifiers);
+                self.select_object(
+                    xuan::segment::Seeds {
+                        points: vec![(point.x, point.y)],
+                        rect: None,
+                    },
+                    mode,
+                );
             }
             Tool::Wand => {
                 let tolerance = self.tolerance;
@@ -1766,6 +1777,28 @@ impl EditorApp {
         }
         if tool == Tool::Region {
             self.add_region(gesture.start, gesture.last);
+            return;
+        }
+        if tool == Tool::Wand
+            && self.wand_object
+            && !matches!(
+                gesture.kind,
+                TransformDrag::Selection | TransformDrag::Pixels
+            )
+        {
+            // Object mode: the dragged rectangle bounds the object.
+            let (a, b) = (gesture.start, gesture.last);
+            let rect = [a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)];
+            if rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0 {
+                let mode = self.selection_mode(modifiers);
+                self.select_object(
+                    xuan::segment::Seeds {
+                        points: Vec::new(),
+                        rect: Some(rect),
+                    },
+                    mode,
+                );
+            }
             return;
         }
         if tool == Tool::Heal {

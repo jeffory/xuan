@@ -162,3 +162,62 @@ fn select_subject_and_remove_background_use_the_graph_cut() {
     wait_for_job(&mut app);
     assert_eq!(app.session().unwrap().document.layers.len(), 2);
 }
+
+/// Two red discs on green, left at x = 30 and right at x = 90, both at y = 36.
+fn two_objects(app: &mut EditorApp) {
+    app.dimensions = [120, 72];
+    app.new_document();
+    let pixels = RgbaImage::from_fn(120, 72, |x, y| {
+        let n = ((x * 7 + y * 13) % 5) as u8 * 5;
+        image::Rgba(if in_object(x, y, 30.0) || in_object(x, y, 90.0) {
+            [220, 40 + n, 40, 255]
+        } else {
+            [40 + n, 150, 60, 255]
+        })
+    });
+    app.session_mut().unwrap().document.layers[0].pixels = Some(Arc::new(pixels));
+}
+
+fn in_object(x: u32, y: u32, cx: f32) -> bool {
+    (x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - 36.0).powi(2) <= 16.0f32.powi(2)
+}
+
+fn object_errors(app: &EditorApp, inside: impl Fn(u32, u32) -> bool) -> usize {
+    let mask = selected(app);
+    (0..120 * 72)
+        .filter(|&i| (mask[i] >= 128) != inside(i as u32 % 120, i as u32 / 120))
+        .count()
+}
+
+#[test]
+fn object_mode_selects_the_clicked_or_boxed_object() {
+    let (context, mut app) = app();
+    two_objects(&mut app);
+    app.set_tool(Tool::Wand);
+    app.wand_object = true;
+    let session = app.session_mut().unwrap();
+    session.zoom = 4.0;
+    session.fit = false;
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(90.5, 36.5),
+        egui::Modifiers::NONE,
+    );
+    wait_for_job(&mut app);
+    assert!(object_errors(&app, |x, y| in_object(x, y, 90.0)) < 20);
+    assert_eq!(app.status, tr("Object Selection"));
+    // Shift-dragging a box around the other adds it.
+    drag(
+        &context,
+        &mut app,
+        Point::new(8.0, 12.0),
+        Point::new(54.0, 60.0),
+        egui::Modifiers::SHIFT,
+    );
+    wait_for_job(&mut app);
+    let both = |x, y| in_object(x, y, 30.0) || in_object(x, y, 90.0);
+    assert!(object_errors(&app, both) < 40);
+    app.command("undo");
+    assert!(object_errors(&app, |x, y| in_object(x, y, 90.0)) < 20);
+}

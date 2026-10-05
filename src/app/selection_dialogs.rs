@@ -31,6 +31,22 @@ pub(super) struct AmountEdit {
 }
 
 impl EditorApp {
+    /// The Magic tool's Object mode: segments the image as shown from a click (definite
+    /// object) or a rectangle (bounds) and combines the object with the selection.
+    pub(super) fn select_object(
+        &mut self,
+        seeds: xuan::segment::Seeds,
+        mode: xuan::selection::SelectionMode,
+    ) {
+        self.start_progress_job(tr("Object Selection"), move |document, progress, cancel| {
+            let image = xuan::render::render(document);
+            let result = xuan::segment::segment(&image, &seeds, progress, cancel)
+                .context(tr("Cancelled"))?;
+            xuan::selection::combine(document, result.mask, mode);
+            Ok(())
+        });
+    }
+
     pub(super) fn open_selection_amount(&mut self, operation: AmountOperation) {
         if self
             .session()

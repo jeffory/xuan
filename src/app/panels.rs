@@ -245,17 +245,31 @@ impl EditorApp {
                                                 );
                                             }
                                             Tool::Wand => {
-                                                ui.label(tr("Tolerance"));
-                                                ui.add(
-                                                    widgets::Number::new(&mut self.tolerance)
-                                                        .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
-                                                        .range(0..=255),
-                                                );
-                                                widgets::checkbox(
+                                                widgets::segmented(
                                                     ui,
-                                                    &mut self.contiguous,
-                                                    tr("Contiguous"),
+                                                    &mut self.wand_object,
+                                                    &[(false, tr("Wand")), (true, tr("Object"))],
                                                 );
+                                                if self.wand_object {
+                                                    ui.label(
+                                                        egui::RichText::new(tr(
+                                                            "Click an object or drag a box around it",
+                                                        ))
+                                                        .color(theme::MUTED),
+                                                    );
+                                                } else {
+                                                    ui.label(tr("Tolerance"));
+                                                    ui.add(
+                                                        widgets::Number::new(&mut self.tolerance)
+                                                            .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
+                                                            .range(0..=255),
+                                                    );
+                                                    widgets::checkbox(
+                                                        ui,
+                                                        &mut self.contiguous,
+                                                        tr("Contiguous"),
+                                                    );
+                                                }
                                             }
                                             _ => {}
                                         }

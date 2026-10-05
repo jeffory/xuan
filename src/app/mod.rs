@@ -463,6 +463,8 @@ pub struct EditorApp {
     color_range: Option<color_range::ColorRangeEdit>,
     color_range_fuzziness: u32,
     contiguous: bool,
+    /// The Magic tool's Object mode: a click or a dragged rectangle selects an object.
+    wand_object: bool,
     radial: bool,
     shape_kind: ShapeKind,
     corner_radius: f32,
@@ -643,6 +645,7 @@ impl EditorApp {
             color_range: None,
             color_range_fuzziness: xuan::selection_ops::ColorRange::DEFAULT_FUZZINESS,
             contiguous: true,
+            wand_object: false,
             radial: false,
             shape_kind: ShapeKind::Rectangle,
             corner_radius: 16.0,
