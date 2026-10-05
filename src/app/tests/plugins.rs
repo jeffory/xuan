@@ -61,7 +61,12 @@ while IFS= read -r line; do
       prompt=$(printf '%s' "$line" | sed -n 's/.*"prompt":"\([^"]*\)".*/\1/p')
       printf '{{"jsonrpc":"2.0","method":"job/progress","params":{{"job":"%s","fraction":0.5,"message":"copying"}}}}\n' "$job"
       cp "$src" "$work/result.png"
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"outputs":[{{"kind":"image","path":"%s/result.png","name":"Echoed"}},{{"kind":"text","text":"prompt=%s"}}]}}}}\n' "$id" "$work" "$prompt" ;;
+      case "$line" in
+        *'"action":"outpaint"'*)
+          printf '{{"jsonrpc":"2.0","id":%s,"result":{{"outputs":[{{"kind":"edit","edits":[{{"op":"extend_canvas","left":4,"top":2,"bottom":6}}]}},{{"kind":"image","path":"%s/result.png","name":"Outpainted","fit":"source"}}]}}}}\n' "$id" "$work" ;;
+        *)
+          printf '{{"jsonrpc":"2.0","id":%s,"result":{{"outputs":[{{"kind":"image","path":"%s/result.png","name":"Echoed"}},{{"kind":"text","text":"prompt=%s"}}]}}}}\n' "$id" "$work" "$prompt" ;;
+      esac ;;
     *'"method":"pane/render"'*)
       case "$line" in
         *'"widget":"export"'*)
@@ -597,6 +602,259 @@ fn provenance_is_kept_on_the_layer_and_never_holds_the_plugins_secrets() {
                 .is_none()
         );
     }
+}
+
+/// An action that extends a composite source by 4 px on the left, 2 px at
+/// the top and the `amount` input (6 by default) at the bottom.
+const OUTPAINT: &str = r#"
+[[actions]]
+id = "outpaint"
+label = "Outpaint"
+source = { from = "composite", extend = { left = 4, top = 2, bottom = "amount" } }
+
+[[actions.inputs]]
+id = "amount"
+type = "integer"
+default = 6
+"#;
+
+/// The mock manifest with [`OUTPAINT`], declaring `document = "edit"` when
+/// `edit` is set.
+fn outpaint_manifest(edit: bool) -> String {
+    let manifest = if edit {
+        MANIFEST.replacen(
+            "[[actions]]",
+            "[permissions]\ndocument = \"edit\"\n\n[[actions]]",
+            1,
+        )
+    } else {
+        MANIFEST.to_owned()
+    };
+    format!("{manifest}{OUTPAINT}")
+}
+
+fn install_outpaint(app: &mut EditorApp, dir: &Path, edit: bool) {
+    let manifest = Manifest::parse(&outpaint_manifest(edit), dir).unwrap();
+    app.install_plugins(vec![manifest], vec![]);
+    app.grant_plugin("mock", true);
+}
+
+/// A finished outpaint job of the mock plugin, with its source prepared as
+/// the host prepares it.
+fn outpaint_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
+    let spec = (app.plugins.manifest("mock").unwrap())
+        .action("outpaint")
+        .unwrap()
+        .clone();
+    let mut job = mock_job(app);
+    let inputs = serde_json::Map::from_iter([("amount".to_owned(), serde_json::json!(6))]);
+    job.action = "outpaint".into();
+    job.prepared = xuan::plugins::jobs::prepare(
+        &app.session().unwrap().document,
+        &spec.source.with_inputs(&inputs),
+        &[],
+        job._work_dir.path(),
+    )
+    .unwrap();
+    job
+}
+
+#[test]
+fn extending_the_canvas_needs_document_edit_even_in_a_result() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_outpaint(&mut app, dir.path(), false);
+    app.dimensions = [8, 8];
+    app.new_document();
+    let steps = app.session().unwrap().history.names().count();
+    let extend = json!({"op": "extend_canvas", "left": 2});
+    let size = |app: &EditorApp| {
+        let document = &app.session().unwrap().document;
+        (document.width, document.height)
+    };
+
+    let error = plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"name": "Grow", "edits": [extend]}),
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("document = \"edit\""),
+        "{}",
+        error.message
+    );
+    let job = outpaint_job(&app);
+    let result = json!({"outputs": [{"kind": "edit", "edits": [extend]}]});
+    let error = format!(
+        "{:#}",
+        app.apply_job_result(&job, result.clone()).unwrap_err()
+    );
+    assert!(error.contains("document = \"edit\""), "{error}");
+    assert_eq!(size(&app), (8, 8));
+    assert!(app.plugins.proposal.is_none());
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+
+    // With the permission, both work: the request as one undo step.
+    install_outpaint(&mut app, dir.path(), true);
+    plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"name": "Grow", "edits": [extend]}),
+    )
+    .unwrap();
+    assert_eq!(size(&app), (10, 8));
+    assert_eq!(app.session().unwrap().history.undo_name(), Some("Grow"));
+    app.command("undo");
+    assert_eq!(size(&app), (8, 8));
+    app.apply_job_result(&job, result).unwrap();
+    assert_eq!(size(&app), (10, 8));
+    app.resolve_proposal(false);
+    assert_eq!(size(&app), (8, 8));
+    // Past the size limits the request changes nothing.
+    let huge = json!({"op": "extend_canvas", "right": 30_000});
+    let error = plugin_request(&mut app, "document/edit", json!({"edits": [huge]})).unwrap_err();
+    assert!(error.message.contains("30000"), "{}", error.message);
+    assert_eq!(size(&app), (8, 8));
+}
+
+#[test]
+fn an_outpaint_result_extends_the_canvas_and_fits_the_extended_source() {
+    use serde_json::json;
+    use xuan::layout::{Guide, GuideAxis};
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_outpaint(&mut app, dir.path(), true);
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.command("fill_fg");
+    let session = app.session_mut().unwrap();
+    session.document.guides = vec![
+        Guide::new(GuideAxis::Vertical, 3.0),
+        Guide::new(GuideAxis::Horizontal, 5.0),
+    ];
+    session.history.commit();
+    session.fit = false;
+    let original = app.session().unwrap().document.clone();
+    let layout = |document: &Document| -> Vec<_> {
+        (document.layers.iter())
+            .map(|l| (l.id, l.transform, l.pixels.clone()))
+            .collect()
+    };
+    let steps = app.session().unwrap().history.names().count();
+    let job = outpaint_job(&app);
+    let export = job.prepared.export.as_ref().unwrap();
+    assert_eq!((export.width, export.height), (12, 16));
+
+    // A twice-as-dense result for the extended source, and a mask of the
+    // left strip of new canvas, both fitted to the source.
+    let result_png = dir.path().join("outpainted.png");
+    RgbaImage::from_pixel(24, 32, image::Rgba([1, 2, 3, 255]))
+        .save(&result_png)
+        .unwrap();
+    let mask = write_mask(dir.path(), "left.png", (12, 16), |x, _| {
+        if x < 4 { 255 } else { 0 }
+    });
+    let result = json!({"outputs": [
+        {"kind": "edit", "edits": [{"op": "extend_canvas", "left": 4, "top": 2, "bottom": 6}]},
+        {"kind": "image", "path": result_png, "name": "Outpainted", "fit": "source"},
+        {"kind": "mask", "path": mask, "fit": "source"},
+    ]});
+    // The same layout Canvas Size gives, anchored right and a quarter down.
+    let mut resized = original.clone();
+    xuan::operations::canvas_size(&mut resized, 12, 16, [1.0, 0.25]).unwrap();
+    let check = |app: &EditorApp| {
+        let document = &app.session().unwrap().document;
+        assert_eq!((document.width, document.height), (12, 16));
+        let base = &document.layers[0].transform;
+        assert_eq!((base.x, base.y), (4.0, 2.0));
+        assert_eq!(*base, resized.layers[0].transform);
+        let guides: Vec<f32> = document.guides.iter().map(|g| g.position).collect();
+        assert_eq!(guides, [7.0, 7.0]);
+        assert_eq!(document.guides, resized.guides);
+        let added = document
+            .layers
+            .iter()
+            .find(|l| l.name == "Outpainted")
+            .unwrap();
+        let t = added.transform;
+        assert_eq!((t.x, t.y, t.width, t.height), (0.0, 0.0, 12.0, 16.0));
+        assert_eq!(added.pixels.as_ref().unwrap().dimensions(), (24, 32));
+        // The mask lands on the new left strip.
+        assert_eq!(selection_at(app, 1, 8), Some(255));
+        assert_eq!(selection_at(app, 4, 8), Some(0));
+    };
+
+    app.apply_job_result(&job, result.clone()).unwrap();
+    assert_eq!(app.dialog, Some(Dialog::PluginProposal));
+    check(&app);
+    assert!(app.session().unwrap().fit);
+    // Discard leaves the document as it was.
+    app.session_mut().unwrap().fit = false;
+    app.resolve_proposal(false);
+    let session = app.session().unwrap();
+    assert_eq!(session.document.width, original.width);
+    assert_eq!(layout(&session.document), layout(&original));
+    assert_eq!(session.document.guides, original.guides);
+    assert_eq!(session.history.names().count(), steps);
+    assert!(session.fit);
+
+    // Accept makes it one undo step, and undo brings the old canvas back.
+    app.apply_job_result(&job, result).unwrap();
+    app.resolve_proposal(true);
+    check(&app);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    assert_eq!(session.history.undo_name(), Some("Echo"));
+    app.command("undo");
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (8, 8));
+    assert_eq!(layout(document), layout(&original));
+    assert_eq!(document.guides, original.guides);
+}
+
+#[test]
+fn the_send_prompt_names_the_extension() {
+    use crate::app::plugins::ActionEdit;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = None;
+    let text = outpaint_manifest(false).replacen(
+        "[[actions]]",
+        "[permissions]\nnetwork = [\"example.com\"]\n\n[[actions]]",
+        1,
+    );
+    app.install_plugins(vec![Manifest::parse(&text, dir.path()).unwrap()], vec![]);
+    app.grant_plugin("mock", true);
+    app.dimensions = [8, 8];
+    app.new_document();
+    let spec = (app.plugins.manifest("mock").unwrap())
+        .action("outpaint")
+        .unwrap()
+        .clone();
+    let edit = |amount: i64| ActionEdit {
+        plugin: "mock".into(),
+        action: "outpaint".into(),
+        values: serde_json::Map::from_iter([("amount".to_owned(), serde_json::json!(amount))]),
+        regions: Vec::new(),
+        selected: None,
+        estimate: None,
+        previous_tool: app.tool,
+        into: xuan::plugins::manifest::ResultInto::Layer,
+        consented: false,
+    };
+    app.plugins.action = Some(edit(6));
+    assert_eq!(
+        app.action_consent_items(&spec)[0],
+        "The whole image, flattened, extended by 4 px on the left, 2 px at the top, 6 px at the bottom"
+    );
+    // Sides of 0 are left out, and the input's value is the one used.
+    app.plugins.action = Some(edit(0));
+    assert_eq!(
+        app.action_consent_items(&spec)[0],
+        "The whole image, flattened, extended by 4 px on the left, 2 px at the top"
+    );
 }
 
 /// A grey mask PNG in `dir`, one of the mock plugin's folders.
@@ -2437,6 +2695,61 @@ done
         assert!(mask.ends_with("selection.png"), "{run}");
         // The source is the 16x16 composite, which max_side 512 does not scale.
         assert!(run.contains("\"width\":16"), "{run}");
+    }
+
+    #[test]
+    fn an_outpaint_action_extends_the_canvas_through_the_mock_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        app.config_path = Some(config.path().join("config.toml"));
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(8, 8).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        std::fs::write(dir.path().join("plugin.toml"), outpaint_manifest(true)).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [8, 8];
+        app.new_document();
+        app.command("fill_fg");
+        let steps = app.session().unwrap().history.names().count();
+        let source = app.session().unwrap().document.layers[0].id;
+
+        app.start_plugin_action("mock", "outpaint");
+        assert!(app.plugins.action.is_some(), "{:?}", app.error);
+        app.run_plugin_action();
+        assert_eq!(app.plugins.jobs.len(), 1, "{:?}", app.error);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let log = received(dir.path());
+        let run = log.lines().find(|l| l.contains("action/run")).unwrap();
+        // The padded composite and the mask of its new area, 12 x 16.
+        assert!(run.contains("extend.png"), "{run}");
+        assert!(
+            run.contains("\"width\":12") && run.contains("\"height\":16"),
+            "{run}"
+        );
+        let document = &app.session().unwrap().document;
+        assert_eq!((document.width, document.height), (12, 16));
+        let base = document.layers.iter().find(|l| l.id == source).unwrap();
+        assert_eq!((base.transform.x, base.transform.y), (4.0, 2.0));
+        let added = document
+            .layers
+            .iter()
+            .find(|l| l.name == "Outpainted")
+            .unwrap();
+        let t = added.transform;
+        assert_eq!((t.x, t.y, t.width, t.height), (0.0, 0.0, 12.0, 16.0));
+        // The source sent back: transparent new canvas around the old image.
+        let pixels = added.pixels.as_ref().unwrap();
+        assert_eq!(pixels.dimensions(), (12, 16));
+        assert_eq!(pixels.get_pixel(1, 1)[3], 0);
+        assert_eq!(pixels.get_pixel(6, 5)[3], 255);
+        app.resolve_proposal(true);
+        let session = app.session().unwrap();
+        assert_eq!(session.history.names().count(), steps + 1);
+        assert_eq!(session.history.undo_name(), Some("Outpaint"));
     }
 
     #[test]
