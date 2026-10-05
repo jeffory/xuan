@@ -68,6 +68,11 @@ while IFS= read -r line; do
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"type":"column","children":[{{"type":"label","text":"%s"}},{{"type":"button","id":"go","label":"Go"}}]}}}}\n' "$id" "$text" ;;
     *'"method":"format/import"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"width":8,"height":8,"layers":[{{"name":"Imported","image":"{fixture}"}}]}}}}\n' "$id" ;;
+    *'"method":"format/export"'*)
+      image=$(printf '%s' "$line" | sed -n 's/.*"image":"\([^"]*\)".*/\1/p')
+      out=$(printf '%s' "$line" | sed -n 's/.*"path":"\([^"]*\)".*/\1/p')
+      cp "$image" "$out"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":null}}\n' "$id" ;;
     *'"method":"shutdown"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":null}}\n' "$id"; exit 0 ;;
     *'"method":"host/'*|*'"method":"document/changed"'*|*'"method":"job/cancel"'*) ;;
@@ -703,7 +708,11 @@ mod unix {
         assert_eq!(app.plugin_import_extensions(), ["foo"]);
         let file = dir.path().join("picture.foo");
         std::fs::write(&file, b"").unwrap();
+        // The import runs in the background and opens the file when done.
         app.open_path(&file, false);
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert_eq!(app.plugins.formats.len(), 1);
+        run_until(&context, &mut app, |app| app.plugins.formats.is_empty());
         assert!(app.error.is_none(), "{:?}", app.error);
         let session = app.session().unwrap();
         assert_eq!(session.title, "picture");
@@ -711,6 +720,7 @@ mod unix {
         assert_eq!(session.document.layers[0].name, "Imported");
         assert!(session.history.dirty());
         app.open_path(&file, true);
+        run_until(&context, &mut app, |app| app.plugins.formats.is_empty());
         assert_eq!(app.session().unwrap().document.layers.len(), 2);
         assert_eq!(app.session().unwrap().history.names().count(), 1);
         // Built-in formats are never handed to plugins.
@@ -772,7 +782,7 @@ done
 "#;
 
     #[test]
-    fn a_plugin_that_crashes_during_a_blocking_call_is_cleaned_up() {
+    fn a_plugin_that_crashes_during_an_import_is_cleaned_up() {
         let dir = tempfile::tempdir().unwrap();
         let (context, mut app) = app();
         install_mock(&mut app, dir.path());
@@ -792,12 +802,15 @@ done
         app.render_pane(key, "open", None);
         assert!(app.plugins.panes[key].pending);
 
-        // The plugin dies while Xuan blocks on format/import.
+        // The plugin dies during format/import.
         let file = dir.path().join("picture.foo");
         std::fs::write(&file, b"").unwrap();
         app.open_path(&file, false);
+        run_until(&context, &mut app, |app| app.plugins.formats.is_empty());
         assert!(
-            app.error.as_deref().is_some_and(|e| e.contains("exited")),
+            app.error
+                .as_deref()
+                .is_some_and(|e| e.contains("stopped unexpectedly") && e.contains("picture.foo")),
             "{:?}",
             app.error
         );
@@ -868,6 +881,89 @@ done
         start(&mut app);
         frame(&context, &mut app);
         assert_eq!(app.plugins.jobs.len(), 1);
+    }
+
+    #[test]
+    fn slow_plugins_start_and_handle_formats_without_blocking_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        // The plugin takes a while before it reads `initialize`.
+        let fixture = dir.path().join("fixture.png");
+        std::fs::write(
+            dir.path().join("plugin.sh"),
+            format!("sleep 1\n{}", script(&fixture)),
+        )
+        .unwrap();
+        app.dimensions = [16, 16];
+        app.new_document();
+        let key = "plugin:mock/info";
+        let started = Instant::now();
+        app.render_pane(key, "open", None);
+        let file = dir.path().join("picture.foo");
+        std::fs::write(&file, b"").unwrap();
+        app.open_path(&file, false);
+        assert!(
+            started.elapsed() < Duration::from_millis(700),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(app.plugins.starting("mock"));
+        assert!(app.error.is_none(), "{:?}", app.error);
+        // What was asked for meanwhile is sent once it has started.
+        run_until(&context, &mut app, |app| {
+            app.plugins.formats.is_empty() && app.plugins.panes[key].tree.is_some()
+        });
+        assert!(!app.plugins.starting("mock"));
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.session().unwrap().title, "picture");
+
+        // Exports run in the background too.
+        let out = dir.path().join("out.foo");
+        app.start_plugin_export("mock", "foo", &out).unwrap();
+        assert_eq!(app.plugins.formats.len(), 1);
+        run_until(&context, &mut app, |app| app.plugins.formats.is_empty());
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert!(app.status.contains("out.foo"), "{}", app.status);
+        assert_eq!(xuan::io::import_image(&out).unwrap().dimensions(), (8, 8));
+
+        // A pending export can be cancelled; the late answer is ignored.
+        std::fs::remove_file(&out).unwrap();
+        app.start_plugin_export("mock", "foo", &out).unwrap();
+        let id = app.plugins.formats[0].id;
+        app.cancel_format_job(id);
+        assert!(app.plugins.formats.is_empty());
+        for _ in 0..20 {
+            frame(&context, &mut app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
+
+    #[test]
+    fn a_plugin_that_fails_to_start_is_reported_with_its_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        std::fs::write(dir.path().join("plugin.sh"), "echo boom >&2\nexit 3\n").unwrap();
+        app.dimensions = [16, 16];
+        app.new_document();
+        let key = "plugin:mock/info";
+        app.render_pane(key, "open", None);
+        let file = dir.path().join("picture.foo");
+        std::fs::write(&file, b"").unwrap();
+        app.open_path(&file, false);
+        run_until(&context, &mut app, |app| app.plugins.formats.is_empty());
+        let error = app.error.clone().unwrap_or_default();
+        assert!(error.contains("did not start"), "{error}");
+        let pane = app.plugins.panes[key].error.clone().unwrap_or_default();
+        assert!(
+            pane.contains("did not start") && pane.contains("boom"),
+            "{pane}"
+        );
+        assert!(!app.plugins.running("mock"));
+        assert!(!app.plugins.starting("mock"));
     }
 
     fn echoed(app: &EditorApp, index: usize) -> usize {

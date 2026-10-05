@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 use xuan::{
@@ -50,7 +50,8 @@ pub(super) struct PluginState {
     pub manifests: Vec<Manifest>,
     pub errors: Vec<LoadError>,
     processes: HashMap<String, Process>,
-    backlog: Vec<(String, Incoming)>,
+    /// Plugins whose `initialize` is unanswered, and since when.
+    starting: HashMap<String, std::time::Instant>,
     pending: HashMap<(String, Id), Pending>,
     pub secrets: Secrets,
     pub secrets_path: Option<PathBuf>,
@@ -61,6 +62,7 @@ pub(super) struct PluginState {
     /// Private data folders for plugins when there is no configuration folder.
     data_fallback: HashMap<String, tempfile::TempDir>,
     pub jobs: Vec<PluginJob>,
+    pub formats: Vec<FormatJob>,
     /// Finished jobs whose results wait, in order, for the editor to be free.
     pub completed: std::collections::VecDeque<(PluginJob, Value)>,
     pub panes: HashMap<String, PaneState>,
@@ -77,7 +79,11 @@ pub(super) struct PluginState {
 }
 
 enum Pending {
+    /// The plugin's `initialize`; it is starting until this is answered.
+    Initialize,
     Job(Uuid),
+    /// A `format/import` or `format/export` of a [`FormatJob`].
+    Format(Uuid),
     Render(String),
     Estimate(String, String),
 }
@@ -104,6 +110,22 @@ pub(super) struct PluginJob {
     pub progress: Option<f32>,
     pub message: String,
     pub cancelled: bool,
+}
+
+/// A file a plugin imports or exports while the editor stays usable.
+pub(super) struct FormatJob {
+    pub id: Uuid,
+    pub plugin: String,
+    pub label: String,
+    kind: FormatKind,
+    started: std::time::Instant,
+    /// Holds the files exchanged until the plugin answers.
+    work_dir: tempfile::TempDir,
+}
+
+enum FormatKind {
+    Import { path: PathBuf, as_layer: bool },
+    Export { path: PathBuf },
 }
 
 /// Layers a job added that the user has not accepted yet.
@@ -143,6 +165,12 @@ pub(super) struct PaneState {
 impl PluginState {
     pub fn manifest(&self, plugin: &str) -> Option<&Manifest> {
         self.manifests.iter().find(|m| m.plugin.id == plugin)
+    }
+
+    /// Whether the plugin's process has not answered `initialize` yet.
+    #[cfg(test)]
+    pub fn starting(&self, plugin: &str) -> bool {
+        self.starting.contains_key(plugin)
     }
 
     pub fn running(&self, plugin: &str) -> bool {
@@ -186,6 +214,11 @@ impl PluginState {
                 (self.jobs.iter())
                     .filter(|job| job.plugin == plugin)
                     .map(|job| job._work_dir.path().to_path_buf()),
+            )
+            .chain(
+                (self.formats.iter())
+                    .filter(|job| job.plugin == plugin)
+                    .map(|job| job.work_dir.path().to_path_buf()),
             );
         edits::Access::new(roots, manifest.permissions.filesystem)
     }
@@ -229,6 +262,8 @@ impl PluginState {
     pub fn install(&mut self, manifests: Vec<Manifest>, errors: Vec<LoadError>) {
         self.processes
             .retain(|id, _| manifests.iter().any(|m| &m.plugin.id == id));
+        self.starting
+            .retain(|id, _| manifests.iter().any(|m| &m.plugin.id == id));
         self.panes.clear();
         self.manifests = manifests;
         self.load_errors = errors.clone();
@@ -243,6 +278,7 @@ impl PluginState {
     }
 
     pub fn stop_all(&mut self) {
+        self.starting.clear();
         for (_, mut process) in self.processes.drain() {
             let _ = process.request("shutdown", Value::Null);
             process.stop();
@@ -390,12 +426,14 @@ impl EditorApp {
     }
 
     pub(super) fn stop_plugin(&mut self, plugin: &str) {
+        self.plugins.starting.remove(plugin);
         if let Some(mut process) = self.plugins.processes.remove(plugin) {
             let _ = process.request("shutdown", Value::Null);
             process.stop();
         }
         self.plugins.pending.retain(|(id, _), _| id != plugin);
         self.plugins.jobs.retain(|job| job.plugin != plugin);
+        self.fail_format_jobs(plugin, None);
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
                 pane.pending = false;
@@ -407,6 +445,7 @@ impl EditorApp {
 
     /// Stop a plugin and fail what was waiting for it with `reason`.
     fn end_plugin(&mut self, plugin: &str, reason: &str) {
+        self.plugins.starting.remove(plugin);
         if let Some(mut process) = self.plugins.processes.remove(plugin) {
             let _ = process.request("shutdown", Value::Null);
             process.stop();
@@ -418,6 +457,7 @@ impl EditorApp {
         for id in failed {
             self.finish_plugin_job(id, Err(reason.to_owned()));
         }
+        self.fail_format_jobs(plugin, Some(reason));
         self.plugins.pending.retain(|(id, _), _| id != plugin);
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
@@ -498,37 +538,22 @@ impl EditorApp {
             let wake: plugins::host::Wake = Arc::new(move || context.request_repaint());
             let mut process = Process::spawn(&manifest, &env, Some(wake))?;
             let (settings, secrets) = self.plugin_settings(&manifest);
-            let id = process.request(
-                "initialize",
-                json!({
-                    "protocol": plugins::manifest::PROTOCOL,
-                    "host": {"name": "Xuan", "version": env!("CARGO_PKG_VERSION")},
-                    "plugin_dir": manifest.dir,
-                    "data_dir": data_dir,
-                    "settings": settings,
-                    "secrets": secrets,
-                }),
-            )?;
-            let (result, others) = process.wait_for(&id, INITIALIZE_TIMEOUT).map_err(|error| {
-                let log = process.log();
-                let tail = log
-                    .iter()
-                    .rev()
-                    .take(5)
-                    .rev()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                anyhow!("{} did not start: {error}\n{tail}", manifest.plugin.name)
-            })?;
-            if let Some(version) = result.get("protocol").and_then(Value::as_u64)
-                && version != u64::from(plugins::manifest::PROTOCOL)
-            {
-                bail!("{} speaks protocol {version}", manifest.plugin.name);
-            }
+            // Started without waiting: the answer arrives with the other
+            // messages, and what is sent meanwhile waits in the process.
+            let id = process.initialize(json!({
+                "protocol": plugins::manifest::PROTOCOL,
+                "host": {"name": "Xuan", "version": env!("CARGO_PKG_VERSION")},
+                "plugin_dir": manifest.dir,
+                "data_dir": data_dir,
+                "settings": settings,
+                "secrets": secrets,
+            }))?;
             self.plugins
-                .backlog
-                .extend(others.into_iter().map(|m| (plugin.to_owned(), m)));
+                .pending
+                .insert((plugin.to_owned(), id), Pending::Initialize);
+            self.plugins
+                .starting
+                .insert(plugin.to_owned(), std::time::Instant::now());
             self.plugins.processes.insert(plugin.into(), process);
         }
         Ok(self.plugins.processes.get_mut(plugin).unwrap())
@@ -536,16 +561,20 @@ impl EditorApp {
 
     /// Service plugin messages. Called once per frame.
     pub(super) fn poll_plugins(&mut self) {
-        let mut incoming: Vec<(String, Incoming)> = std::mem::take(&mut self.plugins.backlog);
+        let mut incoming: Vec<(String, Incoming)> = Vec::new();
         for (id, process) in &mut self.plugins.processes {
             incoming.extend(process.poll().into_iter().map(|m| (id.clone(), m)));
         }
         for (plugin, message) in incoming {
             self.dispatch_plugin_message(&plugin, message);
         }
+        self.check_starting_plugins();
+        self.check_format_jobs();
         self.apply_completed_results();
         self.refresh_panes_for_changes();
         if !self.plugins.jobs.is_empty()
+            || !self.plugins.starting.is_empty()
+            || !self.plugins.formats.is_empty()
             || !self.plugins.completed.is_empty()
             || self
                 .plugins
@@ -596,6 +625,10 @@ impl EditorApp {
     }
 
     fn plugin_closed(&mut self, plugin: &str) {
+        if self.plugins.starting.contains_key(plugin) {
+            self.plugin_failed_to_start(plugin, tr("it exited"));
+            return;
+        }
         let name = self
             .plugins
             .manifest(plugin)
@@ -608,9 +641,11 @@ impl EditorApp {
             .filter(|job| job.plugin == plugin)
             .map(|job| job.id)
             .collect();
+        let reason = format!("{name} {}", tr("stopped unexpectedly"));
         for id in failed {
-            self.finish_plugin_job(id, Err(format!("{name} {}", tr("stopped unexpectedly"))));
+            self.finish_plugin_job(id, Err(reason.clone()));
         }
+        self.fail_format_jobs(plugin, Some(&reason));
         self.plugins.pending.retain(|(id, _), _| id != plugin);
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
@@ -619,6 +654,57 @@ impl EditorApp {
                 pane.queued = None;
                 pane.error = Some(format!("{name} {}", tr("stopped unexpectedly")));
             }
+        }
+    }
+
+    /// A plugin that exited, failed or timed out before answering
+    /// `initialize`: stop it and fail everything that waited for it, with the
+    /// end of its log so the user can see why.
+    fn plugin_failed_to_start(&mut self, plugin: &str, error: &str) {
+        let name = self
+            .plugins
+            .manifest(plugin)
+            .map_or(plugin.to_owned(), |m| m.plugin.name.clone());
+        let log = self.plugins.log(plugin);
+        let tail = log[log.len().saturating_sub(5)..].join("\n");
+        let message = format!("{name} {}: {error}\n{tail}", tr("did not start"))
+            .trim_end()
+            .to_owned();
+        self.plugins.starting.remove(plugin);
+        if let Some(mut process) = self.plugins.processes.remove(plugin) {
+            process.stop();
+        }
+        let failed: Vec<_> = (self.plugins.jobs.iter())
+            .filter(|job| job.plugin == plugin)
+            .map(|job| job.id)
+            .collect();
+        let mut reported = !failed.is_empty();
+        for id in failed {
+            self.finish_plugin_job(id, Err(message.clone()));
+        }
+        reported |= self.fail_format_jobs(plugin, Some(&message));
+        self.plugins.pending.retain(|(id, _), _| id != plugin);
+        for (key, pane) in &mut self.plugins.panes {
+            if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
+                pane.pending = false;
+                pane.dirty = false;
+                pane.queued = None;
+                pane.error = Some(message.clone());
+            }
+        }
+        if !reported {
+            self.status = message.lines().next().unwrap_or_default().to_owned();
+        }
+    }
+
+    /// Fail plugins that have not answered `initialize` in time.
+    fn check_starting_plugins(&mut self) {
+        let late: Vec<String> = (self.plugins.starting.iter())
+            .filter(|(_, since)| since.elapsed() > INITIALIZE_TIMEOUT)
+            .map(|(plugin, _)| plugin.clone())
+            .collect();
+        for plugin in late {
+            self.plugin_failed_to_start(&plugin, tr("it did not answer in time"));
         }
     }
 
@@ -880,9 +966,39 @@ impl EditorApp {
             (None, None) => Ok(Value::Null),
         };
         match pending {
+            Pending::Initialize => {
+                self.plugins.starting.remove(plugin);
+                let version = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("protocol"))
+                    .and_then(Value::as_u64);
+                let error = match result {
+                    Err(error) => Some(error.message),
+                    Ok(_)
+                        if version.is_some_and(|v| v != u64::from(plugins::manifest::PROTOCOL)) =>
+                    {
+                        Some(format!(
+                            "{} {}",
+                            tr("it speaks protocol"),
+                            version.unwrap_or_default()
+                        ))
+                    }
+                    Ok(_) => (self.plugins.processes.get_mut(plugin))
+                        .and_then(|process| process.set_ready().err())
+                        .map(|error| error.to_string()),
+                };
+                if let Some(error) = error {
+                    self.plugin_failed_to_start(plugin, &error);
+                }
+            }
             Pending::Job(id) => {
                 let result = result.map_err(|error| self.describe_rpc_error(plugin, &error));
                 self.finish_plugin_job(id, result);
+            }
+            Pending::Format(id) => {
+                let result = result.map_err(|error| self.describe_rpc_error(plugin, &error));
+                self.finish_format_job(id, result);
             }
             Pending::Render(key) => {
                 let Some(state) = self.plugins.panes.get_mut(&key) else {
@@ -1762,13 +1878,15 @@ impl EditorApp {
             .collect()
     }
 
-    /// Load a file through a plugin's `format/import`.
-    pub(super) fn import_with_plugin(
+    /// Start loading a file through a plugin's `format/import`. The file
+    /// opens when the plugin answers; the editor stays usable meanwhile.
+    pub(super) fn start_plugin_import(
         &mut self,
         plugin: &str,
         format: &str,
         path: &Path,
-    ) -> Result<Document> {
+        as_layer: bool,
+    ) -> Result<()> {
         if !self.plugin_granted(plugin) {
             self.plugins.permission_request =
                 Some((plugin.into(), PendingStart::Action(String::new())));
@@ -1779,17 +1897,164 @@ impl EditorApp {
             );
         }
         let work_dir = plugins::private_dir("xuan-import-")?;
-        let process = self.plugin_process(plugin)?;
-        let id = process.request(
+        let params = json!({"format": format, "path": path, "work_dir": work_dir.path()});
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let label = format!("{} {name}", tr("Opening"));
+        self.start_format_job(
+            plugin,
             "format/import",
-            json!({"format": format, "path": path, "work_dir": work_dir.path()}),
-        )?;
-        let (result, others) = process
-            .wait_for(&id, FORMAT_TIMEOUT)
-            .inspect_err(|_| self.reap_plugin(plugin))?;
+            params,
+            label,
+            FormatKind::Import {
+                path: path.to_path_buf(),
+                as_layer,
+            },
+            work_dir,
+        )
+    }
+
+    /// Start saving the flattened document through a plugin's
+    /// `format/export`. The status bar reports when it is written.
+    pub(super) fn start_plugin_export(
+        &mut self,
+        plugin: &str,
+        format: &str,
+        path: &Path,
+    ) -> Result<()> {
+        let Some(document) = self.session().map(|s| s.document.clone()) else {
+            bail!("No document is open");
+        };
+        if !self.plugin_granted(plugin) {
+            bail!(
+                "{}",
+                tr("Accept the plugin's permissions in Plugins → Manage Plugins… first")
+            );
+        }
+        let work_dir = plugins::private_dir("xuan-export-")?;
+        let export = edits::export_composite(&document, None, work_dir.path(), "image.png")?;
+        let params = json!({
+            "format": format,
+            "path": path,
+            "image": export.path,
+            "document": edits::describe(&document),
+        });
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let label = format!("{} {name}", tr("Exporting"));
+        self.start_format_job(
+            plugin,
+            "format/export",
+            params,
+            label,
+            FormatKind::Export {
+                path: path.to_path_buf(),
+            },
+            work_dir,
+        )
+    }
+
+    fn start_format_job(
+        &mut self,
+        plugin: &str,
+        method: &str,
+        params: Value,
+        label: String,
+        kind: FormatKind,
+        work_dir: tempfile::TempDir,
+    ) -> Result<()> {
+        let process = self.plugin_process(plugin)?;
+        let request = process.request(method, params)?;
+        let id = Uuid::new_v4();
         self.plugins
-            .backlog
-            .extend(others.into_iter().map(|m| (plugin.to_owned(), m)));
+            .pending
+            .insert((plugin.to_owned(), request), Pending::Format(id));
+        self.status = format!("{label}…");
+        self.plugins.formats.push(FormatJob {
+            id,
+            plugin: plugin.to_owned(),
+            label,
+            kind,
+            started: std::time::Instant::now(),
+            work_dir,
+        });
+        Ok(())
+    }
+
+    /// Stop waiting for a format job; a late answer is ignored.
+    pub(super) fn cancel_format_job(&mut self, id: Uuid) {
+        self.plugins.formats.retain(|job| job.id != id);
+        self.plugins
+            .pending
+            .retain(|_, pending| !matches!(pending, Pending::Format(job) if *job == id));
+        self.status = tr("Cancelled").into();
+    }
+
+    /// End the format jobs of a plugin that stopped; `reason` is shown for
+    /// each, or nothing when the user stopped it.
+    fn fail_format_jobs(&mut self, plugin: &str, reason: Option<&str>) -> bool {
+        let failed: Vec<Uuid> = (self.plugins.formats.iter())
+            .filter(|job| job.plugin == plugin)
+            .map(|job| job.id)
+            .collect();
+        for id in &failed {
+            match reason {
+                Some(reason) => self.finish_format_job(*id, Err(reason.to_owned())),
+                None => self.plugins.formats.retain(|job| job.id != *id),
+            }
+        }
+        !failed.is_empty()
+    }
+
+    /// Fail format jobs that have waited too long.
+    fn check_format_jobs(&mut self) {
+        let late: Vec<Uuid> = (self.plugins.formats.iter())
+            .filter(|job| job.started.elapsed() > FORMAT_TIMEOUT)
+            .map(|job| job.id)
+            .collect();
+        for id in late {
+            self.plugins
+                .pending
+                .retain(|_, pending| !matches!(pending, Pending::Format(job) if *job == id));
+            self.finish_format_job(id, Err(tr("the plugin did not answer in time").into()));
+        }
+    }
+
+    fn finish_format_job(&mut self, id: Uuid, result: Result<Value, String>) {
+        let Some(index) = self.plugins.formats.iter().position(|job| job.id == id) else {
+            return;
+        };
+        let job = self.plugins.formats.remove(index);
+        match job.kind {
+            FormatKind::Import { path, as_layer } => {
+                let document = result.map_err(anyhow::Error::msg).and_then(|value| {
+                    self.imported_document(&job.plugin, value, job.work_dir.path())
+                });
+                match document {
+                    Ok(document) => self.open_imported(document, &path, as_layer),
+                    Err(error) => {
+                        self.error = Some(format!(
+                            "{} {}\n\n{error:#}",
+                            tr("Could not open"),
+                            path.display()
+                        ))
+                    }
+                }
+            }
+            FormatKind::Export { path } => match result {
+                Ok(_) => self.status = format!("{} {}", tr("Exported"), path.display()),
+                Err(error) => {
+                    self.error = Some(format!(
+                        "{} {}\n\n{error}",
+                        tr("Could not export"),
+                        path.display()
+                    ))
+                }
+            },
+        }
+    }
+
+    /// The document a plugin's `format/import` answer describes. Its images
+    /// are read from the plugin's folders and the import's `work_dir`.
+    fn imported_document(&self, plugin: &str, result: Value, work_dir: &Path) -> Result<Document> {
         #[derive(serde::Deserialize)]
         struct Imported {
             width: u32,
@@ -1834,7 +2099,7 @@ impl EditorApp {
             "The plugin returned more than {} layers",
             edits::MAX_IMPORT_LAYERS
         );
-        let access = self.plugins.access(plugin).with(work_dir.path());
+        let access = self.plugins.access(plugin).with(work_dir);
         let mut reader = edits::Reader::new(access, edits::MAX_IMPORT_LAYERS);
         for layer in imported.layers {
             let edits = vec![edits::Edit::AddLayer {
@@ -1857,43 +2122,6 @@ impl EditorApp {
             }
         }
         Ok(document)
-    }
-
-    /// Save the flattened document through a plugin's `format/export`.
-    pub(super) fn export_with_plugin(
-        &mut self,
-        plugin: &str,
-        format: &str,
-        path: &Path,
-    ) -> Result<()> {
-        let Some(document) = self.session().map(|s| s.document.clone()) else {
-            bail!("No document is open");
-        };
-        if !self.plugin_granted(plugin) {
-            bail!(
-                "{}",
-                tr("Accept the plugin's permissions in Plugins → Manage Plugins… first")
-            );
-        }
-        let work_dir = plugins::private_dir("xuan-export-")?;
-        let export = edits::export_composite(&document, None, work_dir.path(), "image.png")?;
-        let process = self.plugin_process(plugin)?;
-        let id = process.request(
-            "format/export",
-            json!({
-                "format": format,
-                "path": path,
-                "image": export.path,
-                "document": edits::describe(&document),
-            }),
-        )?;
-        let (_, others) = process
-            .wait_for(&id, FORMAT_TIMEOUT)
-            .inspect_err(|_| self.reap_plugin(plugin))?;
-        self.plugins
-            .backlog
-            .extend(others.into_iter().map(|m| (plugin.to_owned(), m)));
-        Ok(())
     }
 }
 

@@ -675,11 +675,12 @@ impl EditorApp {
 
     /// Floating status for running plugin jobs.
     pub(super) fn plugin_job_windows(&mut self, ctx: &egui::Context) {
-        let jobs: Vec<(uuid::Uuid, String, Option<f32>, String)> = self
-            .plugins
-            .jobs
-            .iter()
+        let jobs: Vec<(uuid::Uuid, String, Option<f32>, String)> = (self.plugins.jobs.iter())
             .map(|job| (job.id, job.label.clone(), job.progress, job.message.clone()))
+            .chain(
+                (self.plugins.formats.iter())
+                    .map(|job| (job.id, job.label.clone(), None, String::new())),
+            )
             .collect();
         let mut cancel = None;
         for (index, (id, label, progress, message)) in jobs.iter().enumerate() {
@@ -723,7 +724,11 @@ impl EditorApp {
                 });
         }
         if let Some(id) = cancel {
-            self.cancel_plugin_job(id);
+            if self.plugins.formats.iter().any(|job| job.id == id) {
+                self.cancel_format_job(id);
+            } else {
+                self.cancel_plugin_job(id);
+            }
         }
     }
 

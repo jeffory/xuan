@@ -344,6 +344,13 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
 
 - One plugin process per plugin, started on first use and kept alive; a crash
   is reported and the plugin restarts on its next use.
+- The editor never waits for a plugin. It sends `initialize` and holds back
+  everything else for that plugin until the answer arrives; a plugin that
+  does not answer within 20 seconds is stopped and reported with the end of
+  its log. `format/import` and `format/export` run in the background like
+  jobs, can be cancelled, and fail after 5 minutes without an answer.
+- Stopping a plugin closes its stdin and kills its whole process tree (its
+  process group on Unix, its Job Object on Windows) shortly after.
 - The host answers plugin requests on the UI thread between frames; a plugin
   must not expect sub-frame latency.
 - Jobs run in the background and the editor remains usable. Only one job per

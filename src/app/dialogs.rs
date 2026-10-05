@@ -919,22 +919,30 @@ impl EditorApp {
                 .set_file_name(format!("{title}.{}", self.export_format))
                 .save_file()
             {
-                let result = match plugin_formats
+                match plugin_formats
                     .iter()
                     .find(|(extension, ..)| *extension == self.export_format)
                 {
+                    // The plugin writes the file in the background and the
+                    // status bar reports when it is done.
                     Some((_, _, plugin, format)) => {
                         let (plugin, format) = (plugin.clone(), format.clone());
-                        self.export_with_plugin(&plugin, &format, &path)
+                        match self.start_plugin_export(&plugin, &format, &path) {
+                            Ok(()) => self.dialog = None,
+                            Err(error) => self.error = Some(format!("{error:#}")),
+                        }
                     }
-                    None => io::export(&self.session().unwrap().document, &path, self.jpeg_quality),
-                };
-                match result {
-                    Ok(()) => {
-                        self.status = format!("{} {}", tr("Exported"), path.display());
-                        self.dialog = None;
-                    }
-                    Err(error) => self.error = Some(format!("{error:#}")),
+                    None => match io::export(
+                        &self.session().unwrap().document,
+                        &path,
+                        self.jpeg_quality,
+                    ) {
+                        Ok(()) => {
+                            self.status = format!("{} {}", tr("Exported"), path.display());
+                            self.dialog = None;
+                        }
+                        Err(error) => self.error = Some(format!("{error:#}")),
+                    },
                 }
             }
         }

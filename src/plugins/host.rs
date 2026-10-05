@@ -165,6 +165,11 @@ pub struct Process {
     held: Vec<Incoming>,
     log: Arc<Mutex<VecDeque<String>>>,
     closed: Arc<AtomicBool>,
+    /// False between `initialize` and its answer. Requests and notifications
+    /// sent meanwhile wait in `outbox`, so the plugin sees nothing before
+    /// `initialize` has been answered, as the protocol promises.
+    ready: bool,
+    outbox: Vec<Message>,
 }
 
 impl Process {
@@ -298,7 +303,32 @@ impl Process {
             held: Vec::new(),
             log,
             closed,
+            ready: true,
+            outbox: Vec::new(),
         })
+    }
+
+    /// Send `initialize` without waiting for the answer. Until
+    /// [`Process::set_ready`], later requests and notifications are held back.
+    pub fn initialize(&mut self, params: Value) -> Result<Id> {
+        let id = Id::Number(NEXT_ID.fetch_add(1, Ordering::Relaxed));
+        self.send(&Message::request(id.clone(), "initialize", params))?;
+        self.ready = false;
+        Ok(id)
+    }
+
+    /// Whether `initialize` has been answered.
+    pub fn ready(&self) -> bool {
+        self.ready
+    }
+
+    /// `initialize` was answered: send what was held back.
+    pub fn set_ready(&mut self) -> Result<()> {
+        self.ready = true;
+        for message in std::mem::take(&mut self.outbox) {
+            self.send(&message)?;
+        }
+        Ok(())
     }
 
     /// Whether the plugin can still receive messages.
@@ -310,12 +340,23 @@ impl Process {
 
     pub fn request(&mut self, method: &str, params: Value) -> Result<Id> {
         let id = Id::Number(NEXT_ID.fetch_add(1, Ordering::Relaxed));
-        self.send(&Message::request(id.clone(), method, params))?;
+        self.send_when_ready(Message::request(id.clone(), method, params))?;
         Ok(id)
     }
 
     pub fn notify(&mut self, method: &str, params: Value) -> Result<()> {
-        self.send(&Message::notification(method, params))
+        self.send_when_ready(Message::notification(method, params))
+    }
+
+    fn send_when_ready(&mut self, message: Message) -> Result<()> {
+        if self.ready {
+            return self.send(&message);
+        }
+        if self.stdin.is_none() {
+            bail!("the plugin has stopped");
+        }
+        self.outbox.push(message);
+        Ok(())
     }
 
     pub fn respond(&mut self, id: Id, result: Result<Value, RpcError>) -> Result<()> {

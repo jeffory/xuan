@@ -905,40 +905,40 @@ impl EditorApp {
         self.mask_target = false;
     }
 
-    /// Open a file through the plugin that declared its format.
+    /// Open a file through the plugin that declared its format. The plugin
+    /// answers in the background; [`EditorApp::open_imported`] opens it then.
     fn open_with_plugin(&mut self, plugin: &str, format: &str, path: &Path, as_layer: bool) {
-        match self.import_with_plugin(plugin, format, path) {
-            Ok(document) => {
-                let title = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                if as_layer && !self.sessions.is_empty() {
-                    let image = xuan::render::render(&document);
-                    self.edit(tr("Import Image"), |doc| {
-                        let mut layer = Layer::image(title, image);
-                        layer.transform.x = (doc.width as f32 - layer.transform.width) * 0.5;
-                        layer.transform.y = (doc.height as f32 - layer.transform.height) * 0.5;
-                        doc.insert(layer);
-                        Ok(())
-                    });
-                    return;
-                }
-                self.sessions.push(Session::new(document, title, None));
-                self.current = self.sessions.len() - 1;
-                self.session_mut().unwrap().history.mark_modified();
-                self.mask_target = false;
-                self.dialog = None;
-            }
-            Err(error) => {
-                self.error = Some(format!(
-                    "{} {}\n\n{error:#}",
-                    tr("Could not open"),
-                    path.display()
-                ))
-            }
+        if let Err(error) = self.start_plugin_import(plugin, format, path, as_layer) {
+            self.error = Some(format!(
+                "{} {}\n\n{error:#}",
+                tr("Could not open"),
+                path.display()
+            ))
         }
+    }
+
+    /// Show a document a plugin imported, as a new tab or a layer.
+    fn open_imported(&mut self, document: Document, path: &Path, as_layer: bool) {
+        let title = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if as_layer && !self.sessions.is_empty() {
+            let image = xuan::render::render(&document);
+            self.edit(tr("Import Image"), |doc| {
+                let mut layer = Layer::image(title, image);
+                layer.transform.x = (doc.width as f32 - layer.transform.width) * 0.5;
+                layer.transform.y = (doc.height as f32 - layer.transform.height) * 0.5;
+                doc.insert(layer);
+                Ok(())
+            });
+            return;
+        }
+        self.sessions.push(Session::new(document, title, None));
+        self.current = self.sessions.len() - 1;
+        self.session_mut().unwrap().history.mark_modified();
+        self.mask_target = false;
     }
 
     /// Repeat the plugin action that generated the active layer.
