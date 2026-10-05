@@ -701,6 +701,62 @@ mod layer_appearance {
     }
 
     #[test]
+    fn layer_effects_are_added_edited_and_kept_on_the_layer() {
+        use xuan::layer_effects::{EffectKind, ShadowEffect};
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        let pixels = active(&ui).pixels.clone();
+        ui.open_menu("Layer");
+        ui.click("Layer Effects…");
+        assert!(ui.app().dialog == Some(Dialog::LayerEffects));
+        // Not the adjustment and filter dialog.
+        assert!(ui.app().effect.is_none());
+        ui.click("Show Drop Shadow");
+        // Shown live on the canvas while the dialog is open.
+        let effects = active(&ui).effects.clone().unwrap();
+        assert_eq!(effects.drop_shadow, Some(ShadowEffect::DROP));
+        let shows =
+            |ui: &UiTest, label: &str| ui.harness.query_all_by_label(label).next().is_some();
+        assert!(shows(&ui, "Distance") && shows(&ui, "Angle") && shows(&ui, "Blur"));
+        ui.click("Show Stroke");
+        assert!(shows(&ui, "Outside") && shows(&ui, "Inside"));
+        ui.click("Inside");
+        ui.click("OK");
+        assert!(ui.app().dialog.is_none());
+        let effects = active(&ui).effects.clone().unwrap();
+        assert!(effects.is_enabled(EffectKind::DropShadow));
+        assert!(effects.stroke.unwrap().inside);
+        // The pixels are untouched; the effects are one undo step.
+        assert!(std::sync::Arc::ptr_eq(
+            active(&ui).pixels.as_ref().unwrap(),
+            pixels.as_ref().unwrap()
+        ));
+        // Editable again later: hiding one keeps its settings, Cancel restores it.
+        ui.open_menu("Layer");
+        ui.click("Layer Effects…");
+        ui.click("Show Drop Shadow");
+        assert!(
+            !active(&ui)
+                .effects
+                .as_ref()
+                .unwrap()
+                .is_enabled(EffectKind::DropShadow)
+        );
+        ui.click("Cancel");
+        assert!(
+            active(&ui)
+                .effects
+                .as_ref()
+                .unwrap()
+                .is_enabled(EffectKind::DropShadow)
+        );
+        ui.app_mut().command("undo");
+        ui.settle();
+        assert_eq!(active(&ui).effects, None);
+    }
+
+    #[test]
     fn black_white_and_color_balance_layers_come_from_the_layer_menu() {
         use xuan::document::Adjustment;
         let mut ui = UiTest::with_document();

@@ -760,7 +760,19 @@ pub fn apply(layer: &Layer) -> Option<Layer> {
     let (width, height) = (pixels.width() as f32, pixels.height() as f32);
     let (mx, my) = (margin as f32 / width, margin as f32 / height);
     let mut drawn = layer.clone();
-    drawn.transform = layer.transform.expanded(-mx, -my, 1.0 + mx, 1.0 + my);
+    drawn.transform = if layer.transform.warp.is_none() {
+        // Grown evenly about the same center: rotation and flips are unchanged, so
+        // upstream's `placed` (scale the size, keep the center) is exact.
+        let center = layer.transform.center();
+        let mut grown = layer.transform;
+        grown.width *= 1.0 + 2.0 * mx;
+        grown.height *= 1.0 + 2.0 * my;
+        grown.x = center.x - grown.width * 0.5;
+        grown.y = center.y - grown.height * 0.5;
+        grown
+    } else {
+        layer.transform.expanded(-mx, -my, 1.0 + mx, 1.0 + my)
+    };
     drawn.pixels = Some(result);
     drawn.mask = None;
     drawn.effects = None;

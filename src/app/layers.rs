@@ -385,6 +385,16 @@ impl EditorApp {
                                                     }
                                                 )
                                             };
+                                            // Photoshop's "fx" marks a layer with effects.
+                                            let detail = if layer
+                                                .effects
+                                                .as_ref()
+                                                .is_some_and(|e| !e.is_empty())
+                                            {
+                                                format!("{detail} · fx")
+                                            } else {
+                                                detail
+                                            };
                                             ui.add(
                                                 egui::Label::new(
                                                     RichText::new(detail)
@@ -460,6 +470,13 @@ impl EditorApp {
             }
             if layer.filter.is_some() && ui.button(tr("Edit filter…")).clicked() {
                 actions.edit_filter = Some(layer.id);
+                ui.close();
+            }
+            if super::layer_effects_dialog::can_take_effects(layer)
+                && ui.button(tr("Layer Effects…")).clicked()
+            {
+                actions.select = Some((layer.id, false));
+                actions.command = Some("layer_effects");
                 ui.close();
             }
             if ui.button(tr("Rename…")).clicked() {

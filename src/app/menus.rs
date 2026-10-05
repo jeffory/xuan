@@ -340,6 +340,20 @@ impl EditorApp {
                                         );
                                     },
                                 );
+                                ui.add_enabled_ui(
+                                    self.session()
+                                        .and_then(|s| s.document.active())
+                                        .is_some_and(super::layer_effects_dialog::can_take_effects),
+                                    |ui| {
+                                        item(
+                                            ui,
+                                            tr("Layer Effects…"),
+                                            "",
+                                            "layer_effects",
+                                            &mut action,
+                                        );
+                                    },
+                                );
                                 ui.separator();
                                 item(ui, tr("Group Layers"), "Ctrl+G", "group", &mut action);
                                 item(

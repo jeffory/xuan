@@ -643,7 +643,7 @@ Drag from a ruler	从标尺拖动
 New guide	新建参考线
 Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
-Layer effects (stroke, shadow, color overlay, glow)	图层效果（描边、阴影、颜色叠加、发光）
+Layer effects on folders or adjustment layers	文件夹或调整图层上的图层效果
 Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
 Per-letter text colors (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
 Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
@@ -651,3 +651,19 @@ Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以
 Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
 Blur or noise settings adapted to Xuan	已按 Xuan 调整的模糊或杂色设置
 Clipping masks on blur or noise layers	模糊或杂色图层上的剪贴蒙版
+Layer Effects	图层效果
+Layer Effects…	图层效果…
+Stroke	描边
+Drop Shadow	投影
+Color Overlay	颜色叠加
+Inner Shadow	内阴影
+Outer Glow	外发光
+Inner Glow	内发光
+Position	位置
+Outside	外部
+Inside	内部
+Remove Effect	移除效果
+Add Effect	添加效果
+Not on this layer	此图层上没有
+Effects stay editable; the pixels are not changed	效果可随时编辑，不会改变像素
+Select a pixel or text layer to add effects	请选择像素或文字图层以添加效果

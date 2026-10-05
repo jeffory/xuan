@@ -21,6 +21,7 @@ use crate::{
     document::{Adjustment, Document, Layer, Mask, Point, Transform},
     effects::Filter,
     i18n::tr,
+    layer_effects::LayerEffects,
     layout::{Guide, GuideAxis, MAX_GUIDE_POSITION, MAX_GUIDES},
     text::{MAX_TEXT_BYTES, TextStyle},
 };
@@ -42,20 +43,11 @@ const XUAN_ONLY_BLEND_MODES: [BlendMode; 3] = [
     BlendMode::DarkerColor,
     BlendMode::LighterColor,
 ];
-/// Keys of a layer's `effects` record (stroke, drop shadow, color overlay, inner shadow, glows).
-const EFFECT_KINDS: [&str; 6] = [
-    "stroke",
-    "shadow",
-    "colorOverlay",
-    "innerShadow",
-    "outerGlow",
-    "innerGlow",
-];
 
 /// Something in a Compositor project that Xuan imported only partly, or not at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dropped {
-    /// One stroke, shadow, color overlay or glow effect (visible or hidden).
+    /// Effects on a folder or an adjustment layer, which upstream never draws; left out.
     LayerEffect,
     /// A text layer whose alignment, tracking, leading or paragraph box Xuan ignores.
     TextLayout,
@@ -76,7 +68,7 @@ pub enum Dropped {
 impl Dropped {
     fn label(self) -> String {
         match self {
-            Self::LayerEffect => tr("Layer effects (stroke, shadow, color overlay, glow)").into(),
+            Self::LayerEffect => tr("Layer effects on folders or adjustment layers").into(),
             Self::TextLayout => {
                 tr("Text alignment, spacing or paragraph box (kept until the text is edited)")
                     .into()
@@ -563,17 +555,88 @@ fn comp_text(value: &Value, version: u64, report: &mut ImportReport) -> Result<O
     Ok(Some(style))
 }
 
-/// Count a layer's effects; Xuan has no layer effects yet, so none of them are imported.
-fn comp_effects(value: &Value, report: &mut ImportReport) -> Result<()> {
+/// A layer's `effects` record (upstream's `LayerEffects`, Document/LayerEffects.swift): each
+/// effect's settings, with upstream's defaults for missing fields and its ranges checked.
+fn comp_effects(value: &Value) -> Result<LayerEffects> {
+    use crate::layer_effects::{GlowEffect, OverlayEffect, ShadowEffect, StrokeEffect};
     let effects = value.as_object().context("Invalid layer effects")?;
-    for kind in EFFECT_KINDS {
-        match effects.get(kind) {
-            None | Some(Value::Null) => {}
-            Some(Value::Object(_)) => report.add(Dropped::LayerEffect),
-            Some(_) => bail!("Invalid layer effect: {kind}"),
+    let record = |key: &str| -> Result<Option<&Value>> {
+        match effects.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(record @ Value::Object(_)) => Ok(Some(record)),
+            Some(_) => bail!("Invalid layer effect: {key}"),
         }
-    }
-    Ok(())
+    };
+    // Missing in older projects means visible.
+    let enabled = |r: &Value| r["enabled"].as_bool().unwrap_or(true);
+    let color = |r: &Value, default: f32| -> Result<[u8; 3]> {
+        let mut rgb = [0; 3];
+        for (channel, key) in rgb.iter_mut().zip(["red", "green", "blue"]) {
+            let value = number(r, key, default);
+            ensure!(
+                value.is_finite() && (0.0..=1.0).contains(&value),
+                "Invalid layer effect color"
+            );
+            *channel = (value * 255.0).round() as u8;
+        }
+        Ok(rgb)
+    };
+    let shadow = |r: &Value, defaults: ShadowEffect| -> Result<ShadowEffect> {
+        Ok(ShadowEffect {
+            enabled: enabled(r),
+            angle: number(r, "angle", defaults.angle),
+            distance: number(r, "distance", defaults.distance),
+            blur: number(r, "blur", defaults.blur),
+            color: color(r, 0.0)?,
+            opacity: number(r, "opacity", defaults.opacity),
+        })
+    };
+    let glow = |r: &Value, defaults: GlowEffect| -> Result<GlowEffect> {
+        Ok(GlowEffect {
+            enabled: enabled(r),
+            size: number(r, "size", defaults.size),
+            color: color(r, 1.0)?,
+            opacity: number(r, "opacity", defaults.opacity),
+        })
+    };
+    let result = LayerEffects {
+        stroke: match record("stroke")? {
+            Some(r) => Some(StrokeEffect {
+                enabled: enabled(r),
+                size: number(r, "size", 4.0),
+                color: color(r, 0.0)?,
+                opacity: number(r, "opacity", 1.0),
+                inside: r["inside"].as_bool().unwrap_or(false),
+            }),
+            None => None,
+        },
+        drop_shadow: match record("shadow")? {
+            Some(r) => Some(shadow(r, ShadowEffect::DROP)?),
+            None => None,
+        },
+        color_overlay: match record("colorOverlay")? {
+            Some(r) => Some(OverlayEffect {
+                enabled: enabled(r),
+                color: color(r, 0.0)?,
+                opacity: number(r, "opacity", 1.0),
+            }),
+            None => None,
+        },
+        inner_shadow: match record("innerShadow")? {
+            Some(r) => Some(shadow(r, ShadowEffect::INNER)?),
+            None => None,
+        },
+        outer_glow: match record("outerGlow")? {
+            Some(r) => Some(glow(r, GlowEffect::OUTER)?),
+            None => None,
+        },
+        inner_glow: match record("innerGlow")? {
+            Some(r) => Some(glow(r, GlowEffect::INNER)?),
+            None => None,
+        },
+    };
+    result.validate()?;
+    Ok(result)
 }
 
 /// Upstream stores a blend mode by its display name, which Xuan's `BlendMode::name` matches.
@@ -697,9 +760,11 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
                 &mut report,
             )?)
         };
-        if !record["effects"].is_null() {
-            comp_effects(&record["effects"], &mut report)?;
-        }
+        let effects = if record["effects"].is_null() {
+            LayerEffects::default()
+        } else {
+            comp_effects(&record["effects"])?
+        };
         if let Some(name) = record["imageFile"].as_str() {
             ensure!(
                 name.eq_ignore_ascii_case(&format!("{id}.png")),
@@ -775,6 +840,13 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
                 layer.filter = Some(filter);
             }
             None => {}
+        }
+        if !effects.is_empty() {
+            if layer.group || layer.is_effect() {
+                report.add(Dropped::LayerEffect);
+            } else {
+                layer.effects = Some(effects);
+            }
         }
         document.layers.push(layer);
     }

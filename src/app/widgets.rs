@@ -314,6 +314,15 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
 }
 
 pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
+    described_checkbox(ui, value, label, label)
+}
+
+/// A checkbox without visible text, named `description` for assistive technology.
+pub fn bare_checkbox(ui: &mut Ui, value: &mut bool, description: &str) -> Response {
+    described_checkbox(ui, value, "", description)
+}
+
+fn described_checkbox(ui: &mut Ui, value: &mut bool, label: &str, description: &str) -> Response {
     let galley = ui
         .painter()
         .layout_no_wrap(label.into(), FontId::proportional(12.0), theme::TEXT);
@@ -329,7 +338,12 @@ pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *value, label)
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            *value,
+            description,
+        )
     });
     let box_rect =
         Rect::from_center_size(pos2(rect.left() + 7.0, rect.center().y), vec2(14.0, 14.0));

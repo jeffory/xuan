@@ -15,6 +15,7 @@ mod grid_settings;
 mod guides;
 mod icons;
 mod jobs;
+mod layer_effects_dialog;
 mod layers;
 mod layout_grid;
 mod levels_controls;
@@ -326,6 +327,8 @@ enum Dialog {
     Settings,
     DropChoice,
     GridSettings,
+    /// Layer → Layer Effects…; not `Effect`, which edits adjustments and filters.
+    LayerEffects,
 }
 
 struct EffectEdit {
@@ -467,6 +470,8 @@ pub struct EditorApp {
     resolution: f32,
     anchor: [f32; 2],
     effect: Option<EffectEdit>,
+    /// Layer → Layer Effects… while it is open.
+    layer_effects: Option<layer_effects_dialog::LayerEffectsEdit>,
     error: Option<String>,
     /// A non-fatal message about a finished operation, such as what an import left out.
     notice: Option<String>,
@@ -629,6 +634,7 @@ impl EditorApp {
             resolution: 72.0,
             anchor: [0.5, 0.5],
             effect: None,
+            layer_effects: None,
             error: None,
             notice: None,
             status: String::new(),
@@ -1078,6 +1084,7 @@ impl EditorApp {
             }
         }
         match command {
+            "layer_effects" => self.start_layer_effects(None),
             "develop" => {
                 if let Some(id) = self.session().and_then(|s| s.document.active) {
                     self.start_develop_layer(id);
@@ -1555,6 +1562,7 @@ impl EditorApp {
         self.dialogs(ctx);
         if self.gesture.is_none()
             && self.effect.is_none()
+            && self.layer_effects.is_none()
             && self.text_edit.is_none()
             && self.job.is_none()
             && !ctx.input(|i| i.pointer.any_down())

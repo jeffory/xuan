@@ -209,6 +209,33 @@ fn version_7_imports_invert_black_white_and_color_balance() {
 }
 
 #[test]
+fn effects_on_folders_and_adjustment_layers_are_left_out() {
+    let (group, invert, photo) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let effects = json!({"colorOverlay": {"red": 1, "green": 0, "blue": 0, "opacity": 1}});
+    let mut group_record = folder(group, "Folder");
+    group_record["effects"] = effects.clone();
+    let mut invert_record = adjustment(invert, json!({"kind": "Invert"}));
+    invert_record["effects"] = effects.clone();
+    let mut photo_record = image_layer(photo, "Photo");
+    photo_record["effects"] = effects;
+    let (document, report) = import(&manifest(
+        8,
+        vec![group_record, photo_record, invert_record],
+    ))
+    .unwrap();
+    assert_eq!(report.count(Dropped::LayerEffect), 2);
+    assert!(find(&document, group).effects.is_none());
+    assert!(find(&document, invert).effects.is_none());
+    let overlay = find(&document, photo)
+        .effects
+        .as_ref()
+        .unwrap()
+        .color_overlay
+        .unwrap();
+    assert_eq!(overlay.color, [255, 0, 0]);
+}
+
+#[test]
 fn version_8_imports_folder_opacity_and_guides() {
     let (group, child) = (Uuid::new_v4(), Uuid::new_v4());
     let mut group_record = folder(group, "Folder");
@@ -427,7 +454,26 @@ fn version_11_imports_text_fonts_effects_and_photoshop_blend_modes() {
     assert_eq!(report.count(Dropped::TextFonts), 1);
     assert_eq!(report.count(Dropped::TextColors), 1);
     assert_eq!(report.count(Dropped::TextLayout), 1);
-    assert_eq!(report.count(Dropped::LayerEffect), 3);
+    // Effects come across with their settings; the hidden shadow stays hidden.
+    assert_eq!(report.count(Dropped::LayerEffect), 0);
+    let effects = find(&document, shadowed).effects.clone().unwrap();
+    let stroke = effects.stroke.unwrap();
+    assert_eq!(
+        (stroke.size, stroke.color, stroke.inside),
+        (4.0, [0; 3], false)
+    );
+    let shadow = effects.drop_shadow.unwrap();
+    assert!(!shadow.enabled);
+    assert_eq!(
+        (shadow.angle, shadow.distance, shadow.blur, shadow.opacity),
+        (90.0, 20.0, 20.0, 0.5)
+    );
+    let glow = effects.outer_glow.unwrap();
+    assert_eq!(
+        (glow.size, glow.color, glow.opacity),
+        (20.0, [255; 3], 0.75)
+    );
+    assert!(effects.color_overlay.is_none() && effects.inner_glow.is_none());
     // Photoshop's blend modes come across under upstream's names.
     assert_eq!(find(&document, shadowed).blend, BlendMode::LinearBurn);
     assert_eq!(find(&document, burned).blend, BlendMode::LinearBurn);
@@ -462,7 +508,7 @@ fn summarizes_what_the_import_left_out_in_each_language() {
     let summary = report.summary().unwrap();
     assert!(summary.starts_with("Imported with changes."), "{summary}");
     assert!(
-        summary.contains("Layer effects (stroke, shadow, color overlay, glow): 3"),
+        summary.contains("Layer effects on folders or adjustment layers: 3"),
         "{summary}"
     );
     assert!(
@@ -629,6 +675,14 @@ fn rejects_hostile_or_damaged_packages() {
         (
             "effect value",
             with(&|v| v["layers"][0]["effects"] = json!({"stroke": 4})),
+        ),
+        (
+            "effect out of range",
+            with(&|v| v["layers"][0]["effects"] = json!({"outerGlow": {"size": 501}})),
+        ),
+        (
+            "effect color out of range",
+            with(&|v| v["layers"][0]["effects"] = json!({"colorOverlay": {"red": 1.5}})),
         ),
         (
             "shape kind",

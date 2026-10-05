@@ -27,12 +27,12 @@ The importer reads Compositor `.comp` directory packages, format versions 1–11
 | `text` alignment, `tracking`, `leading`, `boxSize`; `colorRuns` (10); `fontRuns` (11) | Not represented. The layer's PNG keeps the original look until the text is edited in Xuan |
 | text over 16 KiB or larger than 1024 px | Imported as plain pixels |
 | Photoshop blend modes (Linear Burn, Linear Dodge (Add), Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide) | The same blend modes; the project then saves as `.xuan` version 6 |
-| `effects` (stroke, shadow, color overlay, inner shadow, outer/inner glow) | Left out |
+| `effects` (stroke, shadow, color overlay, inner shadow, outer/inner glow) | Layer effects with the same settings (colors rounded to 8 bits; missing fields take upstream's defaults); the project then saves as `.xuan` version 6. Effects on folders or adjustment layers, which upstream never draws, are left out |
 | `shape` of kind `Line` | Imported as plain pixels |
 
 Whatever is left out or changed is counted, and the app shows a summary after opening the package ("Imported with changes …"). Clipping masks that relied on a left-out layer, or on a filter layer, are released and counted too.
 
-The package is untrusted input. Besides the limits above, the importer rejects (and opens nothing for) manifests that break upstream's rules: unknown versions, blend modes, adjustment kinds or shape kinds; fields used before the version that introduced them (folder opacity or guides before 8, blur/noise before 9, `colorRuns` before 10, `fontRuns` before 11); folders with a blend mode other than Normal; more than 1,000 guides, duplicate guide IDs or positions beyond ±1,000,000; values outside upstream's ranges (blur radius 0.1–250, motion angle ±90 and distance 1–2,000, noise 0.1–400, font size 1–2,000, colors 0–1, tracking −100–1,000, leading 0–5,000, paragraph boxes 16–30,000 per side and 200 million square pixels); text over 100,000 UTF-16 units; text runs that overlap, are empty, overflow or end past the text; run font names over 200 characters or with line breaks; text on layers without pixels; malformed `effects` records; asset names other than `<layer UUID>.png` / `.mask.png`, symlinked assets and paths leaving the package; more than 64 nested folder levels and folder cycles. The manifest is limited to 4 MiB (and serde_json's nesting limit of 128), each asset to 512 MiB, and decoded images to 30,000 pixels per side and 100 megapixels of layers plus 100 megapixels of masks. Hierarchy and clipping checks use an index, so a 10,000-layer project validates in linear time.
+The package is untrusted input. Besides the limits above, the importer rejects (and opens nothing for) manifests that break upstream's rules: unknown versions, blend modes, adjustment kinds or shape kinds; fields used before the version that introduced them (folder opacity or guides before 8, blur/noise before 9, `colorRuns` before 10, `fontRuns` before 11); folders with a blend mode other than Normal; more than 1,000 guides, duplicate guide IDs or positions beyond ±1,000,000; values outside upstream's ranges (blur radius 0.1–250, motion angle ±90 and distance 1–2,000, noise 0.1–400, font size 1–2,000, colors 0–1, tracking −100–1,000, leading 0–5,000, paragraph boxes 16–30,000 per side and 200 million square pixels); text over 100,000 UTF-16 units; text runs that overlap, are empty, overflow or end past the text; run font names over 200 characters or with line breaks; text on layers without pixels; malformed `effects` records or effect settings outside upstream's ranges; asset names other than `<layer UUID>.png` / `.mask.png`, symlinked assets and paths leaving the package; more than 64 nested folder levels and folder cycles. The manifest is limited to 4 MiB (and serde_json's nesting limit of 128), each asset to 512 MiB, and decoded images to 30,000 pixels per side and 100 megapixels of layers plus 100 megapixels of masks. Hierarchy and clipping checks use an index, so a 10,000-layer project validates in linear time.
 
 ## Embedded RAW (version 2)
 
@@ -81,10 +81,11 @@ Invalid guides or grid settings fail validation on load and save. Rulers, grid a
 visibility, Lock Guides and the Snap To settings are app preferences, not project data.
 Guides follow Crop, Canvas Size, Image Size and Flip Canvas.
 
-## Photoshop blend modes and adjustments (version 6)
+## Photoshop blend modes, adjustments and layer effects (version 6)
 
 Documents in which a layer uses one of the blend modes added with Photoshop's full
-set, or a Black & White or Color Balance adjustment, are written as version 6; everything else keeps the lowest version its content
+set, a Black & White or Color Balance adjustment, or layer effects are written as
+version 6; everything else keeps the lowest version its content
 needs (1–5). The reader accepts versions 1–6.
 
 A layer's `blend` is one of the original `Normal`, `Multiply`, `Screen`, `Overlay`,
@@ -108,3 +109,22 @@ Two adjustment kinds are added, following upstream Compositor's settings and ran
   and blue (from yellow), each −100–100, for each tonal range.
 
 Values outside these ranges fail validation on load and save.
+
+A pixel or text layer may have an `effects` object, after upstream Compositor's layer
+effects. Each key is optional; a missing key is an effect the layer does not have, and
+missing fields inside one take the defaults in parentheses. Every effect has `enabled`
+(true), a `color` `[r, g, b]` and an `opacity` (0–1); sizes and distances are in the
+layer's own pixels:
+
+- `stroke`: `size` 0–500 (4), `inside` (false), opacity 1.
+- `drop_shadow` and `inner_shadow`: `angle` −360–360 (90; degrees counterclockwise
+  from the right to the light, so 90 drops the shadow straight down), `distance` 0–5000
+  (20; 10 for the inner shadow), `blur` 0–500 (20; 10), opacity 0.5, black.
+- `color_overlay`: opacity 1.
+- `outer_glow` and `inner_glow`: `size` 0–500 (20; 10), opacity 0.75, white.
+
+Effects are drawn when the document is rendered and are never saved as pixels. They
+follow the layer's pixels through its own mask; the result is drawn at the layer's
+opacity (and its folders'), in its blend mode, and clipped like the layer itself. A
+layer clipped to one with effects is clipped to the effects too. Folders, masks,
+adjustment and filter layers cannot have effects.

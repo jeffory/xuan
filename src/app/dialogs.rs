@@ -36,6 +36,7 @@ impl EditorApp {
                 Dialog::Export => self.export_dialog(ctx),
                 Dialog::DropChoice => self.drop_dialog(ctx),
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
+                Dialog::LayerEffects => self.layer_effects_dialog(ctx),
                 Dialog::Shortcuts => {
                     let mut open = true;
                     widgets::Window::new(tr("Keyboard shortcuts"))
