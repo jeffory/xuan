@@ -291,6 +291,16 @@ class Pane:
         self.document: Optional[Dict[str, Any]] = params.get("document")
 
 
+class Secrets(dict):
+    """The plugin's secrets: a dict whose ``repr`` names the keys but never
+    shows the values, so logging it or a traceback cannot leak them."""
+
+    def __repr__(self) -> str:
+        return "Secrets({%s})" % ", ".join(f"{key!r}: '<redacted>'" for key in self)
+
+    __str__ = __repr__
+
+
 class Plugin:
     """Register handlers with the decorators, then call ``run()``."""
 
@@ -298,7 +308,7 @@ class Plugin:
         self._transport = _Transport()
         self.host = Host(self._transport)
         self.settings: Dict[str, Any] = {}
-        self.secrets: Dict[str, Any] = {}
+        self.secrets: Secrets = Secrets()
         self.plugin_dir: str = os.getcwd()
         self.data_dir: str = os.environ.get("XUAN_DATA_DIR", os.getcwd())
         self.host_info: Dict[str, Any] = {}
@@ -429,7 +439,7 @@ class Plugin:
     def _dispatch(self, method: str, params: Dict[str, Any]) -> Any:
         if method == "initialize":
             self.settings = params.get("settings") or {}
-            self.secrets = params.get("secrets") or {}
+            self.secrets = Secrets(params.get("secrets") or {})
             self.plugin_dir = params.get("plugin_dir") or self.plugin_dir
             self.data_dir = params.get("data_dir") or self.data_dir
             self.host_info = params.get("host") or {}
@@ -490,7 +500,7 @@ class Plugin:
                 job._cancel.set()
         elif method == "settings/changed":
             self.settings = params.get("settings") or {}
-            self.secrets = params.get("secrets") or {}
+            self.secrets = Secrets(params.get("secrets") or {})
             if self._on_settings:
                 threading.Thread(target=self._on_settings, daemon=True).start()
         elif method == "document/changed":

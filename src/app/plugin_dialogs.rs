@@ -655,9 +655,7 @@ impl EditorApp {
             self.plugins
                 .secrets
                 .set(plugin, setting, value.as_str().unwrap_or_default());
-            if let Some(path) = self.plugins.secrets_path.clone()
-                && let Err(error) = self.plugins.secrets.save(&path)
-            {
+            if let Err(error) = self.plugins.save_secrets() {
                 self.error = Some(format!(
                     "{}\n\n{error:#}",
                     tr("Could not save plugin secrets")

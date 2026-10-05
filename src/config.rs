@@ -176,9 +176,24 @@ impl Secrets {
 
     pub fn load(path: &Path) -> Result<Self> {
         match fs::read_to_string(path) {
-            Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("Cannot parse {}", path.display()))
-            }
+            // The parser's message quotes the offending line, which holds a
+            // secret; only its position is reported.
+            Ok(text) => toml::from_str(&text).map_err(|error| {
+                let line = error
+                    .span()
+                    .map(|span| text.as_bytes()[..span.start.min(text.len())]
+                        .iter()
+                        .filter(|&&byte| byte == b'\n')
+                        .count()
+                        + 1);
+                match line {
+                    Some(line) => anyhow::anyhow!(
+                        "Cannot parse {}: invalid TOML on line {line} (not shown, as it may hold a secret)",
+                        path.display()
+                    ),
+                    None => anyhow::anyhow!("Cannot parse {}: invalid TOML", path.display()),
+                }
+            }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error).with_context(|| format!("Cannot read {}", path.display())),
         }
@@ -475,6 +490,11 @@ mod tests {
         }
         secrets.set("comfy", "api_key", "");
         assert!(secrets.0.is_empty());
+        // A broken file is reported without quoting the secret on the bad line.
+        fs::write(&path, "[comfy]\napi_key = \"sk-live-123\nother = 1\n").unwrap();
+        let error = format!("{:#}", Secrets::load(&path).unwrap_err());
+        assert!(!error.contains("sk-live"), "{error}");
+        assert!(error.contains("line 2"), "{error}");
         let mut config = Config::default();
         config
             .plugins

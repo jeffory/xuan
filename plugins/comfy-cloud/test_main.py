@@ -131,5 +131,17 @@ class Redirects(unittest.TestCase):
             self.redirect(BASE + "/a", "http://storage.example/x")
 
 
+class SdkSecrets(unittest.TestCase):
+    def test_secrets_never_show_their_values_when_printed(self):
+        import xuan_plugin
+
+        plugin = xuan_plugin.Plugin()
+        plugin._dispatch("initialize", {"secrets": {"api_key": "sk-live-123"}})
+        self.assertEqual(plugin.secrets.get("api_key"), "sk-live-123")
+        for text in (repr(plugin.secrets), str(plugin.secrets), f"{plugin.secrets}", repr([plugin.secrets])):
+            self.assertNotIn("sk-live", text)
+            self.assertIn("api_key", text)
+
+
 if __name__ == "__main__":
     unittest.main()

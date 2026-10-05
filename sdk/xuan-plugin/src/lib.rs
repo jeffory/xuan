@@ -24,15 +24,14 @@ use std::{
     io::{BufRead, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicI64, Ordering},
-        mpsc,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 pub const PROTOCOL: u32 = 1;
 
@@ -325,11 +324,10 @@ impl Job {
 
     /// A named input, deserialized.
     pub fn input<T: serde::de::DeserializeOwned>(&self, id: &str) -> Result<T> {
-        let value = self
-            .inputs
-            .get(id)
-            .cloned()
-            .ok_or_else(|| RpcError::new(codes::INVALID_PARAMS, format!("missing input {id}")))?;
+        let value =
+            self.inputs.get(id).cloned().ok_or_else(|| {
+                RpcError::new(codes::INVALID_PARAMS, format!("missing input {id}"))
+            })?;
         Ok(serde_json::from_value(value)?)
     }
 
@@ -431,13 +429,35 @@ type ImportHandler = Arc<dyn Fn(&Host, &Path, &Path) -> Result<Value> + Send + S
 type ExportHandler = Arc<dyn Fn(&Host, &Path, &Path, &Value) -> Result<()> + Send + Sync>;
 type SettingsHandler = Arc<dyn Fn(&Settings) + Send + Sync>;
 
-/// Settings and secrets as the editor last sent them.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Settings and secrets as the editor last sent them. Its `Debug` output
+/// names the secrets but never shows their values.
+#[derive(Clone, Default, PartialEq)]
 pub struct Settings {
     pub settings: Value,
     pub secrets: Value,
     pub plugin_dir: PathBuf,
     pub data_dir: PathBuf,
+}
+
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let secrets: Vec<(&str, &str)> = self
+            .secrets
+            .as_object()
+            .map(|secrets| {
+                secrets
+                    .keys()
+                    .map(|key| (key.as_str(), "<redacted>"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        f.debug_struct("Settings")
+            .field("settings", &self.settings)
+            .field("secrets", &secrets)
+            .field("plugin_dir", &self.plugin_dir)
+            .field("data_dir", &self.data_dir)
+            .finish()
+    }
 }
 
 impl Settings {
@@ -550,10 +570,16 @@ impl Plugin {
                 continue;
             }
             let Ok(message) = serde_json::from_str::<Value>(text) else {
-                eprintln!("xuan-plugin: ignoring invalid JSON: {}", &text[..text.len().min(200)]);
+                eprintln!(
+                    "xuan-plugin: ignoring invalid JSON: {}",
+                    &text[..text.len().min(200)]
+                );
                 continue;
             };
-            match (message.get("method").and_then(Value::as_str), message.get("id")) {
+            match (
+                message.get("method").and_then(Value::as_str),
+                message.get("id"),
+            ) {
                 (Some(_), Some(_)) => {
                     let runtime = runtime.clone();
                     std::thread::spawn(move || runtime.handle_request(message));
@@ -612,7 +638,10 @@ impl Runtime {
                 if let Some(handler) = &self.plugin.on_settings {
                     handler(&settings);
                 }
-                *self.settings.lock().map_err(|_| RpcError::internal("poisoned"))? = settings;
+                *self
+                    .settings
+                    .lock()
+                    .map_err(|_| RpcError::internal("poisoned"))? = settings;
                 Ok(json!({"protocol": PROTOCOL}))
             }
             "shutdown" | "pane/close" => Ok(Value::Null),
@@ -638,11 +667,9 @@ impl Runtime {
                         None => Ok(json!({})),
                     };
                 }
-                let handler = self
-                    .plugin
-                    .actions
-                    .get(&action)
-                    .ok_or_else(|| RpcError::new(codes::METHOD_NOT_FOUND, format!("no action {action}")))?;
+                let handler = self.plugin.actions.get(&action).ok_or_else(|| {
+                    RpcError::new(codes::METHOD_NOT_FOUND, format!("no action {action}"))
+                })?;
                 if let Ok(mut jobs) = self.jobs.lock() {
                     jobs.insert(job.id.clone(), cancelled);
                 }
@@ -654,16 +681,17 @@ impl Runtime {
             }
             "pane/render" => {
                 let pane_id = string("pane");
-                let handler = self
-                    .plugin
-                    .panes
-                    .get(&pane_id)
-                    .ok_or_else(|| RpcError::new(codes::METHOD_NOT_FOUND, format!("no pane {pane_id}")))?;
+                let handler = self.plugin.panes.get(&pane_id).ok_or_else(|| {
+                    RpcError::new(codes::METHOD_NOT_FOUND, format!("no pane {pane_id}"))
+                })?;
                 let event = params.get("event").cloned().unwrap_or(Value::Null);
                 let pane = Pane {
                     id: pane_id,
                     reason: string("reason"),
-                    widget: event.get("widget").and_then(Value::as_str).map(str::to_owned),
+                    widget: event
+                        .get("widget")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                     value: event.get("value").cloned().unwrap_or(Value::Null),
                     document: params.get("document").cloned().unwrap_or(Value::Null),
                     host: self.host.clone(),
@@ -677,7 +705,11 @@ impl Runtime {
                     .importers
                     .get(&format)
                     .ok_or_else(|| RpcError::new(codes::METHOD_NOT_FOUND, "no importer"))?;
-                handler(&self.host, Path::new(&string("path")), Path::new(&string("work_dir")))
+                handler(
+                    &self.host,
+                    Path::new(&string("path")),
+                    Path::new(&string("work_dir")),
+                )
             }
             "format/export" => {
                 let format = string("format");
@@ -729,7 +761,7 @@ impl Runtime {
 
 /// Builders for the widget tree a pane returns.
 pub mod ui {
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     pub fn column(children: Vec<Value>) -> Value {
         json!({"type": "column", "children": children})
@@ -808,7 +840,11 @@ pub mod ui {
             b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = String::from("data:image/png;base64,");
         for chunk in png.chunks(3) {
-            let bytes = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let bytes = [
+                chunk[0],
+                *chunk.get(1).unwrap_or(&0),
+                *chunk.get(2).unwrap_or(&0),
+            ];
             let n = (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
             for i in 0..4 {
                 if i <= chunk.len() {
@@ -827,12 +863,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn settings_debug_output_hides_secret_values() {
+        let settings = Settings {
+            settings: json!({"max_side": 1024}),
+            secrets: json!({"api_key": "sk-live-123"}),
+            ..Settings::default()
+        };
+        let text = format!("{settings:?} {settings:#?}");
+        assert!(!text.contains("sk-live"), "{text}");
+        assert!(
+            text.contains("api_key") && text.contains("max_side"),
+            "{text}"
+        );
+        assert_eq!(settings.secret("api_key"), Some("sk-live-123"));
+    }
+
+    #[test]
     fn outputs_serialize_with_the_protocol_tags() {
         let output = Output::image("/tmp/out.png", Some("Out"), 1.0, 2.0).with_mask("/tmp/m.png");
         let value = serde_json::to_value(&output).unwrap();
         assert_eq!(value["kind"], "image");
         assert_eq!(value["mask"], "/tmp/m.png");
-        assert_eq!(serde_json::to_value(Output::None).unwrap(), json!({"kind": "none"}));
+        assert_eq!(
+            serde_json::to_value(Output::None).unwrap(),
+            json!({"kind": "none"})
+        );
         assert_eq!(ui::png_data_url(b"hi"), "data:image/png;base64,aGk=");
         assert_eq!(ui::png_data_url(b"hello"), "data:image/png;base64,aGVsbG8=");
     }

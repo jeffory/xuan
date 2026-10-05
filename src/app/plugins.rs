@@ -54,6 +54,8 @@ pub(super) struct PluginState {
     pending: HashMap<(String, Id), Pending>,
     pub secrets: Secrets,
     pub secrets_path: Option<PathBuf>,
+    /// The secrets file exists but could not be read; it is never overwritten.
+    pub secrets_unreadable: bool,
     pub(super) config_dir: Option<PathBuf>,
     scratch: HashMap<String, tempfile::TempDir>,
     /// Private data folders for plugins when there is no configuration folder.
@@ -162,6 +164,23 @@ impl PluginState {
         Ok(self.scratch[plugin].path().to_path_buf())
     }
 
+    /// Write the secrets file, unless it failed to load: saving then would
+    /// replace the user's stored secrets with the few entered since.
+    pub(super) fn save_secrets(&self) -> Result<()> {
+        let Some(path) = &self.secrets_path else {
+            return Ok(());
+        };
+        ensure!(
+            !self.secrets_unreadable,
+            "{} {}",
+            path.display(),
+            tr(
+                "could not be read, so it is left unchanged. Fix or remove it, then press Reload in Plugins → Manage Plugins…"
+            )
+        );
+        self.secrets.save(path)
+    }
+
     /// The plugin's persistent data folder, created if needed. Without a
     /// configuration folder it is a private temporary folder (owner-only on
     /// Unix) that lasts for this session, never a predictable shared path.
@@ -214,10 +233,12 @@ impl EditorApp {
             .and_then(|path| path.parent().map(Path::to_path_buf));
         self.plugins.config_dir = config_dir.clone();
         self.plugins.secrets_path = config_dir.as_ref().map(|dir| dir.join("secrets.toml"));
+        self.plugins.secrets_unreadable = false;
         if let Some(path) = &self.plugins.secrets_path {
             match Secrets::load(path) {
                 Ok(secrets) => self.plugins.secrets = secrets,
                 Err(error) => {
+                    self.plugins.secrets_unreadable = true;
                     self.error = Some(format!(
                         "{}\n\n{error:#}",
                         tr("Could not load plugin secrets")
@@ -331,8 +352,7 @@ impl EditorApp {
         if let (Some(old), Some(new)) = (self.stored_grant(plugin), &grant)
             && old.dir != new.dir
             && self.plugins.secrets.clear(plugin)
-            && let Some(path) = self.plugins.secrets_path.clone()
-            && let Err(error) = self.plugins.secrets.save(&path)
+            && let Err(error) = self.plugins.save_secrets()
         {
             self.error = Some(format!("{}\n\n{error:#}", tr("Could not save secrets")));
         }

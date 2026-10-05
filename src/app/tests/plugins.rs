@@ -212,6 +212,47 @@ fn plugin_data_without_a_config_folder_is_private_and_unpredictable() {
 }
 
 #[test]
+fn a_secrets_file_that_fails_to_load_is_never_overwritten_or_quoted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = Some(dir.path().join("config.toml"));
+    let secrets = dir.path().join("secrets.toml");
+    let broken = "[mock]\nkey = \"sk-live-123\nother = \"sk-live-456\"\n";
+    std::fs::write(&secrets, broken).unwrap();
+    app.load_plugins();
+    let error = app.error.take().unwrap();
+    assert!(error.contains("Could not load plugin secrets"), "{error}");
+    assert!(!error.contains("sk-live"), "{error}");
+
+    let manifest = Manifest::parse(
+        &MANIFEST.replace(
+            "[[actions]]",
+            "[permissions]\nsecrets = [\"key\"]\n\n[[settings]]\nid = \"key\"\ntype = \"secret\"\n\n[[actions]]",
+        ),
+        dir.path(),
+    )
+    .unwrap();
+    app.install_plugins(vec![manifest.clone()], vec![]);
+    app.set_plugin_setting("mock", "key", serde_json::Value::String("sk-new".into()));
+    let error = app.error.take().unwrap();
+    assert!(error.contains("left unchanged"), "{error}");
+    assert_eq!(std::fs::read_to_string(&secrets).unwrap(), broken);
+
+    // Once the file is fixed and reloaded, secrets are saved again.
+    std::fs::write(&secrets, "[mock]\nkey = \"sk-old\"\n").unwrap();
+    app.load_plugins();
+    assert!(app.error.is_none(), "{:?}", app.error);
+    app.install_plugins(vec![manifest], vec![]);
+    app.set_plugin_setting("mock", "key", serde_json::Value::String("sk-new".into()));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(
+        std::fs::read_to_string(&secrets)
+            .unwrap()
+            .contains("sk-new")
+    );
+}
+
+#[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::consume_exact;
     use egui::{Key, Modifiers};
