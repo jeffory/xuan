@@ -402,16 +402,32 @@ pub fn box_blur(mask: &mut GrayImage, radius: u32) {
 }
 
 /// Paste a result over the source layer's pixels, for `result.into = "replace"`.
+///
+/// The result is scaled back to the layer's resolution first. That size is
+/// checked before anything is allocated, so a large result for a source that
+/// was sent much smaller fails instead of exhausting memory.
 pub fn replace_pixels(
     prepared: &Prepared,
     source: &RgbaImage,
     image: &RgbaImage,
     x: f32,
     y: f32,
-) -> RgbaImage {
+) -> Result<RgbaImage> {
+    let scale = f64::from(prepared.scale);
+    ensure!(
+        scale.is_finite() && scale > 0.0,
+        "The source was prepared with an invalid scale"
+    );
+    let side = |pixels: u32| (f64::from(pixels) / scale).round().max(1.0);
+    let (width, height) = (side(image.width()), side(image.height()));
+    ensure!(
+        width <= f64::from(u32::MAX) && height <= f64::from(u32::MAX),
+        "The result is too large to scale back to the layer"
+    );
+    let (width, height) = (width as u32, height as u32);
+    crate::document::validate_size(width, height)
+        .context("The result is too large to scale back to the layer")?;
     let mut pixels = source.clone();
-    let width = ((image.width() as f32 / prepared.scale).round() as u32).max(1);
-    let height = ((image.height() as f32 / prepared.scale).round() as u32).max(1);
     let resized = if (width, height) == image.dimensions() {
         image.clone()
     } else {
@@ -420,7 +436,7 @@ pub fn replace_pixels(
     let ox = (prepared.crop.0 + x / prepared.scale).round() as i64;
     let oy = (prepared.crop.1 + y / prepared.scale).round() as i64;
     image::imageops::replace(&mut pixels, &resized, ox, oy);
-    pixels
+    Ok(pixels)
 }
 
 #[cfg(test)]
@@ -491,10 +507,37 @@ mod tests {
             &result,
             0.0,
             0.0,
-        );
+        )
+        .unwrap();
         assert_eq!(replaced.get_pixel(100, 75)[1], 255);
         assert_eq!(replaced.get_pixel(0, 0)[2], 255);
         assert_eq!(replaced.dimensions(), (200, 150));
+    }
+
+    #[test]
+    fn replace_results_that_would_scale_past_the_size_limit_fail_first() {
+        // A 30k-pixel layer sent at a small max_side: every result pixel
+        // stands for many layer pixels.
+        let prepared = Prepared {
+            scale: 256.0 / 30_000.0,
+            ..Prepared::none()
+        };
+        let source = RgbaImage::new(4, 4);
+        // 10k x 10k at that scale would be about 1.2M x 1.2M pixels.
+        let huge = RgbaImage::new(10_000, 1);
+        let error = replace_pixels(&prepared, &source, &huge, 0.0, 0.0).unwrap_err();
+        assert!(format!("{error:#}").contains("too large"), "{error:#}");
+        // Within the limit it still works.
+        let small = RgbaImage::new(2, 2);
+        let pixels = replace_pixels(&prepared, &source, &small, 0.0, 0.0).unwrap();
+        assert_eq!(pixels.dimensions(), (4, 4));
+        for scale in [0.0, f32::NAN, f32::INFINITY, -1.0] {
+            let prepared = Prepared {
+                scale,
+                ..Prepared::none()
+            };
+            assert!(replace_pixels(&prepared, &source, &small, 0.0, 0.0).is_err());
+        }
     }
 
     #[test]

@@ -1323,7 +1323,7 @@ impl EditorApp {
                     {
                         replace = Some((
                             source,
-                            jobs::replace_pixels(&job.prepared, pixels, &image, x, y),
+                            jobs::replace_pixels(&job.prepared, pixels, &image, x, y)?,
                         ));
                         continue;
                     }
