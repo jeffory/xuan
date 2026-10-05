@@ -384,9 +384,10 @@ fn version_11_imports_text_fonts_effects_and_photoshop_blend_modes() {
     assert_eq!(report.count(Dropped::TextColors), 1);
     assert_eq!(report.count(Dropped::TextLayout), 1);
     assert_eq!(report.count(Dropped::LayerEffect), 3);
-    assert_eq!(find(&document, shadowed).blend, BlendMode::Normal);
-    assert_eq!(report.count(Dropped::BlendMode("Linear Burn")), 2);
-    assert_eq!(report.count(Dropped::BlendMode("Soft Light")), 1);
+    // Photoshop's blend modes come across under upstream's names.
+    assert_eq!(find(&document, shadowed).blend, BlendMode::LinearBurn);
+    assert_eq!(find(&document, burned).blend, BlendMode::LinearBurn);
+    assert_eq!(document.layers[3].blend, BlendMode::SoftLight);
     assert_eq!(
         document.layers[4].blend,
         BlendMode::Screen,
@@ -413,7 +414,7 @@ fn summarizes_what_the_import_left_out_in_each_language() {
     for _ in 0..3 {
         report.add(Dropped::LayerEffect);
     }
-    report.add(Dropped::BlendMode("Linear Burn"));
+    report.add(Dropped::LineShape);
     let summary = report.summary().unwrap();
     assert!(summary.starts_with("Imported with changes."), "{summary}");
     assert!(
@@ -421,13 +422,12 @@ fn summarizes_what_the_import_left_out_in_each_language() {
         "{summary}"
     );
     assert!(
-        summary.contains("Blend mode “Linear Burn” (drawn as Normal): 1"),
+        summary.contains("Live line shapes (imported as pixels): 1"),
         "{summary}"
     );
 
     let every = [
         Dropped::LayerEffect,
-        Dropped::BlendMode("Divide"),
         Dropped::Adjustment("Color Balance"),
         Dropped::TextLayout,
         Dropped::TextColors,
@@ -518,6 +518,11 @@ fn rejects_hostile_or_damaged_packages() {
         (
             "unknown blend",
             with(&|v| v["layers"][0]["blendMode"] = json!("Sparkle")),
+        ),
+        (
+            // Photoshop has Dissolve, but upstream never writes it.
+            "Xuan-only blend",
+            with(&|v| v["layers"][0]["blendMode"] = json!("Dissolve")),
         ),
         // Text.
         (

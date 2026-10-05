@@ -35,19 +35,12 @@ const MAX_FONT_NAME: usize = 200;
 const MAX_BOX_SIDE: f64 = 30_000.0;
 const MAX_BOX_AREA: f64 = 200_000_000.0;
 
-/// Compositor's Photoshop blend modes that Xuan does not composite yet; they import as Normal.
-const UNSUPPORTED_BLEND_MODES: [&str; 11] = [
-    "Linear Burn",
-    "Linear Dodge (Add)",
-    "Soft Light",
-    "Hard Light",
-    "Vivid Light",
-    "Linear Light",
-    "Pin Light",
-    "Hard Mix",
-    "Exclusion",
-    "Subtract",
-    "Divide",
+/// Photoshop blend modes Xuan has that upstream does not (Document/LayerAppearance.swift leaves
+/// them out); a package naming one is malformed.
+const XUAN_ONLY_BLEND_MODES: [BlendMode; 3] = [
+    BlendMode::Dissolve,
+    BlendMode::DarkerColor,
+    BlendMode::LighterColor,
 ];
 /// Adjustment kinds Xuan has no equivalent for; their layers are left out.
 const UNSUPPORTED_ADJUSTMENTS: [&str; 2] = ["Black & White", "Color Balance"];
@@ -66,8 +59,6 @@ const EFFECT_KINDS: [&str; 6] = [
 pub enum Dropped {
     /// One stroke, shadow, color overlay or glow effect (visible or hidden).
     LayerEffect,
-    /// A layer using this blend mode, drawn as Normal.
-    BlendMode(&'static str),
     /// An adjustment layer of this kind, left out.
     Adjustment(&'static str),
     /// A text layer whose alignment, tracking, leading or paragraph box Xuan ignores.
@@ -90,9 +81,6 @@ impl Dropped {
     fn label(self) -> String {
         match self {
             Self::LayerEffect => tr("Layer effects (stroke, shadow, color overlay, glow)").into(),
-            Self::BlendMode(name) => {
-                format!("{} “{name}” ({})", tr("Blend mode"), tr("drawn as Normal"))
-            }
             Self::Adjustment(name) => {
                 format!("{} “{name}” ({})", tr("Adjustment layer"), tr("left out"))
             }
@@ -569,16 +557,12 @@ fn comp_effects(value: &Value, report: &mut ImportReport) -> Result<()> {
     Ok(())
 }
 
-fn comp_blend(name: &str, report: &mut ImportReport) -> Result<BlendMode> {
-    if let Some(mode) = BlendMode::ALL.into_iter().find(|b| b.name() == name) {
-        return Ok(mode);
-    }
-    let name = UNSUPPORTED_BLEND_MODES
-        .iter()
-        .find(|n| **n == name)
-        .with_context(|| format!("Unknown blend mode: {name}"))?;
-    report.add(Dropped::BlendMode(name));
-    Ok(BlendMode::Normal)
+/// Upstream stores a blend mode by its display name, which Xuan's `BlendMode::name` matches.
+fn comp_blend(name: &str) -> Result<BlendMode> {
+    BlendMode::ALL
+        .into_iter()
+        .find(|b| b.name() == name && !XUAN_ONLY_BLEND_MODES.contains(b))
+        .with_context(|| format!("Unknown blend mode: {name}"))
 }
 
 fn comp_guides(value: &Value, version: u64) -> Result<Vec<Guide>> {
@@ -673,10 +657,7 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
         layer.parent = identifier(&record["parentID"])?;
         layer.group = record["isGroup"].as_bool().unwrap_or(false);
         layer.opacity = number(record, "opacity", 1.0);
-        layer.blend = comp_blend(
-            record["blendMode"].as_str().unwrap_or("Normal"),
-            &mut report,
-        )?;
+        layer.blend = comp_blend(record["blendMode"].as_str().unwrap_or("Normal"))?;
         if layer.group {
             // Folders are pass-through; their own opacity arrived in version 8.
             ensure!(

@@ -639,8 +639,6 @@ New guide	新建参考线
 Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
 Layer effects (stroke, shadow, color overlay, glow)	图层效果（描边、阴影、颜色叠加、发光）
-Blend mode	混合模式
-drawn as Normal	按“正常”绘制
 Adjustment layer	调整图层
 left out	已省略
 Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）

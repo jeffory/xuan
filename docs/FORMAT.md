@@ -26,7 +26,7 @@ The importer reads Compositor `.comp` directory packages, format versions 1–11
 | `text` (content, `fontName`, `fontSize`, color) | Editable text: the PostScript name becomes a family plus bold/italic (`HelveticaNeue-BoldItalic` → Helvetica Neue, bold, italic) |
 | `text` alignment, `tracking`, `leading`, `boxSize`; `colorRuns` (10); `fontRuns` (11) | Not represented. The layer's PNG keeps the original look until the text is edited in Xuan |
 | text over 16 KiB or larger than 1024 px | Imported as plain pixels |
-| Photoshop blend modes Xuan lacks (Linear Burn, Linear Dodge (Add), Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide) | Drawn as Normal |
+| Photoshop blend modes (Linear Burn, Linear Dodge (Add), Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide) | The same blend modes; the project then saves as `.xuan` version 6 |
 | `effects` (stroke, shadow, color overlay, inner shadow, outer/inner glow) | Left out |
 | `shape` of kind `Line` | Imported as plain pixels |
 

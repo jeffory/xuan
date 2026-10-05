@@ -492,12 +492,12 @@ mod tests {
         let mut doc = Document::new(4, 4).unwrap();
         doc.layers[0].pixels = Some(Arc::new(RgbaImage::new(4, 4)));
         // The thirteen original modes still save as version 1.
-        for mode in &BlendMode::ALL[..13] {
+        for mode in &crate::blend::BlendMode::ALL[..13] {
             doc.layers[0].blend = *mode;
             save(&doc, &path).unwrap();
             assert_eq!(manifest_json(&path)["version"], 1, "{}", mode.name());
         }
-        for mode in &BlendMode::ALL[13..] {
+        for mode in &crate::blend::BlendMode::ALL[13..] {
             doc.layers[0].blend = *mode;
             save(&doc, &path).unwrap();
             assert_eq!(manifest_json(&path)["version"], 6, "{}", mode.name());
