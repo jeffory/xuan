@@ -114,8 +114,7 @@ impl Redactor {
 
     pub fn is_secret_key(&self, key: &str) -> bool {
         let key = normalize(key);
-        SECRET_FRAGMENTS.iter().any(|f| key.contains(f))
-            || self.names.iter().any(|name| key.contains(name.as_str()))
+        SECRET_FRAGMENTS.iter().any(|f| key.contains(f)) || self.names.contains(&key)
     }
 
     fn leaks(&self, text: &str) -> bool {

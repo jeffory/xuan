@@ -485,6 +485,120 @@ fn image_outputs_may_declare_their_placed_size() {
     }
 }
 
+/// The mock plugin with a secret setting called `key` whose value is `SECRET`.
+const SECRET: &str = "sk-live-0123456789";
+
+fn install_secret_mock(app: &mut EditorApp, dir: &Path) {
+    RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
+        .save(dir.join("fixture.png"))
+        .unwrap();
+    let manifest = Manifest::parse(
+        &MANIFEST.replace(
+            "[[actions]]",
+            "[permissions]\nsecrets = [\"key\"]\n\n[[settings]]\nid = \"key\"\ntype = \"secret\"\n\n[[actions]]",
+        ),
+        dir,
+    )
+    .unwrap();
+    app.install_plugins(vec![manifest], vec![]);
+    app.grant_plugin("mock", true);
+    app.plugins
+        .secrets
+        .0
+        .entry("mock".into())
+        .or_default()
+        .insert("key".into(), SECRET.into());
+}
+
+#[test]
+fn provenance_is_kept_on_the_layer_and_never_holds_the_plugins_secrets() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_secret_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    let job = mock_job(&app);
+    let fixture = dir.path().join("fixture.png");
+
+    // A plugin that puts its API key into the record, under a generic name,
+    // under its own setting name and inside a value.
+    app.apply_job_result(
+        &job,
+        json!({"outputs": [{
+            "kind": "image", "path": fixture,
+            "provenance": {
+                "model": "sdxl.safetensors", "sampler": "euler", "steps": 20, "seed": 7,
+                "cfg": 6.5, "service": "mock cloud", "request_id": "r-1",
+                "api_key": SECRET,
+                "extra": {"key": "other", "note": format!("signed with {SECRET}"), "lora": "a"},
+            },
+        }]}),
+    )
+    .unwrap();
+    assert!(
+        app.status.contains("3 provenance entries"),
+        "{}",
+        app.status
+    );
+    assert!(!app.status.contains(SECRET));
+    app.resolve_proposal(true);
+    let document = &app.session().unwrap().document;
+    let layer = document.layers.last().unwrap();
+    let record = layer.provenance.clone().unwrap();
+    assert_eq!(record.model.as_deref(), Some("sdxl.safetensors"));
+    assert_eq!(
+        (record.steps, record.seed, record.cfg),
+        (Some(20), Some(7), Some(6.5))
+    );
+    assert_eq!(record.extra.len(), 1);
+    assert_eq!(record.extra["lora"], "a");
+    assert!(layer.generated.is_some());
+    assert!(!serde_json::to_string(document).unwrap().contains(SECRET));
+
+    // The project is saved as format 8 and the record comes back.
+    let path = dir.path().join("project.xuan");
+    io::save(document, &path).unwrap();
+    let loaded = io::load(&path).unwrap();
+    assert_eq!(loaded.layers.last().unwrap().provenance, Some(record));
+
+    // Unknown keys and oversized records refuse the whole result.
+    let layers = app.session().unwrap().document.layers.len();
+    for bad in [
+        json!({"modle": "typo"}),
+        json!({"model": "x".repeat(300)}),
+        json!({"extra": {"a": {"b": {"c": {"d": {"e": 1}}}}}}),
+        json!("a string"),
+    ] {
+        let result = app.apply_job_result(
+            &job,
+            json!({"outputs": [{"kind": "image", "path": fixture, "provenance": bad}]}),
+        );
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("provenance"), "{bad}: {error}");
+    }
+    assert_eq!(app.session().unwrap().document.layers.len(), layers);
+    // Without provenance the layer simply has none, and a null is no record.
+    for provenance in [json!(null), json!({})] {
+        app.apply_job_result(
+            &job,
+            json!({"outputs": [{"kind": "image", "path": fixture, "provenance": provenance}]}),
+        )
+        .unwrap();
+        app.resolve_proposal(true);
+        assert!(
+            app.session()
+                .unwrap()
+                .document
+                .layers
+                .last()
+                .unwrap()
+                .provenance
+                .is_none()
+        );
+    }
+}
+
 /// A grey mask PNG in `dir`, one of the mock plugin's folders.
 fn write_mask(
     dir: &Path,
@@ -1357,6 +1471,62 @@ mod unix {
         let restored = loaded.layers.iter().find(|l| l.name == "Echoed").unwrap();
         assert_eq!(restored.generated.as_ref().unwrap().action, "echo");
         assert!(restored.mask.is_some());
+    }
+
+    /// Remembers the API key it is given at start-up and reports it in the
+    /// provenance of its result, under several names.
+    const LEAKY: &str = r#"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\),"method".*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      key=$(printf '%s' "$line" | sed -n 's/.*"secrets":{"key":"\([^"]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol":1}}\n' "$id" ;;
+    *'"method":"action/estimate"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"cost":"free"}}\n' "$id" ;;
+    *'"method":"action/run"'*)
+      work=$(printf '%s' "$line" | sed -n 's/.*"work_dir":"\([^"]*\)".*/\1/p')
+      src=$(printf '%s' "$line" | sed -n 's/.*"source":{.*"path":"\([^"]*\)".*/\1/p')
+      cp "$src" "$work/result.png"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"outputs":[{"kind":"image","path":"%s/result.png","name":"Leaky","provenance":{"model":"m-1","seed":5,"api_key":"%s","extra":{"url":"https://x/?k=%s","fine":true}}}]}}\n' "$id" "$work" "$key" "$key" ;;
+    *'"method":"shutdown"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":null}\n' "$id"; exit 0 ;;
+  esac
+done
+"#;
+
+    #[test]
+    fn a_plugin_that_reports_its_api_key_in_provenance_has_it_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_secret_mock(&mut app, dir.path());
+        std::fs::write(dir.path().join("plugin.sh"), LEAKY).unwrap();
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.start_plugin_action("mock", "echo");
+        app.add_region(Point::new(1.0, 1.0), Point::new(8.0, 8.0));
+        app.run_plugin_action();
+        assert!(app.error.is_none(), "{:?}", app.error);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        assert!(app.error.is_none(), "{:?}", app.error);
+        app.resolve_proposal(true);
+        let document = &app.session().unwrap().document;
+        let layer = document.layers.iter().find(|l| l.name == "Leaky").unwrap();
+        let record = layer.provenance.as_ref().unwrap();
+        assert_eq!(
+            (record.model.as_deref(), record.seed),
+            (Some("m-1"), Some(5))
+        );
+        // The key, which did reach the plugin, is nowhere in the document or
+        // the status line; only the harmless entry is left.
+        assert_eq!(record.extra.len(), 1);
+        assert_eq!(record.extra["fine"], true);
+        assert!(!serde_json::to_string(document).unwrap().contains(SECRET));
+        assert!(!app.status.contains(SECRET), "{}", app.status);
     }
 
     #[test]

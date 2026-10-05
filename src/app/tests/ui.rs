@@ -215,6 +215,19 @@ impl UiTest {
         self.settle();
     }
 
+    /// Text the last frame put on the clipboard.
+    pub(super) fn copied_text(&self) -> Option<String> {
+        self.harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+    }
+
     /// Whether the last frame asked the window system to close the window.
     pub(super) fn close_requested(&self) -> bool {
         self.harness
@@ -802,6 +815,67 @@ mod layer_appearance {
         ui.app_mut().command("undo");
         ui.settle();
         assert_eq!(active(&ui).effects, None);
+    }
+
+    #[test]
+    fn generated_layers_show_their_model_provenance_read_only_with_a_copy_button() {
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        // Ordinary layers have no such section.
+        assert!(!ui.has("Generation"));
+        let layer = ui
+            .app_mut()
+            .session_mut()
+            .unwrap()
+            .document
+            .active_mut()
+            .unwrap();
+        layer.generated = Some(xuan::document::Generated {
+            plugin: "mock".into(),
+            version: "1".into(),
+            action: "echo".into(),
+            inputs: serde_json::json!({}),
+            source: None,
+            source_hash: None,
+            created: String::new(),
+        });
+        ui.settle();
+        ui.click("Generation");
+        assert!(ui.has("Plugin: mock (echo)"));
+        assert!(ui.has("The plugin reported no model details."));
+        assert!(!ui.has_role(Role::Button, "Copy"));
+
+        let record = xuan::provenance::Provenance {
+            model: Some("sdxl.safetensors".into()),
+            seed: Some(42),
+            steps: Some(30),
+            extra: [("lora".to_string(), serde_json::json!("detail"))].into(),
+            ..Default::default()
+        };
+        let layer = ui
+            .app_mut()
+            .session_mut()
+            .unwrap()
+            .document
+            .active_mut()
+            .unwrap();
+        layer.provenance = Some(record.clone());
+        ui.settle();
+        assert!(ui.has("model: sdxl.safetensors"));
+        assert!(ui.has("steps: 30") && ui.has("seed: 42") && ui.has("extra.lora: detail"));
+        assert!(!ui.has("The plugin reported no model details."));
+        ui.harness
+            .get_by_role_and_label(Role::Button, "Copy")
+            .click();
+        ui.harness.step();
+        let copied = ui.copied_text().expect("the JSON was copied");
+        assert_eq!(
+            serde_json::from_str::<xuan::provenance::Provenance>(&copied).unwrap(),
+            record
+        );
+        // Showing it changes nothing in the document.
+        assert_eq!(active(&ui).provenance, Some(record));
     }
 
     #[test]
