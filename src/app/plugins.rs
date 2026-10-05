@@ -459,7 +459,9 @@ impl EditorApp {
                 ("XUAN_DATA_DIR".to_owned(), data_dir.display().to_string()),
                 ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
             ];
-            let mut process = Process::spawn(&manifest, &env)?;
+            let context = self.context.clone();
+            let wake: plugins::host::Wake = Arc::new(move || context.request_repaint());
+            let mut process = Process::spawn(&manifest, &env, Some(wake))?;
             let (settings, secrets) = self.plugin_settings(&manifest);
             let id = process.request(
                 "initialize",
