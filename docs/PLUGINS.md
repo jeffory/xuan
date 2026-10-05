@@ -317,8 +317,10 @@ capabilities: neither `internetClient` nor `privateNetworkClientServer`.
 Windows then refuses the plugin's connections to other machines and to
 `localhost` alike (an AppContainer reaches loopback only with a firewall
 exemption, which needs administrator rights), and every process the plugin
-starts is in the same container. Creating a socket still works; connecting
-or sending fails, usually with `WSAEACCES` (10013). The plugin process is
+starts is in the same container. Creating a socket still works, but no
+connection is made: Windows drops the packets, so a connection attempt does
+not fail at once but times out (Python raises `TimeoutError`; without a
+timeout it waits for the system's, about 20 seconds). The plugin process is
 created suspended and joins the plugin's Job Object before it runs.
 
 An AppContainer also cannot open files the user can: only what its own SID,

@@ -43,6 +43,8 @@
 //! Windows refuses its connections to other machines and to `localhost`:
 //! an AppContainer never reaches loopback without a firewall exemption,
 //! which needs administrator rights. Its subprocesses inherit the container.
+//! Windows drops the packets, so a connection times out rather than failing
+//! at once.
 //! See `windows.rs` for how it is started.
 //!
 //! The container confines files too: it opens only what its SID, or `ALL
