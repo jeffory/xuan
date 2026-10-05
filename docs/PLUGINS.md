@@ -624,6 +624,60 @@ percentage, ready, not verified or corrupt) and its size on disk, with
 the plugin's whole models folder. The permission and install reviews list the
 models a plugin declares, with their size and host.
 
+### Providers
+
+Xuan's own **Select → Subject**, **Filter → Remove Background** and the Magic
+tool's **Object** mode use classical algorithms (a GrabCut graph cut; see
+[USAGE.md](USAGE.md#selection-providers)); core Xuan has no machine learning.
+A plugin can replace them, for example with a segmentation model, by declaring
+which of its actions provides which **capability**:
+
+```toml
+[[provides]]
+capability = "select_subject"     # or "object_select", "remove_background"
+action = "segment"                # one of the plugin's [[actions]]
+```
+
+The user picks the provider for each capability under **Settings →
+Selection** ("Built-in" by default); the choice is stored in `config.toml` as
+`[providers]`, for example `select_subject = "my-segmenter"`, and a
+configuration without the table uses the built-in algorithms. When a provider
+is chosen, the command runs its action instead:
+
+- The action runs **without its dialog**: its inputs take their defaults, and
+  `inputs.capability` says which command it stands in for. For
+  `object_select`, `inputs.point` (`{x, y}`, a click) or `inputs.rect`
+  (`{x, y, width, height}`, a dragged box) give where the user pointed, in the
+  pixels of the source the plugin was sent, like regions.
+- The providing action must be an `edit` action with a source (`composite` is
+  usual; `layer` suits `remove_background`) and may not have a `regions`
+  input. A capability can be provided once per plugin; one action may provide
+  several. The manifest is refused otherwise.
+- The result's `mask` output (see [Masks](#sources-and-results)) is applied as
+  the command's result, as a **proposal** the user accepts or discards. For
+  `select_subject` it becomes the selection; for `object_select` it combines
+  with the selection as the user's modifier keys asked (Shift adds, Alt
+  subtracts), whatever `mode` the output says. Undo shows the command's name.
+- For `remove_background`, Xuan lays the mask on the layer that was active,
+  as its layer mask (together with any mask it has), and leaves the selection
+  alone. That changes the document, so **`remove_background` needs `document =
+  "edit"`**; `select_subject` and `object_select` only change the selection
+  and work for `document = "read"` plugins. The plugin still returns only a
+  mask: the host makes the layer mask, so a provider cannot touch pixels
+  through this path.
+- Every plugin rule applies as for any other run: the plugin must be allowed
+  (a provider waiting for its permission prompt or model download continues
+  as the provider once they are done), a plugin that declares network hosts
+  asks before the source is sent, and model downloads are confirmed first.
+- If the chosen plugin cannot run, because it is not installed, no longer
+  provides the capability, is disabled, or uses the network while **Disable
+  plugins that use the network** is on, the command uses the built-in
+  algorithm and the status bar says why.
+
+`plugins/select-bright` declares `select_subject` as an example; its README
+and [GENERATIVE.md](GENERATIVE.md) describe how an ONNX segmentation plugin
+fits this slot.
+
 ## Protocol
 
 Messages are JSON-RPC 2.0 objects, one per line, UTF-8, over the plugin's stdin

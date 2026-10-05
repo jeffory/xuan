@@ -898,3 +898,11 @@ Wand	魔棒
 Object	对象
 Object Selection	对象选择
 Click an object or drag a box around it	点按对象或拖出框住它的矩形
+is not installed or no longer provides it	未安装或已不再提供此功能
+is disabled	已停用
+used the built-in	已改用内置的
+Built-in	内置
+Choose the algorithm behind Select Subject and Remove Background	选择“选择主体”和“移除背景”所用的算法
+provider	提供者
+Select an unlocked image layer	请选择未锁定的图像图层
+Built-in uses Xuan's own classical segmentation, with no machine learning. A plugin that provides one of these, such as a segmentation model, can replace it; it runs under the plugin's usual permissions, and if it cannot run (disabled, or offline mode) the built-in algorithm is used with a notice.	内置选项使用 Xuan 自带的经典分割算法，不含机器学习。提供这些功能的插件（例如分割模型）可以替代它；插件按其通常的权限运行，若无法运行（已停用或处于离线模式），则改用内置算法并给出提示。

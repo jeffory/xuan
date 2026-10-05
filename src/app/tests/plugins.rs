@@ -426,6 +426,7 @@ fn mock_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
         message: String::new(),
         cancelled: false,
         consented: false,
+        provider: None,
     }
 }
 
@@ -856,6 +857,7 @@ fn the_send_prompt_names_the_extension() {
         previous_tool: app.tool,
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
+        provider: None,
     };
     app.plugins.action = Some(edit(6));
     assert_eq!(
@@ -1780,6 +1782,7 @@ fn a_selection_mask_is_listed_for_consent_and_needs_a_selection() {
         previous_tool: app.tool,
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
+        provider: None,
     });
     // Nothing selected: the action refuses to start, and no mask is listed.
     app.start_plugin_action("mock", "inpaint");

@@ -181,6 +181,15 @@ class Manifest(unittest.TestCase):
         modes = [value["id"] for value in manifest["actions"][0]["inputs"][2]["values"]]
         self.assertEqual(tuple(modes), Job.MASK_MODES)
 
+    def test_it_provides_select_subject_through_its_action(self):
+        with open(os.path.join(HERE, "plugin.toml"), "rb") as handle:
+            manifest = tomllib.load(handle)
+        provides = manifest["provides"]
+        self.assertEqual(provides, [{"capability": "select_subject", "action": "select-bright"}])
+        actions = {action["id"]: action for action in manifest["actions"]}
+        self.assertEqual(actions["select-bright"]["kind"], "edit")
+        self.assertEqual(actions["select-bright"]["source"]["from"], "composite")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ mod plugin_install;
 mod plugin_models;
 mod plugin_panes;
 mod plugins;
+mod providers;
 mod rulers;
 mod selection_dialogs;
 mod settings;
@@ -462,6 +463,8 @@ pub struct EditorApp {
     /// Select → Color Range…, while open; and the Fuzziness it remembers.
     color_range: Option<color_range::ColorRangeEdit>,
     color_range_fuzziness: u32,
+    /// Why the last command used a built-in algorithm instead of the chosen provider.
+    provider_notice: Option<String>,
     contiguous: bool,
     /// The Magic tool's Object mode: a click or a dragged rectangle selects an object.
     wand_object: bool,
@@ -643,6 +646,7 @@ impl EditorApp {
             expand_amount: 2,
             contract_amount: 2,
             color_range: None,
+            provider_notice: None,
             color_range_fuzziness: xuan::selection_ops::ColorRange::DEFAULT_FUZZINESS,
             contiguous: true,
             wand_object: false,
@@ -1249,7 +1253,17 @@ impl EditorApp {
                 self.start_job(tr("Content-Aware Fill"), xuan::retouch::content_aware_fill)
             }
             "remove_background" => {
-                self.start_progress_job(tr("Remove Background"), xuan::retouch::remove_background)
+                if !self.run_provider(
+                    xuan::plugins::manifest::Capability::RemoveBackground,
+                    None,
+                    None,
+                    xuan::selection::SelectionMode::Replace,
+                ) {
+                    self.start_progress_job(
+                        tr("Remove Background"),
+                        xuan::retouch::remove_background,
+                    );
+                }
             }
             "remove_flat_background" => {
                 let tolerance = self.tolerance;
@@ -1257,6 +1271,13 @@ impl EditorApp {
                     xuan::retouch::remove_flat_background(document, tolerance, cancel)
                 });
             }
+            "select_subject"
+                if self.run_provider(
+                    xuan::plugins::manifest::Capability::SelectSubject,
+                    None,
+                    None,
+                    xuan::selection::SelectionMode::Replace,
+                ) => {}
             "select_subject" => {
                 self.start_progress_job(tr("Select Subject"), |doc, progress, cancel| {
                     let image = render::render(doc);

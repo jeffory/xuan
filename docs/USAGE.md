@@ -119,6 +119,10 @@ to reopen its settings.
 
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
 
+### Selection providers
+
+Select Subject, Remove Background and Object mode use Xuan's built-in classical segmentation by default. Under **Settings → Selection**, each can instead use a plugin that provides it (for example one that runs a segmentation model; see "Providers" in [PLUGINS.md](PLUGINS.md#providers)). The command then runs that plugin, under its usual permissions and prompts, and shows its result as a proposal to **Accept** or **Discard**. If the chosen plugin is disabled, missing, or uses the network while **Disable plugins that use the network** is on, the built-in algorithm runs instead and the status bar says why.
+
 ### Rulers, guides and grid
 
 **View → Rulers** (Ctrl+R) shows rulers along the top and left of the canvas,

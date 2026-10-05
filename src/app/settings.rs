@@ -2,7 +2,7 @@ use super::{EditorApp, theme, widgets};
 use xuan::{
     config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, TitleBar},
     i18n::{self, tr},
-    plugins::sandbox,
+    plugins::{manifest::Capability, sandbox},
 };
 
 /// The pages of the Settings window.
@@ -11,6 +11,8 @@ pub(super) enum SettingsPage {
     #[default]
     General,
     Appearance,
+    /// Which algorithm Select Subject, Remove Background and Object mode use.
+    Selection,
     Keyboard,
 }
 
@@ -92,6 +94,10 @@ impl EditorApp {
         } else {
             240.0
         };
+        let providers: Vec<_> = Capability::ALL
+            .into_iter()
+            .map(|capability| (capability, self.provider_choices(capability)))
+            .collect();
         widgets::Window::new(tr("Settings"))
             .id("app_settings")
             .default_width(680.0)
@@ -112,6 +118,11 @@ impl EditorApp {
                                 SettingsPage::Appearance,
                                 tr("Appearance"),
                                 tr("Window appearance"),
+                            ),
+                            (
+                                SettingsPage::Selection,
+                                tr("Selection"),
+                                tr("Choose the algorithm behind Select Subject and Remove Background"),
                             ),
                             (
                                 SettingsPage::Keyboard,
@@ -136,6 +147,9 @@ impl EditorApp {
                             SettingsPage::General => general_settings(ui, &mut config),
                             SettingsPage::Appearance => {
                                 editing = self.appearance_settings(ui, &mut config);
+                            }
+                            SettingsPage::Selection => {
+                                selection_settings(ui, &mut config, &providers)
                             }
                             SettingsPage::Keyboard => super::keybindings::page(
                                 ui,
@@ -256,6 +270,53 @@ impl EditorApp {
         );
         editing
     }
+}
+
+/// Settings → Selection: a provider for each replaceable algorithm.
+fn selection_settings(
+    ui: &mut egui::Ui,
+    config: &mut Config,
+    providers: &[(Capability, Vec<super::providers::Choice>)],
+) {
+    ui.heading(tr("Selection"));
+    ui.add_space(16.0);
+    egui::Grid::new("settings_providers")
+        .num_columns(2)
+        .spacing(egui::vec2(12.0, 10.0))
+        .show(ui, |ui| {
+            for (capability, choices) in providers {
+                let current = config.providers.get(*capability).map(str::to_owned);
+                // A chosen plugin that is no longer installed still shows by its id.
+                let shown = choices.iter().find(|(id, _)| *id == current).map_or_else(
+                    || current.clone().unwrap_or_default(),
+                    |(_, label)| label.clone(),
+                );
+                ui.label(format!("{} {}", tr(capability.label()), tr("provider")));
+                let mut chosen = current.clone();
+                widgets::PopUp::from_id_salt(("settings_provider", capability.id()))
+                    .selected_text(shown)
+                    .width(240.0)
+                    .show_ui(ui, |ui| {
+                        for (id, label) in choices {
+                            widgets::menu_choice(ui, &mut chosen, id.clone(), label);
+                        }
+                    });
+                if chosen != current {
+                    config.providers.set(*capability, chosen);
+                }
+                ui.end_row();
+            }
+        });
+    ui.add_space(12.0);
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(tr(
+                "Built-in uses Xuan's own classical segmentation, with no machine learning. A plugin that provides one of these, such as a segmentation model, can replace it; it runs under the plugin's usual permissions, and if it cannot run (disabled, or offline mode) the built-in algorithm is used with a notice.",
+            ))
+            .color(theme::MUTED),
+        )
+        .wrap(),
+    );
 }
 
 fn general_settings(ui: &mut egui::Ui, config: &mut Config) {

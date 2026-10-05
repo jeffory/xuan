@@ -105,7 +105,10 @@ impl EditorApp {
                     session.document = document;
                     session.document.promote_image_masks();
                     session.history.commit();
-                    self.status = job.name;
+                    self.status = match self.provider_notice.take() {
+                        Some(notice) => format!("{} · {notice}", job.name),
+                        None => job.name,
+                    };
                 }
                 result => {
                     session.history.cancel(&mut session.document);

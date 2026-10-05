@@ -19,7 +19,7 @@ use xuan::{
         self, LoadError, Manifest, edits,
         host::{Incoming, Process},
         jobs::{self, Prepared, Region},
-        manifest::{Action, ActionKind, DocumentAccess, InputKind, Menu, ResultInto},
+        manifest::{Action, ActionKind, Capability, DocumentAccess, InputKind, Menu, ResultInto},
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
         ui::Node,
     },
@@ -95,6 +95,9 @@ pub(super) struct PluginState {
     /// A plugin action that runs once its models are downloaded or verified,
     /// with its inputs.
     pub awaiting_models: Option<(String, (String, Option<Value>))>,
+    /// A provider run waiting for its action to start (after a permission prompt or
+    /// a model download); see `providers.rs`.
+    pub provider_pending: Option<super::providers::ProviderRun>,
     /// How models are downloaded: https, or a fake in tests.
     pub transport: Option<Arc<dyn plugins::models::Transport>>,
 }
@@ -134,6 +137,8 @@ pub(super) struct PluginJob {
     /// The user confirmed sending its document data, so it may export more
     /// while it runs.
     pub consented: bool,
+    /// Set when the job stands in for a built-in command.
+    pub provider: Option<super::providers::ProviderRun>,
 }
 
 /// A plugin action in a menu.
@@ -196,6 +201,9 @@ pub(super) struct ActionEdit {
     pub into: ResultInto,
     /// The user confirmed sending this run's document data.
     pub consented: bool,
+    /// Set when the action stands in for a built-in command: it runs without its
+    /// dialog and its mask is applied as that command's result.
+    pub provider: Option<super::providers::ProviderRun>,
 }
 
 #[derive(Default)]
@@ -1282,7 +1290,10 @@ impl EditorApp {
     }
 
     /// Open the action's dialog, or run it straight away when it has no inputs.
+    /// Runs a plugin action as its menu item, shortcut or `host/run` does. A provider
+    /// run still waiting for its action is dropped: this is the action itself.
     pub(super) fn start_plugin_action(&mut self, plugin: &str, action: &str) {
+        self.plugins.provider_pending = None;
         self.start_plugin_action_with(plugin, action, None);
     }
 
@@ -1366,7 +1377,9 @@ impl EditorApp {
             }
             values.insert(input.id.clone(), value);
         }
-        if spec.inputs.is_empty() {
+        let provider = (self.plugins.provider_pending.take())
+            .filter(|run| run.plugin == plugin && run.action == action);
+        if spec.inputs.is_empty() || provider.is_some() {
             self.plugins.action = Some(ActionEdit {
                 plugin: plugin.into(),
                 action: action.into(),
@@ -1377,6 +1390,7 @@ impl EditorApp {
                 previous_tool: self.tool,
                 into: ResultInto::Layer,
                 consented: false,
+                provider,
             });
             self.run_plugin_action();
             return;
@@ -1396,6 +1410,7 @@ impl EditorApp {
                 ResultInto::Document
             },
             consented: false,
+            provider: None,
         });
         if spec.regions_input().is_some() {
             self.set_tool(Tool::Region);
@@ -1456,6 +1471,33 @@ impl EditorApp {
         }
         if let Some(input) = spec.regions_input() {
             inputs.insert(input.id.clone(), Value::Array(prepared.regions.clone()));
+        }
+        // A provider run says what it stands in for and where the user pointed, in the
+        // source's pixels like everything else the plugin gets.
+        if let Some(run) = &edit.provider {
+            inputs.insert("capability".into(), json!(run.capability.id()));
+            if let Some(point) = run.point {
+                let (x, y) = prepared.from_document(point);
+                inputs.insert("point".into(), json!({"x": x, "y": y}));
+            }
+            if let Some([left, top, right, bottom]) = run.rect {
+                let corners = [(left, top), (right, top), (right, bottom), (left, bottom)]
+                    .map(|(x, y)| prepared.from_document(xuan::document::Point::new(x, y)));
+                let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+                let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+                let max_x = corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let max_y = corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                inputs.insert(
+                    "rect".into(),
+                    json!({"x": min_x, "y": min_y, "width": max_x - min_x, "height": max_y - min_y}),
+                );
+            }
         }
         // Inputs as stored on the layer: regions in document coordinates.
         let mut stored = edit.values.clone();
@@ -1546,6 +1588,7 @@ impl EditorApp {
             }
         }
         let document = self.session().map(|s| s.document.id);
+        let provider = (self.plugins.action.as_ref()).and_then(|edit| edit.provider.clone());
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
             let work_dir = plugins::private_dir("xuan-job-")?;
@@ -1576,6 +1619,7 @@ impl EditorApp {
                 message: String::new(),
                 cancelled: false,
                 consented,
+                provider,
             });
             Ok(())
         })();
@@ -1950,13 +1994,13 @@ impl EditorApp {
         {
             document.select(source, false);
         }
-        let ids: Vec<Uuid> = layers.iter().map(|l| l.id).collect();
+        let mut ids: Vec<Uuid> = layers.iter().map(|l| l.id).collect();
         for layer in layers {
             document.insert(layer);
         }
         // Masks become the selection, in order, after every other change.
         // Changing the selection is not a pixel edit, so any plugin may.
-        let before = (!masks.is_empty()).then(|| document.selection.clone());
+        let mut before = (!masks.is_empty()).then(|| document.selection.clone());
         let mut shifted = job.prepared.clone();
         shifted.transform.x += dx;
         shifted.transform.y += dy;
@@ -1969,14 +2013,47 @@ impl EditorApp {
                 (x + dx, y + dy)
             };
             let coverage = jobs::place_mask(&shifted, size, &mask, x, y, &placed)?;
+            // A provider's mask combines as the command the user ran asked.
+            let mode = job.provider.as_ref().map_or(mode, |run| run.mode);
             selection::combine(&mut document, coverage, mode);
+        }
+        // Remove Background through a provider: the host lays the mask on the layer
+        // the user chose, as the built-in command does; the selection stays as it was.
+        if let Some(run) =
+            (job.provider.as_ref()).filter(|run| run.capability == Capability::RemoveBackground)
+            && let Some(old_selection) = before.take()
+        {
+            ensure!(
+                manifest
+                    .as_ref()
+                    .is_some_and(|m| m.permissions.document == DocumentAccess::Edit),
+                "Remove Background needs document = \"edit\" in the plugin's manifest"
+            );
+            let index = (run.layer)
+                .and_then(|id| document.layers.iter().position(|l| l.id == id))
+                .filter(|&i| document.layers[i].pixels.is_some() && !document.layers[i].locked)
+                .context(tr("Select an unlocked image layer"))?;
+            let matte = xuan::paint::mask_from_selection(&document, &document.layers[index]);
+            xuan::retouch::apply_layer_matte(&mut document.layers[index], matte);
+            document.selection = old_selection;
+            let existing: std::collections::HashSet<Uuid> =
+                document.layers.iter().map(|l| l.id).collect();
+            document.promote_image_masks();
+            ids.extend(
+                (document.layers.iter())
+                    .map(|l| l.id)
+                    .filter(|id| !existing.contains(id)),
+            );
         }
         let selection = before.map(|before| ProposedSelection {
             before,
             after: document.selection.clone(),
         });
+        let name = (job.provider.as_ref()).map_or(job.label.clone(), |run| {
+            tr(run.capability.label()).to_owned()
+        });
         document.validate()?;
-        session.history.begin(&job.label, &session.document);
+        session.history.begin(&name, &session.document);
         // A result that resized the canvas is shown whole.
         session.fit |=
             (document.width, document.height) != (session.document.width, session.document.height);
@@ -1984,7 +2061,7 @@ impl EditorApp {
         session.invalidate();
         self.plugins.proposal = Some(Proposal {
             document: job.document,
-            name: job.label.clone(),
+            name,
             source: self.plugins.source(&job.plugin),
             layers: ids,
             selection,

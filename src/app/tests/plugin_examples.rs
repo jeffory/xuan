@@ -174,6 +174,24 @@ mod unix {
         assert_eq!(session.history.undo_name(), Some("Select Bright Areas"));
         assert_eq!(session.document.layers.len(), 1);
         assert_eq!(session.document.layers[0].pixels, pixels);
+
+        // As the Select Subject provider it runs at once, without its dialog.
+        app.config.providers.set(
+            xuan::plugins::manifest::Capability::SelectSubject,
+            Some("select-bright".into()),
+        );
+        app.command("deselect");
+        app.command("select_subject");
+        assert!(app.job.is_none() && app.plugins.action.is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        app.resolve_proposal(true);
+        let session = app.session().unwrap();
+        assert_eq!(session.history.undo_name(), Some("Select Subject"));
+        let selection = session.document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(5, 15)[0], 255);
+        assert_eq!(selection.get_pixel(35, 15)[0], 0);
         app.stop_plugin("select-bright");
     }
 

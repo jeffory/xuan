@@ -32,6 +32,13 @@ and **#7** (MCP server and client).
 5. **Defer C2PA, plugin signing and the OS keyring.** Record the provenance we
    already store, add the model and sampler to it (done in #40), and revisit
    when there is a plugin registry.
+6. **No machine learning or LLMs in core Xuan** (decided in #5). Core features
+   use classical algorithms: Select Subject, Remove Background and the Magic
+   tool's Object mode run a GrabCut graph cut with a guided-filter edge
+   (`src/segment.rs`). ML is optional and lives in plugins, which replace the
+   built-in algorithm through a **provider** (`[[provides]]` in the manifest,
+   chosen in Settings → Selection; see "Providers" in
+   [PLUGINS.md](PLUGINS.md#providers)).
 
 ## 1. Plugin model
 
@@ -155,7 +162,7 @@ local job with no network.
 | --- | --- | --- |
 | Text-to-image | ComfyUI (local or cloud), diffusers, or a hosted API | Comfy example already covers the cloud path. A local ComfyUI plugin is the same code with a `localhost` base URL. |
 | Inpaint / outpaint | Same, with a mask workflow | The host features are done: `source.mask = "selection"` (#42) and `source.extend` with `extend_canvas` (#36); `extend-edges` has a backend hook. |
-| Background removal, segmentation | ONNX Runtime in the plugin (U2-Net, IS-Net, SAM-class models) | Plugin returns a `mask` output (#37); `select-bright` has a backend hook. #5 decides which model and licence ship. |
+| Background removal, segmentation | ONNX Runtime in the plugin (U2-Net, IS-Net, SAM-class models) | Plugin returns a `mask` output (#37) and declares `[[provides]]` for `select_subject`, `object_select` and/or `remove_background`, so the user can make it replace the built-in GrabCut; `select-bright` is the template. |
 | Upscaling | Real-ESRGAN or similar via ONNX Runtime in the plugin | `local-upscale` has a backend hook. |
 | Prompt assist, captioning | Ollama or llama.cpp over localhost | A pane or action that returns `text` or fills an input. |
 | Style transfer, colorize, denoise | Same ONNX pattern | Per-model plugins. |
@@ -176,9 +183,11 @@ local job with no network.
 - **Python environments.** Each ML plugin needs its own virtualenv, created by
   the user or an install script. The manifest `command` can point into it. A
   documented convention is enough; do not manage environments in the host.
-- **Bundled model for #5.** If Select Subject must work out of the box, ship it
-  as a first-party plugin with the model as a downloadable (not in the binary).
-  Core Xuan keeps its edge-colour matte as the offline fallback.
+- ~~**Bundled model for #5.**~~ **Decided in #5: none in core.** Select
+  Subject works out of the box with the classical GrabCut segmentation. A
+  segmentation model ships, if at all, as a plugin with the model as a
+  verified download (#38) that the user picks as the provider; the built-in
+  algorithm is always the fallback, including in offline mode.
 - **GPU selection** is the plugin's business (onnxruntime providers, CUDA).
 
 ## 5. Privacy and safety
@@ -343,7 +352,7 @@ a cosmetic change and not worth breaking existing installs.
 | --- | --- | --- | --- |
 | **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin. Model downloads are done (#38). | Ship a local-ComfyUI variant of the Comfy example, declaring its checkpoints in `[[models]]`. |
 | **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42), used by the Comfy Cloud **Inpaint Selection** action; `source.extend` with a new-area mask and an `extend_canvas` edit (#36), shown by `extend-edges`. | A generative outpainting backend. | Host work done; wire an outpainting workflow into a backend of `extend-edges` or the Comfy example. |
-| **Background removal / segmentation** | `selection/export`, `set_selection` and `set_mask` edits, `replace` results, a `mask` output that becomes a selection (#37) and the `select-bright` prototype. | A shipped model and licence decision (#5). | The host `mask` output is done; do the model and Select Subject UI in #5, implemented as a first-party ONNX plugin. |
+| **Background removal / segmentation** | Classical Select Subject, Remove Background and Object mode in core (#5); `selection/export`, `set_selection` and `set_mask` edits, `replace` results, a `mask` output that becomes a selection (#37), providers that replace the built-in algorithm (#5) and the `select-bright` template. | An ONNX segmentation plugin. | Build it on `select-bright`: a backend with the model declared in `[[models]]`, and `[[provides]]` for the capabilities it serves. |
 | **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Large-image speed. Placed size (#35) and model downloads (#38) are done. | An ONNX Real-ESRGAN backend whose model is declared in `[[models]]` (see the `local-upscale` README). |
 | **Others** (style transfer, colorize, denoise, captions) | Same job/result machinery; `text` output for captions; panes for assist UIs. | Nothing specific. | Plugins only; no host work. |
 
@@ -362,4 +371,25 @@ composite at most 1024 pixels on a side, returns a grey `mask` output with
 `fit = "source"`, and Xuan proposes it as the selection. Its built-in backend
 selects by brightness; a `backend_<name>.py` with a `segment` function is
 where an ONNX U²-Net or IS-Net model would go. It needs only `document =
-"read"`. Tests: `python3 -m unittest discover -s plugins/select-bright`.
+"read"`, and it declares `[[provides]] capability = "select_subject"`, so
+choosing it in Settings → Selection makes Select → Subject run it instead of
+the built-in GrabCut. Tests: `python3 -m unittest discover -s
+plugins/select-bright`.
+
+**An ONNX segmentation plugin, step by step.** Start from `select-bright`:
+
+1. Create `.venv` in the plugin folder with `onnxruntime`, `numpy` and
+   `pillow` (a `setup.sh`/`setup.ps1` that pins them), and point `command` at
+   `.venv/bin/python main.py`. Nothing of this reaches Xuan's binary.
+2. Declare the model in `[[models]]` with its https URL, size, SHA-256 and
+   licence, and list it in the action's `models`. Xuan asks, downloads,
+   verifies and passes the path (`job.model_path("u2net")`).
+3. Write `backend_u2net.py`: resize the source to the model's input, run the
+   session, return the matte; `fit_source=True` scales a 320×320 matte over
+   any source.
+4. Declare what it can replace: `select_subject` (and `object_select`, using
+   `inputs.point` / `inputs.rect` to crop or prompt the model) need only
+   `document = "read"`; `remove_background` needs `document = "edit"`, since
+   Xuan lays its mask on the layer.
+5. The user picks it under Settings → Selection. If it is disabled, or offline
+   mode turns it off, Xuan uses the built-in algorithm and says so.

@@ -430,8 +430,10 @@ impl EditorApp {
                 self.plugins.permission_request = None;
                 self.dialog = None;
                 match next {
+                    // Not `start_plugin_action`: a provider run waiting for this
+                    // grant continues as one.
                     PendingStart::Action(action) if !action.is_empty() => {
-                        self.start_plugin_action(&plugin, &action)
+                        self.start_plugin_action_with(&plugin, &action, None)
                     }
                     PendingStart::Pane(key) => self.render_pane(&key, "open", None),
                     PendingStart::Action(_) => {}

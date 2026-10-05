@@ -1073,3 +1073,48 @@ mod color_range {
         );
     }
 }
+
+mod selection_providers {
+    use super::*;
+    use xuan::plugins::manifest::Capability;
+
+    #[test]
+    fn settings_choose_a_provider_and_remember_it() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        std::fs::write(
+            plugin.path().join("plugin.toml"),
+            "[plugin]\nid = \"seg\"\nname = \"Seg\"\nversion = \"1\"\ncommand = [\"sh\", \"x\"]\n\n\
+             [[provides]]\ncapability = \"select_subject\"\naction = \"segment\"\n\n\
+             [[actions]]\nid = \"segment\"\nlabel = \"Segment\"\nsource = { from = \"composite\" }\n",
+        )
+        .unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        let manifest = xuan::plugins::Manifest::load(plugin.path()).unwrap();
+        ui.app_mut().install_plugins(vec![manifest], vec![]);
+        ui.app_mut().command("settings");
+        ui.settle();
+        ui.click("Selection");
+        assert!(ui.has("Select Subject provider"));
+        // The first of the three pop-ups is Select Subject's.
+        ui.harness
+            .query_all_by_label("Built-in")
+            .next()
+            .unwrap()
+            .click();
+        ui.settle();
+        ui.click("Seg (seg)");
+        assert_eq!(
+            ui.app().config.providers.get(Capability::SelectSubject),
+            Some("seg")
+        );
+        assert_eq!(
+            ui.app().config.providers.get(Capability::ObjectSelect),
+            None
+        );
+        ui.click("Done");
+        let saved = xuan::config::Config::load(&config.path().join("config.toml")).unwrap();
+        assert_eq!(saved.providers.get(Capability::SelectSubject), Some("seg"));
+    }
+}

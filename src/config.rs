@@ -118,6 +118,52 @@ pub struct Config {
     /// [`Config::block_undeclared_network`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_undeclared_network: Option<bool>,
+    /// Settings → Selection: which plugin, if any, stands in for Select Subject, Remove
+    /// Background and the Magic tool's Object mode. Built-in when absent.
+    #[serde(default, skip_serializing_if = "Providers::is_default")]
+    pub providers: Providers,
+}
+
+/// The plugin chosen for each replaceable algorithm, by plugin id; `None` is the
+/// built-in one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Providers {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub select_subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remove_background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_select: Option<String>,
+}
+
+impl Providers {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The plugin chosen for `capability`.
+    pub fn get(&self, capability: crate::plugins::manifest::Capability) -> Option<&str> {
+        use crate::plugins::manifest::Capability;
+        match capability {
+            Capability::SelectSubject => self.select_subject.as_deref(),
+            Capability::RemoveBackground => self.remove_background.as_deref(),
+            Capability::ObjectSelect => self.object_select.as_deref(),
+        }
+    }
+
+    pub fn set(
+        &mut self,
+        capability: crate::plugins::manifest::Capability,
+        plugin: Option<String>,
+    ) {
+        use crate::plugins::manifest::Capability;
+        *match capability {
+            Capability::SelectSubject => &mut self.select_subject,
+            Capability::RemoveBackground => &mut self.remove_background,
+            Capability::ObjectSelect => &mut self.object_select,
+        } = plugin;
+    }
 }
 
 /// "Block network for plugins that don't declare it" for users who never
@@ -146,6 +192,7 @@ impl Default for Config {
             recent_commands: Vec::new(),
             disable_network_plugins: false,
             block_undeclared_network: None,
+            providers: Providers::default(),
         }
     }
 }
@@ -366,6 +413,11 @@ impl Config {
                 "keybindings".into(),
                 toml::Value::Table(self.keybindings.clone()),
             );
+        }
+        if self.providers.is_default() {
+            table.remove("providers");
+        } else {
+            table.insert("providers".into(), toml::Value::try_from(&self.providers)?);
         }
         if self.recent_commands.is_empty() {
             table.remove("recent_commands");
@@ -767,5 +819,46 @@ mod tests {
         // Clearing every override removes the table again.
         Config::default().save(&path).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("keybindings"));
+    }
+
+    #[test]
+    fn providers_default_to_built_in_and_round_trip() {
+        use crate::plugins::manifest::Capability;
+        // Files from before providers existed load with every algorithm built in, and
+        // a configuration that never chose one does not write the table.
+        let old: Config = toml::from_str("language = 'zh-CN'\npixel_grid = false\n").unwrap();
+        assert_eq!(old.providers, Providers::default());
+        assert!(
+            !toml::to_string(&Config::default())
+                .unwrap()
+                .contains("providers")
+        );
+        let mut config = Config::default();
+        config
+            .providers
+            .set(Capability::SelectSubject, Some("select-bright".into()));
+        let text = toml::to_string(&config).unwrap();
+        assert!(
+            text.contains("[providers]\nselect_subject = \"select-bright\""),
+            "{text}"
+        );
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(
+            back.providers.get(Capability::SelectSubject),
+            Some("select-bright")
+        );
+        assert_eq!(back.providers.get(Capability::RemoveBackground), None);
+        // Saving writes the table, and choosing Built-in again removes it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap().providers, config.providers);
+        config.providers.set(Capability::SelectSubject, None);
+        config.save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("providers"));
+        // Unknown capabilities from a later release are ignored, CRLF too.
+        let later: Config =
+            toml::from_str("[providers]\r\nobject_select = \"seg\"\r\nfuture = \"x\"\r\n").unwrap();
+        assert_eq!(later.providers.get(Capability::ObjectSelect), Some("seg"));
     }
 }

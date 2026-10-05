@@ -38,6 +38,15 @@ impl EditorApp {
         seeds: xuan::segment::Seeds,
         mode: xuan::selection::SelectionMode,
     ) {
+        let point = (seeds.points.first()).map(|&(x, y)| xuan::document::Point::new(x, y));
+        if self.run_provider(
+            xuan::plugins::manifest::Capability::ObjectSelect,
+            point,
+            seeds.rect,
+            mode,
+        ) {
+            return;
+        }
         self.start_progress_job(tr("Object Selection"), move |document, progress, cancel| {
             let image = xuan::render::render(document);
             let result = xuan::segment::segment(&image, &seeds, progress, cancel)

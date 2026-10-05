@@ -32,6 +32,10 @@ pub struct Manifest {
     /// Model files the host downloads and verifies for the plugin.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<Model>,
+    /// Built-in algorithms one of the plugin's actions can replace, when the user
+    /// picks the plugin in Settings → Selection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provides: Vec<Provide>,
     /// Folder the manifest was read from; the plugin runs there.
     #[serde(skip)]
     pub dir: PathBuf,
@@ -73,6 +77,53 @@ impl Permissions {
             && self.document == DocumentAccess::Read
             && self.filesystem == FilesystemAccess::None
     }
+}
+
+/// A built-in algorithm a plugin action can stand in for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    /// Select → Subject: a mask that becomes the selection.
+    SelectSubject,
+    /// Filter → Remove Background: a mask the host lays on the source layer as its
+    /// layer mask. It changes the document, so it needs `document = "edit"`.
+    RemoveBackground,
+    /// The Magic tool's Object mode: a mask of the object at a clicked point or inside
+    /// a dragged rectangle, which becomes the selection.
+    ObjectSelect,
+}
+
+impl Capability {
+    pub const ALL: [Self; 3] = [
+        Self::SelectSubject,
+        Self::RemoveBackground,
+        Self::ObjectSelect,
+    ];
+
+    /// The manifest's name for it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::SelectSubject => "select_subject",
+            Self::RemoveBackground => "remove_background",
+            Self::ObjectSelect => "object_select",
+        }
+    }
+
+    /// The command it replaces, untranslated.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SelectSubject => "Select Subject",
+            Self::RemoveBackground => "Remove Background",
+            Self::ObjectSelect => "Object Selection",
+        }
+    }
+}
+
+/// `[[provides]]`: the action that provides a capability.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Provide {
+    pub capability: Capability,
+    pub action: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1045,6 +1096,34 @@ impl Manifest {
                 );
             }
         }
+        let mut capabilities = std::collections::HashSet::new();
+        for provide in &self.provides {
+            let capability = provide.capability.id();
+            ensure!(
+                capabilities.insert(provide.capability),
+                "capability `{capability}` is provided twice"
+            );
+            let action = self.action(&provide.action).with_context(|| {
+                format!(
+                    "capability `{capability}` names action `{}`, which is not in [[actions]]",
+                    provide.action
+                )
+            })?;
+            ensure!(
+                action.needs_image(),
+                "capability `{capability}` needs an edit action with a source image"
+            );
+            ensure!(
+                action.regions_input().is_none(),
+                "capability `{capability}` runs without a dialog, so its action cannot ask for regions"
+            );
+            ensure!(
+                provide.capability != Capability::RemoveBackground
+                    || self.permissions.document == DocumentAccess::Edit,
+                "capability `remove_background` changes the image (a layer mask), so it needs \
+                 document = \"edit\" in [permissions]"
+            );
+        }
         ids.clear();
         for pane in &self.panes {
             validate_id(&pane.id).with_context(|| format!("pane `{}`", pane.id))?;
@@ -1079,6 +1158,12 @@ impl Manifest {
 
     pub fn action(&self, id: &str) -> Option<&Action> {
         self.actions.iter().find(|action| action.id == id)
+    }
+
+    /// The action that provides `capability`, if the plugin declares one.
+    pub fn provider(&self, capability: Capability) -> Option<&Action> {
+        let provide = self.provides.iter().find(|p| p.capability == capability)?;
+        self.action(&provide.action)
     }
 
     pub fn pane(&self, id: &str) -> Option<&Pane> {
