@@ -180,7 +180,10 @@ fn use_fake(app: &mut EditorApp, fake: Fake) -> Arc<Fake> {
     fake
 }
 
-/// Run frames until `done`, failing after 20 seconds.
+/// Run frames until `done`, failing after 20 seconds. A worker thread may
+/// change what `done` sees between frames, so a few more frames follow to
+/// show the new state and let the layout settle before the test looks at
+/// or clicks the screen.
 fn wait(ui: &mut UiTest, mut done: impl FnMut(&EditorApp) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !done(ui.app()) {
@@ -192,6 +195,8 @@ fn wait(ui: &mut UiTest, mut done: impl FnMut(&EditorApp) -> bool) {
         ui.settle();
         std::thread::sleep(Duration::from_millis(5));
     }
+    ui.settle();
+    ui.settle();
 }
 
 fn status(app: &EditorApp, id: &str) -> ModelStatusView {
@@ -427,8 +432,13 @@ fn the_models_section_downloads_shows_and_deletes_models() {
     assert!(dir.join("net.onnx").is_file());
 
     ui.click("Delete");
-    assert!(ui.has("Not downloaded"));
     assert!(!dir.join("net.onnx").exists());
+    assert!(
+        ui.has("Not downloaded"),
+        "status: {}, error: {:?}",
+        ui.app().status,
+        ui.app().error
+    );
 
     // Delete All Models removes the whole folder.
     ui.app_mut()
