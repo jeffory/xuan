@@ -29,6 +29,40 @@ use super::{Dialog, EditorApp, Session, Tool, shortcuts};
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Host commands any plugin may run through `host/run`: they only move the view.
+pub(super) const HOST_VIEW_COMMANDS: &[&str] = &["fit", "actual", "zoom_in", "zoom_out"];
+/// Host commands a plugin with `document = "edit"` may also run: each is one
+/// undoable edit of the open document. Nothing that touches files, the
+/// clipboard, settings or other plugins is ever allowed.
+pub(super) const HOST_EDIT_COMMANDS: &[&str] = &[
+    "undo",
+    "redo",
+    "new_layer",
+    "duplicate",
+    "delete_layer",
+    "group",
+    "ungroup",
+    "move_out",
+    "merge",
+    "flatten",
+    "mask",
+    "new_mask_layer",
+    "delete_mask",
+    "disable_mask",
+    "link_mask",
+    "clip",
+    "select_all",
+    "deselect",
+    "invert_selection",
+    "fill_fg",
+    "fill_bg",
+    "clear",
+    "invert",
+    "flip_h",
+    "flip_v",
+    "flip_canvas_h",
+    "flip_canvas_v",
+];
 /// Shortest time between two links a plugin opens.
 const LINK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -534,7 +568,11 @@ impl EditorApp {
         }
     }
 
-    fn service_request(&mut self, plugin: &str, request: &Request) -> Result<Value, RpcError> {
+    pub(super) fn service_request(
+        &mut self,
+        plugin: &str,
+        request: &Request,
+    ) -> Result<Value, RpcError> {
         let params = &request.params;
         let string = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_owned);
         let uuid = |key: &str| -> Result<Uuid, RpcError> {
@@ -638,12 +676,39 @@ impl EditorApp {
                         "The editor is busy",
                     ));
                 }
+                let edit = self
+                    .plugins
+                    .manifest(plugin)
+                    .is_some_and(|m| m.permissions.document == DocumentAccess::Edit);
                 match action.split_once('/') {
-                    Some((other, id)) => {
-                        let (other, id) = (other.to_owned(), id.to_owned());
-                        self.start_plugin_action(&other, &id);
+                    // A plugin may start its own actions, never another plugin's.
+                    Some((owner, id)) if owner == plugin => {
+                        let id = id.to_owned();
+                        self.start_plugin_action_with(plugin, &id, params.get("inputs"));
                     }
-                    None => self.command(&action),
+                    Some(_) => {
+                        return Err(RpcError::new(
+                            protocol::INVALID_REQUEST,
+                            "A plugin can only run its own actions",
+                        ));
+                    }
+                    None if HOST_VIEW_COMMANDS.contains(&action.as_str())
+                        || (edit && HOST_EDIT_COMMANDS.contains(&action.as_str())) =>
+                    {
+                        self.command(&action)
+                    }
+                    None if HOST_EDIT_COMMANDS.contains(&action.as_str()) => {
+                        return Err(RpcError::new(
+                            protocol::INVALID_REQUEST,
+                            "The manifest does not declare document = \"edit\"",
+                        ));
+                    }
+                    None => {
+                        return Err(RpcError::new(
+                            protocol::INVALID_REQUEST,
+                            format!("Plugins cannot run `{action}`"),
+                        ));
+                    }
                 }
                 Ok(json!({"ok": true}))
             }

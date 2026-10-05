@@ -239,7 +239,7 @@ frame.
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true}`; needs `document = "edit"` |
-| `host/run` | `{action, inputs?}` | runs a host command or another plugin's action |
+| `host/run` | `{action, inputs?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
 
 `document/edit` edits, applied together as one undo step named `name`:
@@ -322,6 +322,13 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
   document is in flight; a job is cancelled if its document tab closes.
 - Pixels never leave the user's machine unless the plugin sends them somewhere;
   the permissions dialog says which hosts a plugin declared.
-- `host/run` may call built-in commands (the identifiers in
-  [SHORTCUTS.md](SHORTCUTS.md)) and other plugins' actions, so plugins compose;
-  a future MCP server exposes the same registry to agents.
+- `host/run` may call the view commands `fit`, `actual`, `zoom_in` and
+  `zoom_out`. A plugin that declares `document = "edit"` may also call
+  commands that make one undoable document edit: `undo`, `redo`, `new_layer`,
+  `duplicate`, `delete_layer`, `group`, `ungroup`, `move_out`, `merge`,
+  `flatten`, `mask`, `new_mask_layer`, `delete_mask`, `disable_mask`,
+  `link_mask`, `clip`, `select_all`, `deselect`, `invert_selection`,
+  `fill_fg`, `fill_bg`, `clear`, `invert`, `flip_h`, `flip_v`,
+  `flip_canvas_h` and `flip_canvas_v`. Commands that open, save, export or
+  close files, use the clipboard, change settings or manage plugins are
+  refused, and a plugin can start only its own actions.

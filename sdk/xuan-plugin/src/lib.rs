@@ -220,7 +220,7 @@ impl Host {
         Ok(())
     }
 
-    /// Run a built-in command or another plugin's `plugin/action`.
+    /// Run an allowed host command, or one of this plugin's own `plugin/action`.
     pub fn run(&self, action: &str, inputs: Value) -> Result<()> {
         self.request("host/run", json!({"action": action, "inputs": inputs}))?;
         Ok(())

@@ -198,7 +198,7 @@ class Host:
         self.request("document/edit", {"name": name, "edits": edits})
 
     def run(self, action: str, inputs: Optional[Dict[str, Any]] = None) -> None:
-        """Run a built-in command or another plugin's ``plugin/action``."""
+        """Run an allowed host command, or one of this plugin's own ``plugin/action``."""
         self.request("host/run", {"action": action, "inputs": inputs or {}})
 
     def open(self, path: Optional[str] = None, url: Optional[str] = None) -> None:

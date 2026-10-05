@@ -737,6 +737,93 @@ fn plugin_menus_panes_and_chords_work_through_the_ui() {
     assert_eq!(ui.app().session().unwrap().history.names().count(), steps);
 }
 
+fn host_run(
+    app: &mut EditorApp,
+    plugin: &str,
+    action: &str,
+) -> Result<serde_json::Value, xuan::plugins::protocol::RpcError> {
+    let request = xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(1),
+        method: "host/run".into(),
+        params: serde_json::json!({"action": action, "inputs": {"prompt": "from host/run"}}),
+    };
+    app.service_request(plugin, &request)
+}
+
+#[cfg(unix)]
+#[test]
+fn host_run_only_allows_safe_commands_and_the_plugins_own_actions() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    let reader = app.plugins.manifest("mock").unwrap().clone();
+    let mut editor = Manifest::parse(
+        &MANIFEST
+            .replace("id = \"mock\"", "id = \"editor\"")
+            .replace("shortcut = \"Ctrl+Shift+E\"\n", "")
+            .replace(
+                "[[actions]]",
+                "[permissions]\ndocument = \"edit\"\n\n[[actions]]",
+            ),
+        other.path(),
+    )
+    .unwrap();
+    editor.dir = dir.path().to_path_buf();
+    app.install_plugins(vec![reader, editor], vec![]);
+    app.grant_plugin("editor", true);
+    let path = dir.path().join("work.xuan");
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("new_layer");
+    io::save(&app.session().unwrap().document, &path).unwrap();
+    app.session_mut().unwrap().path = Some(path.clone());
+    frame(&context, &mut app);
+    let saved = std::fs::read(&path).unwrap();
+    let layers = |app: &EditorApp| app.session().unwrap().document.layers.len();
+
+    // A read-only plugin can move the view but not edit, save or close.
+    assert!(host_run(&mut app, "mock", "zoom_in").is_ok());
+    for command in ["flatten", "delete_layer"] {
+        let error = host_run(&mut app, "mock", command).unwrap_err();
+        assert!(
+            error.message.contains("edit"),
+            "{command}: {}",
+            error.message
+        );
+    }
+    for command in [
+        "save", "save_as", "export", "close", "quit", "open", "settings", "plugins", "paste",
+        "copy",
+    ] {
+        assert!(host_run(&mut app, "mock", command).is_err(), "{command}");
+    }
+    assert_eq!(layers(&app), 2);
+    assert_eq!(app.sessions.len(), 1);
+    assert!(!app.close_app);
+    // Nothing reached the file.
+    assert_eq!(std::fs::read(&path).unwrap(), saved);
+
+    // A plugin with edit access may make undoable edits, but still not save.
+    assert!(host_run(&mut app, "editor", "flatten").is_ok());
+    assert_eq!(layers(&app), 1);
+    assert!(host_run(&mut app, "editor", "save").is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), saved);
+
+    // Another plugin's action is refused; the plugin's own runs with its inputs.
+    assert!(host_run(&mut app, "mock", "editor/echo").is_err());
+    assert!(app.plugins.action.is_none());
+    assert_eq!(app.dialog, None);
+    assert!(host_run(&mut app, "mock", "mock/echo").is_ok());
+    let edit = app.plugins.action.as_ref().unwrap();
+    assert_eq!(
+        (edit.plugin.as_str(), edit.action.as_str()),
+        ("mock", "echo")
+    );
+    assert_eq!(edit.values["prompt"], "from host/run");
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::{builtin_for, consume_exact};
