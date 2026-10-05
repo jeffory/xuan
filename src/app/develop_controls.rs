@@ -8,7 +8,10 @@ use xuan::i18n::tr;
 use egui::{Color32, Sense, Stroke, pos2, vec2};
 use xuan::raw::{self, DevelopSettings, Overlay, OverlayKind, WhiteBalance};
 
-use super::{develop::Develop, theme, widgets};
+use super::{
+    develop::{CanvasTool, Develop},
+    theme, widgets,
+};
 
 fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
     ui.horizontal(|ui| {
@@ -27,13 +30,23 @@ fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive
     });
 }
 
+/// A checkbox that turns `tool` on or off as the canvas's only active tool.
+fn tool_checkbox(ui: &mut egui::Ui, d: &mut Develop, tool: CanvasTool, label: &str) -> bool {
+    let mut active = d.tool == tool;
+    let changed = widgets::checkbox(ui, &mut active, label).changed();
+    if changed {
+        d.tool = if active { tool } else { CanvasTool::None };
+    }
+    changed
+}
+
 fn percent(ui: &mut egui::Ui, label: &str, value: &mut f32) {
     slider(ui, label, value, -100.0..=100.0, "%");
 }
 
 pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
     if !d.settings.negative.enabled {
-        d.film_base_picker = false;
+        d.leave_tool(CanvasTool::FilmBase);
     }
     histogram(ui, d);
     ui.add_space(8.0);
@@ -55,10 +68,8 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
             .clicked()
         {
             d.settings = DevelopSettings::default();
-            d.picker = false;
-            d.film_base_picker = false;
+            d.tool = CanvasTool::None;
             d.selected_overlay = None;
-            d.draw_overlay = false;
         }
         widgets::PopUp::from_id_salt("raw_presets")
             .selected_text(tr("Presets"))
@@ -90,7 +101,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
                     if ui.button(name).clicked() {
                         d.settings = preset;
                         d.selected_overlay = None;
-                        d.draw_overlay = false;
+                        d.leave_tool(CanvasTool::DrawMask);
                         ui.close();
                     }
                 }
@@ -221,10 +232,7 @@ fn white_balance(ui: &mut egui::Ui, d: &mut Develop) {
                     }
                 }
             });
-        if widgets::checkbox(ui, &mut d.picker, tr("Pick neutral")).changed() {
-            d.draw_overlay = false;
-            d.film_base_picker = false;
-        }
+        tool_checkbox(ui, d, CanvasTool::WhiteBalance, tr("Pick neutral"));
     });
     ui.add_enabled_ui(
         d.settings.white_balance == WhiteBalance::Temperature,
@@ -251,8 +259,9 @@ fn negative(ui: &mut egui::Ui, d: &mut Develop) {
     )
     .changed()
     {
-        d.picker = false;
-        d.film_base_picker = false;
+        if d.tool.is_picker() {
+            d.tool = CanvasTool::None;
+        }
         if d.settings.negative.enabled
             && unconfigured
             && let Some(raw) = &d.proxy
@@ -272,12 +281,10 @@ fn negative(ui: &mut egui::Ui, d: &mut Develop) {
             d.settings.negative.film_base = calibration.film_base;
             d.settings.negative.density_range = calibration.density_range;
         }
-        if widgets::checkbox(ui, &mut d.film_base_picker, tr("Pick film base")).changed() {
-            d.picker = false;
-            d.draw_overlay = false;
-            if d.film_base_picker {
-                d.compare = super::develop::Compare::Original;
-            }
+        if tool_checkbox(ui, d, CanvasTool::FilmBase, tr("Pick film base"))
+            && d.tool == CanvasTool::FilmBase
+        {
+            d.compare = super::develop::Compare::Original;
         }
     });
     slider(
@@ -548,10 +555,8 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
                         ..Default::default()
                     });
                     d.selected_overlay = Some(d.settings.overlays.len() - 1);
-                    d.draw_overlay = true;
+                    d.tool = CanvasTool::DrawMask;
                     d.show_mask = true;
-                    d.picker = false;
-                    d.film_base_picker = false;
                 }
             }
         });
@@ -571,10 +576,7 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
     };
     ui.separator();
     ui.horizontal(|ui| {
-        if widgets::checkbox(ui, &mut d.draw_overlay, tr("Draw mask")).changed() {
-            d.picker = false;
-            d.film_base_picker = false;
-        }
+        tool_checkbox(ui, d, CanvasTool::DrawMask, tr("Draw mask"));
         widgets::checkbox(ui, &mut d.show_mask, tr("Show guides"));
     });
     let overlay = &mut d.settings.overlays[index];
@@ -601,7 +603,7 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
     if widgets::button(ui, tr("Delete mask")).clicked() {
         d.settings.overlays.remove(index);
         d.selected_overlay = None;
-        d.draw_overlay = false;
+        d.leave_tool(CanvasTool::DrawMask);
     }
 }
 
@@ -824,7 +826,7 @@ fn load_preset(d: &mut Develop) {
         Ok(settings) => {
             d.settings = settings;
             d.selected_overlay = None;
-            d.draw_overlay = false;
+            d.leave_tool(CanvasTool::DrawMask);
         }
         Err(error) => d.error = Some(format!("{}: {error}", tr("Could not load RAW settings"))),
     }

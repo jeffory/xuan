@@ -91,9 +91,7 @@ impl EditorApp {
         }
         if let Some(develop) = &mut self.develop {
             if pressed(Key::Escape) {
-                develop.picker = false;
-                develop.film_base_picker = false;
-                develop.draw_overlay = false;
+                develop.tool = super::develop::CanvasTool::None;
             }
             if pressed(Key::F1) {
                 self.command("shortcuts");

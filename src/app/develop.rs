@@ -70,6 +70,27 @@ pub(super) enum Compare {
     SideBySide,
 }
 
+/// The click/drag tool active on the Develop canvas. Exactly one can be active,
+/// so picking one mode implicitly leaves the others.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum CanvasTool {
+    /// Plain navigation: drag pans, or moves the split divider.
+    #[default]
+    None,
+    /// White-balance eyedropper: click a neutral area.
+    WhiteBalance,
+    /// Film-base eyedropper: click an unexposed film edge.
+    FilmBase,
+    /// Drag on the image to place the selected mask.
+    DrawMask,
+}
+
+impl CanvasTool {
+    pub fn is_picker(self) -> bool {
+        matches!(self, Self::WhiteBalance | Self::FilmBase)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum CanvasDrag {
     Pan { origin: Pos2, pan: Vec2 },
@@ -117,13 +138,11 @@ pub(super) struct Develop {
     pub pan: Vec2,
     canvas_drag: Option<CanvasDrag>,
     pub fit: bool,
-    pub picker: bool,
-    pub film_base_picker: bool,
+    pub tool: CanvasTool,
     pub panel: usize,
     pub curve_channel: usize,
     pub hsl_band: usize,
     pub selected_overlay: Option<usize>,
-    pub draw_overlay: bool,
     pub show_mask: bool,
     pub undo: Vec<DevelopSettings>,
     pub redo: Vec<DevelopSettings>,
@@ -173,13 +192,11 @@ impl Develop {
             pan: Vec2::ZERO,
             canvas_drag: None,
             fit: true,
-            picker: false,
-            film_base_picker: false,
+            tool: CanvasTool::None,
             panel: 0,
             curve_channel: 0,
             hsl_band: 0,
             selected_overlay: None,
-            draw_overlay: false,
             show_mask: false,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -359,8 +376,15 @@ impl Develop {
                 self.redo.push(previous);
             }
             self.selected_overlay = None;
-            self.draw_overlay = false;
+            self.leave_tool(CanvasTool::DrawMask);
             self.changed();
+        }
+    }
+
+    /// Returns to plain navigation if `tool` is the active canvas tool.
+    pub fn leave_tool(&mut self, tool: CanvasTool) {
+        if self.tool == tool {
+            self.tool = CanvasTool::None;
         }
     }
 
@@ -890,16 +914,19 @@ impl EditorApp {
                     tr("Decoding RAW sensor data…")
                 } else if d.receiver.is_some() || d.needs_preview(d.preview_side) {
                     tr("Updating preview…")
-                } else if d.film_base_picker {
-                    tr("Click an unexposed film edge to sample the orange mask")
-                } else if d.picker {
-                    tr("Click a neutral gray area to set white balance")
-                } else if d.draw_overlay {
-                    tr("Drag on the image to place the selected mask")
-                } else if let Some(notice) = &d.notice {
-                    notice
                 } else {
-                    tr("RAW embedded · 32-bit float processing · sRGB photo layer")
+                    match d.tool {
+                        CanvasTool::FilmBase => {
+                            tr("Click an unexposed film edge to sample the orange mask")
+                        }
+                        CanvasTool::WhiteBalance => {
+                            tr("Click a neutral gray area to set white balance")
+                        }
+                        CanvasTool::DrawMask => tr("Drag on the image to place the selected mask"),
+                        CanvasTool::None => d.notice.as_deref().unwrap_or(tr(
+                            "RAW embedded · 32-bit float processing · sRGB photo layer",
+                        )),
+                    }
                 });
                 if let Some(asset) = &d.asset {
                     let [width, height] = d
@@ -1235,7 +1262,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
         // Keep the gesture chosen at its origin, even after leaving the divider.
         d.canvas_drag = if force_pan {
             Some(CanvasDrag::Pan { origin, pan: d.pan })
-        } else if !d.picker && !d.film_base_picker && !d.draw_overlay {
+        } else if d.tool == CanvasTool::None {
             Some(if over_divider(origin) {
                 CanvasDrag::Split {
                     pointer_offset: origin.x - split_x,
@@ -1252,7 +1279,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
             Some(CanvasDrag::Pan { .. }) => egui::CursorIcon::Grabbing,
             Some(CanvasDrag::Split { .. }) => egui::CursorIcon::ResizeHorizontal,
             None if force_pan => egui::CursorIcon::Grab,
-            None if d.picker || d.film_base_picker || d.draw_overlay => egui::CursorIcon::Crosshair,
+            None if d.tool != CanvasTool::None => egui::CursorIcon::Crosshair,
             None if response.hover_pos().is_some_and(over_divider) => {
                 egui::CursorIcon::ResizeHorizontal
             }
@@ -1293,7 +1320,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
         }
         d.last_brush_point = None;
     } else if !force_pan
-        && (d.picker || d.film_base_picker)
+        && d.tool.is_picker()
         && response.clicked()
         && let (Some(point), Some(raw)) = (point, &d.full)
     {
@@ -1308,10 +1335,10 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
                     .interact_pointer_pos()
                     .is_some_and(|p| p.x < split_x));
         let source = if viewing_original { point } else { source };
-        if d.film_base_picker {
+        if d.tool == CanvasTool::FilmBase {
             if let Some(base) = raw::sample_film_base(raw, source) {
                 d.settings.negative.film_base = base;
-                d.film_base_picker = false;
+                d.tool = CanvasTool::None;
                 d.compare = Compare::Edited;
             } else {
                 d.notice = Some(
@@ -1322,13 +1349,13 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
             d.settings.custom_wb = wb;
             d.settings.white_balance = WhiteBalance::Custom;
             d.settings.tint = 0.0;
-            d.picker = false;
+            d.tool = CanvasTool::None;
         } else {
             d.notice =
                 Some(tr("Cannot sample this area. Choose a neutral area of the image.").into());
         }
     } else if !force_pan
-        && d.draw_overlay
+        && d.tool == CanvasTool::DrawMask
         && let Some(overlay) = d
             .selected_overlay
             .and_then(|i| d.settings.overlays.get_mut(i))
@@ -1578,7 +1605,7 @@ mod tests {
             if mask {
                 d.settings.overlays.push(raw::Overlay::default());
                 d.selected_overlay = Some(0);
-                d.draw_overlay = true;
+                d.tool = CanvasTool::DrawMask;
             }
             let settings = d.settings.clone();
             let texture = d.texture.as_ref().unwrap().id();
@@ -1639,10 +1666,38 @@ mod tests {
         let mut d = ready(&ctx);
         d.undo.push(DevelopSettings::default());
         d.selected_overlay = Some(0);
-        d.draw_overlay = true;
+        d.tool = CanvasTool::DrawMask;
         d.undo(false);
         assert!(d.selected_overlay.is_none());
-        assert!(!d.draw_overlay);
+        assert_eq!(d.tool, CanvasTool::None);
+    }
+
+    #[test]
+    fn canvas_tools_are_exclusive_and_escape_returns_to_navigation() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        app.develop = Some(ready(&ctx));
+        click_text(&ctx, &mut app, "Masks");
+        click_text(&ctx, &mut app, "+ Linear");
+        assert_eq!(app.develop.as_ref().unwrap().tool, CanvasTool::DrawMask);
+        click_text(&ctx, &mut app, "Basic");
+        click_text(&ctx, &mut app, "Pick neutral");
+        assert_eq!(app.develop.as_ref().unwrap().tool, CanvasTool::WhiteBalance);
+        click_text(&ctx, &mut app, "Pick neutral");
+        assert_eq!(app.develop.as_ref().unwrap().tool, CanvasTool::None);
+        click_text(&ctx, &mut app, "Pick neutral");
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(app.develop.as_ref().unwrap().tool, CanvasTool::None);
     }
 
     #[test]
@@ -1880,14 +1935,14 @@ mod tests {
         assert!(app.dialog.is_none());
         assert_eq!(app.develop.as_ref().unwrap().settings, converted);
         click_text(&ctx, &mut app, "Pick film base");
-        assert!(app.develop.as_ref().unwrap().film_base_picker);
+        assert_eq!(app.develop.as_ref().unwrap().tool, CanvasTool::FilmBase);
         assert!(app.develop.as_ref().unwrap().compare == Compare::Original);
         let output = frame(&ctx, &mut app, vec![]);
         let d = app.develop.as_ref().unwrap();
         let rect = image_rect(&output, d.before.as_ref().unwrap().id());
         click(&ctx, &mut app, rect.center());
         let d = app.develop.as_ref().unwrap();
-        assert!(!d.film_base_picker);
+        assert_eq!(d.tool, CanvasTool::None);
         assert!(d.compare == Compare::Edited);
         assert_ne!(d.settings.negative.film_base, converted.negative.film_base);
         let sampled = d.settings.clone();
