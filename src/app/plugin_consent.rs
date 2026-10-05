@@ -11,7 +11,7 @@ use serde_json::Value;
 use xuan::{
     i18n::tr,
     plugins::{
-        manifest::{Action, ActionKind, InputKind, SourceKind},
+        manifest::{Action, ActionKind, InputKind, SourceKind, SourceMask},
         protocol::{self, Request, RpcError},
         sandbox,
     },
@@ -212,7 +212,15 @@ impl EditorApp {
                     image.push_str(&format!(", {} {side} px", tr("longest side at most")));
                 }
             }
+            let has_image = image.is_some();
             items.extend(image);
+            // A constant mask for "nothing selected" carries no document data.
+            if has_image
+                && spec.source.mask == SourceMask::Selection
+                && document.selection.is_some()
+            {
+                items.push(tr("The selection, as a mask").into());
+            }
         }
         if let Some(input) = spec.regions_input()
             && !edit.regions.is_empty()

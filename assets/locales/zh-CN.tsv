@@ -796,3 +796,5 @@ runs as a program with your rights. Xuan enforces the permissions below only for
 Network blocked by Xuan (Linux)	网络已被 Xuan 阻止（Linux）
 It cannot open network sockets, not even to this computer.	它无法打开网络套接字，即使是连接本机也不行。
 did not start with its network blocked, and Xuan does not run it unfiltered while “Block network for plugins that don't declare it” is on in Settings	无法在阻止网络的情况下启动；设置中的“为未声明网络的插件阻止网络”开启时，Xuan 不会在不受限制的情况下运行它
+Select an area first	请先选择一个区域
+The selection, as a mask	选区（作为蒙版）

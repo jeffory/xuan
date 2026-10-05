@@ -1284,6 +1284,16 @@ impl EditorApp {
             self.error = Some(tr("Open a document first").into());
             return;
         }
+        if spec.needs_image()
+            && spec.source.mask == plugins::manifest::SourceMask::Selection
+            && spec.source.mask_empty == plugins::manifest::MaskEmpty::Error
+            && self
+                .session()
+                .is_some_and(|s| s.document.selection.is_none())
+        {
+            self.error = Some(tr("Select an area first").into());
+            return;
+        }
         let mut values = Map::new();
         let mut regions = Vec::new();
         for input in &spec.inputs {

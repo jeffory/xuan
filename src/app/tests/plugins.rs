@@ -652,6 +652,7 @@ fn a_mask_fitted_to_the_source_covers_the_source_layer() {
         max_side: Some(16),
         crop_to_regions: false,
         padding: 0.0,
+        ..Source::default()
     };
     job.prepared = jobs::prepare(
         &app.session().unwrap().document,
@@ -1121,6 +1122,69 @@ fn shortcuts_match_their_modifiers_exactly() {
 }
 
 /// Tests that run the mock plugin, a POSIX shell script.
+const INPAINT: &str = r#"
+[[actions]]
+id = "inpaint"
+label = "Inpaint"
+source = { from = "composite", max_side = 512, mask = "selection" }
+"#;
+
+#[test]
+fn a_selection_mask_is_listed_for_consent_and_needs_a_selection() {
+    use crate::app::plugins::ActionEdit;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = None;
+    let fixture = dir.path().join("fixture.png");
+    RgbaImage::new(8, 8).save(&fixture).unwrap();
+    std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+    std::fs::write(
+        dir.path().join("plugin.toml"),
+        format!("{}{INPAINT}", network_manifest("\"example.com\"")),
+    )
+    .unwrap();
+    app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+    app.grant_plugin("mock", true);
+    app.dimensions = [8, 8];
+    app.new_document();
+    let spec = app
+        .plugins
+        .manifest("mock")
+        .unwrap()
+        .action("inpaint")
+        .unwrap()
+        .clone();
+    app.plugins.action = Some(ActionEdit {
+        plugin: "mock".into(),
+        action: "inpaint".into(),
+        values: serde_json::Map::new(),
+        regions: Vec::new(),
+        selected: None,
+        estimate: None,
+        previous_tool: app.tool,
+        into: xuan::plugins::manifest::ResultInto::Layer,
+        consented: false,
+    });
+    // Nothing selected: the action refuses to start, and no mask is listed.
+    app.start_plugin_action("mock", "inpaint");
+    assert!(app.error.take().is_some());
+    assert!(
+        !app.action_consent_items(&spec)
+            .contains(&"The selection, as a mask".to_string())
+    );
+    let selection = selection_where(&app, |x, _| x < 4);
+    app.session_mut().unwrap().document.selection = Some(selection);
+    let items = app.action_consent_items(&spec);
+    assert_eq!(
+        items[..3],
+        [
+            "The whole image, flattened, longest side at most 512 px",
+            "The selection, as a mask",
+            "The document's size and the names and positions of its layers",
+        ]
+    );
+}
+
 #[cfg(unix)]
 mod unix {
     use super::*;

@@ -1,7 +1,10 @@
 //! Preparing what an action receives and fitting what it returns back into
 //! the document. Plugins only see the exported source image; every scale,
 //! crop and layer transform is undone here when the result comes back.
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, ensure};
 use image::{GrayImage, RgbaImage};
@@ -11,7 +14,7 @@ use uuid::Uuid;
 
 use super::{
     edits::{Export, fit, sub_transform, write_gray_png, write_png},
-    manifest::{Source, SourceKind},
+    manifest::{MAX_MASK_RADIUS, MaskEmpty, Source, SourceKind, SourceMask},
 };
 use crate::document::{Document, Layer, Mask, Point, Transform};
 
@@ -115,6 +118,8 @@ pub struct Prepared {
     pub transform: Transform,
     /// Regions in export coordinates, as sent to the plugin.
     pub regions: Vec<Value>,
+    /// The selection mask sent with the source, same size as the export.
+    pub mask: Option<PathBuf>,
     pub hash: Option<String>,
 }
 
@@ -128,6 +133,7 @@ impl Prepared {
             scale: 1.0,
             transform: Transform::new(1, 1),
             regions: Vec::new(),
+            mask: None,
             hash: None,
         }
     }
@@ -144,6 +150,7 @@ impl Prepared {
                 "offset": {"x": self.crop.0, "y": self.crop.1},
                 "document_x": export.x,
                 "document_y": export.y,
+                "mask": self.mask,
             }),
             None => Value::Null,
         }
@@ -244,8 +251,10 @@ pub fn prepare(
         scale: 1.0,
         transform,
         regions: Vec::new(),
+        mask: None,
         hash: Some(super::edits::pixel_hash(&pixels)),
     };
+    let selection_mask = source_mask(document, source)?;
     // Regions in source pixels: bounding boxes of the mapped corners.
     let boxes: Vec<(f32, f32, f32, f32)> = regions
         .iter()
@@ -274,11 +283,13 @@ pub fn prepare(
         })
         .collect();
     let mut crop = prepared.crop;
+    // A grown or feathered mask also widens a selection source's crop.
+    let crop_mask = match &selection_mask {
+        Some(SelectionMask::Shape(mask)) => Some(mask.as_ref()),
+        _ => document.selection.as_deref(),
+    };
     if source.from == SourceKind::Selection
-        && let Some((x0, y0, x1, y1)) = document
-            .selection
-            .as_deref()
-            .and_then(crate::selection::bounds)
+        && let Some((x0, y0, x1, y1)) = crop_mask.and_then(crate::selection::bounds)
     {
         crop = (x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32);
     } else if source.crop_to_regions && !boxes.is_empty() {
@@ -335,11 +346,7 @@ pub fn prepare(
         let mut mask_path = None;
         if let Some(mask) = &region.mask {
             let (ew, eh) = (exported.width(), exported.height());
-            let projected = GrayImage::from_fn(ew, eh, |px, py| {
-                let point = prepared.to_document(px as f32 + 0.5, py as f32 + 0.5);
-                let coverage = crate::selection::coverage(Some(mask), point);
-                image::Luma([(coverage * 255.0).round() as u8])
-            });
+            let projected = project_mask(&prepared, mask, ew, eh);
             let path = dir.join(format!("region-{}.png", index + 1));
             write_gray_png(&projected, &path)?;
             mask_path = Some(path);
@@ -354,7 +361,115 @@ pub fn prepare(
             "fields": region.fields,
         }));
     }
+    match selection_mask {
+        Some(SelectionMask::Shape(mask)) => {
+            let projected = project_mask(&prepared, &mask, exported.width(), exported.height());
+            let path = dir.join("selection.png");
+            write_gray_png(&projected, &path)?;
+            prepared.mask = Some(path);
+        }
+        Some(SelectionMask::Constant(value)) => {
+            let projected =
+                GrayImage::from_pixel(exported.width(), exported.height(), image::Luma([value]));
+            let path = dir.join("selection.png");
+            write_gray_png(&projected, &path)?;
+            prepared.mask = Some(path);
+        }
+        None => {}
+    }
     Ok(prepared)
+}
+
+/// The selection mask an action asked for, before it is cut to the export.
+enum SelectionMask {
+    /// The selection after `mask_grow` and `mask_feather`, at document size.
+    Shape(Arc<GrayImage>),
+    /// No selection: everything (255) or nothing (0).
+    Constant(u8),
+}
+
+fn source_mask(document: &Document, source: &Source) -> Result<Option<SelectionMask>> {
+    if source.mask != SourceMask::Selection {
+        return Ok(None);
+    }
+    let Some(selection) = &document.selection else {
+        return match source.mask_empty {
+            MaskEmpty::Error => anyhow::bail!("Select an area first"),
+            MaskEmpty::White => Ok(Some(SelectionMask::Constant(255))),
+            MaskEmpty::Black => Ok(Some(SelectionMask::Constant(0))),
+        };
+    };
+    let grow = source
+        .mask_grow
+        .clamp(-(MAX_MASK_RADIUS as i32), MAX_MASK_RADIUS as i32);
+    let feather = source
+        .mask_feather
+        .clamp(0.0, MAX_MASK_RADIUS as f32)
+        .round() as u32;
+    if grow == 0 && feather == 0 {
+        return Ok(Some(SelectionMask::Shape(selection.clone())));
+    }
+    let mut mask = (**selection).clone();
+    grow_mask(&mut mask, grow);
+    box_blur(&mut mask, feather);
+    Ok(Some(SelectionMask::Shape(Arc::new(mask))))
+}
+
+/// `mask` (at document size) sampled at each pixel of an export.
+fn project_mask(prepared: &Prepared, mask: &GrayImage, width: u32, height: u32) -> GrayImage {
+    GrayImage::from_fn(width, height, |px, py| {
+        let point = prepared.to_document(px as f32 + 0.5, py as f32 + 0.5);
+        let coverage = crate::selection::coverage(Some(mask), point);
+        image::Luma([(coverage * 255.0).round() as u8])
+    })
+}
+
+/// Grow (`radius > 0`) or shrink (`radius < 0`) a mask by that many pixels,
+/// with a square reach.
+pub fn grow_mask(mask: &mut GrayImage, radius: i32) {
+    if radius == 0 {
+        return;
+    }
+    let (w, h) = (mask.width() as usize, mask.height() as usize);
+    let reach = radius.unsigned_abs() as usize;
+    let widen = radius > 0;
+    let mut line = Vec::new();
+    let mut out = Vec::new();
+    for row in mask.chunks_exact_mut(w) {
+        window_extreme(row, reach, widen, &mut out);
+        row.copy_from_slice(&out);
+    }
+    for x in 0..w {
+        line.clear();
+        line.extend((0..h).map(|y| mask.as_raw()[y * w + x]));
+        window_extreme(&line, reach, widen, &mut out);
+        for (y, value) in out.iter().enumerate() {
+            mask.as_mut()[y * w + x] = *value;
+        }
+    }
+}
+
+/// The maximum (or minimum) of each `2 * reach + 1` window of `line`.
+fn window_extreme(line: &[u8], reach: usize, maximum: bool, out: &mut Vec<u8>) {
+    let n = line.len();
+    out.clear();
+    let better = |a: u8, b: u8| if maximum { a >= b } else { a <= b };
+    let mut queue = std::collections::VecDeque::<usize>::new();
+    let mut next = 0;
+    for i in 0..n {
+        let end = (i + reach + 1).min(n);
+        while next < end {
+            while queue.back().is_some_and(|&b| better(line[next], line[b])) {
+                queue.pop_back();
+            }
+            queue.push_back(next);
+            next += 1;
+        }
+        while queue.front().is_some_and(|&f| f + reach < i) {
+            queue.pop_front();
+        }
+        out.push(line[*queue.front().unwrap()]);
+    }
 }
 
 /// A new layer for an image the plugin returned at export position `x, y`.
@@ -633,6 +748,7 @@ mod tests {
             max_side: Some(50),
             crop_to_regions: true,
             padding: 0.0,
+            ..Source::default()
         };
         // A region over the red pixel in document space: layer pixel (100, 75)
         // sits at document (20 + 200, 10 + 150).
@@ -739,6 +855,7 @@ mod tests {
             max_side: Some(200),
             crop_to_regions: false,
             padding: 0.25,
+            ..Source::default()
         };
         let prepared = prepare(
             &document,
@@ -815,6 +932,7 @@ mod tests {
             max_side: None,
             crop_to_regions: false,
             padding: 0.0,
+            ..Source::default()
         };
         let prepared = prepare(&document, &source, &[], dir).unwrap();
         (document, prepared)
@@ -972,5 +1090,188 @@ mod tests {
         assert_eq!(mask.get_pixel(0, 0)[0], 0);
         let edge = mask.get_pixel(5, 10)[0];
         assert!(edge > 0 && edge < 255, "{edge}");
+    }
+
+    /// The test document with 100..300 x 100..200 selected.
+    fn selected() -> Document {
+        let mut document = document();
+        document.selection = Some(Arc::new(GrayImage::from_fn(400, 300, |x, y| {
+            image::Luma([if (100..300).contains(&x) && (100..200).contains(&y) {
+                255
+            } else {
+                0
+            }])
+        })));
+        document
+    }
+
+    fn with_mask(from: SourceKind, max_side: Option<u32>) -> Source {
+        Source {
+            from,
+            max_side,
+            mask: SourceMask::Selection,
+            ..Source::default()
+        }
+    }
+
+    fn sent_mask(prepared: &Prepared) -> GrayImage {
+        super::super::edits::read_gray_png(prepared.mask.as_ref().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_selection_mask_matches_the_source_export_for_every_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = selected();
+        // Layer: the layer's 200x150 pixels sit at (20, 10), twice as big.
+        for (max_side, scale) in [(None, 1.0), (Some(100), 0.5)] {
+            let prepared = prepare(
+                &document,
+                &with_mask(SourceKind::Layer, max_side),
+                &[],
+                dir.path(),
+            )
+            .unwrap();
+            let export = prepared.export.as_ref().unwrap();
+            let mask = sent_mask(&prepared);
+            assert_eq!(mask.dimensions(), (export.width, export.height));
+            assert_eq!(prepared.scale, scale);
+            // Layer pixel (100, 75) is document (220, 160): selected. Layer
+            // pixel (10, 10) is document (40, 30): not.
+            let at = |lx: f32, ly: f32| mask.get_pixel((lx * scale) as u32, (ly * scale) as u32)[0];
+            assert_eq!(at(100.0, 75.0), 255);
+            assert_eq!(at(10.0, 10.0), 0);
+            assert_eq!(at(190.0, 75.0), 0);
+            assert_eq!(prepared.describe()["mask"], json!(prepared.mask));
+        }
+        // Composite: 400x300, selected 100..300 x 100..200.
+        for (max_side, scale) in [(None, 1.0), (Some(200), 0.5)] {
+            let prepared = prepare(
+                &document,
+                &with_mask(SourceKind::Composite, max_side),
+                &[],
+                dir.path(),
+            )
+            .unwrap();
+            let mask = sent_mask(&prepared);
+            let export = prepared.export.as_ref().unwrap();
+            assert_eq!(mask.dimensions(), (export.width, export.height));
+            assert_eq!(mask.width(), (400.0 * scale) as u32);
+            let at = |x: f32, y: f32| mask.get_pixel((x * scale) as u32, (y * scale) as u32)[0];
+            assert_eq!((at(150.0, 150.0), at(299.0, 199.0)), (255, 255));
+            assert_eq!(
+                (at(50.0, 150.0), at(150.0, 250.0), at(310.0, 150.0)),
+                (0, 0, 0)
+            );
+        }
+        // Selection: cropped to its bounds, so the mask is solid.
+        for (max_side, size) in [(None, (200, 100)), (Some(100), (100, 50))] {
+            let prepared = prepare(
+                &document,
+                &with_mask(SourceKind::Selection, max_side),
+                &[],
+                dir.path(),
+            )
+            .unwrap();
+            assert_eq!(prepared.crop, (100.0, 100.0, 200.0, 100.0));
+            let mask = sent_mask(&prepared);
+            assert_eq!(mask.dimensions(), size);
+            assert!(mask.as_raw().iter().all(|&v| v == 255));
+        }
+    }
+
+    #[test]
+    fn mask_feather_and_grow_change_the_mask_before_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = selected();
+        let mask_of = |feather: f32, grow: i32| {
+            let source = Source {
+                mask_feather: feather,
+                mask_grow: grow,
+                ..with_mask(SourceKind::Composite, None)
+            };
+            sent_mask(&prepare(&document, &source, &[], dir.path()).unwrap())
+        };
+        let plain = mask_of(0.0, 0);
+        assert_eq!(
+            (plain.get_pixel(95, 150)[0], plain.get_pixel(105, 150)[0]),
+            (0, 255)
+        );
+        let grown = mask_of(0.0, 10);
+        assert_eq!(
+            (grown.get_pixel(95, 150)[0], grown.get_pixel(89, 150)[0]),
+            (255, 0)
+        );
+        assert_eq!(grown.get_pixel(150, 205)[0], 255);
+        let shrunk = mask_of(0.0, -10);
+        assert_eq!(
+            (shrunk.get_pixel(105, 150)[0], shrunk.get_pixel(115, 150)[0]),
+            (0, 255)
+        );
+        let soft = mask_of(8.0, 0);
+        let edge = soft.get_pixel(100, 150)[0];
+        assert!(edge > 0 && edge < 255, "{edge}");
+        assert_eq!(soft.get_pixel(200, 150)[0], 255);
+        assert_eq!(soft.get_pixel(20, 20)[0], 0);
+        // Grow happens first and widens a selection source's crop with it.
+        let source = Source {
+            mask_grow: 10,
+            ..with_mask(SourceKind::Selection, None)
+        };
+        let prepared = prepare(&document, &source, &[], dir.path()).unwrap();
+        assert_eq!(prepared.crop, (90.0, 90.0, 220.0, 120.0));
+        assert!(sent_mask(&prepared).as_raw().iter().all(|&v| v == 255));
+        // Out of range radii are clamped, not trusted.
+        let source = Source {
+            mask_grow: i32::MAX,
+            mask_feather: f32::NAN,
+            ..with_mask(SourceKind::Composite, None)
+        };
+        let prepared = prepare(&document, &source, &[], dir.path()).unwrap();
+        assert!(sent_mask(&prepared).as_raw().iter().all(|&v| v == 255));
+    }
+
+    #[test]
+    fn without_a_selection_the_mask_errors_or_is_a_constant() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = document();
+        let source = with_mask(SourceKind::Composite, Some(200));
+        let error = prepare(&document, &source, &[], dir.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("Select an area"));
+        for (empty, value) in [(MaskEmpty::White, 255), (MaskEmpty::Black, 0)] {
+            let source = Source {
+                mask_empty: empty,
+                ..source.clone()
+            };
+            let prepared = prepare(&document, &source, &[], dir.path()).unwrap();
+            let mask = sent_mask(&prepared);
+            assert_eq!(mask.dimensions(), (200, 150));
+            assert!(mask.as_raw().iter().all(|&v| v == value));
+        }
+        // An action that does not ask for a mask never gets one.
+        let plain = Source::default();
+        assert!(
+            prepare(&document, &plain, &[], dir.path())
+                .unwrap()
+                .mask
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn grow_mask_dilates_and_erodes_a_square_reach() {
+        let mut mask = GrayImage::new(21, 21);
+        mask.put_pixel(10, 10, image::Luma([255]));
+        grow_mask(&mut mask, 3);
+        let lit = mask.as_raw().iter().filter(|&&v| v == 255).count();
+        assert_eq!(lit, 49);
+        assert_eq!(mask.get_pixel(13, 7)[0], 255);
+        assert_eq!(mask.get_pixel(14, 10)[0], 0);
+        grow_mask(&mut mask, -3);
+        assert_eq!(mask.as_raw().iter().filter(|&&v| v == 255).count(), 1);
+        assert_eq!(mask.get_pixel(10, 10)[0], 255);
+        // A shape touching the border does not erode from the border.
+        let mut mask = GrayImage::from_pixel(8, 8, image::Luma([255]));
+        grow_mask(&mut mask, -2);
+        assert!(mask.as_raw().iter().all(|&v| v == 255));
     }
 }

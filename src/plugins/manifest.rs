@@ -370,6 +370,14 @@ pub struct Source {
     pub crop_to_regions: bool,
     /// Padding around the regions, as a fraction of the crop's size.
     pub padding: f32,
+    /// Also send the selection as a mask in the source's coordinates.
+    pub mask: SourceMask,
+    /// Blur of the mask's edge, in document units.
+    pub mask_feather: f32,
+    /// Grow (positive) or shrink (negative) the mask, in document units.
+    pub mask_grow: i32,
+    /// What the mask is when nothing is selected.
+    pub mask_empty: MaskEmpty,
 }
 
 impl Default for Source {
@@ -379,8 +387,34 @@ impl Default for Source {
             max_side: None,
             crop_to_regions: false,
             padding: 0.25,
+            mask: SourceMask::None,
+            mask_feather: 0.0,
+            mask_grow: 0,
+            mask_empty: MaskEmpty::Error,
         }
     }
+}
+
+/// Largest `mask_feather` and `mask_grow`, in document units.
+pub const MAX_MASK_RADIUS: u32 = 256;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceMask {
+    #[default]
+    None,
+    Selection,
+}
+
+/// The mask an action gets when `source.mask = "selection"` and nothing is
+/// selected: refuse to run, or send a mask that is all selected or all not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MaskEmpty {
+    #[default]
+    Error,
+    White,
+    Black,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -637,6 +671,28 @@ impl Manifest {
                 "action `{}` padding must be between 0 and 4",
                 action.id
             );
+            let source = &action.source;
+            ensure!(
+                source.mask == SourceMask::Selection
+                    || (source.mask_feather == 0.0
+                        && source.mask_grow == 0
+                        && source.mask_empty == MaskEmpty::Error),
+                "action `{}` sets mask_feather, mask_grow or mask_empty without source.mask",
+                action.id
+            );
+            ensure!(
+                source.mask == SourceMask::None
+                    || (action.kind == ActionKind::Edit && source.from != SourceKind::None),
+                "action `{}` needs an edit action with a source to send a mask",
+                action.id
+            );
+            ensure!(
+                source.mask_feather.is_finite()
+                    && (0.0..=MAX_MASK_RADIUS as f32).contains(&source.mask_feather)
+                    && source.mask_grow.unsigned_abs() <= MAX_MASK_RADIUS,
+                "action `{}` mask_feather and mask_grow must be within {MAX_MASK_RADIUS}",
+                action.id
+            );
             ensure!(
                 action
                     .source
@@ -831,6 +887,24 @@ import = true
             .contains("one regions")
         );
         assert!(broken("import = true", "import = false").contains("neither"));
+        let mask = |source: &str| {
+            let action = format!("[[actions]]\nid = \"m\"\nlabel = \"M\"\nsource = {source}\n");
+            Manifest::parse(&format!("{EXAMPLE}\n{action}"), dir)
+        };
+        let ok = mask("{ from = \"composite\", mask = \"selection\", mask_feather = 8, mask_grow = -4, mask_empty = \"white\" }").unwrap();
+        let source = &ok.action("m").unwrap().source;
+        assert_eq!(source.mask, SourceMask::Selection);
+        assert_eq!((source.mask_feather, source.mask_grow), (8.0, -4));
+        assert_eq!(source.mask_empty, MaskEmpty::White);
+        assert_eq!(
+            ok.action("precise-edit").unwrap().source.mask,
+            SourceMask::None
+        );
+        assert!(mask("{ mask = \"selection\", mask_grow = 999 }").is_err());
+        assert!(mask("{ mask = \"selection\", mask_feather = -1 }").is_err());
+        assert!(mask("{ from = \"none\", mask = \"selection\" }").is_err());
+        assert!(mask("{ mask_grow = 4 }").is_err());
+        assert!(mask("{ mask = \"layer\" }").is_err());
         assert!(
             Manifest::parse(
                 &format!("{EXAMPLE}\n[[actions]]\nid = \"precise-edit\"\nlabel = \"Again\"\n"),
