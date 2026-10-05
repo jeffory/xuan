@@ -621,3 +621,82 @@ mod rulers_and_guides {
         assert_eq!(ui.app().session().unwrap().document.grid, None);
     }
 }
+
+mod layer_appearance {
+    use super::*;
+    use egui::Key;
+
+    /// Focuses the layer panel's opacity slider (the slider level with the "Opacity" label).
+    fn focus_opacity(ui: &mut UiTest) {
+        let label = ui.harness.get_by_label("Opacity").rect().center().y;
+        let slider = ui
+            .harness
+            .get_all_by_role(Role::Slider)
+            .find(|slider| (slider.rect().center().y - label).abs() < 12.0)
+            .expect("an opacity slider");
+        assert!(!slider.accesskit_node().is_disabled());
+        slider.focus();
+        ui.settle();
+    }
+
+    fn active(ui: &UiTest) -> &xuan::document::Layer {
+        ui.app().session().unwrap().document.active().unwrap()
+    }
+
+    #[test]
+    fn a_folder_takes_an_opacity_but_not_a_blend_mode() {
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("group");
+        ui.settle();
+        assert!(active(&ui).group);
+        // Blending stays with each layer (upstream's canEditAppearance), so the menu is off.
+        assert!(!ui.enabled("Normal"));
+        focus_opacity(&mut ui);
+        for _ in 0..10 {
+            ui.key(Key::ArrowLeft);
+        }
+        let opacity = active(&ui).opacity;
+        assert!(opacity < 1.0, "{opacity}");
+        // The folder dims what is inside it.
+        let document = &ui.app().session().unwrap().document;
+        let child = document
+            .layers
+            .iter()
+            .find(|l| l.parent == Some(document.active.unwrap()))
+            .unwrap();
+        let point = xuan::document::Point::new(5.0, 5.0);
+        assert_eq!(
+            xuan::render::inherited_coverage(document, child, point),
+            opacity
+        );
+        // Each key press is its own undo step.
+        ui.app_mut().command("undo");
+        ui.settle();
+        assert!(active(&ui).opacity > opacity);
+    }
+
+    #[test]
+    fn the_blend_menu_lists_photoshops_modes_in_its_order() {
+        let mut ui = UiTest::with_document();
+        ui.click("Normal");
+        for name in [
+            "Dissolve",
+            "Linear Burn",
+            "Linear Dodge (Add)",
+            "Hard Mix",
+            "Divide",
+        ] {
+            assert!(ui.has(name), "{name}");
+        }
+        let y = |ui: &UiTest, name: &str| ui.harness.get_by_label(name).rect().top();
+        assert!(y(&ui, "Dissolve") < y(&ui, "Darken"));
+        assert!(y(&ui, "Linear Burn") < y(&ui, "Darker Color"));
+        assert!(y(&ui, "Pin Light") < y(&ui, "Hard Mix"));
+        assert!(y(&ui, "Divide") < y(&ui, "Hue"));
+        // The menu opens where it fits the window.
+        let screen = ui.ctx().content_rect();
+        assert!(screen.contains_rect(ui.harness.get_by_label("Soft Light").rect()));
+        ui.click("Soft Light");
+        assert_eq!(active(&ui).blend, xuan::blend::BlendMode::SoftLight);
+    }
+}

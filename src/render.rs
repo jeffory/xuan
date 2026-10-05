@@ -596,6 +596,40 @@ mod tests {
         }
     }
 
+    /// Upstream's LayerOpacity (Document/LayerGroups.swift): a folder's opacity multiplies into
+    /// each layer inside it, nested folders included, and the layers still blend one by one
+    /// with what is below (folders pass through rather than being flattened first).
+    #[test]
+    fn folder_opacity_dims_every_layer_inside() {
+        let mut doc = Document::new(1, 1).unwrap();
+        let base = Layer::image("Base", RgbaImage::from_pixel(1, 1, Rgba([0, 0, 255, 255])));
+        let mut outer = Layer::blank("Outer", 1, 1);
+        outer.group = true;
+        outer.opacity = 0.5;
+        let mut inner = Layer::blank("Inner", 1, 1);
+        inner.group = true;
+        inner.parent = Some(outer.id);
+        inner.opacity = 0.5;
+        let mut red = Layer::image("Red", RgbaImage::from_pixel(1, 1, Rgba([255, 0, 0, 255])));
+        red.parent = Some(inner.id);
+        let mut invert = Layer::blank("Invert", 1, 1);
+        invert.pixels = None;
+        invert.adjustment = Some(crate::document::Adjustment::Invert);
+        invert.parent = Some(outer.id);
+        doc.layers = vec![base, outer, inner, red];
+        // Red at a quarter over blue.
+        assert_eq!(render_pixels(&doc, 1, 1).get_pixel(0, 0).0, [64, 0, 191, 255]);
+        doc.layers[2].opacity = 1.0;
+        assert_eq!(render_pixels(&doc, 1, 1).get_pixel(0, 0).0, [128, 0, 128, 255]);
+        // An adjustment inside the folder is dimmed too: half an inversion of (128, 0, 128).
+        doc.layers.push(invert);
+        let pixel = render_pixels(&doc, 1, 1).get_pixel(0, 0).0;
+        assert_eq!(pixel, [128, 128, 128, 255]);
+        // At zero opacity nothing inside the folder draws.
+        doc.layers[1].opacity = 0.0;
+        assert_eq!(render_pixels(&doc, 1, 1).get_pixel(0, 0).0, [0, 0, 255, 255]);
+    }
+
     #[test]
     fn folder_visibility_mask_and_clipping_compose() {
         let mut doc = Document::new(2, 1).unwrap();

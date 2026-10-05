@@ -654,6 +654,29 @@ impl PopUp {
         egui::Popup::menu(&response).width(self.width).show(content)
     }
 
+    /// Like `show_ui`, for long lists: the menu opens on the side of the button with more room
+    /// (and is kept on screen), rather than always below it.
+    pub fn show_tall_ui<R>(
+        self,
+        ui: &mut Ui,
+        content: impl FnOnce(&mut Ui) -> R,
+    ) -> Option<egui::InnerResponse<R>> {
+        let response = self.button(ui);
+        let screen = ui.ctx().content_rect();
+        let above = response.rect.top() - screen.top();
+        let below = screen.bottom() - response.rect.bottom();
+        let align = if above > below {
+            egui::RectAlign::TOP_START
+        } else {
+            egui::RectAlign::BOTTOM_START
+        };
+        egui::Popup::menu(&response)
+            .width(self.width)
+            .align(align)
+            .align_alternatives(&[])
+            .show(content)
+    }
+
     pub fn button(&self, ui: &mut Ui) -> Response {
         let (rect, _) = ui.allocate_exact_size(vec2(self.width, 22.0), Sense::hover());
         let response = ui.interact(rect, ui.make_persistent_id(self.id), Sense::click());

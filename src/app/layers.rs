@@ -201,45 +201,47 @@ impl EditorApp {
             .inner_margin(egui::Margin::symmetric(12, 12))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
-                ui.add_enabled_ui(active.is_some_and(|layer| !layer.group), |ui| {
+                // A folder has an opacity of its own that dims everything inside it, as in
+                // upstream (Document/LayerGroups.swift, LayerOpacity); blending and locks stay
+                // with each layer, so only the opacity slider is enabled for folders.
+                ui.add_enabled_ui(active.is_some(), |ui| {
                     let mut blend = active.map_or(BlendMode::Normal, |l| l.blend);
                     let mut opacity = active.map_or(1.0, |l| l.opacity);
                     let mut locked = active.is_some_and(|l| l.locked);
                     let mut changed = false;
+                    let folder = active.is_some_and(|l| l.group);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(tr("Blend")).size(11.0));
-                        ui.add_enabled_ui(active.is_none_or(|l| !l.standalone_mask), |ui| {
-                            widgets::PopUp::from_id_salt("blend_mode")
-                                .width((ui.available_width() - 24.0).max(80.0))
-                                .selected_text(tr(blend.name()))
-                                .show_ui(ui, |ui| {
-                                    // 27 modes may not fit a small window.
-                                    egui::ScrollArea::vertical()
-                                        .max_height(ui.ctx().content_rect().height() * 0.8)
-                                        .show(ui, |ui| {
-                                            for (index, group) in
-                                                BlendMode::GROUPS.into_iter().enumerate()
-                                            {
-                                                if index > 0 {
-                                                    ui.separator();
-                                                }
-                                                for &mode in group {
-                                                    changed |= widgets::menu_choice(
-                                                        ui,
-                                                        &mut blend,
-                                                        mode,
-                                                        tr(mode.name()),
-                                                    )
-                                                    .changed();
-                                                }
+                        ui.add_enabled_ui(!folder, |ui| {
+                            ui.label(RichText::new(tr("Blend")).size(11.0));
+                            ui.add_enabled_ui(active.is_none_or(|l| !l.standalone_mask), |ui| {
+                                widgets::PopUp::from_id_salt("blend_mode")
+                                    .width((ui.available_width() - 24.0).max(80.0))
+                                    .selected_text(tr(blend.name()))
+                                    // 27 modes: open on the side with more room.
+                                    .show_tall_ui(ui, |ui| {
+                                        for (index, group) in
+                                            BlendMode::GROUPS.into_iter().enumerate()
+                                        {
+                                            if index > 0 {
+                                                ui.separator();
                                             }
-                                        });
-                                });
+                                            for &mode in group {
+                                                changed |= widgets::menu_choice(
+                                                    ui,
+                                                    &mut blend,
+                                                    mode,
+                                                    tr(mode.name()),
+                                                )
+                                                .changed();
+                                            }
+                                        }
+                                    });
+                            });
+                            if icons::lock(ui, locked).clicked() {
+                                locked = !locked;
+                                changed = true;
+                            }
                         });
-                        if icons::lock(ui, locked).clicked() {
-                            locked = !locked;
-                            changed = true;
-                        }
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(tr("Opacity")).size(11.0));
