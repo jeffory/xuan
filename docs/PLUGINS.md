@@ -165,17 +165,28 @@ from connecting either. Install plugins you trust.
 | | `document = "read"` (default) | `document = "edit"` |
 | --- | --- | --- |
 | `document/get`, `layer/export`, `document/export`, `selection/export` | yes | yes |
-| Action results (`image`, `document`, `mask`, `edit`, `text`), as a proposal the user accepts or discards | yes | yes |
+| Action results that only change the selection or open a new document: `mask`, `document` (and an `image` with `result.into = "document"`), a `set_selection` edit, `text`; always a proposal the user accepts or discards | yes | yes |
+| Action results that change the open document's pixels or layers: an `image` placed as a layer or replacing the source, any other `edit` op, `extend_canvas` | no | yes |
 | `document/edit`, including its `set_selection` op | no | yes |
 | `extend_canvas`, in `document/edit` or in a result's `edit` output | no | yes |
 | `host/run` commands that edit the document | no | yes |
 
-A `mask` result changes only the selection, never pixels, and only after the
-user accepts it, so it needs no `document = "edit"`: a read-only segmentation
-plugin can propose a selection. Changing the selection directly with
-`document/edit` still needs `"edit"`. Growing the canvas changes the document
-itself, so a result that holds an `extend_canvas` edit is refused as a whole
-unless the plugin declares `"edit"`.
+A plugin with `document = "read"` can read the document and propose
+selections or new documents, but it can't change your image. A `mask` result
+changes only the selection, never pixels, and only after the user accepts it,
+so it needs no `document = "edit"`: a read-only segmentation plugin can
+propose a selection. A `set_selection` edit in a result is treated the same
+way, and a new document leaves the open one alone. Anything that would change
+the open document's pixels or layers (a new layer, a replaced layer, any
+other `edit` op, `extend_canvas`) needs `"edit"`: Xuan refuses the whole
+result with an error that names the permission, and nothing is proposed.
+Changing the selection directly with `document/edit` still needs `"edit"`.
+
+The manifest is checked too: with `document = "read"`, an action that writes
+`result.into = "layer"`, `"replace"` or `"ask"` is rejected when the plugin is
+loaded. Leave `result` out for an action that returns only masks, or use
+`"document"`. Because a grant is bound to the permissions it was given for,
+changing `document` in a manifest asks the user to review the plugin again.
 
 ### Network
 
@@ -522,7 +533,9 @@ The SDKs read the amounts and mask with `job.extension` and
 `Output::edit(vec![edits::extend_canvas(margins)])` in Rust. See
 `plugins/extend-edges`.
 
-`result.into` chooses where image outputs go: `layer` (a new layer above the
+`result.into` chooses where image outputs go (a plugin with `document = "read"`
+may only use `document`; the others change the open document and need
+`document = "edit"`): `layer` (a new layer above the
 source, the default), `replace` (the source layer's pixels), `document` (a new
 tab), or `ask` (the dialog offers **New layer** / **New document**). With `mask_to_regions`, a new layer gets a mask built from the
 regions with a soft edge, so only the parts the user asked to change show

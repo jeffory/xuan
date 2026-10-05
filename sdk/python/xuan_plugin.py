@@ -301,7 +301,10 @@ class Job:
         fit_source: bool = False,
         provenance: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """An image output. ``width``/``height`` (document units) or
+        """An image output. Unless the action's ``result.into`` is
+        ``document`` (a new tab), it changes the open document, so the manifest
+        needs ``document = "edit"``; a ``read`` plugin's result is refused.
+        ``width``/``height`` (document units) or
         ``fit_source=True`` (cover the source that was sent) place a result of
         any pixel size at that size, so extra pixels become higher density.
 
@@ -346,7 +349,8 @@ class Job:
         ``mode`` combines it with the current selection: ``replace``, ``add``,
         ``subtract`` or ``intersect``. It is placed like ``image``, so
         ``fit_source=True`` lays a mask of any size over the source that was
-        sent. Needs no ``document = "edit"``: a selection is not a pixel edit."""
+        sent. Needs no ``document = "edit"``: a selection is not a pixel edit, so a
+        ``document = "read"`` plugin may return it."""
         if mode not in Job.MASK_MODES:
             raise ValueError(f"mode must be one of {', '.join(Job.MASK_MODES)}")
         output: Dict[str, Any] = {"kind": "mask", "path": path, "mode": mode, "x": x, "y": y}
@@ -371,6 +375,9 @@ class Job:
 
     @staticmethod
     def edit(edits: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Edits applied with the result as one undo step. Needs
+        ``document = "edit"``; a ``read`` plugin may only return a
+        ``set_selection`` edit, anything else refuses the whole result."""
         return {"kind": "edit", "edits": edits}
 
     SIDES = ("left", "top", "right", "bottom")

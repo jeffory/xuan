@@ -6,6 +6,10 @@ description = "Example plugin written in Rust: inverts the colours inside the bo
 # Build with `cargo build --release` in this folder first.
 command = ["target/release/invert-regions"]
 
+# The result is a new layer over the source, which changes the document.
+[permissions]
+document = "edit"
+
 [[actions]]
 id = "invert"
 label = "Invert Regions…"

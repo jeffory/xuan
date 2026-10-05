@@ -173,7 +173,8 @@ class Manifest(unittest.TestCase):
         permissions = manifest.get("permissions", {})
         self.assertNotIn("network", permissions)
         self.assertNotIn("secrets", permissions)
-        self.assertEqual(permissions.get("document", "read"), "read")
+        # The result is a new layer, which needs document = "edit".
+        self.assertEqual(permissions.get("document", "read"), "edit")
         self.assertEqual(permissions.get("filesystem", "none"), "none")
 
 

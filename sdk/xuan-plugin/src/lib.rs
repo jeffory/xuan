@@ -528,6 +528,9 @@ pub enum Output {
 }
 
 impl Output {
+    /// An image output. Unless the action's `result.into` is `document` (a new
+    /// tab), it changes the open document, so the manifest needs
+    /// `document = "edit"`; a `read` plugin's result is refused.
     pub fn image(path: impl Into<PathBuf>, name: Option<&str>, x: f32, y: f32) -> Self {
         Self::Image {
             path: path.into(),
@@ -581,7 +584,8 @@ impl Output {
     /// A grey PNG (white selected, black not, grey partly) that becomes the
     /// document's selection once the user accepts the result, combined with
     /// the current selection by `mode`. Placed like an image at `x`, `y` in
-    /// source pixels. A plugin needs no `document = "edit"` for it.
+    /// source pixels. A plugin needs no `document = "edit"` for it: a `read` plugin
+    /// may propose a selection, but not layers, replaced pixels or other edits.
     pub fn mask(path: impl Into<PathBuf>, mode: MaskMode) -> Self {
         Self::Mask {
             path: path.into(),
@@ -658,7 +662,8 @@ impl Output {
     }
 
     /// Document edits applied with the result, as one undo step; see
-    /// [`edits`].
+    /// [`edits`]. Needs `document = "edit"`; a `read` plugin may only return a
+    /// `set_selection` edit, anything else refuses the whole result.
     pub fn edit(edits: Vec<Value>) -> Self {
         Self::Edit { edits }
     }

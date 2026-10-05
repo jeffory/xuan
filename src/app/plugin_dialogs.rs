@@ -886,7 +886,6 @@ impl EditorApp {
 /// its network blocked ([`xuan::plugins::sandbox`]).
 pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
-    let mut any = false;
     if blocked {
         ui.label(format!("• {}", tr("Network blocked by Xuan (Linux)")));
         ui.add(
@@ -902,7 +901,6 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
         );
     }
     if !permissions.network.is_empty() {
-        any = true;
         ui.add(
             egui::Label::new(format!(
                 "• {} {}",
@@ -924,7 +922,6 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
         );
     }
     if !manifest.models.is_empty() {
-        any = true;
         let models = (manifest.models.iter())
             .map(|model| {
                 format!(
@@ -945,7 +942,6 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
         );
     }
     if !permissions.secrets.is_empty() {
-        any = true;
         ui.label(format!(
             "• {} {}",
             tr("Receives these secrets:"),
@@ -953,16 +949,19 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
         ));
     }
     if permissions.document == xuan::plugins::manifest::DocumentAccess::Edit {
-        any = true;
         ui.label(format!(
             "• {}",
             tr("Edits documents directly (as undoable steps)")
+        ));
+    } else {
+        ui.label(format!(
+            "• {}",
+            tr("Can read the document and propose selections or new documents, but can't change your image")
         ));
     }
     match permissions.filesystem {
         xuan::plugins::manifest::FilesystemAccess::None => {}
         xuan::plugins::manifest::FilesystemAccess::Read => {
-            any = true;
             ui.label(format!(
                 "• {}",
                 tr(
@@ -971,15 +970,11 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
             ));
         }
         xuan::plugins::manifest::FilesystemAccess::Write => {
-            any = true;
             ui.label(format!(
                 "• {}",
                 tr("Has Xuan read and write any file or folder for it, not only its own and temporary folders")
             ));
         }
-    }
-    if !any {
-        ui.label(RichText::new(tr("Reads the document only")).color(theme::MUTED));
     }
 }
 

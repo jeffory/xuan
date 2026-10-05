@@ -1,7 +1,7 @@
 //! Plugins hosted in the editor, exercised with a shell script that speaks
 //! the protocol.
 use super::*;
-use xuan::plugins::Manifest;
+use xuan::plugins::{Manifest, manifest::DocumentAccess};
 
 const MANIFEST: &str = r#"
 [plugin]
@@ -97,13 +97,24 @@ done
 }
 
 fn install_mock(app: &mut EditorApp, dir: &Path) {
+    install_mock_with(app, dir, DocumentAccess::Edit);
+}
+
+/// The mock plugin as declared: it asks for no permissions, so `document` is
+/// "read".
+fn install_read_mock(app: &mut EditorApp, dir: &Path) {
+    install_mock_with(app, dir, DocumentAccess::Read);
+}
+
+fn install_mock_with(app: &mut EditorApp, dir: &Path, document: DocumentAccess) {
     let fixture = dir.join("fixture.png");
     RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
         .save(&fixture)
         .unwrap();
     std::fs::write(dir.join("plugin.sh"), script(&fixture)).unwrap();
     std::fs::write(dir.join("plugin.toml"), MANIFEST).unwrap();
-    let manifest = Manifest::load(dir).unwrap();
+    let mut manifest = Manifest::load(dir).unwrap();
+    manifest.permissions.document = document;
     app.install_plugins(vec![manifest], vec![]);
     app.grant_plugin("mock", true);
 }
@@ -128,7 +139,9 @@ fn install_network_mock(app: &mut EditorApp, dir: &Path) {
         .unwrap();
     std::fs::write(dir.join("plugin.sh"), script(&fixture)).unwrap();
     std::fs::write(dir.join("plugin.toml"), network_manifest("\"example.com\"")).unwrap();
-    app.install_plugins(vec![Manifest::load(dir).unwrap()], vec![]);
+    let mut manifest = Manifest::load(dir).unwrap();
+    manifest.permissions.document = DocumentAccess::Edit;
+    app.install_plugins(vec![manifest], vec![]);
     app.grant_plugin("mock", true);
 }
 
@@ -500,7 +513,7 @@ fn install_secret_mock(app: &mut EditorApp, dir: &Path) {
     let manifest = Manifest::parse(
         &MANIFEST.replace(
             "[[actions]]",
-            "[permissions]\nsecrets = [\"key\"]\n\n[[settings]]\nid = \"key\"\ntype = \"secret\"\n\n[[actions]]",
+            "[permissions]\nsecrets = [\"key\"]\ndocument = \"edit\"\n\n[[settings]]\nid = \"key\"\ntype = \"secret\"\n\n[[actions]]",
         ),
         dir,
     )
@@ -1061,10 +1074,10 @@ fn a_read_only_plugin_can_propose_a_selection_but_not_edit_pixels() {
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();
     let (_context, mut app) = app();
-    install_mock(&mut app, dir.path());
+    install_read_mock(&mut app, dir.path());
     assert_eq!(
         app.plugins.manifest("mock").unwrap().permissions.document,
-        xuan::plugins::manifest::DocumentAccess::Read
+        DocumentAccess::Read
     );
     app.dimensions = [8, 8];
     app.new_document();
@@ -1109,6 +1122,237 @@ fn a_read_only_plugin_can_propose_a_selection_but_not_edit_pixels() {
     let session = app.session().unwrap();
     assert_eq!(session.history.names().count(), steps);
     assert_eq!(session.document.layers[0].pixels, pixels);
+}
+
+/// What a result can change that a read-only plugin must not touch.
+fn document_state(app: &EditorApp) -> (usize, usize, Vec<uuid::Uuid>, Vec<Vec<u8>>, bool, usize) {
+    let session = app.session().unwrap();
+    let document = &session.document;
+    (
+        app.sessions.len(),
+        document.width as usize * 10_000 + document.height as usize,
+        document.layers.iter().map(|l| l.id).collect(),
+        (document.layers.iter())
+            .map(|l| {
+                l.pixels
+                    .as_deref()
+                    .map(|p| p.as_raw().clone())
+                    .unwrap_or_default()
+            })
+            .collect(),
+        document.selection.is_some(),
+        session.history.names().count(),
+    )
+}
+
+#[test]
+fn a_read_only_plugin_cannot_return_results_that_change_the_document() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_read_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.command("fill_fg");
+    let layer = app.session().unwrap().document.layers[0].id;
+    let fixture = dir.path().join("fixture.png");
+    let mask = write_mask(dir.path(), "mask.png", (8, 8), |_, _| 255);
+    let before = document_state(&app);
+
+    let layer_job = mock_job(&app);
+    let mut replace_job = mock_job(&app);
+    replace_job.into = xuan::plugins::manifest::ResultInto::Replace;
+    replace_job.prepared.layer = Some(layer);
+    let image = json!({"kind": "image", "path": fixture});
+    let edit = |edit| json!({"kind": "edit", "edits": [edit]});
+    let results = [
+        (&layer_job, json!({"outputs": [image]})),
+        (&replace_job, json!({"outputs": [image]})),
+        // The whole result is refused, also next to a harmless mask.
+        (
+            &layer_job,
+            json!({"outputs": [{"kind": "mask", "path": mask}, image]}),
+        ),
+        (
+            &layer_job,
+            json!({"outputs": [edit(json!({"op": "add_layer", "image": fixture}))]}),
+        ),
+        (
+            &layer_job,
+            json!({"outputs": [edit(json!({"op": "replace_pixels", "layer": layer, "image": fixture}))]}),
+        ),
+        (
+            &layer_job,
+            json!({"outputs": [edit(json!({"op": "remove_layer", "layer": layer}))]}),
+        ),
+        (
+            &layer_job,
+            json!({"outputs": [edit(json!({"op": "set", "layer": layer, "name": "x"}))]}),
+        ),
+        (
+            &layer_job,
+            json!({"outputs": [edit(json!({"op": "extend_canvas", "left": 2}))]}),
+        ),
+        (
+            &layer_job,
+            json!({"outputs": [{"kind": "edit", "edits": [
+                {"op": "set_selection", "mask": mask},
+                {"op": "extend_canvas", "right": 1},
+            ]}]}),
+        ),
+    ];
+    for (job, result) in results {
+        let error = format!(
+            "{:#}",
+            app.apply_job_result(job, result.clone()).unwrap_err()
+        );
+        assert!(error.contains("document = \"edit\""), "{result}: {error}");
+        assert!(app.plugins.proposal.is_none(), "{result}");
+        assert_eq!(document_state(&app), before, "{result}");
+    }
+}
+
+#[test]
+fn a_read_only_plugin_can_return_masks_selections_and_new_documents() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_read_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.command("fill_fg");
+    let fixture = dir.path().join("fixture.png");
+    let mask = write_mask(
+        dir.path(),
+        "mask.png",
+        (8, 8),
+        |x, _| if x < 2 { 255 } else { 0 },
+    );
+    let job = mock_job(&app);
+
+    // A mask and a selection-only edit are proposals about the selection.
+    for output in [
+        json!({"kind": "mask", "path": mask}),
+        json!({"kind": "edit", "edits": [{"op": "set_selection", "mask": mask}]}),
+        json!({"kind": "text", "text": "done"}),
+    ] {
+        app.apply_job_result(&job, json!({"outputs": [output]}))
+            .unwrap();
+        let proposed = app.plugins.proposal.is_some();
+        app.resolve_proposal(false);
+        assert_eq!(proposed, output["kind"] != "text", "{output}");
+    }
+    app.apply_job_result(&job, json!({"outputs": [{"kind": "mask", "path": mask}]}))
+        .unwrap();
+    app.resolve_proposal(true);
+    assert_eq!(selection_at(&app, 0, 0), Some(255));
+
+    // New documents leave the open one alone, as a `document` output or as an
+    // image of an action whose result goes into a new document.
+    let layers = app.session().unwrap().document.layers.len();
+    let tabs = app.sessions.len();
+    app.current = 0;
+    app.apply_job_result(
+        &job,
+        json!({"outputs": [{"kind": "document", "path": fixture, "name": "New"}]}),
+    )
+    .unwrap();
+    assert_eq!(app.sessions.len(), tabs + 1);
+    app.current = 0;
+    let mut into_document = mock_job(&app);
+    into_document.into = xuan::plugins::manifest::ResultInto::Document;
+    app.apply_job_result(
+        &into_document,
+        json!({"outputs": [{"kind": "image", "path": fixture}]}),
+    )
+    .unwrap();
+    assert_eq!(app.sessions.len(), tabs + 2);
+    assert_eq!(app.sessions[0].document.layers.len(), layers);
+    assert!(app.plugins.proposal.is_none());
+}
+
+#[test]
+fn an_editing_plugin_still_proposes_layers_replacements_and_edits() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    assert_eq!(
+        app.plugins.manifest("mock").unwrap().permissions.document,
+        DocumentAccess::Edit
+    );
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.command("fill_fg");
+    let fixture = dir.path().join("fixture.png");
+    let job = mock_job(&app);
+    let before = document_state(&app);
+    for output in [
+        json!({"kind": "image", "path": fixture}),
+        json!({"kind": "edit", "edits": [{"op": "add_layer", "image": fixture}]}),
+        json!({"kind": "edit", "edits": [{"op": "extend_canvas", "left": 1}]}),
+    ] {
+        app.apply_job_result(&job, json!({"outputs": [output]}))
+            .unwrap();
+        assert!(app.plugins.proposal.is_some(), "{output}");
+        app.resolve_proposal(true);
+        assert_ne!(document_state(&app), before, "{output}");
+        let session = app.session_mut().unwrap();
+        assert!(session.history.undo(&mut session.document));
+    }
+}
+
+#[test]
+fn a_read_only_manifest_cannot_declare_a_result_that_changes_the_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let with = |permissions: &str, result: &str| {
+        let text = format!(
+            "{}\n{permissions}\n[[actions]]\nid = \"a\"\nlabel = \"A\"\n{result}\n",
+            MANIFEST.split("[[actions]]").next().unwrap()
+        );
+        Manifest::parse(&text, dir.path())
+    };
+    for into in ["layer", "replace", "ask"] {
+        let error = with("", &format!("result = {{ into = \"{into}\" }}"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("document = \"read\""), "{into}: {error}");
+        assert!(error.contains("action `a`"), "{into}: {error}");
+        assert!(
+            with(
+                "[permissions]\ndocument = \"read\"\n",
+                &format!("result = {{ into = \"{into}\" }}")
+            )
+            .is_err()
+        );
+        // The plugin that declares what it needs is fine.
+        with(
+            "[permissions]\ndocument = \"edit\"\n",
+            &format!("result = {{ into = \"{into}\" }}"),
+        )
+        .unwrap();
+    }
+    // New documents, and actions that leave `result` out (masks), are fine.
+    with("", "result = { into = \"document\" }").unwrap();
+    with("", "").unwrap();
+}
+
+#[test]
+fn the_permission_review_says_what_a_read_only_plugin_can_do() {
+    use crate::app::tests::ui::UiTest;
+    let config = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let folder = installable_plugin(source.path(), "reader", "1.0.0", "");
+    let mut ui = UiTest::new();
+    ui.isolate_config(config.path());
+    ui.open_menu("Plugins");
+    ui.click("Install from Folder or Zip…");
+    ui.drop_files(&[&folder]);
+    assert!(ui.has("Id: inst"));
+    assert!(ui.has(
+        "• Can read the document and propose selections or new documents, but can't change your image"
+    ));
+    assert!(!ui.has("• Edits documents directly (as undoable steps)"));
 }
 
 #[test]
@@ -2181,7 +2425,7 @@ done
     fn reloading_fails_the_jobs_of_removed_and_changed_plugins() {
         let dir = tempfile::tempdir().unwrap();
         let (context, mut app) = app();
-        install_mock(&mut app, dir.path());
+        install_read_mock(&mut app, dir.path());
         // The plugin never answers runs or renders.
         std::fs::write(dir.path().join("plugin.sh"), CRASHING_IMPORT).unwrap();
         app.dimensions = [16, 16];
@@ -2540,7 +2784,7 @@ done
         let dir = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let (context, mut app) = app();
-        install_mock(&mut app, dir.path());
+        install_read_mock(&mut app, dir.path());
         let reader = app.plugins.manifest("mock").unwrap().clone();
         let mut editor = Manifest::parse(
             &MANIFEST
@@ -2860,7 +3104,9 @@ done
             format!("{MANIFEST}{INPAINT}"),
         )
         .unwrap();
-        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        let mut manifest = Manifest::load(dir.path()).unwrap();
+        manifest.permissions.document = DocumentAccess::Edit;
+        app.install_plugins(vec![manifest], vec![]);
         app.grant_plugin("mock", true);
         app.dimensions = [16, 16];
         app.new_document();

@@ -1748,6 +1748,30 @@ impl EditorApp {
                 "extend_canvas needs document = \"edit\" in the plugin's manifest"
             );
         }
+        // A plugin that may only read proposes selections and new documents.
+        // Refuse the whole result before anything is applied.
+        if !manifest
+            .as_ref()
+            .is_some_and(|m| m.permissions.document == DocumentAccess::Edit)
+        {
+            let new_document = job.into == ResultInto::Document
+                || (job.prepared.export.is_none()
+                    && !self.sessions.iter().any(|s| s.document.id == job.document));
+            let changes = outputs.iter().find_map(|output| match output {
+                Output::Image { .. } if !new_document => Some("an image placed in the document"),
+                Output::Edit { edits } if !edits.iter().all(edits::Edit::is_selection_only) => {
+                    Some("an edit")
+                }
+                _ => None,
+            });
+            if let Some(what) = changes {
+                bail!(
+                    "The plugin returned {what}, which changes the document, but its manifest \
+                     has document = \"read\". A read-only plugin may only return selections \
+                     (masks), new documents and text; it needs document = \"edit\" for more"
+                );
+            }
+        }
         // Images and masks are placed on the document as it was sent; when
         // the result also extends the canvas they move with its content.
         let (dx, dy) = edits::origin_shift(result_edits());

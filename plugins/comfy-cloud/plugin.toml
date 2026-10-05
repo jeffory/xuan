@@ -8,6 +8,7 @@ command = ["python3", "main.py"]
 [permissions]
 network = ["cloud.comfy.org", "*.run.comfy.app"]
 secrets = ["api_key"]
+document = "edit"
 
 [[settings]]
 id = "api_key"

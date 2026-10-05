@@ -839,6 +839,7 @@ impl Manifest {
         let mut manifest: Self = toml::from_str(text)?;
         manifest.dir = dir.to_path_buf();
         manifest.validate()?;
+        manifest.check_declared_results(&toml::from_str(text)?)?;
         Ok(manifest)
     }
 
@@ -847,6 +848,37 @@ impl Manifest {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("Cannot read {}", path.display()))?;
         Self::parse(&text, dir).with_context(|| format!("Invalid {}", path.display()))
+    }
+
+    /// A plugin with `document = "read"` cannot return layers, so an action
+    /// that says so in its `result.into` is refused. An action that leaves
+    /// `result` out is fine: it may still return masks and new documents,
+    /// and the host refuses anything else when the result arrives. `raw` is
+    /// the manifest as written, because the default `into` is `layer`.
+    fn check_declared_results(&self, raw: &toml::Value) -> Result<()> {
+        if self.permissions.document == DocumentAccess::Edit {
+            return Ok(());
+        }
+        let declared = (raw.get("actions").and_then(toml::Value::as_array))
+            .into_iter()
+            .flatten();
+        for (action, raw) in self.actions.iter().zip(declared) {
+            let written = raw.get("result").and_then(|result| result.get("into"));
+            let what = match action.result.into {
+                _ if written.is_none() => continue,
+                ResultInto::Layer => "a new layer",
+                ResultInto::Replace => "the source layer",
+                ResultInto::Ask => "a new layer or a new document, as asked",
+                ResultInto::Document => continue,
+            };
+            bail!(
+                "action `{}` puts its result in {what}, but the plugin has document = \"read\", \
+                 which can't change the image: use result.into = \"document\" or declare \
+                 document = \"edit\" in [permissions]",
+                action.id
+            );
+        }
+        Ok(())
     }
 
     fn validate(&self) -> Result<()> {

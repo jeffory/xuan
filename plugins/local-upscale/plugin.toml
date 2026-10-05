@@ -6,10 +6,10 @@ description = "Enlarge the active layer 2x to 4x on this machine. A pure-Python 
 command = ["python3", "main.py"]
 protocol = 1
 
-# No network, no secrets, no document edits: the result is a new layer over the
-# source and the pixels never leave the machine.
+# No network and no secrets, and the pixels never leave the machine. The result
+# is a new layer over the source, which changes the document, so it needs "edit".
 [permissions]
-document = "read"
+document = "edit"
 filesystem = "none"
 
 [[settings]]

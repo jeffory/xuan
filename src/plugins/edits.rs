@@ -516,6 +516,14 @@ impl Edit {
     }
 }
 
+impl Edit {
+    /// Whether the edit changes only the selection, like a `mask` output, and
+    /// so may be proposed by a plugin that has `document = "read"`.
+    pub fn is_selection_only(&self) -> bool {
+        matches!(self, Self::SetSelection { .. })
+    }
+}
+
 /// How far a batch moves the document's content: the sum of the `left` and
 /// `top` of its `extend_canvas` edits. Outputs placed in the coordinates of
 /// the document as it was sent move by this much to stay on their content.
@@ -1171,6 +1179,9 @@ mod tests {
         );
         assert!(parsed.needs_edit_access());
         assert!(!Edit::Select { layer: Uuid::nil() }.needs_edit_access());
+        assert!(Edit::SetSelection { mask: None }.is_selection_only());
+        assert!(!Edit::Select { layer: Uuid::nil() }.is_selection_only());
+        assert!(!parsed.is_selection_only());
         // Shrinking is not part of the op.
         for bad in [json!(-1), json!(1.5), json!("4")] {
             let value = json!({"op": "extend_canvas", "left": bad});
