@@ -68,14 +68,41 @@ impl TitleBar {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Lowest and highest zoom, in percent, at which the pixel grid may start to show.
+pub const PIXEL_GRID_PERCENT_RANGE: std::ops::RangeInclusive<u32> = 200..=6400;
+pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub language: Language,
     pub title_bar: TitleBar,
+    /// View → Pixel Grid.
+    pub pixel_grid: bool,
+    /// Zoom, in percent, from which the pixel grid is drawn.
+    pub pixel_grid_percent: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            language: Language::default(),
+            title_bar: TitleBar::default(),
+            pixel_grid: true,
+            pixel_grid_percent: DEFAULT_PIXEL_GRID_PERCENT,
+        }
+    }
 }
 
 impl Config {
+    /// The grid threshold, forced into the supported range even for hand-edited files.
+    pub fn pixel_grid_percent(&self) -> u32 {
+        self.pixel_grid_percent.clamp(
+            *PIXEL_GRID_PERCENT_RANGE.start(),
+            *PIXEL_GRID_PERCENT_RANGE.end(),
+        )
+    }
+
     pub fn path() -> Result<PathBuf> {
         let variable = if cfg!(windows) {
             "APPDATA"
@@ -107,6 +134,11 @@ impl Config {
         };
         table.insert("language".into(), toml::Value::try_from(self.language)?);
         table.insert("title_bar".into(), toml::Value::try_from(self.title_bar)?);
+        table.insert("pixel_grid".into(), toml::Value::Boolean(self.pixel_grid));
+        table.insert(
+            "pixel_grid_percent".into(),
+            toml::Value::Integer(self.pixel_grid_percent().into()),
+        );
         let parent = path.parent().context("Configuration path has no parent")?;
         fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -143,6 +175,8 @@ mod tests {
         let chinese = Config {
             language: Language::SimplifiedChinese,
             title_bar: TitleBar::MacOs,
+            pixel_grid: false,
+            pixel_grid_percent: 1200,
         };
         chinese.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), chinese);
@@ -174,8 +208,64 @@ mod tests {
             Config {
                 language: Language::SimplifiedChinese,
                 title_bar: TitleBar::default(),
+                ..Config::default()
             }
         );
+    }
+
+    #[test]
+    fn pixel_grid_defaults_persist_and_older_files_still_load() {
+        let defaults = Config::default();
+        assert!(defaults.pixel_grid);
+        assert_eq!(defaults.pixel_grid_percent, 500);
+        // Files from before the pixel grid existed.
+        let old: Config = toml::from_str("language = 'zh-CN'\ntitle_bar = 'system'\n").unwrap();
+        assert_eq!(old.title_bar, TitleBar::System);
+        assert!(old.pixel_grid);
+        assert_eq!(old.pixel_grid_percent(), 500);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "language = 'en'\n").unwrap();
+        assert_eq!(Config::load(&path).unwrap(), Config::default());
+        // A partial new-style file keeps the other default.
+        let partial: Config = toml::from_str("pixel_grid = false").unwrap();
+        assert!(!partial.pixel_grid && partial.pixel_grid_percent == 500);
+
+        let custom = Config {
+            pixel_grid: false,
+            pixel_grid_percent: 800,
+            ..Config::default()
+        };
+        custom.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), custom);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("pixel_grid = false") && text.contains("pixel_grid_percent = 800"));
+    }
+
+    #[test]
+    fn pixel_grid_threshold_is_clamped_to_the_supported_range() {
+        for (stored, effective) in [
+            (0, 200),
+            (199, 200),
+            (200, 200),
+            (6400, 6400),
+            (99999, 6400),
+        ] {
+            let config = Config {
+                pixel_grid_percent: stored,
+                ..Config::default()
+            };
+            assert_eq!(config.pixel_grid_percent(), effective);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config {
+            pixel_grid_percent: 50,
+            ..Config::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert_eq!(Config::load(&path).unwrap().pixel_grid_percent, 200);
     }
 
     #[test]

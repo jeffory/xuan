@@ -3626,6 +3626,32 @@ fn menu_bar_hover_switches_only_while_a_menu_is_open() {
 }
 
 #[test]
+fn view_menu_pixel_grid_toggle_applies_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    assert!(app.config.pixel_grid);
+    let view = layer_label(&context, &mut app, "View") + Vec2::splat(5.0);
+    for expected in [false, true] {
+        pointer_frame(&context, &mut app, view, None, egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, view, Some(true), egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, view, Some(false), egui::Modifiers::NONE);
+        let item = layer_label(&context, &mut app, "Pixel Grid") + Vec2::splat(5.0);
+        click(&context, &mut app, item);
+        assert_eq!(app.config.pixel_grid, expected);
+        assert_eq!(
+            xuan::config::Config::load(&path).unwrap().pixel_grid,
+            expected
+        );
+        assert!(app.error.is_none());
+        // Keep the menu from lingering into the next round.
+        egui::Popup::close_all(&context);
+        frame(&context, &mut app);
+    }
+}
+
+#[test]
 fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     let (context, mut app) = app();
     // The traffic lights sit at fixed positions on the left.
@@ -4554,6 +4580,80 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
             .unwrap()
             .raw
             .is_some()
+    );
+}
+
+/// Open Settings on the Appearance page and return the threshold field's position.
+fn settings_threshold_field(context: &egui::Context, app: &mut EditorApp) -> Pos2 {
+    app.dialog = Some(Dialog::Settings);
+    context.data_mut(|d| d.insert_temp(egui::Id::new("settings_page"), true));
+    frame(context, app);
+    layer_label(context, app, "500%") + Vec2::new(8.0, 6.0)
+}
+
+#[test]
+fn dragging_the_pixel_grid_threshold_saves_once_after_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    let field = settings_threshold_field(&context, &mut app);
+    pointer_frame(&context, &mut app, field, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, field, Some(true), egui::Modifiers::NONE);
+    for step in 1..=6 {
+        let pos = field + Vec2::new(25.0 * step as f32, 0.0);
+        pointer_frame(&context, &mut app, pos, None, egui::Modifiers::NONE);
+        // Applied live while dragging, but nothing is written yet.
+        assert!(!path.exists(), "written mid-drag at step {step}");
+    }
+    assert!(app.config.pixel_grid_percent > 500, "live update");
+    let live = app.config.pixel_grid_percent;
+    let end = field + Vec2::new(150.0, 0.0);
+    pointer_frame(&context, &mut app, end, Some(false), egui::Modifiers::NONE);
+    frame(&context, &mut app);
+    let saved = xuan::config::Config::load(&path).unwrap();
+    assert_eq!(saved.pixel_grid_percent, app.config.pixel_grid_percent);
+    assert!(saved.pixel_grid_percent >= live);
+    // Idle frames do not write again.
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+    assert!(!app.config_dirty && app.error.is_none());
+}
+
+#[test]
+fn closing_settings_mid_drag_still_saves_the_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    let field = settings_threshold_field(&context, &mut app);
+    pointer_frame(&context, &mut app, field, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, field, Some(true), egui::Modifiers::NONE);
+    for step in 1..=4 {
+        let pos = field + Vec2::new(25.0 * step as f32, 0.0);
+        pointer_frame(&context, &mut app, pos, None, egui::Modifiers::NONE);
+    }
+    assert!(!path.exists());
+    let dragged = app.config.pixel_grid_percent;
+    assert!(dragged > 500);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog.is_none());
+    assert_eq!(
+        xuan::config::Config::load(&path)
+            .unwrap()
+            .pixel_grid_percent,
+        dragged
     );
 }
 

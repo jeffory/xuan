@@ -441,6 +441,10 @@ impl EditorApp {
                                 item(ui, tr("Zoom Out"), "Ctrl+−", "zoom_out", &mut action);
                             });
                             ui.separator();
+                            let mut pixel_grid = self.config.pixel_grid;
+                            if widgets::checkbox(ui, &mut pixel_grid, tr("Pixel Grid")).clicked() {
+                                self.set_pixel_grid(pixel_grid);
+                            }
                             ui.add_enabled_ui(!developing, |ui| {
                                 widgets::checkbox(
                                     ui,

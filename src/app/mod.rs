@@ -16,6 +16,7 @@ mod layers;
 mod levels_controls;
 mod menus;
 mod panels;
+mod pixel_grid;
 mod settings;
 mod shortcuts;
 mod stroke_smoothing;
@@ -372,6 +373,10 @@ impl Gesture {
 
 pub struct EditorApp {
     config: xuan::config::Config,
+    /// Overrides the default configuration file location (tests).
+    config_path: Option<std::path::PathBuf>,
+    /// Settings changed in memory (a field mid-drag) but not yet written.
+    config_dirty: bool,
     tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
@@ -517,6 +522,8 @@ impl EditorApp {
         egui_extras::install_image_loaders(ctx);
         let mut app = Self {
             config: Default::default(),
+            config_path: None,
+            config_dirty: false,
             tablet: None,
             context: ctx.clone(),
             window_title: String::new(),

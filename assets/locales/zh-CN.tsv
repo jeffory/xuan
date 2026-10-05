@@ -573,3 +573,6 @@ Insert the dropped file as a layer, or open it as a new document?	将拖入的�
 Insert the dropped files as layers, or open them as new documents?	将拖入的文件插入为图层，还是作为新文档打开？
 Open as new document	作为新文档打开
 Insert as layer	插入为图层
+Pixel Grid	像素网格
+Show pixel grid above	显示像素网格的缩放比例高于
+Outlines individual pixels when zoomed in past this level, between 200% and 6400%.	放大超过此比例时勾勒出每个像素，范围为 200% 至 6400%。

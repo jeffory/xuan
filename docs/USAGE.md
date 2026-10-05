@@ -184,7 +184,7 @@ open are queued and handled once it closes.
 
 The photo editor uses an 8-bit sRGB raster pipeline. RAW Develop uses floating-point camera data and offers direct 16-bit TIFF output with an sRGB profile; its photo-layer render uses the existing 8-bit pipeline. Imported raster ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; Xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.
 
-Remove Background uses a border-color matte, intended for simple backgrounds, instead of Apple's foreground-recognition service. Content-aware fill and healing use a portable texture-matching implementation, so results differ from Compositor. Initial zoomed-out canvas previews are capped at 4096 pixels per side. At 100% zoom and above, the preview uses full document resolution up to the device's texture limit; the pixel grid appears from 800% when individual document pixels can be displayed. Filter Apply uses full layer dimensions and export uses full document dimensions. Imports, saves, and raster adjustments can temporarily occupy the UI thread. Vulkan is the verified rendering path; OpenGL surface availability depends on the driver.
+Remove Background uses a border-color matte, intended for simple backgrounds, instead of Apple's foreground-recognition service. Content-aware fill and healing use a portable texture-matching implementation, so results differ from Compositor. Initial zoomed-out canvas previews are capped at 4096 pixels per side. At 100% zoom and above, the preview uses full document resolution up to the device's texture limit; the pixel grid (see below) appears when individual document pixels can be displayed. Filter Apply uses full layer dimensions and export uses full document dimensions. Imports, saves, and raster adjustments can temporarily occupy the UI thread. Vulkan is the verified rendering path; OpenGL surface availability depends on the driver.
 
 ## Language and settings
 
@@ -204,6 +204,20 @@ The **Appearance** category sets the **Window title bar**:
 The title bar changes immediately. Compact and macOS windows have rounded corners,
 which need a window created with transparency: after switching from **System**,
 corners stay square until Xuan restarts.
+
+The **Pixel grid** settings control the overlay: zoomed in past a threshold (500% by default), Xuan outlines individual image
+pixels with a thin, semi-transparent grey grid that stays visible on light and
+dark content. It fades in over the first quarter of the threshold above it, so it
+does not pop on. Lines follow the document's pixel boundaries at any pan, zoom, and
+display scale, and are snapped to physical screen pixels. The grid is only a screen
+overlay: it is never part of exports, copies, or saved files. It also appears in the
+RAW Develop canvas, where one image pixel is one RAW output pixel, for pixel peeping.
+
+Turn it on or off with **View → Pixel Grid** (on by default). Set the zoom level in
+**Settings → Appearance → Show pixel grid above** (200% to 6400%, default 500%).
+Both settings are saved. There is no keyboard shortcut. A canvas whose preview is
+limited by the graphics card's texture size cannot show one texel per pixel, so
+the grid is hidden there.
 
 Quit with **File → Quit** (Ctrl+Q). It asks about unsaved changes and open Develop
 sessions, like closing the window.

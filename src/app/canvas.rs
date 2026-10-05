@@ -213,35 +213,18 @@ impl EditorApp {
                 );
                 let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
                 // A hardware-limited preview cannot represent individual document pixels.
-                if zoom >= 8.0
+                if self.config.pixel_grid
                     && session.preview_size == [session.document.width, session.document.height]
                 {
-                    let start = ((visible.left() - origin.x) / zoom).floor().max(0.0) as u32;
-                    let end = ((visible.right() - origin.x) / zoom)
-                        .ceil()
-                        .min(session.document.width as f32) as u32;
-                    for x in start..=end {
-                        painter.line_segment(
-                            [
-                                pos2(origin.x + x as f32 * zoom, visible.top()),
-                                pos2(origin.x + x as f32 * zoom, visible.bottom()),
-                            ],
-                            Stroke::new(0.5_f32, Color32::from_white_alpha(28)),
-                        );
-                    }
-                    let start = ((visible.top() - origin.y) / zoom).floor().max(0.0) as u32;
-                    let end = ((visible.bottom() - origin.y) / zoom)
-                        .ceil()
-                        .min(session.document.height as f32) as u32;
-                    for y in start..=end {
-                        painter.line_segment(
-                            [
-                                pos2(visible.left(), origin.y + y as f32 * zoom),
-                                pos2(visible.right(), origin.y + y as f32 * zoom),
-                            ],
-                            Stroke::new(0.5_f32, Color32::from_white_alpha(28)),
-                        );
-                    }
+                    super::pixel_grid::draw(
+                        &painter,
+                        origin,
+                        Vec2::splat(zoom),
+                        [session.document.width, session.document.height],
+                        visible,
+                        zoom * 100.0,
+                        self.config.pixel_grid_percent(),
+                    );
                 }
                 if let Some(mask) = &session.document.selection {
                     let step = (1.0 / zoom).ceil().max(1.0) as usize;
