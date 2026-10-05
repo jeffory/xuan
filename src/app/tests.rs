@@ -45,6 +45,41 @@ fn heic_opens_as_a_document_and_imports_as_an_undoable_layer() {
 }
 
 #[test]
+fn compositor_import_opens_and_reports_what_it_left_out() {
+    let (context, mut app) = app();
+    let package = tempfile::tempdir().unwrap();
+    let id = uuid::Uuid::new_v4().to_string().to_uppercase();
+    std::fs::create_dir(package.path().join("images")).unwrap();
+    image::RgbaImage::new(2, 2)
+        .save(package.path().join(format!("images/{id}.png")))
+        .unwrap();
+    let manifest = serde_json::json!({
+        "format": "com.compositor.project", "version": 11, "colorSpace": "sRGB",
+        "documentID": uuid::Uuid::new_v4(), "width": 2, "height": 2, "activeLayerID": id,
+        "layers": [{"id": id, "name": "Photo", "isVisible": true, "imageFile": format!("{id}.png"),
+            "blendMode": "Hard Mix", "effects": {"stroke": {"size": 2}},
+            "transform": {"origin": [0, 0], "size": [2, 2], "rotation": 0}}],
+    });
+    std::fs::write(
+        package.path().join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    app.open_path(package.path(), false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), 1);
+    assert!(
+        app.session().unwrap().path.is_none(),
+        "saving must not overwrite the package"
+    );
+    let notice = app.notice.clone().unwrap();
+    assert!(notice.contains("“Hard Mix”"), "{notice}");
+    assert!(notice.contains("Layer effects"), "{notice}");
+    keyboard_frame(&context, &mut app, Vec::new(), egui::Modifiers::NONE);
+    assert!(app.notice.is_some());
+}
+
+#[test]
 fn text_tool_creates_edits_and_undoes_one_transaction() {
     let (context, mut app) = app();
     app.dimensions = [640, 480];
