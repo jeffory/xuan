@@ -213,15 +213,27 @@ impl EditorApp {
                                 .width((ui.available_width() - 24.0).max(80.0))
                                 .selected_text(tr(blend.name()))
                                 .show_ui(ui, |ui| {
-                                    for mode in BlendMode::ALL {
-                                        changed |= widgets::menu_choice(
-                                            ui,
-                                            &mut blend,
-                                            mode,
-                                            tr(mode.name()),
-                                        )
-                                        .changed();
-                                    }
+                                    // 27 modes may not fit a small window.
+                                    egui::ScrollArea::vertical()
+                                        .max_height(ui.ctx().content_rect().height() * 0.8)
+                                        .show(ui, |ui| {
+                                            for (index, group) in
+                                                BlendMode::GROUPS.into_iter().enumerate()
+                                            {
+                                                if index > 0 {
+                                                    ui.separator();
+                                                }
+                                                for &mode in group {
+                                                    changed |= widgets::menu_choice(
+                                                        ui,
+                                                        &mut blend,
+                                                        mode,
+                                                        tr(mode.name()),
+                                                    )
+                                                    .changed();
+                                                }
+                                            }
+                                        });
                                 });
                         });
                         if icons::lock(ui, locked).clicked() {

@@ -41,8 +41,55 @@ fn blend(d: vec3<f32>, s: vec3<f32>, mode: u32) -> vec3<f32> {
         case 10u: { return set_lum(set_sat(d, sat(s)), lum(d)); }
         case 11u: { return set_lum(s, lum(d)); }
         case 12u: { return set_lum(d, lum(s)); }
+        // The modes added with .xuan format 6, in `BlendMode::ALL` order; see
+        // `blend_channel` in blend.rs for the formulas. 13 (Dissolve) blends as
+        // Normal once `composite` has thresholded its alpha.
+        case 14u: { return max(d + s - 1.0, vec3(0.0)); }
+        case 15u: { return select(d, s, lum(s) < lum(d)); }
+        case 16u: { return min(d + s, vec3(1.0)); }
+        case 17u: { return select(d, s, lum(s) > lum(d)); }
+        case 18u: {
+            return select(2.0 * d * (1.0 - s) + sqrt(d) * (2.0 * s - 1.0),
+                2.0 * d * s + d * d * (1.0 - 2.0 * s), s <= vec3(0.5));
+        }
+        case 19u: { return select(1.0 - 2.0 * (1.0 - d) * (1.0 - s), 2.0 * d * s, s <= vec3(0.5)); }
+        case 20u: {
+            return vec3(vivid_light(d.r, s.r), vivid_light(d.g, s.g), vivid_light(d.b, s.b));
+        }
+        case 21u: { return clamp(d + 2.0 * s - 1.0, vec3(0.0), vec3(1.0)); }
+        case 22u: { return select(max(d, 2.0 * s - 1.0), min(d, 2.0 * s), s <= vec3(0.5)); }
+        case 23u: { return select(vec3(0.0), vec3(1.0), floor((d + s) * 255.0 + 0.5) >= vec3(255.0)); }
+        case 24u: { return d + s - 2.0 * d * s; }
+        case 25u: { return max(d - s, vec3(0.0)); }
+        case 26u: {
+            return select(min(d / max(s, vec3(0.000001)), vec3(1.0)),
+                select(vec3(0.0), vec3(1.0), d * 255.0 >= vec3(0.5)), s * 255.0 < vec3(0.5));
+        }
         default: { return s; }
     }
+}
+
+fn color_dodge(d: f32, s: f32) -> f32 {
+    if d == 0.0 { return 0.0; }
+    if s >= 1.0 { return 1.0; }
+    return min(d / (1.0 - s), 1.0);
+}
+
+fn color_burn(d: f32, s: f32) -> f32 {
+    if d == 1.0 { return 1.0; }
+    if s <= 0.0 { return 0.0; }
+    return 1.0 - min((1.0 - d) / s, 1.0);
+}
+
+fn vivid_light(d: f32, s: f32) -> f32 {
+    if s <= 0.5 { return color_burn(d, 2.0 * s); }
+    return color_dodge(d, 2.0 * s - 1.0);
+}
+
+/// Dissolve's per-pixel threshold, the same hash as `blend::dissolve_value`.
+fn dissolve_value(pixel: vec2<i32>) -> f32 {
+    let hash = mix32(bitcast<u32>(pixel.x) * 0x9e3779b1u ^ mix32(bitcast<u32>(pixel.y) * 0x85ebca77u));
+    return f32(hash >> 8u) / 16777216.0;
 }
 
 fn hue_to_rgb(hue: f32, saturation: f32, lightness: f32) -> vec3<f32> {

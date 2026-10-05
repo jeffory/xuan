@@ -80,3 +80,19 @@ The `document` object gains two optional keys:
 Invalid guides or grid settings fail validation on load and save. Rulers, grid and guide
 visibility, Lock Guides and the Snap To settings are app preferences, not project data.
 Guides follow Crop, Canvas Size, Image Size and Flip Canvas.
+
+## Photoshop blend modes (version 6)
+
+Documents in which a layer uses one of the blend modes added with Photoshop's full
+set are written as version 6; everything else keeps the lowest version its content
+needs (1–5). The reader accepts versions 1–6.
+
+A layer's `blend` is one of the original `Normal`, `Multiply`, `Screen`, `Overlay`,
+`Darken`, `Lighten`, `Difference`, `ColorDodge`, `ColorBurn`, `Hue`, `Saturation`,
+`Color` and `Luminosity`, or, from version 6, `Dissolve`, `LinearBurn`, `DarkerColor`,
+`LinearDodge`, `LighterColor`, `SoftLight`, `HardLight`, `VividLight`, `LinearLight`,
+`PinLight`, `HardMix`, `Exclusion`, `Subtract` or `Divide`. The formulas are
+Photoshop's, computed in sRGB on straight colors. Dissolve keeps a pixel fully
+opaque with a probability equal to its coverage (alpha × opacity × masks), using a
+fixed hash of the document pixel's coordinates, so the pattern is the same on every
+machine and between the CPU and GPU renderers.

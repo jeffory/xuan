@@ -41,7 +41,6 @@ use rayon::prelude::*;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    blend::BlendMode,
     document::{Adjustment, Document, Layer, Point},
     render,
 };
@@ -591,10 +590,7 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
         if t.flip_x { -1.0 } else { 1.0 },
         if t.flip_y { -1.0 } else { 1.0 },
     ];
-    p.flags[0] = BlendMode::ALL
-        .iter()
-        .position(|b| *b == layer.blend)
-        .unwrap_or(0) as u32;
+    p.flags[0] = layer.blend.code();
     p.appearance[0] = layer.opacity;
     if let Some(inverse) = t
         .warp
@@ -788,6 +784,7 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blend::BlendMode;
     use image::Rgba;
 
     #[test]

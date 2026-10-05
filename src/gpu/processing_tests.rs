@@ -205,6 +205,82 @@ fn processing_adjustments_and_composition_match_cpu() {
     }
 }
 
+/// Count pixels whose premultiplied channels differ by more than `tolerance`.
+fn premultiplied_mismatches(a: &RgbaImage, b: &RgbaImage, tolerance: u8) -> usize {
+    let premultiply = |p: &Rgba<u8>| {
+        let a = p[3] as f32 / 255.0;
+        [
+            p[0] as f32 * a,
+            p[1] as f32 * a,
+            p[2] as f32 * a,
+            p[3] as f32,
+        ]
+    };
+    a.pixels()
+        .zip(b.pixels())
+        .filter(|(p, q)| {
+            premultiply(p)
+                .iter()
+                .zip(premultiply(q))
+                .any(|(x, y)| (x - y).abs() > tolerance as f32)
+        })
+        .count()
+}
+
+/// Every blend mode, over partly transparent and opaque backdrops, at an
+/// opacity, with a rotated source. Hard Mix, Dissolve, Darker Color and
+/// Lighter Color switch between two results, so a pixel sitting on the
+/// threshold may switch differently in the GPU's 16-bit float canvas; they
+/// may differ on a few pixels, the rest on none.
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_blend_modes_match_cpu() {
+    use crate::blend::BlendMode;
+    let gpu = processor();
+    for opaque in [false, true] {
+        let mut document = Document::new(96, 80).unwrap();
+        document.layers = vec![Layer::image(
+            "Backdrop",
+            RgbaImage::from_fn(96, 80, |x, y| {
+                Rgba([
+                    (x * 255 / 95) as u8,
+                    (y * 255 / 79) as u8,
+                    ((x + y) * 3 % 256) as u8,
+                    if opaque {
+                        255
+                    } else {
+                        120 + (x % 5) as u8 * 30
+                    },
+                ])
+            }),
+        )];
+        let mut top = Layer::image("Top", fixture(71, 53));
+        top.transform.x = 9.0;
+        top.transform.y = 11.0;
+        top.transform.rotation = 11.0;
+        top.opacity = 0.8;
+        document.layers.push(top);
+        for mode in BlendMode::ALL {
+            document.layers[1].blend = mode;
+            let cpu = crate::render::render(&document);
+            let actual = gpu.compose(&document, 96, 80).unwrap();
+            let allowed = match mode {
+                BlendMode::HardMix
+                | BlendMode::Dissolve
+                | BlendMode::DarkerColor
+                | BlendMode::LighterColor => 96 * 80 / 200,
+                _ => 0,
+            };
+            let mismatches = premultiplied_mismatches(&actual, &cpu, 3);
+            assert!(
+                mismatches <= allowed,
+                "{} (opaque backdrop {opaque}): {mismatches} pixels differ",
+                mode.name()
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires native compute adapter"]
 fn processing_raw_matches_cpu_at_both_depths() {

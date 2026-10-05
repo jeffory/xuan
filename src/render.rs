@@ -2,7 +2,7 @@ use image::{GrayImage, Rgba, RgbaImage};
 use rayon::prelude::*;
 
 use crate::{
-    blend::composite,
+    blend::{BlendMode, composite, dissolve_alpha},
     document::{Document, Layer, Point},
 };
 
@@ -392,6 +392,9 @@ fn composite_at(
         if let Some(image) = &layer.pixels {
             let mut source = sample(image, layer.transform.inverse(point));
             source[3] = layer_alpha(document, layer, point, 0) * coverage;
+            if layer.blend == BlendMode::Dissolve {
+                source[3] = dissolve_alpha(source[3], point.x, point.y);
+            }
             pixel = composite(pixel, source, layer.blend);
         }
     }

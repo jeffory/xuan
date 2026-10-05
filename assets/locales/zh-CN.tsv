@@ -198,6 +198,15 @@ Hue	色相
 Saturation	饱和度
 Color	颜色
 Luminosity	明度
+Dissolve	溶解
+Darker Color	深色
+Lighter Color	浅色
+Linear Dodge (Add)	线性减淡（添加）
+Vivid Light	亮光
+Linear Light	线性光
+Pin Light	点光
+Hard Mix	实色混合
+Divide	划分
 Lock layer	锁定图层
 Unlock layer	解锁图层
 Toggle visibility	切换可见性

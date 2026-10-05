@@ -104,25 +104,7 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let manifest = Manifest {
             format: "me.silverl.xuan".into(),
-            version: if !document.guides.is_empty() || document.grid.is_some() {
-                5
-            } else if document.layers.iter().any(|l| {
-                l.filter.is_some()
-                    || l.parent.is_some_and(|id| {
-                        document
-                            .layers
-                            .iter()
-                            .any(|p| p.id == id && p.can_attach_effects())
-                    })
-            }) {
-                4
-            } else if document.layers.iter().any(|l| l.standalone_mask) {
-                3
-            } else if document.layers.iter().any(|l| l.raw.is_some()) {
-                2
-            } else {
-                1
-            },
+            version: format_version(document),
             document: document.clone(),
             pixel_layers: document
                 .layers
@@ -166,6 +148,35 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The newest version supported by `load`.
+const LATEST_VERSION: u32 = 6;
+
+/// The lowest format version that can hold everything `document` uses, so
+/// older readers keep opening projects that do not need the newer features.
+fn format_version(document: &Document) -> u32 {
+    if document.layers.iter().any(|l| !l.blend.is_legacy()) {
+        6
+    } else if !document.guides.is_empty() || document.grid.is_some() {
+        5
+    } else if document.layers.iter().any(|l| {
+        l.filter.is_some()
+            || l.parent.is_some_and(|id| {
+                document
+                    .layers
+                    .iter()
+                    .any(|p| p.id == id && p.can_attach_effects())
+            })
+    }) {
+        4
+    } else if document.layers.iter().any(|l| l.standalone_mask) {
+        3
+    } else if document.layers.iter().any(|l| l.raw.is_some()) {
+        2
+    } else {
+        1
+    }
+}
+
 fn zip_read(archive: &mut ZipArchive<File>, name: &str, limit: u64) -> Result<Vec<u8>> {
     let file = archive
         .by_name(name)
@@ -189,7 +200,7 @@ pub fn load(path: &Path) -> Result<Document> {
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
-        manifest.format == "me.silverl.xuan" && (1..=5).contains(&manifest.version),
+        manifest.format == "me.silverl.xuan" && (1..=LATEST_VERSION).contains(&manifest.version),
         "Unsupported xuan project version"
     );
     let mut used_pixels = 0;
@@ -474,6 +485,30 @@ mod tests {
         assert_eq!(load(&path).unwrap().grid, None);
     }
 
+    #[test]
+    fn photoshop_blend_modes_round_trip_as_version_6() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("blend.xuan");
+        let mut doc = Document::new(4, 4).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::new(4, 4)));
+        // The thirteen original modes still save as version 1.
+        for mode in &BlendMode::ALL[..13] {
+            doc.layers[0].blend = *mode;
+            save(&doc, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 1, "{}", mode.name());
+        }
+        for mode in &BlendMode::ALL[13..] {
+            doc.layers[0].blend = *mode;
+            save(&doc, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 6, "{}", mode.name());
+            assert_eq!(load(&path).unwrap().layers[0].blend, *mode);
+        }
+        assert_eq!(
+            manifest_json(&path)["document"]["layers"][0]["blend"],
+            "Divide"
+        );
+    }
+
     fn write_manifest(path: &Path, manifest: &Value) {
         let mut archive = ZipWriter::new(File::create(path).unwrap());
         archive
@@ -545,7 +580,7 @@ mod tests {
         }
         // A future version is refused rather than half read.
         let mut future = document(serde_json::json!([]), Value::Null);
-        future["version"] = serde_json::json!(6);
+        future["version"] = serde_json::json!(LATEST_VERSION + 1);
         write_manifest(&path, &future);
         assert!(load(&path).is_err());
     }

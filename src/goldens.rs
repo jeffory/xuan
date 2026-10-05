@@ -75,6 +75,7 @@ const RAW_FIXTURE: &str = "nikon-d70-nef";
 const SCENES: &[&str] = &[
     "demo",
     "blend_modes",
+    "blend_modes_photoshop",
     "layer_mask",
     "clipping_mask",
     "adjustment_layers",
@@ -133,6 +134,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
             gpu: GPU,
         },
         composite("blend_modes", blend_modes()),
+        composite("blend_modes_photoshop", blend_modes_photoshop()),
         composite("layer_mask", layer_mask()),
         composite("clipping_mask", clipping_mask()),
         composite("adjustment_layers", adjustment_layers()),
@@ -252,13 +254,23 @@ fn placed(mut layer: Layer, x: f32, y: f32) -> Layer {
     layer
 }
 
-/// Thirteen 19-pixel strips, one per blend mode from top to bottom in
-/// `BlendMode::ALL` order, over the gradient. The right quarter of each strip
-/// fades out so partial coverage is covered too.
+/// Thirteen 19-pixel strips, one per original blend mode from top to bottom
+/// in `BlendMode::ALL` order, over the gradient. The right quarter of each
+/// strip fades out so partial coverage is covered too.
 fn blend_modes() -> Document {
+    blend_strips(&BlendMode::ALL[..13], 4.0, 19)
+}
+
+/// The fourteen modes added with Photoshop's full set (`BlendMode::ALL[13..]`),
+/// as 18-pixel strips laid out like `blend_modes`.
+fn blend_modes_photoshop() -> Document {
+    blend_strips(&BlendMode::ALL[13..], 2.0, 18)
+}
+
+fn blend_strips(modes: &[BlendMode], top: f32, height: u32) -> Document {
     let mut layers = vec![Layer::image("Gradient", gradient())];
-    for (index, mode) in BlendMode::ALL.into_iter().enumerate() {
-        let mut strip = hue_ramp(SIZE, 19);
+    for (index, &mode) in modes.iter().enumerate() {
+        let mut strip = hue_ramp(SIZE, height);
         for (x, _, pixel) in strip.enumerate_pixels_mut() {
             if x >= SIZE * 3 / 4 {
                 pixel[3] = (255 - (x - SIZE * 3 / 4) * 3) as u8;
@@ -267,7 +279,7 @@ fn blend_modes() -> Document {
         let mut layer = placed(
             Layer::image(mode.name(), strip),
             0.0,
-            4.0 + index as f32 * 19.0,
+            top + (index as u32 * height) as f32,
         );
         layer.blend = mode;
         layers.push(layer);
