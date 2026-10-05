@@ -1,6 +1,6 @@
 # Pinned so a new stable release cannot break CI (clippy runs with -D warnings).
 # Upgrade deliberately: bump the version, run scripts/check.sh, fix new lints.
 [toolchain]
-channel = "1.98.1"
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
