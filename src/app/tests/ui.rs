@@ -21,6 +21,10 @@ mod keybindings;
 #[path = "ui_palette.rs"]
 mod palette;
 
+#[cfg(target_os = "linux")]
+#[path = "ui_window_buttons.rs"]
+mod window_buttons;
+
 /// An `EditorApp` running inside a kittest harness at the usual 1280x860 window size.
 pub(super) struct UiTest {
     harness: Harness<'static, Option<EditorApp>>,

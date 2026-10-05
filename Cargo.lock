@@ -5341,6 +5341,7 @@ dependencies = [
  "rawler",
  "rayon",
  "rcgen",
+ "resvg",
  "rfd",
  "ring",
  "rustix 1.1.5",

@@ -232,6 +232,38 @@ impl EditorApp {
             })
             .wrap(),
         );
+        #[cfg(target_os = "linux")]
+        if config.title_bar == TitleBar::Compact {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(tr("Window buttons"));
+                widgets::PopUp::from_id_salt("settings_window_buttons")
+                    .selected_text(tr(config.window_buttons.name()))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for option in xuan::config::WindowButtons::ALL {
+                            widgets::menu_choice(
+                                ui,
+                                &mut config.window_buttons,
+                                option,
+                                tr(option.name()),
+                            );
+                        }
+                    });
+            });
+            ui.add_space(8.0);
+            ui.add(
+                egui::Label::new(match config.window_buttons {
+                    xuan::config::WindowButtons::Theme => tr(
+                        "Draw the buttons with the images of your desktop theme, falling back to the built-in ones when it has none.",
+                    ),
+                    xuan::config::WindowButtons::BuiltIn => {
+                        tr("Always draw the buttons that come with Xuan.")
+                    }
+                })
+                .wrap(),
+            );
+        }
         ui.add_space(8.0);
         let note = if config.title_bar.client_side() && !self.transparent_window {
             tr("Rounded window corners appear after restarting Xuan.")

@@ -71,6 +71,39 @@ impl TitleBar {
     }
 }
 
+/// Where a Compact title bar gets its minimize, maximize and close buttons from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowButtons {
+    /// The images of the desktop's own theme, when it has any (Linux).
+    #[serde(rename = "theme")]
+    Theme,
+    /// The glyphs drawn by Xuan.
+    #[serde(rename = "builtin")]
+    BuiltIn,
+}
+
+impl Default for WindowButtons {
+    fn default() -> Self {
+        if cfg!(target_os = "linux") {
+            Self::Theme
+        } else {
+            Self::BuiltIn
+        }
+    }
+}
+
+impl WindowButtons {
+    pub const ALL: [Self; 2] = [Self::Theme, Self::BuiltIn];
+
+    /// Untranslated display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Theme => "Match desktop theme",
+            Self::BuiltIn => "Built-in",
+        }
+    }
+}
+
 /// Lowest and highest zoom, in percent, at which the pixel grid may start to show.
 pub const PIXEL_GRID_PERCENT_RANGE: std::ops::RangeInclusive<u32> = 200..=6400;
 pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
@@ -80,6 +113,8 @@ pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
 pub struct Config {
     pub language: Language,
     pub title_bar: TitleBar,
+    /// Where Compact's window buttons come from.
+    pub window_buttons: WindowButtons,
     /// View → Pixel Grid.
     pub pixel_grid: bool,
     /// Zoom, in percent, from which the pixel grid is drawn.
@@ -177,6 +212,7 @@ impl Default for Config {
         Self {
             language: Language::default(),
             title_bar: TitleBar::default(),
+            window_buttons: WindowButtons::default(),
             pixel_grid: true,
             pixel_grid_percent: DEFAULT_PIXEL_GRID_PERCENT,
             // Upstream's defaults: rulers and grid hidden, guides shown and unlocked.
@@ -375,6 +411,10 @@ impl Config {
         };
         table.insert("language".into(), toml::Value::try_from(self.language)?);
         table.insert("title_bar".into(), toml::Value::try_from(self.title_bar)?);
+        table.insert(
+            "window_buttons".into(),
+            toml::Value::try_from(self.window_buttons)?,
+        );
         table.insert("pixel_grid".into(), toml::Value::Boolean(self.pixel_grid));
         table.insert(
             "pixel_grid_percent".into(),
@@ -500,6 +540,34 @@ mod tests {
                 ..Config::default()
             }
         );
+    }
+
+    #[test]
+    fn window_buttons_default_to_the_theme_on_linux_and_older_files_still_load() {
+        assert_eq!(
+            Config::default().window_buttons,
+            if cfg!(target_os = "linux") {
+                WindowButtons::Theme
+            } else {
+                WindowButtons::BuiltIn
+            }
+        );
+        // A file from before the setting existed.
+        let old: Config = toml::from_str("language = 'zh-CN'\ntitle_bar = 'compact'\n").unwrap();
+        assert_eq!(old.window_buttons, WindowButtons::default());
+        for choice in WindowButtons::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            Config {
+                window_buttons: choice,
+                ..Config::default()
+            }
+            .save(&path)
+            .unwrap();
+            assert_eq!(Config::load(&path).unwrap().window_buttons, choice);
+        }
+        let builtin: Config = toml::from_str("window_buttons = 'builtin'").unwrap();
+        assert_eq!(builtin.window_buttons, WindowButtons::BuiltIn);
     }
 
     #[test]

@@ -332,12 +332,31 @@ saved automatically. Chinese glyphs are bundled with the application.
 
 The **Appearance** category sets the **Window title bar**:
 
-- **Compact** (the default): the menus share the title bar with monochrome
-  minimize, maximize, and close buttons on the right. Under GNOME, the buttons
-  follow the desktop's `button-layout` setting for side and order.
+- **Compact** (the default): the menus share the title bar with minimize,
+  maximize, and close buttons on the right. Under GNOME the buttons follow the
+  desktop's `button-layout` setting for side and order, and under KDE Plasma the
+  `ButtonsOnLeft` / `ButtonsOnRight` of `kwinrc`.
 - **System**: the desktop draws the title bar, window buttons, and resize borders,
   and the menus sit in a normal bar below it.
 - **macOS**: the menus share the title bar with macOS-style buttons on the left.
+
+On Linux, **Window buttons** (shown for Compact) chooses the artwork:
+
+- **Match desktop theme** (the default) draws the buttons with the images of your
+  desktop theme, including their hover, pressed, and unfocused states and the restore
+  button, so they match native windows. Xuan looks for them at run time, in this
+  order: the decoration images that KDE Plasma's GTK integration (kde-gtk-config)
+  writes to `~/.config/gtk-3.0` and `gtk-4.0` (KDE only); the images of the current
+  GTK theme (`gtk-theme-name` in `settings.ini`, or GNOME's setting) under
+  `~/.local/share/themes`, `~/.themes` and `$XDG_DATA_DIRS`; then the
+  `window-close-symbolic`, `window-minimize-symbolic`, `window-maximize-symbolic` and
+  `window-restore-symbolic` icons of the current icon theme, coloured like the title
+  bar text. The file names are read from the theme's CSS, not assumed. A state a theme
+  has no image for is shown with the normal image and a light highlight. Changing the
+  decoration, colour scheme, or icon theme updates the buttons within a few seconds,
+  without restarting Xuan.
+- **Built-in** always draws the monochrome buttons that come with Xuan. They are
+  also used when the theme provides no usable images, and on Windows.
 
 The title bar changes immediately. Compact and macOS windows have rounded corners,
 which need a window created with transparency: after switching from **System**,
@@ -382,6 +401,7 @@ The file is created when a preference changes. For example:
 ```toml
 language = "zh-CN" # Use "en" for English (the default).
 title_bar = "system" # Or "compact" (the default) or "macos".
+window_buttons = "theme" # Compact buttons: "theme" (the default on Linux) or "builtin".
 rulers = true # View → Rulers (off by default).
 show_grid = false # View → Show → Grid.
 show_guides = true # View → Show → Guides.

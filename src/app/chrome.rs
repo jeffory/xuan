@@ -1,4 +1,6 @@
 use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, emath::GuiRounding as _, pos2, vec2};
+#[cfg(target_os = "linux")]
+use xuan::config::WindowButtons;
 use xuan::{config::TitleBar, i18n::tr};
 
 use super::{EditorApp, theme};
@@ -87,9 +89,46 @@ impl ButtonLayout {
         (!layout.left.is_empty() || !layout.right.is_empty()).then_some(layout)
     }
 
-    /// Follows GNOME's button layout when running under GNOME. Elsewhere, or if
-    /// `gsettings` is missing or slow, keeps the default.
+    /// Parses KWin's `[org.kde.kdecoration2]` `ButtonsOnLeft` / `ButtonsOnRight` from
+    /// `kwinrc`: `I` is minimize, `A` maximize and `X` close; the other letters (menu,
+    /// help, pin, ...) are ignored. A missing key keeps KWin's own default for that
+    /// side, and `None` means no button is left, so the window can always be closed.
+    #[cfg(target_os = "linux")]
+    pub(super) fn parse_kwin(text: &str) -> Option<Self> {
+        let ini = super::window_theme::Ini::parse(text);
+        let side = |key: &str, default: &str| -> Vec<WindowButton> {
+            ini.get("org.kde.kdecoration2", key)
+                .unwrap_or(default)
+                .chars()
+                .filter_map(|letter| match letter {
+                    'I' => Some(WindowButton::Minimize),
+                    'A' => Some(WindowButton::Maximize),
+                    'X' => Some(WindowButton::Close),
+                    _ => None,
+                })
+                .collect()
+        };
+        let layout = Self {
+            left: side("ButtonsOnLeft", "MS"),
+            right: side("ButtonsOnRight", "HIAX"),
+        };
+        (!layout.left.is_empty() || !layout.right.is_empty()).then_some(layout)
+    }
+
+    /// Follows KWin's button layout under KDE and GNOME's under GNOME. Elsewhere, or if
+    /// the setting is missing or slow to read, keeps the default.
     pub(super) fn from_desktop() -> Self {
+        #[cfg(target_os = "linux")]
+        if std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|desktop| super::window_theme::desktop_is(&desktop, "KDE"))
+        {
+            return std::fs::read_to_string(
+                super::window_theme::process_config_home().join("kwinrc"),
+            )
+            .ok()
+            .and_then(|text| Self::parse_kwin(&text))
+            .unwrap_or_default();
+        }
         if !cfg!(target_os = "linux")
             || !std::env::var("XDG_CURRENT_DESKTOP")
                 .is_ok_and(|desktop| desktop.split(':').any(|d| d.eq_ignore_ascii_case("GNOME")))
@@ -190,64 +229,70 @@ impl EditorApp {
             };
             response
                 .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-            let painter = ui.painter();
-            if response.hovered() || response.has_focus() {
-                let alpha = if response.is_pointer_button_down_on() {
-                    36
+            #[cfg(target_os = "linux")]
+            let themed = self.paint_theme_button(ui, rect, button, maximized, &response, focused);
+            #[cfg(not(target_os = "linux"))]
+            let themed = false;
+            if !themed {
+                let painter = ui.painter();
+                if response.hovered() || response.has_focus() {
+                    let alpha = if response.is_pointer_button_down_on() {
+                        36
+                    } else {
+                        20
+                    };
+                    painter.rect_filled(
+                        rect.shrink2(vec2(2.0, 0.0)),
+                        theme::BUTTON_RADIUS,
+                        Color32::from_white_alpha(alpha),
+                    );
+                }
+                let color = if focused || response.hovered() {
+                    theme::TEXT
                 } else {
-                    20
+                    theme::MUTED
                 };
-                painter.rect_filled(
-                    rect.shrink2(vec2(2.0, 0.0)),
-                    theme::BUTTON_RADIUS,
-                    Color32::from_white_alpha(alpha),
-                );
-            }
-            let color = if focused || response.hovered() {
-                theme::TEXT
-            } else {
-                theme::MUTED
-            };
-            let stroke = Stroke::new(1.0_f32, color);
-            // Pixel-centered 1 px strokes stay crisp at integer offsets.
-            let c = rect
-                .center()
-                .round_to_pixel_center(painter.pixels_per_point());
-            match button {
-                WindowButton::Minimize => {
-                    painter.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], stroke);
-                }
-                WindowButton::Maximize if maximized => {
-                    // Two overlapping windows: the front one, then the visible
-                    // top and right edges of the one behind it.
-                    painter.rect_stroke(
-                        Rect::from_min_max(c + vec2(-4.0, -2.0), c + vec2(2.0, 4.0)),
-                        0.0,
-                        stroke,
-                        StrokeKind::Middle,
-                    );
-                    painter.add(egui::Shape::line(
-                        vec![
-                            c + vec2(-2.0, -2.0),
-                            c + vec2(-2.0, -4.0),
-                            c + vec2(4.0, -4.0),
-                            c + vec2(4.0, 2.0),
-                            c + vec2(2.0, 2.0),
-                        ],
-                        stroke,
-                    ));
-                }
-                WindowButton::Maximize => {
-                    painter.rect_stroke(
-                        Rect::from_center_size(c, vec2(8.0, 8.0)),
-                        0.0,
-                        stroke,
-                        StrokeKind::Middle,
-                    );
-                }
-                WindowButton::Close => {
-                    painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
-                    painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
+                let stroke = Stroke::new(1.0_f32, color);
+                // Pixel-centered 1 px strokes stay crisp at integer offsets.
+                let c = rect
+                    .center()
+                    .round_to_pixel_center(painter.pixels_per_point());
+                match button {
+                    WindowButton::Minimize => {
+                        painter.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], stroke);
+                    }
+                    WindowButton::Maximize if maximized => {
+                        // Two overlapping windows: the front one, then the visible
+                        // top and right edges of the one behind it.
+                        painter.rect_stroke(
+                            Rect::from_min_max(c + vec2(-4.0, -2.0), c + vec2(2.0, 4.0)),
+                            0.0,
+                            stroke,
+                            StrokeKind::Middle,
+                        );
+                        painter.add(egui::Shape::line(
+                            vec![
+                                c + vec2(-2.0, -2.0),
+                                c + vec2(-2.0, -4.0),
+                                c + vec2(4.0, -4.0),
+                                c + vec2(4.0, 2.0),
+                                c + vec2(2.0, 2.0),
+                            ],
+                            stroke,
+                        ));
+                    }
+                    WindowButton::Maximize => {
+                        painter.rect_stroke(
+                            Rect::from_center_size(c, vec2(8.0, 8.0)),
+                            0.0,
+                            stroke,
+                            StrokeKind::Middle,
+                        );
+                    }
+                    WindowButton::Close => {
+                        painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
+                        painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
+                    }
                 }
             }
             if response.clicked() {
@@ -256,6 +301,96 @@ impl EditorApp {
             response.on_hover_text(label);
         }
         ui.spacing_mut().item_spacing.x = spacing;
+    }
+
+    /// Draws the button with the desktop theme's image. `false` means none was found (or
+    /// the setting is Built-in) and the caller draws its own glyph.
+    #[cfg(target_os = "linux")]
+    fn paint_theme_button(
+        &mut self,
+        ui: &egui::Ui,
+        rect: Rect,
+        button: WindowButton,
+        maximized: bool,
+        response: &egui::Response,
+        focused: bool,
+    ) -> bool {
+        use super::window_theme::{Env, Highlight, Kind, State, WindowTheme};
+        if self.config.window_buttons != WindowButtons::Theme {
+            return false;
+        }
+        let theme = self.window_theme.get_or_insert_with(|| {
+            // Tests never read the developer's own configuration.
+            #[cfg(test)]
+            let env = Env::default();
+            #[cfg(not(test))]
+            let env = Env::from_process();
+            WindowTheme::new(env)
+        });
+        theme.refresh(std::time::Instant::now());
+        let ppp = ui.ctx().pixels_per_point();
+        let kind = match button {
+            WindowButton::Minimize => Kind::Minimize,
+            WindowButton::Maximize if maximized => Kind::Restore,
+            WindowButton::Maximize => Kind::Maximize,
+            WindowButton::Close => Kind::Close,
+        };
+        let state = if response.is_pointer_button_down_on() {
+            State::Active
+        } else if response.hovered() || response.has_focus() {
+            State::Hover
+        } else if !focused {
+            State::Backdrop
+        } else {
+            State::Normal
+        };
+        let Some(resolved) = theme.resolved() else {
+            return false;
+        };
+        let Some(pick) = resolved.pick(kind, state, ppp) else {
+            return false;
+        };
+        let (asset, highlight, dim) = (pick.asset.clone(), pick.highlight, pick.dim);
+        let tint = asset.symbolic.then(|| {
+            let fallback = if state == State::Backdrop {
+                theme::MUTED
+            } else {
+                theme::TEXT
+            };
+            resolved
+                .tints
+                .color(state == State::Backdrop, theme::TITLEBAR, fallback)
+        });
+        let Some((texture, size)) = theme.texture(ui.ctx(), &asset, ppp, tint) else {
+            return false;
+        };
+        let painter = ui.painter();
+        if highlight != Highlight::None {
+            let alpha = if highlight == Highlight::Pressed {
+                36
+            } else {
+                20
+            };
+            painter.rect_filled(
+                rect.shrink2(vec2(2.0, 0.0)),
+                theme::BUTTON_RADIUS,
+                Color32::from_white_alpha(alpha),
+            );
+        }
+        let fit = (rect.width() / size.x).min(rect.height() / size.y).min(1.0);
+        let image = Rect::from_center_size(rect.center().round_to_pixel_center(ppp), size * fit);
+        let color = if dim && !asset.symbolic {
+            Color32::WHITE.gamma_multiply(0.6)
+        } else {
+            Color32::WHITE
+        };
+        painter.image(
+            texture,
+            image,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            color,
+        );
+        true
     }
 
     fn window_button_action(&mut self, ctx: &egui::Context, button: WindowButton, maximized: bool) {

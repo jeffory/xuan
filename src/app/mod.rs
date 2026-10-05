@@ -48,6 +48,8 @@ mod tests;
 mod text_controls;
 mod theme;
 mod widgets;
+#[cfg(target_os = "linux")]
+mod window_theme;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -523,6 +525,9 @@ pub struct EditorApp {
     /// The decorations last requested from the window system.
     decorated: bool,
     button_layout: chrome::ButtonLayout,
+    /// Window-button artwork from the desktop theme, loaded on first use.
+    #[cfg(target_os = "linux")]
+    window_theme: Option<window_theme::WindowTheme>,
     clipboard: Option<(RgbaImage, Point)>,
     system_clipboard: Option<arboard::Clipboard>,
     jpeg_quality: u8,
@@ -696,6 +701,8 @@ impl EditorApp {
             transparent_window: true,
             decorated: false,
             button_layout: Default::default(),
+            #[cfg(target_os = "linux")]
+            window_theme: None,
             clipboard: None,
             system_clipboard: None,
             jpeg_quality: 90,
