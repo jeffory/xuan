@@ -2224,6 +2224,52 @@ done
     }
 
     #[test]
+    fn an_action_with_a_selection_mask_sends_it_in_the_source_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        app.config_path = Some(config.path().join("config.toml"));
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(8, 8).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            format!("{MANIFEST}{INPAINT}"),
+        )
+        .unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+
+        // Nothing is selected: the action refuses before anything is sent.
+        app.start_plugin_action("mock", "inpaint");
+        assert!(app.error.take().is_some());
+        assert!(app.plugins.jobs.is_empty());
+        settle(&context, &mut app);
+        assert!(!received(dir.path()).contains("action/run"));
+
+        let selection = selection_where(&app, |x, y| x < 8 && y < 4);
+        app.session_mut().unwrap().document.selection = Some(selection);
+        app.start_plugin_action("mock", "inpaint");
+        assert_eq!(app.plugins.jobs.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let log = received(dir.path());
+        let run = log.lines().find(|l| l.contains("action/run")).unwrap();
+        let mask = run
+            .split("\"mask\":\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        assert!(mask.ends_with("selection.png"), "{run}");
+        // The source is the 16x16 composite, which max_side 512 does not scale.
+        assert!(run.contains("\"width\":16"), "{run}");
+    }
+
+    #[test]
     fn dont_ask_again_lasts_until_the_grant_changes() {
         let dir = tempfile::tempdir().unwrap();
         let config = tempfile::tempdir().unwrap();
