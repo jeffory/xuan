@@ -21,6 +21,7 @@ plugins under `plugins/`:
 | `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; three actions |
 | `plugins/local-upscale` | Python | A local, offline job with no permissions beyond reading; a swappable model backend |
 | `plugins/select-bright` | Python | A `mask` result that becomes the selection; a placeholder for a segmentation model |
+| `plugins/extend-edges` | Python | Outpainting: an extended source, `extend_canvas` in a result, an image fitted to the new canvas; a placeholder for a generative model |
 
 Both SDKs read requests on the main thread and run handlers on worker threads,
 so a handler may call the editor (`host.document()`, `host.export_layer()`, …)
@@ -71,12 +72,15 @@ from connecting either. Install plugins you trust.
 | `document/get`, `layer/export`, `document/export`, `selection/export` | yes | yes |
 | Action results (`image`, `document`, `mask`, `edit`, `text`), as a proposal the user accepts or discards | yes | yes |
 | `document/edit`, including its `set_selection` op | no | yes |
+| `extend_canvas`, in `document/edit` or in a result's `edit` output | no | yes |
 | `host/run` commands that edit the document | no | yes |
 
 A `mask` result changes only the selection, never pixels, and only after the
 user accepts it, so it needs no `document = "edit"`: a read-only segmentation
 plugin can propose a selection. Changing the selection directly with
-`document/edit` still needs `"edit"`.
+`document/edit` still needs `"edit"`. Growing the canvas changes the document
+itself, so a result that holds an `extend_canvas` edit is refused as a whole
+unless the plugin declares `"edit"`.
 
 ### Network
 
@@ -89,7 +93,8 @@ network](#blocking-the-network)), otherwise nothing stops it from connecting.
 document data, Xuan shows **Send to *Plugin (plugin id)*?** before anything
 is sent. It names the declared hosts and lists exactly what goes with this
 run: the source image (the active layer's pixels, the flattened image, or the
-flattened image inside the selection, with any crop around the regions and
+flattened image inside the selection, with any crop around the regions,
+the new canvas of `source.extend` ("extended by 64 px on the left, …") and
 the `max_side` limit), the selection as a mask when the action asks for one
 (only if something is selected), the positions and sizes of the regions and their text
 fields, and each non-empty `text`, `multiline` or `path` input. Other inputs
@@ -356,6 +361,63 @@ result layer is masked by the selection (see `plugins/comfy-cloud`). `regions`
 stay the right tool for several separate edits with their own text; the
 selection mask is for one area.
 
+#### Extending the canvas (outpainting)
+
+An action that paints beyond the image's edges sets `source.extend` on a
+`composite` source. Each side is a number of document pixels, or the id of
+an `integer` or `number` input of the action that holds it, so the user can
+choose it in the dialog:
+
+```toml
+source = { from = "composite", max_side = 2048,
+           extend = { left = "amount", top = 0, right = "amount", bottom = 128 } }
+```
+
+- The source image is the flattened document padded with transparent pixels
+  by those amounts: its top-left is at (−left, −top) in the document, which
+  `action/run` reports as `source.document_x` and `document_y`. The amounts
+  reach the plugin as `source.extend` (`{left, top, right, bottom}`, in
+  document pixels).
+- The host also writes `extend.png` to the job's work directory and gives
+  its path as `source.extend_mask`: an 8-bit grey PNG of **exactly the size
+  of the source export**, white over the new canvas and black over the old
+  image. Export pixels that `max_side` scaling makes straddle the old edge
+  count as new. With `source.mask = "selection"`, the selection mask uses the
+  same grid and is black over the new canvas.
+- The extended size is checked against the document limits (30,000 pixels a
+  side, 100 megapixels) before anything is exported; a larger extension
+  refuses to start. Sides in the manifest may be at most 30,000, and input
+  values are rounded and clamped to 0..30,000.
+- `extend` needs an `edit` action with `from = "composite"`. Sending an
+  extended source needs only `document = "read"`, but growing the canvas
+  with the result needs `document = "edit"`.
+
+The result grows the canvas with an `extend_canvas` edit (see [Reading and
+editing the document](#reading-and-editing-the-document)) and places the
+painted image with `"fit": "source"`. "Source" means the bounds of the
+source as it was sent, which for an extended source include the new canvas.
+`image` and `mask` outputs are always placed on the document as it was when
+the job started; when the result's edits extend the canvas, they move with
+the content by the edits' `left` and `top`, like every existing layer. So an
+image fitted to an extended source lands exactly on the new canvas once the
+result extends it by the same amounts, at any `max_side`. Without the edit
+the same image hangs over the old canvas's edges. Returning `extend.png` as
+the image's `mask` keeps the original pixels visible under the new layer:
+
+```json
+{"outputs": [
+  {"kind": "edit", "edits": [{"op": "extend_canvas", "left": 64, "top": 0, "right": 64, "bottom": 128}]},
+  {"kind": "image", "path": "…/outpainted.png", "fit": "source", "mask": "…/extend.png"}
+]}
+```
+
+The SDKs read the amounts and mask with `job.extension` and
+`job.extend_mask_path` in Python (`job.extension()` and
+`job.extend_mask_path()` in Rust), and write the edit with
+`job.extend_canvas(**job.extension)` in Python or
+`Output::edit(vec![edits::extend_canvas(margins)])` in Rust. See
+`plugins/extend-edges`.
+
 `result.into` chooses where image outputs go: `layer` (a new layer above the
 source, the default), `replace` (the source layer's pixels), `document` (a new
 tab), or `ask` (the dialog offers **New layer** / **New document**). With `mask_to_regions`, a new layer gets a mask built from the
@@ -417,7 +479,8 @@ refused with an invalid-params error.
                           "mask": null, "fields": {"desc": "Change the earring", "type": "obj"}}]},
   "source": {"path": "/tmp/xuan/jobs/0c2d…/source.png", "width": 896, "height": 1152,
              "layer": "6f0a…", "scale": 0.5, "offset": {"x": 120, "y": 80},
-             "mask": "/tmp/xuan/jobs/0c2d…/selection.png"},
+             "mask": "/tmp/xuan/jobs/0c2d…/selection.png",
+             "extend": null, "extend_mask": null},
   "document": {"id": "…", "width": 1792, "height": 2304, "active": "6f0a…", "layers": [ … ]}
 }}
 ```
@@ -451,7 +514,9 @@ it a size instead and the pixels are fitted to that size: `width` and/or
 `height` in document units (one side alone keeps the aspect ratio), or
 `"fit": "source"` to cover the bounds of the source that was sent, at `x`,`y`
 from its top-left. A higher-resolution result then sits exactly over the
-source with a higher pixel density. `fit` cannot be combined with `width` or
+source with a higher pixel density. For an extended source those bounds
+include the new canvas (see [Extending the
+canvas](#extending-the-canvas-outpainting)). `fit` cannot be combined with `width` or
 `height`, and an action without a source cannot use `fit`. Sizes must be
 finite, above 0 and at most 30,000 document units; the image's own pixels
 still count against the size and 100-megapixel limits. With `result.into =
@@ -550,6 +615,16 @@ wait for the user's answer (see [Network](#network)).
 - `{"op": "set_mask", "layer", "mask": path | null}`
 - `{"op": "set_selection", "mask": path | null}`
 - `{"op": "select", "layer"}`
+- `{"op": "extend_canvas", "left"?, "top"?, "right"?, "bottom"?}`: grow the
+  canvas by whole document pixels on each side (each 0 or more, default 0;
+  shrinking is not offered). Layers, mask placements and guides move by
+  `left`, `top` exactly as **Image → Canvas Size…** moves them with the
+  matching anchor, and the selection is cleared, as Canvas Size does. The new
+  size must stay within 30,000 pixels a side and 100 megapixels. Needs
+  `document = "edit"`, also in a result's `edit` output.
+
+Edits apply in order, each in the document's coordinates at that point: an
+`add_layer` after an `extend_canvas` is placed on the grown canvas.
 
 Notifications from the plugin: `host/log` `{level, message}` and `host/status`
 `{message}`. The status bar shows a plugin's message, like the `text` output of

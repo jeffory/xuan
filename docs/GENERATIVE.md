@@ -24,7 +24,8 @@ and **#7** (MCP server and client).
 3. **Add three small host features that every generative plugin needs:** a
    result that declares its placed size (upscale), canvas extension (outpaint)
    and a `mask` output kind that becomes a selection (segmentation, #5).
-   The placed size is done in #35 and the `mask` output in #37.
+   The placed size is done in #35, the `mask` output in #37 and canvas
+   extension in #36.
 4. **Give models a home:** a per-plugin `models_dir` with a manifest-declared,
    hash-checked download, shown to the user with its size before it starts.
 5. **Defer C2PA, plugin signing and the OS keyring.** Record the provenance we
@@ -96,7 +97,15 @@ server in Xuan should reuse the `document/*` and `document/edit` code paths
 - **Canvas extension.** No edit op changes the canvas size. Outpainting needs
   "grow the canvas by N pixels on each side, then fill". Add an `extend_canvas`
   edit op, or a source option `extend = {left, top, right, bottom}` that sends a
-  padded image plus an alpha mask of the new area.
+  padded image plus an alpha mask of the new area. Done (#36), both: a
+  composite source with `extend` (fixed pixels or an input's value per side)
+  arrives padded with transparent pixels, with `extend_mask`, a grey mask of
+  the new area on the same grid as the selection mask. A result's
+  `extend_canvas` edit grows the canvas through the Canvas Size code path
+  (guides follow), needs `document = "edit"`, and image and mask outputs move
+  with the content, so `fit = "source"` covers the new canvas. The send
+  prompt says how far the image is extended. `plugins/extend-edges` shows it
+  with a mirror/repeat fill where a generative backend would go.
 - **Mask as output.** `set_selection` exists but takes a file the plugin must
   write and then apply with `document/edit`, which needs `document = "edit"`.
   Segmentation (#5) wants a plain `mask` output kind: a result that the host
@@ -144,7 +153,7 @@ local job with no network.
 | Goal | Backend | Notes |
 | --- | --- | --- |
 | Text-to-image | ComfyUI (local or cloud), diffusers, or a hosted API | Comfy example already covers the cloud path. A local ComfyUI plugin is the same code with a `localhost` base URL. |
-| Inpaint / outpaint | Same, with a mask workflow | Needs the host features in section 2. |
+| Inpaint / outpaint | Same, with a mask workflow | The host features are done: `source.mask = "selection"` (#42) and `source.extend` with `extend_canvas` (#36); `extend-edges` has a backend hook. |
 | Background removal, segmentation | ONNX Runtime in the plugin (U2-Net, IS-Net, SAM-class models) | Plugin returns a `mask` output (#37); `select-bright` has a backend hook. #5 decides which model and licence ship. |
 | Upscaling | Real-ESRGAN or similar via ONNX Runtime in the plugin | `local-upscale` has a backend hook. |
 | Prompt assist, captioning | Ollama or llama.cpp over localhost | A pane or action that returns `text` or fills an input. |
@@ -323,7 +332,7 @@ a cosmetic change and not worth breaking existing installs.
 | Goal | Already works | Missing | Recommendation |
 | --- | --- | --- | --- |
 | **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin; model download story. | Ship a local-ComfyUI variant of the Comfy example; add `models_dir`. |
-| **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42), used by the Comfy Cloud **Inpaint Selection** action. | Canvas extension for outpainting. | Add `extend` to the source and an `extend_canvas` edit op. |
+| **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42), used by the Comfy Cloud **Inpaint Selection** action; `source.extend` with a new-area mask and an `extend_canvas` edit (#36), shown by `extend-edges`. | A generative outpainting backend. | Host work done; wire an outpainting workflow into a backend of `extend-edges` or the Comfy example. |
 | **Background removal / segmentation** | `selection/export`, `set_selection` and `set_mask` edits, `replace` results, a `mask` output that becomes a selection (#37) and the `select-bright` prototype. | A shipped model and licence decision (#5). | The host `mask` output is done; do the model and Select Subject UI in #5, implemented as a first-party ONNX plugin. |
 | **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Result placed-size control; model download; large-image speed. | Add `width`/`height` to image outputs; later an ONNX Real-ESRGAN backend. |
 | **Others** (style transfer, colorize, denoise, captions) | Same job/result machinery; `text` output for captions; panes for assist UIs. | Nothing specific. | Plugins only; no host work. |
