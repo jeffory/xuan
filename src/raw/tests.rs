@@ -606,8 +606,8 @@ fn eyedroppers_share_patch_sampling_at_edges_and_through_geometry() {
         let mut count = 0.0;
         for y in ys {
             for x in xs.clone() {
-                for c in 0..3 {
-                    sum[c] += raw.camera.get_pixel(x, y)[c];
+                for (total, value) in sum.iter_mut().zip(raw.camera.get_pixel(x, y).0) {
+                    *total += value;
                 }
                 count += 1.0;
             }
