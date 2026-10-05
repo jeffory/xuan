@@ -164,7 +164,23 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
             text=True,
             timeout=30,
         ).strip()
-        assert actual_version == f"xuan {VERSION}", actual_version
+        check_version(actual_version)
+
+
+def check_version(actual):
+    """Match `xuan --version` against the build channel (see src/buildinfo.rs).
+
+    Release builds print `xuan <version>`; dev builds print the commit
+    instead, e.g. `xuan build 1dfa61c (2026-10-05)`.
+    """
+    if os.environ.get("XUAN_BUILD_CHANNEL") == "release":
+        assert actual == f"xuan {VERSION}", actual
+        return
+    commit = os.environ.get("XUAN_BUILD_COMMIT", "")[:7]
+    if commit:
+        assert actual.startswith(f"xuan build {commit}"), actual
+    else:
+        assert actual.startswith("xuan build ") or actual == "xuan development build", actual
 
 
 def check_source(temporary):
@@ -335,7 +351,7 @@ def check_appimage(temporary):
         actual_version = subprocess.check_output(
             [*command, "--version"], cwd=destination, text=True, timeout=60
         ).strip()
-        assert actual_version == f"xuan {VERSION}", actual_version
+        check_version(actual_version)
     print(
         f"Verified {package.name}: payload, bundled glibc/loader, static runtime, FUSE-free launch"
     )
