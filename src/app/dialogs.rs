@@ -121,6 +121,20 @@ impl EditorApp {
             }
         }
         self.close_dialog(ctx);
+        if let Some(notice) = self.notice.clone() {
+            let mut dismiss = false;
+            widgets::Window::new(tr("Imported with changes"))
+                .id("import_notice")
+                .default_width(460.0)
+                .show(ctx, |ui| {
+                    ui.label(notice);
+                    ui.add_space(12.0);
+                    dismiss = widgets::primary_button(ui, tr("OK")).clicked();
+                });
+            if dismiss {
+                self.notice = None;
+            }
+        }
         if let Some(error) = self.error.clone() {
             let mut dismiss = false;
             widgets::Window::new(tr("Couldn't complete the operation"))

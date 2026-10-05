@@ -12,7 +12,27 @@ Saving validates the document, writes a sibling temporary archive, flushes it, a
 
 Limits: 30,000 pixels per canvas/image dimension, 100 megapixels per canvas, 100 megapixels of layer assets plus 100 megapixels of masks, 10,000 layers, 64 nested group levels, 4 MiB manifest JSON, and 512 MiB encoded asset files.
 
-The importer accepts Compositor package versions 1–7 (version 8 adds guides; importing them is tracked in issue #1), including Swift's alternating-key enum dictionaries, individual color channels, mask placement/link flags, grain parameters, and live shape styles. Import is one-way: Save creates a `.xuan` file and leaves the `.comp` package untouched.
+## Importing Compositor packages
+
+The importer reads Compositor `.comp` directory packages, format versions 1–11 (Compositor 1.4.5 writes 11), including Swift's alternating-key enum dictionaries, individual color channels, mask placement/link flags, grain parameters, and live shape styles. Import is one-way: Save creates a `.xuan` file and leaves the `.comp` package untouched. A newer version is refused rather than half read.
+
+| Upstream field (version) | In Xuan |
+| --- | --- |
+| folder `opacity` (8) | Folder opacity, multiplied into every layer inside |
+| top-level `guides` (8) | `guides`; the project then saves as `.xuan` version 5. Packages hold no layout grid (upstream keeps it as an app preference), so `grid` stays unset |
+| `Invert` adjustment (7) | Invert adjustment layer |
+| `Gaussian Blur`, `Motion Blur`, `Add Noise` adjustments (9) | Filter layers. Settings beyond Xuan's ranges are reduced (blur radius to 100, motion distance to 200, noise amount to 100); the motion angle is negated because upstream measures it counterclockwise; Gaussian noise becomes uniform and the noise seed is not kept. Filter layers ignore blend modes and clipping |
+| `Black & White`, `Color Balance` adjustments (7) | Left out, with the layer |
+| `text` (content, `fontName`, `fontSize`, color) | Editable text: the PostScript name becomes a family plus bold/italic (`HelveticaNeue-BoldItalic` → Helvetica Neue, bold, italic) |
+| `text` alignment, `tracking`, `leading`, `boxSize`; `colorRuns` (10); `fontRuns` (11) | Not represented. The layer's PNG keeps the original look until the text is edited in Xuan |
+| text over 16 KiB or larger than 1024 px | Imported as plain pixels |
+| Photoshop blend modes Xuan lacks (Linear Burn, Linear Dodge (Add), Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide) | Drawn as Normal |
+| `effects` (stroke, shadow, color overlay, inner shadow, outer/inner glow) | Left out |
+| `shape` of kind `Line` | Imported as plain pixels |
+
+Whatever is left out or changed is counted, and the app shows a summary after opening the package ("Imported with changes …"). Clipping masks that relied on a left-out layer, or on a filter layer, are released and counted too.
+
+The package is untrusted input. Besides the limits above, the importer rejects (and opens nothing for) manifests that break upstream's rules: unknown versions, blend modes, adjustment kinds or shape kinds; fields used before the version that introduced them (folder opacity or guides before 8, blur/noise before 9, `colorRuns` before 10, `fontRuns` before 11); folders with a blend mode other than Normal; more than 1,000 guides, duplicate guide IDs or positions beyond ±1,000,000; values outside upstream's ranges (blur radius 0.1–250, motion angle ±90 and distance 1–2,000, noise 0.1–400, font size 1–2,000, colors 0–1, tracking −100–1,000, leading 0–5,000, paragraph boxes 16–30,000 per side and 200 million square pixels); text over 100,000 UTF-16 units; text runs that overlap, are empty, overflow or end past the text; run font names over 200 characters or with line breaks; text on layers without pixels; malformed `effects` records; asset names other than `<layer UUID>.png` / `.mask.png`, symlinked assets and paths leaving the package; more than 64 nested folder levels and folder cycles. The manifest is limited to 4 MiB (and serde_json's nesting limit of 128), each asset to 512 MiB, and decoded images to 30,000 pixels per side and 100 megapixels of layers plus 100 megapixels of masks. Hierarchy and clipping checks use an index, so a 10,000-layer project validates in linear time.
 
 ## Embedded RAW (version 2)
 

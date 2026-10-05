@@ -628,3 +628,17 @@ Snap / Lock guides	对齐 / 锁定参考线
 Drag from a ruler	从标尺拖动
 New guide	新建参考线
 No document open	未打开文档
+Imported with changes	已导入（有改动）
+Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
+Layer effects (stroke, shadow, color overlay, glow)	图层效果（描边、阴影、颜色叠加、发光）
+Blend mode	混合模式
+drawn as Normal	按“正常”绘制
+Adjustment layer	调整图层
+left out	已省略
+Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
+Per-letter text colors (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
+Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
+Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以像素导入）
+Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
+Blur or noise settings adapted to Xuan	已按 Xuan 调整的模糊或杂色设置
+Clipping masks on blur, noise or left-out layers	模糊、杂色或已省略图层上的剪贴蒙版

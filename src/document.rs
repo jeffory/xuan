@@ -571,13 +571,15 @@ impl Document {
         if let Some(grid) = &self.grid {
             grid.validate()?;
         }
-        let ids: HashSet<_> = self.layers.iter().map(|layer| layer.id).collect();
+        // Indexed so hostile files with many deeply nested layers validate in linear time.
+        let ids: std::collections::HashMap<_, _> =
+            self.layers.iter().map(|layer| (layer.id, layer)).collect();
         ensure!(
             ids.len() == self.layers.len(),
             "Duplicate layer identifiers"
         );
         ensure!(
-            self.active.is_none_or(|id| ids.contains(&id)),
+            self.active.is_none_or(|id| ids.contains_key(&id)),
             "Missing active layer"
         );
         let mut pixels = 0_u64;
@@ -661,10 +663,9 @@ impl Document {
                     visited.insert(id) && visited.len() <= 65,
                     "Cyclic or excessively nested groups"
                 );
-                let container = self
-                    .layers
-                    .iter()
-                    .find(|l| l.id == id)
+                let container = ids
+                    .get(&id)
+                    .copied()
                     .ok_or_else(|| anyhow::anyhow!("Missing parent layer"))?;
                 ensure!(
                     container.group || (container.can_attach_effects() && child.is_effect()),
@@ -680,7 +681,7 @@ impl Document {
                     !layer.group && visited.insert(id) && visited.len() <= 257,
                     "Invalid clipping mask graph"
                 );
-                let target = self.layers.iter().find(|l| l.id == id);
+                let target = ids.get(&id).copied();
                 ensure!(
                     target.is_some_and(|l| !l.group && !l.standalone_mask && l.filter.is_none()),
                     "Missing clipping source"

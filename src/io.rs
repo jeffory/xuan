@@ -9,20 +9,21 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use image::{DynamicImage, ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
-    blend::BlendMode,
-    document::{Adjustment, Document, Layer, MAX_PIXELS, Mask, Point, Transform, validate_size},
+    document::{Document, MAX_PIXELS, validate_size},
     render,
 };
 
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
 const MAX_ASSET: u64 = 512 * 1024 * 1024;
 
+mod compositor;
 mod heif;
+
+pub use compositor::{Dropped, ImportReport};
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -255,311 +256,19 @@ fn package_read(root: &Path, relative: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn number(value: &Value, key: &str, default: f32) -> f32 {
-    value[key].as_f64().map_or(default, |v| v as f32)
-}
-fn identifier(value: &Value) -> Result<Option<Uuid>> {
-    value
-        .as_str()
-        .map(Uuid::parse_str)
-        .transpose()
-        .map_err(Into::into)
-}
-
-fn comp_transform(value: &Value) -> Result<Transform> {
-    let pair = |value: &Value, a: &str, b: &str| -> Result<(f32, f32)> {
-        let (x, y) = if let Some(values) = value.as_array() {
-            ensure!(values.len() == 2, "Invalid transform coordinates");
-            (values[0].as_f64(), values[1].as_f64())
-        } else {
-            (value[a].as_f64(), value[b].as_f64())
-        };
-        Ok((
-            x.context("Missing transform coordinate")? as f32,
-            y.context("Missing transform coordinate")? as f32,
-        ))
-    };
-    let (x, y) = pair(&value["origin"], "x", "y")?;
-    let (width, height) = pair(&value["size"], "width", "height")?;
-    let t = Transform {
-        x,
-        y,
-        width,
-        height,
-        rotation: number(value, "rotation", 0.0),
-        flip_x: value["flipX"].as_bool().unwrap_or(false),
-        flip_y: value["flipY"].as_bool().unwrap_or(false),
-        warp: None,
-    };
-    ensure!(t.valid(), "Invalid Compositor layer transform");
-    Ok(t)
-}
-
-// Swift dictionaries with enum keys are encoded as alternating key/value arrays.
-fn swift_dictionary_get<'a>(value: &'a Value, key: &str) -> &'a Value {
-    if let Some(array) = value.as_array() {
-        for pair in array.as_chunks::<2>().0 {
-            if pair[0].as_str() == Some(key) {
-                return &pair[1];
-            }
-        }
-        &Value::Null
-    } else {
-        &value[key]
-    }
-}
-
-fn comp_adjustment(value: &Value) -> Result<Adjustment> {
-    let kind = value["kind"]
-        .as_str()
-        .context("Adjustment kind is missing")?;
-    let result = match kind {
-        "Hue/Saturation" => {
-            let hsv = &value["hsvSettings"];
-            if hsv.is_null() {
-                Adjustment::HueSaturation {
-                    hue: number(value, "hue", 0.0),
-                    saturation: number(value, "saturation", 0.0),
-                    lightness: number(value, "lightness", 0.0),
-                    colorize: value["colorize"].as_bool().unwrap_or(false),
-                }
-            } else {
-                let mut settings = crate::color::HueSettings {
-                    range: crate::color::HueSettings::RANGES
-                        .iter()
-                        .position(|name| Some(*name) == hsv["range"].as_str())
-                        .unwrap_or(0),
-                    colorize: hsv["colorize"].as_bool().unwrap_or(false),
-                    invert_range: hsv["invertRange"].as_bool().unwrap_or(false),
-                    ..Default::default()
-                };
-                for (index, name) in crate::color::HueSettings::RANGES.iter().enumerate() {
-                    let adjustment = swift_dictionary_get(&hsv["adjustments"], name);
-                    settings.adjustments[index] = [
-                        number(adjustment, "hue", 0.0),
-                        number(adjustment, "saturation", 0.0),
-                        number(adjustment, "lightness", 0.0),
-                    ];
-                    let band = swift_dictionary_get(&hsv["bands"], name);
-                    if !band.is_null() {
-                        settings.bands[index] = [
-                            number(band, "falloffStart", 0.0),
-                            number(band, "rangeStart", 0.0),
-                            number(band, "rangeEnd", 360.0),
-                            number(band, "falloffEnd", 360.0),
-                        ];
-                    }
-                }
-                Adjustment::HueRanges {
-                    settings: Box::new(settings),
-                }
-            }
-        }
-        "Levels" => {
-            let input = value["levels"]["ranges"]
-                .as_array()
-                .context("Missing levels ranges")?;
-            ensure!(input.len() == 4, "Invalid levels ranges");
-            let ranges = std::array::from_fn(|i| {
-                let r = &input[i];
-                [
-                    number(r, "black", 0.0),
-                    number(r, "gamma", 1.0),
-                    number(r, "white", 255.0),
-                    number(r, "outputBlack", 0.0),
-                    number(r, "outputWhite", 255.0),
-                ]
-            });
-            Adjustment::LevelsChannels { ranges }
-        }
-        "Curves" => {
-            let input = value["curves"]["channels"]
-                .as_array()
-                .context("Missing curve channels")?;
-            ensure!(
-                input.len() == 4 && input.iter().all(|c| c.is_array()),
-                "Invalid curve channels"
-            );
-            let channels = std::array::from_fn(|i| {
-                input[i]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|p| Point::new(number(p, "x", 0.0) / 255.0, number(p, "y", 0.0) / 255.0))
-                    .collect()
-            });
-            Adjustment::CurvesChannels { channels }
-        }
-        "Exposure" => {
-            let settings = &value["exposureSettings"];
-            Adjustment::Exposure {
-                exposure: number(settings, "exposure", 0.0),
-                offset: number(settings, "offset", 0.0),
-                gamma: number(settings, "gamma", 1.0),
-            }
-        }
-        "Gradient Map" => {
-            let color = |key| {
-                let c = &value["gradientMapSettings"][key];
-                [
-                    number(c, "red", if key == "shadows" { 0.0 } else { 1.0 }),
-                    number(c, "green", if key == "shadows" { 0.0 } else { 1.0 }),
-                    number(c, "blue", if key == "shadows" { 0.0 } else { 1.0 }),
-                    1.0,
-                ]
-                .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-            };
-            Adjustment::GradientMap {
-                shadows: color(
-                    if value["gradientMapSettings"]["reversed"]
-                        .as_bool()
-                        .unwrap_or(false)
-                    {
-                        "highlights"
-                    } else {
-                        "shadows"
-                    },
-                ),
-                highlights: color(
-                    if value["gradientMapSettings"]["reversed"]
-                        .as_bool()
-                        .unwrap_or(false)
-                    {
-                        "shadows"
-                    } else {
-                        "highlights"
-                    },
-                ),
-            }
-        }
-        "Grain" => {
-            let settings = &value["grainSettings"];
-            Adjustment::FilmGrain {
-                amount: number(settings, "amount", 0.0),
-                size: number(settings, "size", 1.0),
-                roughness: number(settings, "roughness", 50.0),
-                seed: settings["seed"].as_u64().unwrap_or(1) as u32,
-            }
-        }
-        _ => bail!("Unsupported Compositor adjustment: {kind}"),
-    };
-    crate::effects::validate_adjustment(&result)?;
-    Ok(result)
-}
-
+/// Open a Compositor `.comp` package (format versions 1–11); see [`compositor::load`].
 pub fn load_compositor(path: &Path) -> Result<Document> {
-    let manifest: Value = serde_json::from_slice(&package_read(
-        path,
-        Path::new("manifest.json"),
-        MAX_MANIFEST,
-    )?)?;
-    ensure!(
-        manifest["format"] == "com.compositor.project",
-        "Not a Compositor project"
-    );
-    let version = manifest["version"]
-        .as_u64()
-        .context("Project version missing")?;
-    // TODO(#1): Compositor 8+ adds a `guides` array ({id, axis: "horizontal"|"vertical", position})
-    // to the manifest and folder opacity. When the importer accepts version 8, map the guides onto
-    // `Document::guides` with `crate::layout::Guide` and check them with `validate_guides`. The
-    // layout grid is an app preference upstream, so packages carry no grid to import.
-    ensure!(
-        (1..=7).contains(&version),
-        "Unsupported Compositor project version {version}"
-    );
-    ensure!(
-        manifest["colorSpace"].as_str().unwrap_or("sRGB") == "sRGB",
-        "Unsupported color space"
-    );
-    let width = u32::try_from(manifest["width"].as_u64().context("Missing canvas width")?)?;
-    let height = u32::try_from(
-        manifest["height"]
-            .as_u64()
-            .context("Missing canvas height")?,
-    )?;
-    let mut document = Document::new(width, height)?;
-    document.id = identifier(&manifest["documentID"])?.context("Missing document ID")?;
-    document.resolution = number(&manifest, "resolution", 72.0);
-    document.layers.clear();
-    let records = manifest["layers"].as_array().context("Missing layers")?;
-    ensure!(records.len() <= 10_000, "Too many layers");
-    let mut image_pixels = 0;
-    let mut mask_pixels = 0;
-    for record in records {
-        let id = identifier(&record["id"])?.context("Missing layer ID")?;
-        let mut layer = Layer::blank(
-            record["name"].as_str().context("Missing layer name")?,
-            width,
-            height,
-        );
-        layer.id = id;
-        layer.visible = record["isVisible"].as_bool().unwrap_or(true);
-        layer.transform = comp_transform(&record["transform"])?;
-        layer.parent = identifier(&record["parentID"])?;
-        layer.group = record["isGroup"].as_bool().unwrap_or(false);
-        layer.opacity = number(record, "opacity", 1.0);
-        let blend_name = record["blendMode"].as_str().unwrap_or("Normal");
-        layer.blend = BlendMode::ALL
-            .into_iter()
-            .find(|b| b.name() == blend_name)
-            .context("Unknown blend mode")?;
-        layer.clip_to = identifier(&record["maskSourceID"])?;
-        if let Some(name) = record["imageFile"].as_str() {
-            ensure!(
-                name.eq_ignore_ascii_case(&format!("{id}.png")),
-                "Unsafe layer asset path"
-            );
-            let bytes = package_read(path, &Path::new("images").join(name), MAX_ASSET)?;
-            layer.pixels = Some(Arc::new(decode_image(bytes, &mut image_pixels)?.to_rgba8()));
-        }
-        if let Some(name) = record["maskFile"].as_str() {
-            ensure!(
-                name.eq_ignore_ascii_case(&format!("{id}.mask.png")),
-                "Unsafe mask asset path"
-            );
-            let bytes = package_read(path, &Path::new("images").join(name), MAX_ASSET)?;
-            layer.mask = Some(Mask {
-                pixels: Arc::new(decode_image(bytes, &mut mask_pixels)?.to_luma8()),
-                enabled: record["maskEnabled"].as_bool().unwrap_or(true),
-                linked: record["maskLinked"].as_bool().unwrap_or(true),
-                placement: if record["maskPlacement"].is_null() {
-                    None
-                } else {
-                    Some(comp_transform(&record["maskPlacement"])?)
-                },
-            });
-        }
-        if let Some(shape) = record["shape"].as_object() {
-            let radius = shape
-                .get("cornerRadius")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0) as f32;
-            ensure!(radius.is_finite() && radius >= 0.0, "Invalid shape radius");
-            let kind = if record["shape"]["kind"] == "Ellipse" {
-                crate::paint::ShapeKind::Ellipse
-            } else if radius > 0.0 {
-                crate::paint::ShapeKind::RoundedRectangle
-            } else {
-                crate::paint::ShapeKind::Rectangle
-            };
-            let color =
-                |key| (number(&record["shape"], key, 0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
-            layer.shape = Some(crate::document::ShapeStyle {
-                kind,
-                color: [color("red"), color("green"), color("blue"), 255],
-                corner_radius: radius,
-            });
-        }
-        if !record["adjustment"].is_null() {
-            layer.adjustment = Some(comp_adjustment(&record["adjustment"])?);
-        }
-        document.layers.push(layer);
+    compositor::load(path).map(|(document, _)| document)
+}
+
+/// Open a project like [`load`], also returning what a Compositor import left out. `.xuan`
+/// projects always load completely, so their report is empty.
+pub fn load_with_report(path: &Path) -> Result<(Document, ImportReport)> {
+    if path.is_dir() {
+        compositor::load(path)
+    } else {
+        Ok((load(path)?, ImportReport::default()))
     }
-    document.active = identifier(&manifest["activeLayerID"])?;
-    document.selected = document.active.into_iter().collect();
-    document.validate()?;
-    Ok(document)
 }
 
 pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
@@ -614,7 +323,9 @@ pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::{Layer, Mask, Transform};
     use image::{GrayImage, Luma, Rgba};
+    use serde_json::Value;
 
     #[test]
     fn exports_all_formats_and_png_print_resolution() {
@@ -644,30 +355,6 @@ mod tests {
         let density = reader.info().pixel_dims.unwrap();
         assert_eq!(density.xppu, 11811);
         assert_eq!(density.unit, png::Unit::Meter);
-    }
-
-    #[test]
-    fn imports_swift_enum_dictionaries_and_individual_color_channels() {
-        let value = serde_json::json!({"kind":"Hue/Saturation", "hsvSettings": {
-            "range":"Reds", "colorize":false, "invertRange":true,
-            "adjustments":["Master", {"hue":5,"saturation":0,"lightness":0}, "Reds", {"hue":40,"saturation":-20,"lightness":3}],
-            "bands":["Reds", {"falloffStart":310,"rangeStart":340,"rangeEnd":20,"falloffEnd":50}]
-        }});
-        let Adjustment::HueRanges { settings } = comp_adjustment(&value).unwrap() else {
-            panic!("expected selective hue settings");
-        };
-        assert_eq!(settings.range, 1);
-        assert_eq!(settings.adjustments[1], [40.0, -20.0, 3.0]);
-        assert_eq!(settings.bands[1], [310.0, 340.0, 20.0, 50.0]);
-        assert!(settings.invert_range);
-        let default =
-            serde_json::json!({"black":0,"gamma":1,"white":255,"outputBlack":0,"outputWhite":255});
-        let mut value = serde_json::json!({"kind":"Levels","levels":{"ranges":[default,default,default,default]}});
-        value["levels"]["ranges"][1]["gamma"] = serde_json::json!(1.5);
-        let Adjustment::LevelsChannels { ranges } = comp_adjustment(&value).unwrap() else {
-            panic!("expected channel levels");
-        };
-        assert_eq!(ranges[1][1], 1.5);
     }
 
     #[test]
@@ -863,22 +550,5 @@ mod tests {
         future["version"] = serde_json::json!(7);
         write_manifest(&path, &future);
         assert!(load(&path).is_err());
-    }
-
-    #[test]
-    fn imports_swift_transform_and_rejects_path_traversal() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::create_dir(directory.path().join("images")).unwrap();
-        let id = Uuid::new_v4();
-        let mut value = serde_json::json!({"format":"com.compositor.project", "version":7, "documentID":Uuid::new_v4(), "width":2, "height":2, "activeLayerID":id,
-            "layers":[{"id":id,"name":"Test", "isVisible":true,"transform":{"origin":[1,2],"size":[2,2],"rotation":30,"flipX":true,"flipY":false}}]});
-        let manifest = directory.path().join("manifest.json");
-        fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
-        let document = load_compositor(directory.path()).unwrap();
-        assert_eq!(document.layers[0].transform.rotation, 30.0);
-        assert!(document.layers[0].transform.flip_x);
-        value["layers"][0]["imageFile"] = Value::String("../../outside.png".into());
-        fs::write(manifest, serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(load_compositor(directory.path()).is_err());
     }
 }

@@ -215,13 +215,16 @@ fn camera_label(make: &str, model: &str) -> Option<String> {
 
 fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
     let source = RawSource::new_from_slice(bytes);
-    let header = rawler::decode_dummy(&source).map_err(|e| decoder_error(&source, e))?;
-    validate_size(header.width.try_into()?, header.height.try_into()?)?;
-    validate_sensor(&header)?;
-    let decoder = rawler::get_decoder(&source)?;
-    let params = RawDecodeParams::default();
-    let metadata = decoder.raw_metadata(&source, &params)?;
-    let raw = decoder.raw_image(&source, &params, false)?;
+    // Sensor layout is validated only on the fully decoded image: the header-only scan
+    // is not guaranteed to report the same cpp/CFA as the full decode.
+    let header = rawler::decode_dummy(&source).map_err(|e| decoder_error(&source, e));
+    let (metadata, raw) = bounded_full_decode(header, || {
+        let decoder = rawler::get_decoder(&source)?;
+        let params = RawDecodeParams::default();
+        let metadata = decoder.raw_metadata(&source, &params)?;
+        let raw = decoder.raw_image(&source, &params, false)?;
+        Ok((metadata, raw))
+    })?;
     validate_size(raw.width.try_into()?, raw.height.try_into()?)?;
     validate_sensor(&raw)?;
     let matrix = raw
@@ -293,6 +296,18 @@ fn as_shot_white_balance(wb_coeffs: [f32; 4], xyz_to_camera: &[[f32; 3]; 3]) -> 
     let daylight = std::array::from_fn(|i| white[1] / white[i]);
     ensure!(usable(&daylight), "Invalid camera white balance");
     Ok(daylight)
+}
+
+/// Run `full` (which allocates the pixel buffer) only after the header-only scan has
+/// established that the image size is within limits. If the header scan fails there is no
+/// trustworthy size bound, so its error is returned without a full decode.
+fn bounded_full_decode<T>(
+    header: Result<rawler::RawImage>,
+    full: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let header = header?;
+    validate_size(header.width.try_into()?, header.height.try_into()?)?;
+    full()
 }
 
 fn validate_sensor(raw: &rawler::RawImage) -> Result<()> {

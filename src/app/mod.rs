@@ -486,6 +486,8 @@ pub struct EditorApp {
     anchor: [f32; 2],
     effect: Option<EffectEdit>,
     error: Option<String>,
+    /// A non-fatal message about a finished operation, such as what an import left out.
+    notice: Option<String>,
     status: String,
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
@@ -649,6 +651,7 @@ impl EditorApp {
             anchor: [0.5, 0.5],
             effect: None,
             error: None,
+            notice: None,
             status: String::new(),
             rename: None,
             close_tab: None,
@@ -800,8 +803,12 @@ impl EditorApp {
             return;
         }
         let project = path.is_dir() || path.extension().is_some_and(|e| e == "xuan");
+        let mut report = io::ImportReport::default();
         let result = if project {
-            io::load(path)
+            io::load_with_report(path).map(|(document, imported)| {
+                report = imported;
+                document
+            })
         } else {
             io::import_image(path)
                 .and_then(|image| {
@@ -855,6 +862,10 @@ impl EditorApp {
                 self.current = self.sessions.len() - 1;
                 self.mask_target = false;
                 self.dialog = None;
+                if let Some(summary) = report.summary() {
+                    self.status = tr("Imported with changes").into();
+                    self.notice = Some(summary);
+                }
             }
             Err(error) => {
                 self.error = Some(format!(
