@@ -29,6 +29,8 @@ use super::{Dialog, EditorApp, Session, Tool, shortcuts};
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Shortest time between two links a plugin opens.
+const LINK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Identifier of a plugin pane in the sidebar layout.
 pub(super) fn pane_key(plugin: &str, pane: &str) -> String {
@@ -62,6 +64,8 @@ pub(super) struct PluginState {
     pub manager_selected: Option<String>,
     revisions: HashMap<Uuid, u64>,
     pub shortcuts: Vec<(Shortcut, String, String)>,
+    /// When a plugin last opened a link.
+    last_link: Option<std::time::Instant>,
 }
 
 enum Pending {
@@ -648,7 +652,22 @@ impl EditorApp {
                     self.open_path(Path::new(&path), false);
                     Ok(json!({"ok": true}))
                 } else if let Some(url) = string("url") {
-                    open_url(&url).map_err(internal)?;
+                    let url =
+                        checked_url(&url).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                    // One link at a time, so a plugin cannot flood the browser.
+                    let now = std::time::Instant::now();
+                    if self
+                        .plugins
+                        .last_link
+                        .is_some_and(|last| now.duration_since(last) < LINK_INTERVAL)
+                    {
+                        return Err(RpcError::new(
+                            protocol::RATE_LIMITED,
+                            "Links can be opened at most once a second",
+                        ));
+                    }
+                    self.plugins.last_link = Some(now);
+                    self.context.open_url(egui::OpenUrl::new_tab(url));
                     Ok(json!({"ok": true}))
                 } else {
                     Err(RpcError::invalid_params("`path` or `url` is required"))
@@ -1843,30 +1862,60 @@ fn timestamp() -> String {
     )
 }
 
-fn open_url(url: &str) -> Result<()> {
+/// A link a plugin may open: an absolute http(s) URL with a host and no
+/// credentials, normalized. Links are opened by the platform's browser
+/// launcher, never through a shell.
+fn checked_url(text: &str) -> Result<String> {
+    let url = url::Url::parse(text.trim()).context("Not a valid link")?;
     ensure!(
-        url.starts_with("https://") || url.starts_with("http://"),
+        matches!(url.scheme(), "http" | "https"),
         "Only http(s) links can be opened"
     );
-    #[cfg(windows)]
-    let mut command = {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "", url]);
-        c
-    };
-    #[cfg(not(windows))]
-    let mut command = {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
-    command.spawn().context("Cannot open the link")?;
-    Ok(())
+    ensure!(
+        url.host_str().is_some_and(|host| !host.is_empty()),
+        "The link has no host"
+    );
+    ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "Links with credentials cannot be opened"
+    );
+    Ok(url.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugins_may_only_open_web_links_with_a_host() {
+        assert_eq!(
+            checked_url(" https://example.com/a?b=1 ").unwrap(),
+            "https://example.com/a?b=1"
+        );
+        assert_eq!(
+            checked_url("http://Example.COM").unwrap(),
+            "http://example.com/"
+        );
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "mailto:a@example.com",
+            "ftp://example.com/",
+            "https://",
+            "https://user:pw@example.com/",
+            "https://cloud.comfy.org@evil.com/",
+            "example.com",
+            "",
+        ] {
+            assert!(checked_url(bad).is_err(), "{bad}");
+        }
+        // Shell metacharacters stay inside the URL: no shell ever sees it.
+        let url = checked_url("https://x.example/&calc|a^b%PATH%").unwrap();
+        assert!(url.starts_with("https://x.example/"), "{url}");
+        let source = include_str!("plugins.rs");
+        let shell = ["Command::new(\"cmd\")", "Command::new(\"xdg-open\")"];
+        assert!(shell.iter().all(|s| !source.contains(s)));
+    }
 
     #[test]
     fn timestamps_are_rfc3339_utc() {
