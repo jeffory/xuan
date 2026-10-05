@@ -255,6 +255,21 @@ class Job:
         return self.source.get("mask") if self.source else None
 
     @property
+    def extension(self) -> Optional[Dict[str, int]]:
+        """How far the source was extended (``source.extend``), as
+        ``{"left", "top", "right", "bottom"}`` in document pixels, or None."""
+        extend = self.source.get("extend") if self.source else None
+        if not extend:
+            return None
+        return {side: int(extend.get(side) or 0) for side in Job.SIDES}
+
+    @property
+    def extend_mask_path(self) -> Optional[str]:
+        """A grey PNG the size of ``source_path``: white over the new canvas
+        an extended source was padded with, black over the old image."""
+        return self.source.get("extend_mask") if self.source else None
+
+    @property
     def regions(self) -> List[Dict[str, Any]]:
         for value in self.inputs.values():
             if isinstance(value, list) and value and isinstance(value[0], dict) and "index" in value[0]:
@@ -345,6 +360,21 @@ class Job:
     @staticmethod
     def edit(edits: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {"kind": "edit", "edits": edits}
+
+    SIDES = ("left", "top", "right", "bottom")
+
+    @staticmethod
+    def extend_canvas(left: int = 0, top: int = 0, right: int = 0, bottom: int = 0) -> Dict[str, Any]:
+        """An ``extend_canvas`` edit: grow the canvas by whole document
+        pixels on each side, moving layers and guides like Canvas Size. Needs
+        ``document = "edit"``. Pass ``**job.extension`` to grow the canvas by
+        what the source was extended by; an image returned with
+        ``fit_source=True`` then covers the whole new canvas."""
+        sides = {"left": left, "top": top, "right": right, "bottom": bottom}
+        for side, value in sides.items():
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{side} must be a whole number of pixels, 0 or more")
+        return {"op": "extend_canvas", **sides}
 
     @staticmethod
     def text(text: str) -> Dict[str, Any]:

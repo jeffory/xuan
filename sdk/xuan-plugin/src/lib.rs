@@ -282,6 +282,56 @@ pub struct Source {
     /// `source.mask = "selection"` (white selected, black not).
     #[serde(default)]
     pub mask: Option<PathBuf>,
+    /// New canvas the source was padded with, in document pixels, when the
+    /// action sets `source.extend`.
+    #[serde(default)]
+    pub extend: Option<Margins>,
+    /// A grey PNG the size of `path`, white over the new canvas and black
+    /// over the old image, when the source was extended.
+    #[serde(default)]
+    pub extend_mask: Option<PathBuf>,
+}
+
+/// Pixels on each side of the canvas: what `source.extend` added, and what
+/// an `extend_canvas` edit adds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Margins {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+}
+
+impl Margins {
+    pub fn new(left: u32, top: u32, right: u32, bottom: u32) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+}
+
+/// Document edits for [`Output::edit`] and [`Host::edit`].
+pub mod edits {
+    use super::Margins;
+    use serde_json::{json, Value};
+
+    /// Grow the canvas by `margins` document pixels, moving the layers and
+    /// guides like Canvas Size. Needs `document = "edit"`. In a result, images
+    /// and masks placed with `fit = "source"` on an extended source then cover
+    /// the whole new canvas.
+    pub fn extend_canvas(margins: Margins) -> Value {
+        json!({
+            "op": "extend_canvas",
+            "left": margins.left,
+            "top": margins.top,
+            "right": margins.right,
+            "bottom": margins.bottom,
+        })
+    }
 }
 
 /// One `action/run`.
@@ -332,6 +382,17 @@ impl Job {
     /// a grey PNG with the same size and crop as [`Job::source_path`].
     pub fn selection_mask_path(&self) -> Option<&Path> {
         self.source.as_ref().and_then(|s| s.mask.as_deref())
+    }
+
+    /// How far the source was extended (`source.extend`), in document pixels.
+    pub fn extension(&self) -> Option<Margins> {
+        self.source.as_ref().and_then(|s| s.extend)
+    }
+
+    /// The mask of the new canvas around an extended source, white where it
+    /// was padded, with the same size and grid as [`Job::source_path`].
+    pub fn extend_mask_path(&self) -> Option<&Path> {
+        self.source.as_ref().and_then(|s| s.extend_mask.as_deref())
     }
 
     /// A named input, deserialized.
@@ -555,6 +616,12 @@ impl Output {
 
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
+    }
+
+    /// Document edits applied with the result, as one undo step; see
+    /// [`edits`].
+    pub fn edit(edits: Vec<Value>) -> Self {
+        Self::Edit { edits }
     }
 }
 
@@ -1104,6 +1171,33 @@ mod tests {
         assert_eq!(Output::text("hi").fit_source(), Output::text("hi"));
         assert_eq!(ui::png_data_url(b"hi"), "data:image/png;base64,aGk=");
         assert_eq!(ui::png_data_url(b"hello"), "data:image/png;base64,aGVsbG8=");
+    }
+
+    #[test]
+    fn extended_sources_and_extend_canvas_edits_serialize() {
+        let source: Source = serde_json::from_value(json!({
+            "path": "/j/source.png", "width": 12, "height": 16,
+            "extend": {"left": 4, "top": 2, "right": 0, "bottom": 6},
+            "extend_mask": "/j/extend.png",
+        }))
+        .unwrap();
+        assert_eq!(source.extend, Some(Margins::new(4, 2, 0, 6)));
+        assert_eq!(
+            source.extend_mask.as_deref(),
+            Some(Path::new("/j/extend.png"))
+        );
+        let plain: Source = serde_json::from_value(
+            json!({"path": "/j/source.png", "width": 8, "height": 6, "extend": null}),
+        )
+        .unwrap();
+        assert!(plain.extend.is_none() && plain.extend_mask.is_none());
+        let output = Output::edit(vec![edits::extend_canvas(Margins::new(4, 2, 0, 6))]);
+        assert_eq!(
+            serde_json::to_value(&output).unwrap(),
+            json!({"kind": "edit", "edits": [
+                {"op": "extend_canvas", "left": 4, "top": 2, "right": 0, "bottom": 6}
+            ]})
+        );
     }
 
     #[test]
