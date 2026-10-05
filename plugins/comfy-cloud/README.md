@@ -52,3 +52,12 @@ workflows whose node classes it does not know and names the node in the error.
 Results come back as a proposal above the canvas: **Compare**, **Accept** or
 **Discard**. Precise Edit adds a new layer masked to the boxes; Generate asks
 whether to add a layer or open a new document.
+
+## Tests
+
+The download and redirect checks that keep the API key on the configured
+server have unit tests that need only the system Python:
+
+```sh
+python3 -m unittest discover -s plugins/comfy-cloud
+```

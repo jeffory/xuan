@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -42,6 +43,78 @@ history_lock = threading.Lock()
 
 # --- HTTP -----------------------------------------------------------------
 
+# Hosts the manifest declares under permissions.network; outputs are only
+# downloaded from these (or from the configured server).
+NETWORK = ("cloud.comfy.org", "*.run.comfy.app")
+
+
+def host_allowed(host, patterns=NETWORK):
+    """Whether ``host`` is one of ``patterns``; ``*.x`` matches subdomains of x."""
+    host = (host or "").lower().rstrip(".")
+    if not host:
+        return False
+    for pattern in patterns:
+        pattern = pattern.lower()
+        if pattern.startswith("*."):
+            if host.endswith(pattern[1:]) and len(host) > len(pattern) - 1:
+                return True
+        elif host == pattern:
+            return True
+    return False
+
+
+def _origin(parsed):
+    port = parsed.port or {"https": 443, "http": 80}.get(parsed.scheme)
+    return (parsed.scheme, (parsed.hostname or "").lower(), port)
+
+
+def same_server(url, base):
+    """Whether ``url`` is on exactly the configured server: same scheme, host
+    and port, and no user info (``https://server@evil.example`` is evil.example)."""
+    target = urllib.parse.urlsplit(url)
+    if target.username is not None or target.password is not None:
+        return False
+    return bool(target.hostname) and _origin(target) == _origin(urllib.parse.urlsplit(base))
+
+
+def download_target(url, base, patterns=NETWORK):
+    """Resolve an output URL. Returns ``(url, send_key)``: the API key goes only
+    to the configured server over https; other https hosts the manifest declares
+    get no key; anything else (other hosts, http, file:, …) is refused."""
+    if url.startswith("/") and not url.startswith("//"):
+        url = base + url
+    target = urllib.parse.urlsplit(url)
+    if same_server(url, base) and target.scheme in ("https", "http"):
+        return url, target.scheme == "https"
+    if (
+        target.scheme == "https"
+        and target.username is None
+        and target.password is None
+        and host_allowed(target.hostname, patterns)
+    ):
+        return url, False
+    raise RpcError(INTERNAL_ERROR, f"refusing to download from {url[:200]}")
+
+
+class _Redirects(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only to https (or the same server), and never carry the
+    API key to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        source = urllib.parse.urlsplit(req.full_url)
+        target = urllib.parse.urlsplit(newurl)
+        if target.scheme != "https" and _origin(target) != _origin(source):
+            raise urllib.error.HTTPError(newurl, code, "refusing a non-https redirect", headers, fp)
+        if _origin(target) != _origin(source):
+            new.remove_header("Authorization")
+        return new
+
+
+_opener = urllib.request.build_opener(_Redirects)
+
 
 class Client:
     def __init__(self):
@@ -50,11 +123,11 @@ class Client:
         if not self.key and "cloud.comfy.org" in self.base:
             raise NeedsSetup("Enter your Comfy API key in the plugin settings.")
 
-    def _request(self, method, path, body=None, headers=None, raw=False):
-        url = self.base + path
+    def _request(self, method, path, body=None, headers=None, raw=False, url=None, send_key=True):
+        url = url or self.base + path
         data = None
         hdrs = {"Accept": "application/json"}
-        if self.key:
+        if self.key and send_key and same_server(url, self.base):
             hdrs["Authorization"] = "Bearer " + self.key
         if body is not None and not raw:
             data = json.dumps(body).encode("utf-8")
@@ -64,7 +137,7 @@ class Client:
         hdrs.update(headers or {})
         request = urllib.request.Request(url, data=data, method=method, headers=hdrs)
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with _opener.open(request, timeout=120) as response:
                 payload = response.read()
                 if response.headers.get("Content-Type", "").startswith("application/json"):
                     return json.loads(payload or b"null")
@@ -124,9 +197,8 @@ class Client:
             url = self.base + f"/api/v2/assets/{asset}/content"
         if not url:
             raise RpcError(INTERNAL_ERROR, f"output without a url: {json.dumps(output)[:200]}")
-        if url.startswith("/"):
-            url = self.base + url
-        payload = self._request("GET", url[len(self.base):], raw=True) if url.startswith(self.base) else urllib.request.urlopen(url, timeout=300).read()
+        url, send_key = download_target(url, self.base)
+        payload = self._request("GET", None, raw=True, url=url, send_key=send_key)
         with open(destination, "wb") as handle:
             handle.write(payload)
 
