@@ -556,3 +556,8 @@ Link / Unlink	链接 / 取消链接
 Create / Release Clipping Mask	创建 / 释放剪贴蒙版
 Load Layer / Mask	载入图层 / 蒙版
 Cannot sample this area. Choose a neutral area of the image.	无法取样此区域。请选择图像中的中性区域。
+Add dropped files	添加拖入的文件
+Insert the dropped file as a layer, or open it as a new document?	将拖入的文件插入为图层，还是作为新文档打开？
+Insert the dropped files as layers, or open them as new documents?	将拖入的文件插入为图层，还是作为新文档打开？
+Open as new document	作为新文档打开
+Insert as layer	插入为图层

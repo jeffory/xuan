@@ -170,6 +170,16 @@ Use **File → Open Compositor Project…** to import an original `.comp` folder
 
 HEIC/HEIF photos (`.heic`, `.heif`, and `.hif`, including uppercase extensions) open directly on Linux and Windows using the bundled decoder. Use File → Open, import as a layer, or drag a photo into the editor. The primary still image is imported, including tiled images and container rotation/mirroring; sequences and unsupported HEVC coding features report an error. Images use the editor's 8-bit raster pipeline and are limited to 512 MiB per file, 30,000 pixels per side, and 100 megapixels. Saved `.xuan` projects embed the decoded pixels, so the original HEIC file is no longer required. HEIC export is not supported. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library. No external converter is required for these formats. See the [project format](FORMAT.md) for details about saved documents.
 
+### Drag and drop
+
+Drag image or RAW files onto the window to add them. With no document open they
+open as new documents. With a document open, one prompt covers the whole drop:
+**Insert as layer** (default, Enter), **Open as new document**, or **Cancel**
+(Esc). `.xuan` projects and project folders always open as new documents without
+a prompt; in a mixed drop they open after you answer, even if you cancel. Drops
+that arrive while a dialog, background job, error, save prompt, or Develop is
+open are queued and handled once it closes.
+
 ## Current limits
 
 The photo editor uses an 8-bit sRGB raster pipeline. RAW Develop uses floating-point camera data and offers direct 16-bit TIFF output with an sRGB profile; its photo-layer render uses the existing 8-bit pipeline. Imported raster ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; Xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.

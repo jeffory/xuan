@@ -6,6 +6,7 @@ mod develop;
 mod develop_controls;
 mod develop_preview;
 mod dialogs;
+mod drops;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;
@@ -300,6 +301,7 @@ enum Dialog {
     Shortcuts,
     About,
     Settings,
+    DropChoice,
 }
 
 struct EffectEdit {
@@ -429,6 +431,8 @@ pub struct EditorApp {
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
     close_app: bool,
+    drop_prompt: Option<drops::DropPrompt>,
+    pending_drops: std::collections::VecDeque<Vec<PathBuf>>,
     allow_close: bool,
     clipboard: Option<(RgbaImage, Point)>,
     system_clipboard: Option<arboard::Clipboard>,
@@ -566,6 +570,8 @@ impl EditorApp {
             rename: None,
             close_tab: None,
             close_app: false,
+            drop_prompt: None,
+            pending_drops: Default::default(),
             allow_close: false,
             clipboard: None,
             system_clipboard: None,
@@ -1449,20 +1455,11 @@ impl EditorApp {
             }
             self.close_app = true;
         }
-        if self.dialog.is_none()
-            && self.develop_close_requested.is_none()
-            && self.job.is_none()
-            && self.error.is_none()
-            && self.close_tab.is_none()
-            && !self.close_app
-        {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        self.queue_drop(dropped.into_iter().filter_map(|f| f.path).collect());
+        if !self.drops_blocked() {
             self.shortcuts(ctx);
-            let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-            for file in dropped {
-                if let Some(path) = file.path {
-                    self.open_path(&path, true);
-                }
-            }
+            self.process_drops();
         }
         // Keep antialiased panel seams opaque while preserving the rounded window corners.
         ctx.layer_painter(egui::LayerId::background()).rect_filled(

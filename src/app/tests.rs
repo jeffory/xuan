@@ -4372,3 +4372,159 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
     frame(&context, &mut app);
     assert_eq!(Tool::Brush.label(), "Brush");
 }
+
+fn drop_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temporary = tempfile::tempdir().unwrap();
+    let image = temporary.path().join("photo.png");
+    RgbaImage::from_pixel(6, 4, image::Rgba([21, 87, 163, 255]))
+        .save(&image)
+        .unwrap();
+    let project = temporary.path().join("saved.xuan");
+    let mut doc = Document::new(9, 7).unwrap();
+    doc.insert(Layer::image("Saved", RgbaImage::new(9, 7)));
+    xuan::io::save(&doc, &project).unwrap();
+    (temporary, image, project)
+}
+
+fn app_with_document() -> (egui::Context, EditorApp) {
+    let (context, mut app) = app();
+    app.dimensions = [20, 16];
+    app.new_document();
+    (context, app)
+}
+
+#[test]
+fn drop_without_document_opens_without_prompt() {
+    let (_directory, image, _) = drop_fixture();
+    let (_, mut app) = app();
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 1);
+    assert_eq!(app.sessions[0].title, "photo");
+    assert_eq!(app.sessions[0].document.layers.len(), 1);
+}
+
+#[test]
+fn drop_with_document_prompts_and_each_choice_applies() {
+    let (_directory, image, _) = drop_fixture();
+    let (context, mut app) = app_with_document();
+    let layers = app.session().unwrap().document.layers.len();
+    app.queue_drop(vec![image.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert_eq!(app.sessions.len(), 1);
+
+    // Enter inserts as a layer, the default.
+    let enter = vec![text_key(egui::Key::Enter, egui::Modifiers::NONE)];
+    keyboard_frame(&context, &mut app, enter, egui::Modifiers::NONE);
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 1);
+    assert_eq!(app.session().unwrap().document.layers.len(), layers + 1);
+
+    // Open as new document.
+    app.queue_drop(vec![image.clone()]);
+    app.process_drops();
+    app.drop_choose_for_test(Some(false));
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.sessions[1].title, "photo");
+
+    // Cancel (Esc) does nothing.
+    app.current = 0;
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    let escape = vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)];
+    keyboard_frame(&context, &mut app, escape, egui::Modifiers::NONE);
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.sessions[0].document.layers.len(), layers + 1);
+}
+
+#[test]
+fn drop_of_only_projects_never_prompts_and_mixed_drops_open_projects_after_choice() {
+    let (_directory, image, project) = drop_fixture();
+    let (_, mut app) = app_with_document();
+    app.queue_drop(vec![project.clone()]);
+    app.process_drops();
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+
+    app.current = 0;
+    let layers = app.sessions[0].document.layers.len();
+    app.queue_drop(vec![project.clone(), image.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert_eq!(app.sessions.len(), 2, "projects wait for the choice");
+    app.drop_choose_for_test(Some(true));
+    assert_eq!(app.sessions.len(), 3);
+    assert_eq!(app.sessions[0].document.layers.len(), layers + 1);
+
+    // Cancel still opens the project.
+    app.current = 0;
+    app.queue_drop(vec![image, project]);
+    app.process_drops();
+    app.drop_choose_for_test(None);
+    assert_eq!(app.sessions.len(), 4);
+    assert_eq!(app.sessions[0].document.layers.len(), layers + 1);
+}
+
+#[test]
+fn drops_are_queued_while_blocked_and_handled_afterwards() {
+    let (_directory, image, _) = drop_fixture();
+    let (_, mut app) = app_with_document();
+    app.dialog = Some(Dialog::About);
+    app.queue_drop(vec![image.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::About));
+    assert_eq!(app.pending_drops.len(), 1);
+    app.dialog = None;
+    app.error = Some("boom".into());
+    app.process_drops();
+    assert_eq!(app.pending_drops.len(), 1);
+    app.error = None;
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    // The first drop prompts; the second waits for the prompt to resolve.
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert_eq!(app.pending_drops.len(), 1);
+    app.drop_choose_for_test(Some(false));
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert!(app.pending_drops.is_empty());
+    app.drop_choose_for_test(None);
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+}
+
+#[test]
+fn drops_wait_while_develop_is_open() {
+    let (_directory, image, _) = drop_fixture();
+    let (_, mut app) = app_with_document();
+    let layer = app.session_mut().unwrap().document.active_mut().unwrap();
+    let id = layer.id;
+    layer.pixels = Some(Arc::new(RgbaImage::from_pixel(
+        20,
+        16,
+        image::Rgba([100, 90, 80, 255]),
+    )));
+    layer.raw = Some(xuan::raw::RawAsset {
+        filename: "camera.NEF".into(),
+        bytes: Arc::new(vec![1, 2, 3]),
+        metadata: xuan::raw::RawMetadata {
+            width: 20,
+            height: 16,
+            ..Default::default()
+        },
+        settings: xuan::raw::DevelopSettings::default(),
+    });
+    app.start_develop_layer(id);
+    assert!(app.develop.is_some());
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    assert!(app.dialog.is_none());
+    assert_eq!(app.pending_drops.len(), 1);
+    app.cancel_develop();
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+}
