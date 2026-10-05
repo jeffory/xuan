@@ -1126,6 +1126,29 @@ mod tests {
         home.refused(&v2, "does not hold the plugin `demo`");
     }
 
+    /// Every bundled example plugin passes the install checks. Rust ones are
+    /// checked without copying, as a local build makes them large.
+    #[test]
+    fn the_bundled_plugins_pass_the_install_checks() {
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        let folders = super::super::plugin_folders(&bundled);
+        assert!(folders.len() >= 6, "{folders:?}");
+        let home = Home::new();
+        for folder in folders {
+            let manifest = Manifest::load(&folder).unwrap();
+            check_command(&manifest).unwrap_or_else(|e| panic!("{}: {e:#}", folder.display()));
+            if folder.join("Cargo.toml").exists() {
+                continue;
+            }
+            let staged = home
+                .installer
+                .prepare(&folder)
+                .unwrap_or_else(|e| panic!("{}: {e:#}", folder.display()));
+            assert_eq!(staged.manifest.plugin.id, manifest.plugin.id);
+        }
+        home.assert_clean();
+    }
+
     #[test]
     fn hidden_folders_are_not_loaded() {
         let home = Home::new();
