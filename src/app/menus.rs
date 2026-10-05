@@ -406,7 +406,36 @@ impl EditorApp {
                                     "invert_selection",
                                     &mut action,
                                 );
+                                labelled(
+                                    ui,
+                                    &items,
+                                    tr("Layer's Pixels"),
+                                    "select_layer_pixels",
+                                    &mut action,
+                                );
+                                labelled(
+                                    ui,
+                                    &items,
+                                    tr("Mask's Black Areas"),
+                                    "select_mask_black",
+                                    &mut action,
+                                );
                                 item(ui, &items, "load_selection", &mut action);
+                                ui.separator();
+                                labelled(
+                                    ui,
+                                    &items,
+                                    tr("Expand…"),
+                                    "expand_selection",
+                                    &mut action,
+                                );
+                                labelled(
+                                    ui,
+                                    &items,
+                                    tr("Contract…"),
+                                    "contract_selection",
+                                    &mut action,
+                                );
                                 item(ui, &items, "feather", &mut action);
                                 plugin_items(
                                     ui,

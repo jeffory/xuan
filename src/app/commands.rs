@@ -396,6 +396,26 @@ fn generated_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|layer| layer.generated.is_some())
 }
+fn image_layer(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|l| l.pixels.is_some() && !l.group)
+}
+fn masked_layer(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|l| l.mask.is_some())
+}
+fn has_selection(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .is_some_and(|s| s.document.selection.is_some())
+}
 fn has_guides(app: &EditorApp) -> bool {
     editing(app) && app.session().is_some_and(|s| !s.document.guides.is_empty())
 }
@@ -641,6 +661,16 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_shift(Key::I)])
         .host(Edit),
     cmd("load_selection", "Load Layer / Mask", C::Select),
+    cmd("select_layer_pixels", "Select Layer's Pixels", C::Select)
+        .when(image_layer)
+        .aliases(&["alpha", "opacity", "transparency"]),
+    cmd("select_mask_black", "Select Mask's Black Areas", C::Select).when(masked_layer),
+    cmd("expand_selection", "Expand Selection…", C::Select)
+        .when(has_selection)
+        .aliases(&["grow", "dilate"]),
+    cmd("contract_selection", "Contract Selection…", C::Select)
+        .when(has_selection)
+        .aliases(&["shrink", "erode"]),
     cmd("feather", "Feather 3 px", C::Select),
     // Filter
     cmd(

@@ -111,6 +111,7 @@ impl EditorApp {
                 Dialog::PluginProposal => self.plugin_proposal_dialog(ctx),
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),
+                Dialog::SelectionAmount => self.selection_amount_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {
                     let mut open = true;

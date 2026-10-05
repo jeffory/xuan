@@ -23,4 +23,5 @@ pub mod raw;
 pub mod render;
 pub mod retouch;
 pub mod selection;
+pub mod selection_ops;
 pub mod text;

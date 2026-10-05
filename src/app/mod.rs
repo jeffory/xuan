@@ -35,6 +35,7 @@ mod plugin_models;
 mod plugin_panes;
 mod plugins;
 mod rulers;
+mod selection_dialogs;
 mod settings;
 mod shortcuts;
 mod snap;
@@ -335,6 +336,8 @@ enum Dialog {
     GridSettings,
     /// Layer → Layer Effects…; not `Effect`, which edits adjustments and filters.
     LayerEffects,
+    /// Select → Expand… / Contract….
+    SelectionAmount,
 }
 
 struct EffectEdit {
@@ -451,6 +454,10 @@ pub struct EditorApp {
     polygon: Vec<Point>,
     selection_mode: SelectionMode,
     tolerance: u8,
+    /// Select → Expand… / Contract…: the open dialog and the amounts it remembers.
+    selection_amount: Option<selection_dialogs::AmountEdit>,
+    expand_amount: u32,
+    contract_amount: u32,
     contiguous: bool,
     radial: bool,
     shape_kind: ShapeKind,
@@ -626,6 +633,9 @@ impl EditorApp {
             polygon: Vec::new(),
             selection_mode: SelectionMode::Replace,
             tolerance: 32,
+            selection_amount: None,
+            expand_amount: 2,
+            contract_amount: 2,
             contiguous: true,
             radial: false,
             shape_kind: ShapeKind::Rectangle,
@@ -1436,6 +1446,18 @@ impl EditorApp {
                 self.edit_selection(tr("Load Selection"), |doc| {
                     operations::selection_from_layer(doc, mask);
                 });
+            }
+            "select_layer_pixels" => self.edit_selection(tr("Load Layer Selection"), |doc| {
+                operations::selection_from_layer_pixels(doc);
+            }),
+            "select_mask_black" => self.edit_selection(tr("Load Mask Selection"), |doc| {
+                operations::selection_from_mask_black(doc);
+            }),
+            "expand_selection" => {
+                self.open_selection_amount(selection_dialogs::AmountOperation::Expand)
+            }
+            "contract_selection" => {
+                self.open_selection_amount(selection_dialogs::AmountOperation::Contract)
             }
             "feather" => self.edit_selection(tr("Feather Selection"), |doc| {
                 if let Some(selection) = &doc.selection {

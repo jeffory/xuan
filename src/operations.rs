@@ -516,6 +516,46 @@ pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
     document.selection = Some(Arc::new(mask));
 }
 
+/// Select → Layer's Pixels: the active layer's opacity, ignoring its mask, becomes the
+/// selection (soft where the layer is partly transparent), as Compositor's does.
+pub fn selection_from_layer_pixels(document: &mut Document) -> bool {
+    let Some(layer) = document.active().filter(|l| l.pixels.is_some() && !l.group) else {
+        return false;
+    };
+    let mut bare = layer.clone();
+    bare.mask = None;
+    bare.clip_to = None;
+    bare.opacity = 1.0;
+    let mask = GrayImage::from_fn(document.width, document.height, |x, y| {
+        let point = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+        Luma([(render::layer_alpha(document, &bare, point, 0) * 255.0).round() as u8])
+    });
+    document.selection = Some(Arc::new(mask));
+    true
+}
+
+/// Select → Mask's Black Areas: what the active layer's mask hides becomes the selection,
+/// as Compositor's does. Grey is partly selected; outside the mask nothing is.
+pub fn selection_from_mask_black(document: &mut Document) -> bool {
+    let Some(layer) = document.active() else {
+        return false;
+    };
+    let Some(mask) = &layer.mask else {
+        return false;
+    };
+    let placement = mask.placement.unwrap_or(layer.transform);
+    let pixels = mask.pixels.clone();
+    let selection = GrayImage::from_fn(document.width, document.height, |x, y| {
+        let unit = placement.inverse(Point::new(x as f32 + 0.5, y as f32 + 0.5));
+        if !(0.0..1.0).contains(&unit.x) || !(0.0..1.0).contains(&unit.y) {
+            return Luma([0]);
+        }
+        Luma([255 - (render::mask_sample(&pixels, unit) * 255.0).round() as u8])
+    });
+    document.selection = Some(Arc::new(selection));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,5 +795,36 @@ mod tests {
         assert!(error.to_string().contains("100 megapixels"), "{error}");
         assert!(extend_canvas(&mut document, u32::MAX, 0, u32::MAX, 0).is_err());
         assert_eq!(state(&document), state(&setup()));
+    }
+
+    #[test]
+    fn layer_pixels_and_mask_black_areas_become_the_selection() {
+        let mut document = Document::new(4, 2).unwrap();
+        let mut layer = Layer::image(
+            "Top",
+            RgbaImage::from_fn(4, 2, |x, _| {
+                image::Rgba([9, 9, 9, [0, 128, 255, 255][x as usize]])
+            }),
+        );
+        let mut mask = crate::document::Mask::white();
+        mask.pixels = Arc::new(GrayImage::from_fn(4, 2, |x, _| {
+            Luma([[255, 0, 64, 255][x as usize]])
+        }));
+        layer.mask = Some(mask);
+        layer.opacity = 0.5;
+        document.insert(layer);
+        assert!(selection_from_layer_pixels(&mut document));
+        // The layer's own opacity, ignoring its mask and layer opacity.
+        assert_eq!(
+            document.selection.as_ref().unwrap().as_raw()[..4],
+            [0, 128, 255, 255]
+        );
+        assert!(selection_from_mask_black(&mut document));
+        assert_eq!(
+            document.selection.as_ref().unwrap().as_raw()[..4],
+            [0, 255, 191, 0]
+        );
+        document.active_mut().unwrap().mask = None;
+        assert!(!selection_from_mask_black(&mut document));
     }
 }

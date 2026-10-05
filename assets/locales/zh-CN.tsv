@@ -868,3 +868,17 @@ Build	构建
 Development build	开发版本
 modified	已修改
 Copy version	复制版本
+Load Layer Selection	载入图层选区
+Load Mask Selection	载入蒙版选区
+Expand Selection	扩展选区
+Contract Selection	收缩选区
+Expand by	扩展量
+Contract by	收缩量
+Layer's Pixels	图层像素
+Mask's Black Areas	蒙版黑色区域
+Expand…	扩展…
+Contract…	收缩…
+Select Layer's Pixels	选择图层像素
+Select Mask's Black Areas	选择蒙版黑色区域
+Expand Selection…	扩展选区…
+Contract Selection…	收缩选区…
