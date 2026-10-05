@@ -347,6 +347,17 @@ impl Job {
     }
 }
 
+/// How a `mask` output combines with the current selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaskMode {
+    #[default]
+    Replace,
+    Add,
+    Subtract,
+    Intersect,
+}
+
 /// What an action returns.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -376,6 +387,22 @@ pub enum Output {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
+    /// A grey PNG that becomes the selection; see [`Output::mask`].
+    Mask {
+        path: PathBuf,
+        #[serde(default)]
+        mode: MaskMode,
+        #[serde(default)]
+        x: f32,
+        #[serde(default)]
+        y: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fit: Option<String>,
+    },
     Edit {
         edits: Vec<Value>,
     },
@@ -399,55 +426,65 @@ impl Output {
         }
     }
 
-    /// Place an image at `width` x `height` document units rather than its
-    /// pixel size. A higher-resolution result then keeps its extra pixels at
-    /// a higher pixel density. Giving only one side keeps the aspect ratio.
-    pub fn with_size(self, width: Option<f32>, height: Option<f32>) -> Self {
-        match self {
-            Self::Image {
-                path,
-                name,
-                x,
-                y,
-                mask,
-                ..
-            } => Self::Image {
-                path,
-                name,
-                x,
-                y,
-                mask,
-                width,
-                height,
-                fit: None,
-            },
-            other => other,
+    /// Place an image or mask at `width` x `height` document units rather
+    /// than its pixel size. A higher-resolution result then keeps its extra
+    /// pixels at a higher pixel density. Giving only one side keeps the
+    /// aspect ratio.
+    pub fn with_size(mut self, new_width: Option<f32>, new_height: Option<f32>) -> Self {
+        if let Self::Image {
+            width, height, fit, ..
+        }
+        | Self::Mask {
+            width, height, fit, ..
+        } = &mut self
+        {
+            *width = new_width;
+            *height = new_height;
+            *fit = None;
+        }
+        self
+    }
+
+    /// Place an image or mask over the bounds of the source that was sent
+    /// (`fit = "source"`), however many pixels it has.
+    pub fn fit_source(mut self) -> Self {
+        if let Self::Image {
+            width, height, fit, ..
+        }
+        | Self::Mask {
+            width, height, fit, ..
+        } = &mut self
+        {
+            *width = None;
+            *height = None;
+            *fit = Some("source".into());
+        }
+        self
+    }
+
+    /// A grey PNG (white selected, black not, grey partly) that becomes the
+    /// document's selection once the user accepts the result, combined with
+    /// the current selection by `mode`. Placed like an image at `x`, `y` in
+    /// source pixels. A plugin needs no `document = "edit"` for it.
+    pub fn mask(path: impl Into<PathBuf>, mode: MaskMode) -> Self {
+        Self::Mask {
+            path: path.into(),
+            mode,
+            x: 0.0,
+            y: 0.0,
+            width: None,
+            height: None,
+            fit: None,
         }
     }
 
-    /// Place an image over the bounds of the source that was sent (`fit =
-    /// "source"`), however many pixels it has.
-    pub fn fit_source(self) -> Self {
-        match self {
-            Self::Image {
-                path,
-                name,
-                x,
-                y,
-                mask,
-                ..
-            } => Self::Image {
-                path,
-                name,
-                x,
-                y,
-                mask,
-                width: None,
-                height: None,
-                fit: Some("source".into()),
-            },
-            other => other,
+    /// Move an image or mask to `x`, `y` in source pixels.
+    pub fn at(mut self, new_x: f32, new_y: f32) -> Self {
+        if let Self::Image { x, y, .. } | Self::Mask { x, y, .. } = &mut self {
+            *x = new_x;
+            *y = new_y;
         }
+        self
     }
 
     pub fn with_mask(self, mask: impl Into<PathBuf>) -> Self {
@@ -976,6 +1013,22 @@ mod tests {
             serde_json::to_value(Output::None).unwrap(),
             json!({"kind": "none"})
         );
+        let mask = Output::mask("/tmp/m.png", MaskMode::Subtract)
+            .at(2.0, 3.0)
+            .fit_source();
+        assert_eq!(
+            serde_json::to_value(&mask).unwrap(),
+            json!({"kind": "mask", "path": "/tmp/m.png", "mode": "subtract", "x": 2.0, "y": 3.0, "fit": "source"})
+        );
+        let sized = Output::mask("/tmp/m.png", MaskMode::default()).with_size(None, Some(9.0));
+        let value = serde_json::to_value(&sized).unwrap();
+        assert_eq!(
+            (value["mode"].as_str(), value["height"].as_f64()),
+            (Some("replace"), Some(9.0))
+        );
+        assert!(value.get("fit").is_none() && value.get("width").is_none());
+        // Only images and masks have a placement.
+        assert_eq!(Output::text("hi").fit_source(), Output::text("hi"));
         assert_eq!(ui::png_data_url(b"hi"), "data:image/png;base64,aGk=");
         assert_eq!(ui::png_data_url(b"hello"), "data:image/png;base64,aGVsbG8=");
     }

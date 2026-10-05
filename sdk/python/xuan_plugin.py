@@ -283,6 +283,35 @@ class Job:
             output["fit"] = "source"
         return output
 
+    MASK_MODES = ("replace", "add", "subtract", "intersect")
+
+    @staticmethod
+    def mask(
+        path: str,
+        mode: str = "replace",
+        x: float = 0,
+        y: float = 0,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
+        fit_source: bool = False,
+    ) -> Dict[str, Any]:
+        """A mask output: a grey PNG (white selected, black not, grey partly)
+        that becomes the document's selection once the user accepts it.
+        ``mode`` combines it with the current selection: ``replace``, ``add``,
+        ``subtract`` or ``intersect``. It is placed like ``image``, so
+        ``fit_source=True`` lays a mask of any size over the source that was
+        sent. Needs no ``document = "edit"``: a selection is not a pixel edit."""
+        if mode not in Job.MASK_MODES:
+            raise ValueError(f"mode must be one of {', '.join(Job.MASK_MODES)}")
+        output: Dict[str, Any] = {"kind": "mask", "path": path, "mode": mode, "x": x, "y": y}
+        if width is not None:
+            output["width"] = width
+        if height is not None:
+            output["height"] = height
+        if fit_source:
+            output["fit"] = "source"
+        return output
+
     @staticmethod
     def new_document(path: str, name: Optional[str] = None) -> Dict[str, Any]:
         output: Dict[str, Any] = {"kind": "document", "path": path}
@@ -673,6 +702,26 @@ def encode_png(width: int, height: int, rgba: bytes) -> bytes:
     )
 
 
+def encode_gray_png(width: int, height: int, gray: bytes) -> bytes:
+    """Encode 8-bit grey rows as PNG, for masks, with the standard library only."""
+    import struct
+    import zlib
+
+    if len(gray) != width * height:
+        raise ValueError("gray must hold width * height bytes")
+    raw = b"".join(b"\x00" + gray[y * width : (y + 1) * width] for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 6))
+        + chunk(b"IEND", b"")
+    )
+
+
 def decode_png(data: bytes):
     """Decode an 8-bit RGB/RGBA/gray PNG to ``(width, height, rgba bytes)``.
 
@@ -754,6 +803,7 @@ __all__ = [
     "ui",
     "png_data_url",
     "encode_png",
+    "encode_gray_png",
     "decode_png",
     "PROTOCOL",
     "CANCELLED",
