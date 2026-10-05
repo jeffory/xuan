@@ -1,0 +1,49 @@
+[plugin]
+id = "extend-edges"
+name = "Extend Edges"
+version = "0.1.0"
+description = "Grow the canvas and fill the new edges on this machine by mirroring or repeating the image. A pure-Python placeholder for a generative outpainting model."
+command = ["python3", "main.py"]
+protocol = 1
+
+# No network and no secrets. Extending the canvas is a document change, so
+# the result's extend_canvas edit needs document = "edit".
+[permissions]
+document = "edit"
+filesystem = "none"
+
+[[settings]]
+id = "backend"
+type = "text"
+label = "Backend"
+help = "edges is built in. A name such as sdxl loads backend_sdxl.py from the plugin folder (see README.md)."
+default = "edges"
+
+[[actions]]
+id = "outpaint"
+label = "Outpaint (Fill Edges)…"
+menu = "Image"
+kind = "edit"
+# The flattened image, padded on every side by the "amount" input, with a
+# mask of the new area. At most 2048 pixels on its longest side.
+source = { from = "composite", max_side = 2048, extend = { left = "amount", top = "amount", right = "amount", bottom = "amount" } }
+description = "Add new canvas around the image and fill it by mirroring or repeating the edges. Everything stays on this computer."
+
+[[actions.inputs]]
+id = "amount"
+type = "integer"
+label = "Extend by"
+help = "New canvas on each side, in pixels."
+default = 64
+min = 1
+max = 2048
+
+[[actions.inputs]]
+id = "fill"
+type = "enum"
+label = "Fill"
+values = [
+  { id = "mirror", label = "Mirror the edges" },
+  { id = "repeat", label = "Repeat the edge pixels" },
+]
+default = "mirror"

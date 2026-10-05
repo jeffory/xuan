@@ -16,6 +16,7 @@ fn bundled_plugins_load_with_their_shortcuts() {
     let (_context, mut app) = app();
     let manifests = [
         "comfy-cloud",
+        "extend-edges",
         "histogram",
         "invert-regions",
         "local-upscale",
@@ -174,6 +175,70 @@ mod unix {
         assert_eq!(session.document.layers.len(), 1);
         assert_eq!(session.document.layers[0].pixels, pixels);
         app.stop_plugin("select-bright");
+    }
+
+    #[test]
+    fn extend_edges_outpaints_a_larger_canvas_through_the_python_sdk() {
+        if !python() {
+            eprintln!("python3 not available; skipping");
+            return;
+        }
+        let (context, mut app) = app();
+        app.install_plugins(vec![example("extend-edges")], vec![]);
+        app.grant_plugin("extend-edges", true);
+        app.dimensions = [40, 30];
+        app.new_document();
+        // White on the left, black on the right.
+        app.brush.color = [255, 255, 255, 255];
+        app.command("fill_fg");
+        app.edit_selection("Right", |document| {
+            document.selection = Some(std::sync::Arc::new(image::GrayImage::from_fn(
+                40,
+                30,
+                |x, _| image::Luma([if x >= 20 { 255 } else { 0 }]),
+            )));
+        });
+        app.brush.color = [0, 0, 0, 255];
+        app.command("fill_fg");
+        app.command("deselect");
+        let source = app.session().unwrap().document.layers[0].id;
+        let steps = app.session().unwrap().history.names().count();
+        let inputs = serde_json::json!({"amount": 5, "fill": "repeat"});
+        app.start_plugin_action_with("extend-edges", "outpaint", Some(&inputs));
+        app.run_plugin_action();
+        assert!(app.error.is_none(), "{:?}", app.error);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let document = &app.session().unwrap().document;
+        assert_eq!((document.width, document.height), (50, 40));
+        let base = document.layers.iter().find(|l| l.id == source).unwrap();
+        assert_eq!((base.transform.x, base.transform.y), (5.0, 5.0));
+        let layer = (document.layers.iter())
+            .find(|l| l.name == "Outpainted edges")
+            .unwrap();
+        let t = layer.transform;
+        assert_eq!((t.x, t.y, t.width, t.height), (0.0, 0.0, 50.0, 40.0));
+        // The edges repeat outwards; the mask shows only the new canvas.
+        let pixels = layer.pixels.as_ref().unwrap();
+        assert_eq!(pixels.dimensions(), (50, 40));
+        assert_eq!(pixels.get_pixel(1, 20).0, [255, 255, 255, 255]);
+        assert_eq!(pixels.get_pixel(48, 2).0, [0, 0, 0, 255]);
+        let mask = &layer.mask.as_ref().unwrap().pixels;
+        assert_eq!(
+            (mask.get_pixel(1, 20)[0], mask.get_pixel(25, 20)[0]),
+            (255, 0)
+        );
+        let message = app.plugins.proposal.as_ref().unwrap().message.clone();
+        assert_eq!(message.as_deref(), Some("Extended the canvas to 50x40"));
+        app.resolve_proposal(true);
+        let session = app.session().unwrap();
+        assert_eq!(session.history.names().count(), steps + 1);
+        assert_eq!(session.history.undo_name(), Some("Outpaint (Fill Edges)"));
+        app.command("undo");
+        let document = &app.session().unwrap().document;
+        assert_eq!((document.width, document.height), (40, 30));
+        app.stop_plugin("extend-edges");
     }
 
     /// Needs `cargo build --release` in `plugins/invert-regions` first.
