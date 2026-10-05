@@ -317,6 +317,97 @@ fn oversized_results_are_refused_before_their_images_are_read() {
     assert!(app.plugins.proposal.is_some());
 }
 
+fn plugin_request(
+    app: &mut EditorApp,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, xuan::plugins::protocol::RpcError> {
+    let request = xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(1),
+        method: method.into(),
+        params,
+    };
+    app.service_request("mock", &request)
+}
+
+#[test]
+fn host_side_file_access_stays_in_the_plugins_folders() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    let foreign = outside.path().join("foreign.png");
+    RgbaImage::from_pixel(4, 4, image::Rgba([9, 9, 9, 255]))
+        .save(&foreign)
+        .unwrap();
+    let install = |app: &mut EditorApp, filesystem: &str| {
+        let text = MANIFEST.replace(
+            "[[actions]]",
+            &format!(
+                "[permissions]\ndocument = \"edit\"\nfilesystem = \"{filesystem}\"\n\n[[actions]]"
+            ),
+        );
+        app.install_plugins(vec![Manifest::parse(&text, dir.path()).unwrap()], vec![]);
+    };
+    install(&mut app, "none");
+    app.dimensions = [8, 8];
+    app.new_document();
+    let layers = |app: &EditorApp| app.session().unwrap().document.layers.len();
+
+    // Exports go to the scratch folder or one of the plugin's own folders.
+    let export = plugin_request(&mut app, "document/export", json!({})).unwrap();
+    assert!(Path::new(export["path"].as_str().unwrap()).is_file());
+    let error =
+        plugin_request(&mut app, "document/export", json!({"dir": outside.path()})).unwrap_err();
+    assert!(error.message.contains("outside"), "{}", error.message);
+    let export = plugin_request(&mut app, "document/export", json!({"dir": dir.path()})).unwrap();
+    assert!(
+        Path::new(export["path"].as_str().unwrap()).starts_with(dir.path().canonicalize().unwrap())
+    );
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+
+    // Edits read images only from those folders.
+    let add = |image: &Path| json!({"name": "x", "edits": [{"op": "add_layer", "image": image}]});
+    let error = plugin_request(&mut app, "document/edit", add(&foreign)).unwrap_err();
+    assert!(error.message.contains("outside"), "{}", error.message);
+    assert_eq!(layers(&app), 1);
+    plugin_request(
+        &mut app,
+        "document/edit",
+        add(Path::new(export["path"].as_str().unwrap())),
+    )
+    .unwrap();
+    assert_eq!(layers(&app), 2);
+    // So do job results and host/open.
+    let job = mock_job(&app);
+    let result = json!({"outputs": [{"kind": "image", "path": foreign}]});
+    let error = format!(
+        "{:#}",
+        app.apply_job_result(&job, result.clone()).unwrap_err()
+    );
+    assert!(error.contains("outside"), "{error}");
+    let error = plugin_request(&mut app, "host/open", json!({"path": foreign})).unwrap_err();
+    assert!(error.message.contains("outside"), "{}", error.message);
+    assert_eq!(app.sessions.len(), 1);
+
+    // `filesystem = "read"` lets the host read anywhere, but not write.
+    install(&mut app, "read");
+    plugin_request(&mut app, "document/edit", add(&foreign)).unwrap();
+    assert_eq!(layers(&app), 3);
+    app.apply_job_result(&job, result).unwrap();
+    app.resolve_proposal(false);
+    assert!(plugin_request(&mut app, "document/export", json!({"dir": outside.path()})).is_err());
+    // `filesystem = "write"` lets it write anywhere too.
+    install(&mut app, "write");
+    let export =
+        plugin_request(&mut app, "document/export", json!({"dir": outside.path()})).unwrap();
+    assert!(
+        Path::new(export["path"].as_str().unwrap())
+            .starts_with(outside.path().canonicalize().unwrap())
+    );
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::consume_exact;

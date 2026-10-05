@@ -164,6 +164,32 @@ impl PluginState {
         Ok(self.scratch[plugin].path().to_path_buf())
     }
 
+    /// Where the host may read and write files for this plugin: its folder,
+    /// its data folder and the scratch and job folders made for it, unless
+    /// the manifest's `filesystem` permission allows more.
+    pub(super) fn access(&self, plugin: &str) -> edits::Access {
+        let Some(manifest) = self.manifest(plugin) else {
+            return edits::Access::default();
+        };
+        let data = match &self.config_dir {
+            Some(config_dir) => Some(plugins::data_dir(config_dir, plugin)),
+            None => self
+                .data_fallback
+                .get(plugin)
+                .map(|d| d.path().to_path_buf()),
+        };
+        let roots = [Some(manifest.dir.clone()), data]
+            .into_iter()
+            .flatten()
+            .chain(self.scratch.get(plugin).map(|d| d.path().to_path_buf()))
+            .chain(
+                (self.jobs.iter())
+                    .filter(|job| job.plugin == plugin)
+                    .map(|job| job._work_dir.path().to_path_buf()),
+            );
+        edits::Access::new(roots, manifest.permissions.filesystem)
+    }
+
     /// Write the secrets file, unless it failed to load: saving then would
     /// replace the user's stored secrets with the few entered since.
     pub(super) fn save_secrets(&self) -> Result<()> {
@@ -619,8 +645,14 @@ impl EditorApp {
                 .session()
                 .map_or(Value::Null, |session| edits::describe(&session.document))),
             "layer/export" | "document/export" | "selection/export" => {
+                // A folder the plugin names must be one of its own, unless
+                // its manifest allows writing elsewhere.
                 let dir = match string("dir") {
-                    Some(dir) => PathBuf::from(dir),
+                    Some(dir) => self
+                        .plugins
+                        .access(plugin)
+                        .writable_dir(Path::new(&dir))
+                        .map_err(|e| RpcError::invalid_params(format!("{e:#}")))?,
                     None => self.plugins.scratch_dir(plugin).map_err(internal)?,
                 };
                 let Some(session) = self.session() else {
@@ -680,6 +712,7 @@ impl EditorApp {
                         "The editor is busy",
                     ));
                 }
+                let mut reader = edits::Reader::new(self.plugins.access(plugin), edits::MAX_LAYERS);
                 let Some(session) = self.session_mut() else {
                     return Err(RpcError::new(
                         protocol::INVALID_PARAMS,
@@ -687,7 +720,6 @@ impl EditorApp {
                     ));
                 };
                 let mut document = session.document.clone();
-                let mut reader = edits::Reader::new(edits::MAX_LAYERS);
                 edits::apply(&mut document, &edits, &mut reader).map_err(internal)?;
                 session.history.begin(&name, &session.document);
                 session.document = document;
@@ -743,7 +775,10 @@ impl EditorApp {
             }
             "host/open" => {
                 if let Some(path) = string("path") {
-                    self.open_path(Path::new(&path), false);
+                    let path = (self.plugins.access(plugin))
+                        .readable(Path::new(&path))
+                        .map_err(|e| RpcError::invalid_params(format!("{e:#}")))?;
+                    self.open_path(&path, false);
                     Ok(json!({"ok": true}))
                 } else if let Some(url) = string("url") {
                     let url =
@@ -1298,8 +1333,10 @@ impl EditorApp {
             "The plugin returned more than {} edits",
             edits::MAX_EDITS
         );
-        // Every image of the result shares one pixel and layer budget.
-        let mut reader = edits::Reader::new(edits::MAX_LAYERS);
+        // Every image of the result shares one pixel and layer budget, and
+        // is read only from the plugin's folders, including this job's.
+        let access = self.plugins.access(&job.plugin).with(job._work_dir.path());
+        let mut reader = edits::Reader::new(access, edits::MAX_LAYERS);
         let manifest = self.plugins.manifest(&job.plugin).cloned();
         let generated = |source: Option<Uuid>, hash: Option<String>| Generated {
             plugin: job.plugin.clone(),
@@ -1789,7 +1826,8 @@ impl EditorApp {
             "The plugin returned more than {} layers",
             edits::MAX_IMPORT_LAYERS
         );
-        let mut reader = edits::Reader::new(edits::MAX_IMPORT_LAYERS);
+        let access = self.plugins.access(plugin).with(work_dir.path());
+        let mut reader = edits::Reader::new(access, edits::MAX_IMPORT_LAYERS);
         for layer in imported.layers {
             let edits = vec![edits::Edit::AddLayer {
                 image: layer.image,

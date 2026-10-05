@@ -45,8 +45,14 @@ permissions it declares (a plugin that declares none still asks to run), and
 records the grant in `config.toml`. Until then its panes show a "Review
 Permissions…" button instead of starting it. If the folder, the command or the
 permissions change, the plugin asks again. Folders that share a plugin id are
-reported and none of them is loaded. Xuan cannot enforce the permissions;
-install plugins you trust.
+reported and none of them is loaded.
+
+Xuan enforces the permissions for what it does on a plugin's behalf: it edits
+documents only for plugins that declare `document = "edit"`, hands over only
+the declared secrets, and reads and writes files only in the plugin's own
+folders (see [Files](#files)) unless `filesystem` allows more. It cannot
+limit what the plugin process itself does, which runs with the user's rights,
+so install plugins you trust.
 
 ## Manifest
 
@@ -63,7 +69,7 @@ protocol = 1                      # protocol version this plugin speaks
 network = ["cloud.comfy.org"]     # hosts the plugin connects to (informational)
 secrets = ["api_key"]             # settings of type "secret" it receives
 document = "edit"                 # "read" (default) or "edit"
-filesystem = "none"               # "none" (default), "read" or "write" outside its folders
+filesystem = "none"               # "none" (default), "read" or "write": where the host reads and writes for it
 
 [[settings]]
 id = "api_key"
@@ -201,6 +207,17 @@ directories the host owns; messages carry paths, never pixels.
 for a job go in the `work_dir` the host passes with each job and are removed when
 the job ends.
 
+### Files
+
+The host reads and writes files for a plugin only inside its folders: the
+plugin folder, `data_dir`, the scratch folder that exports go to by default, and
+the `work_dir` of its running jobs and imports. Paths are resolved first, so a
+symlink cannot lead out of them. This covers the images and masks of results,
+`document/edit` and imports, `host/open` paths, and the `dir` of exports. With
+`filesystem = "read"` the host reads files anywhere; with `filesystem =
+"write"` it also exports into any folder. A request outside these folders is
+refused with an invalid-params error.
+
 ### Actions
 
 `action/run` is sent once per invocation:
@@ -246,7 +263,7 @@ frame.
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
 | `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, layers: [{id, name, kind, visible, locked, opacity, blend, parent, x, y, width, height, rotation, generated?}]}` |
-| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` | `{path, width, height, x, y, scale}` |
+| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale}` |
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true}`; needs `document = "edit"` |

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::manifest::FilesystemAccess;
 use crate::{
     blend::BlendMode,
     document::{Document, Layer, MAX_PIXELS, MAX_SIDE, Mask, Transform},
@@ -111,6 +112,80 @@ pub const MAX_EDITS: usize = 1000;
 /// Largest image file read for a plugin.
 const MAX_FILE: u64 = 512 * 1024 * 1024;
 
+/// Where the host may read and write files on a plugin's behalf: under its
+/// own folders (the plugin folder, its data folder, and the scratch and work
+/// folders the host made for it), or anywhere when the manifest's
+/// `filesystem` permission allows it. Paths are resolved first, so a symlink
+/// cannot lead out of those folders.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Access {
+    roots: Vec<PathBuf>,
+    read_anywhere: bool,
+    write_anywhere: bool,
+}
+
+impl Access {
+    /// No confinement, for files the host chose itself.
+    pub fn anywhere() -> Self {
+        Self {
+            roots: Vec::new(),
+            read_anywhere: true,
+            write_anywhere: true,
+        }
+    }
+
+    pub fn new(roots: impl IntoIterator<Item = PathBuf>, filesystem: FilesystemAccess) -> Self {
+        let mut access = Self {
+            roots: Vec::new(),
+            read_anywhere: filesystem != FilesystemAccess::None,
+            write_anywhere: filesystem == FilesystemAccess::Write,
+        };
+        for root in roots {
+            access = access.with(&root);
+        }
+        access
+    }
+
+    /// Also allow `root`. Folders that do not exist are left out.
+    pub fn with(mut self, root: &Path) -> Self {
+        if let Ok(root) = std::fs::canonicalize(root)
+            && !self.roots.contains(&root)
+        {
+            self.roots.push(root);
+        }
+        self
+    }
+
+    fn inside(&self, path: &Path) -> bool {
+        self.roots.iter().any(|root| path.starts_with(root))
+    }
+
+    /// The resolved path of a file or folder the host may read.
+    pub fn readable(&self, path: &Path) -> Result<PathBuf> {
+        let resolved = std::fs::canonicalize(path)
+            .with_context(|| format!("Cannot read {}", path.display()))?;
+        ensure!(
+            self.read_anywhere || self.inside(&resolved),
+            "{} is outside the plugin's folders; reading other files needs filesystem = \"read\" in its manifest",
+            path.display()
+        );
+        Ok(resolved)
+    }
+
+    /// The resolved path of a folder the host may write into.
+    pub fn writable_dir(&self, dir: &Path) -> Result<PathBuf> {
+        let resolved = std::fs::canonicalize(dir)
+            .with_context(|| format!("Cannot use the folder {}", dir.display()))?;
+        ensure!(resolved.is_dir(), "{} is not a folder", dir.display());
+        ensure!(
+            self.write_anywhere || self.inside(&resolved),
+            "{} is outside the plugin's folders; writing elsewhere needs filesystem = \"write\" in its manifest",
+            dir.display()
+        );
+        Ok(resolved)
+    }
+}
+
 /// Reads the images of one plugin result, edit batch or import, keeping a
 /// running total so a plugin cannot make the host decode more than
 /// [`MAX_PIXELS`] pixels, or create more layers than allowed, for one answer.
@@ -118,6 +193,7 @@ const MAX_FILE: u64 = 512 * 1024 * 1024;
 /// decoded.
 #[derive(Debug)]
 pub struct Reader {
+    access: Access,
     pixels: u64,
     layers: usize,
     max_layers: usize,
@@ -125,8 +201,9 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub fn new(max_layers: usize) -> Self {
+    pub fn new(access: Access, max_layers: usize) -> Self {
         Self {
+            access,
             pixels: 0,
             layers: 0,
             max_layers,
@@ -166,8 +243,9 @@ impl Reader {
     fn decode(&mut self, path: &Path) -> Result<image::DynamicImage> {
         use image::ImageDecoder;
         use std::io::Read;
+        let resolved = self.access.readable(path)?;
         let mut bytes = Vec::new();
-        std::fs::File::open(path)
+        std::fs::File::open(&resolved)
             .with_context(|| format!("Cannot read {}", path.display()))?
             .take(MAX_FILE + 1)
             .read_to_end(&mut bytes)
@@ -201,12 +279,12 @@ impl Reader {
 
 /// Read one image a plugin wrote.
 pub fn read_png(path: &Path) -> Result<RgbaImage> {
-    Reader::new(0).rgba(path)
+    Reader::new(Access::anywhere(), 0).rgba(path)
 }
 
 /// Read one mask a plugin wrote.
 pub fn read_gray_png(path: &Path) -> Result<GrayImage> {
-    Reader::new(0).gray(path)
+    Reader::new(Access::anywhere(), 0).gray(path)
 }
 
 /// Shrink so the longest side is at most `max_side`; returns the scale used.
@@ -639,7 +717,11 @@ mod tests {
     use crate::document::Point;
 
     fn run(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
-        apply(document, edits, &mut Reader::new(MAX_LAYERS))
+        apply(
+            document,
+            edits,
+            &mut Reader::new(Access::anywhere(), MAX_LAYERS),
+        )
     }
 
     fn png(dir: &Path, name: &str, color: [u8; 4], size: u32) -> PathBuf {
@@ -693,7 +775,7 @@ mod tests {
         // decode), the second is refused from its header alone.
         let big = dir.path().join("big.png");
         huge_png(&big, 10_000, 6_000);
-        let mut reader = Reader::new(MAX_LAYERS);
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS);
         let first = format!("{:#}", reader.rgba(&big).unwrap_err());
         assert!(!first.contains("megapixels"), "{first}");
         let second = format!("{:#}", reader.rgba(&big).unwrap_err());
@@ -702,7 +784,7 @@ mod tests {
         let small = png(dir.path(), "small.png", [1, 2, 3, 255], 4);
         assert_eq!(reader.pixels, 60_000_000);
         assert!(reader.rgba(&small).is_ok());
-        assert!(Reader::new(0).gray(&small).is_ok());
+        assert!(Reader::new(Access::anywhere(), 0).gray(&small).is_ok());
 
         let mut document = Document::new(8, 8).unwrap();
         let add = Edit::AddLayer {
@@ -725,7 +807,7 @@ mod tests {
             MAX_LAYERS
         );
         // Batches of one result share the layer and edit counts.
-        let mut reader = Reader::new(2);
+        let mut reader = Reader::new(Access::anywhere(), 2);
         let mut copy = Document::new(8, 8).unwrap();
         apply(&mut copy, &[add.clone()], &mut reader).unwrap();
         apply(&mut copy, &[add.clone()], &mut reader).unwrap();
@@ -733,10 +815,58 @@ mod tests {
         let select = Edit::Select {
             layer: document.layers[0].id,
         };
-        let mut reader = Reader::new(0);
+        let mut reader = Reader::new(Access::anywhere(), 0);
         apply(&mut document, &vec![select.clone(); 600], &mut reader).unwrap();
         let error = apply(&mut document, &vec![select; 600], &mut reader).unwrap_err();
         assert!(error.to_string().contains("edits"), "{error}");
+    }
+
+    #[test]
+    fn host_side_file_access_is_confined_to_the_plugins_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let inside = png(root.path(), "in.png", [1, 2, 3, 255], 2);
+        let elsewhere = png(outside.path(), "out.png", [1, 2, 3, 255], 2);
+        let confined = Access::new([root.path().to_path_buf()], FilesystemAccess::None);
+        assert!(confined.readable(&inside).is_ok());
+        assert!(
+            confined
+                .readable(
+                    &root
+                        .path()
+                        .join("../")
+                        .join(root.path().file_name().unwrap())
+                        .join("in.png")
+                )
+                .is_ok()
+        );
+        let error = confined.readable(&elsewhere).unwrap_err().to_string();
+        assert!(error.contains("filesystem"), "{error}");
+        assert!(confined.readable(&root.path().join("missing.png")).is_err());
+        assert!(confined.writable_dir(root.path()).is_ok());
+        assert!(confined.writable_dir(outside.path()).is_err());
+        assert!(confined.writable_dir(&inside).is_err());
+        let mut reader = Reader::new(confined.clone(), 1);
+        assert!(reader.rgba(&inside).is_ok());
+        assert!(reader.rgba(&elsewhere).is_err());
+        assert!(reader.gray(&elsewhere).is_err());
+        // A symlink inside the folder cannot point out of it.
+        #[cfg(unix)]
+        {
+            let link = root.path().join("link.png");
+            std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+            assert!(confined.readable(&link).is_err());
+            let folder = root.path().join("folder");
+            std::os::unix::fs::symlink(outside.path(), &folder).unwrap();
+            assert!(confined.writable_dir(&folder).is_err());
+        }
+        // The manifest's filesystem permission widens it.
+        let reads = Access::new([root.path().to_path_buf()], FilesystemAccess::Read);
+        assert!(reads.readable(&elsewhere).is_ok());
+        assert!(reads.writable_dir(outside.path()).is_err());
+        let writes = Access::new([], FilesystemAccess::Write);
+        assert!(writes.writable_dir(outside.path()).is_ok());
+        assert!(Access::anywhere().readable(&elsewhere).is_ok());
     }
 
     #[test]

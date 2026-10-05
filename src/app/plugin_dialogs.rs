@@ -351,7 +351,7 @@ impl EditorApp {
                         "{} {} {}",
                         manifest.plugin.name,
                         manifest.plugin.version,
-                        tr("asks for the following. Xuan cannot enforce these; only run plugins you trust."),
+                        tr("asks for the following. Xuan reads and writes files for it only in its own folders unless it may use the file system, but the plugin runs with your rights and could reach anything you can; only run plugins you trust."),
                     ))
                     .wrap(),
                 );
@@ -816,13 +816,18 @@ fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest) {
         xuan::plugins::manifest::FilesystemAccess::None => {}
         xuan::plugins::manifest::FilesystemAccess::Read => {
             any = true;
-            ui.label(format!("• {}", tr("Reads files outside its folders")));
+            ui.label(format!(
+                "• {}",
+                tr(
+                    "Has Xuan read any file for it, not only those in its own and temporary folders"
+                )
+            ));
         }
         xuan::plugins::manifest::FilesystemAccess::Write => {
             any = true;
             ui.label(format!(
                 "• {}",
-                tr("Reads and writes files outside its folders")
+                tr("Has Xuan read and write any file or folder for it, not only its own and temporary folders")
             ));
         }
     }

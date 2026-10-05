@@ -313,7 +313,9 @@ impl Job {
         );
     }
 
-    /// A file path inside the job's working directory.
+    /// A file path inside the job's working directory. Write outputs here:
+    /// the host reads result images only from the plugin's own folders
+    /// unless the manifest declares `filesystem = "read"`.
     pub fn path(&self, name: &str) -> PathBuf {
         self.work_dir.join(name)
     }

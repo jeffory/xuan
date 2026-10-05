@@ -172,7 +172,11 @@ class Host:
         max_side: Optional[int] = None,
         dir: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Write a layer's pixels or mask as PNG; returns path, size and position."""
+        """Write a layer's pixels or mask as PNG; returns path, size and position.
+
+        ``dir`` must be one of the plugin's folders (a job's ``work_dir``,
+        ``data_dir`` or the plugin folder) unless the manifest declares
+        ``filesystem = "write"``; by default the host picks a scratch folder."""
         params: Dict[str, Any] = {"layer": layer, "what": what}
         if max_side:
             params["max_side"] = int(max_side)
@@ -181,7 +185,7 @@ class Host:
         return self.request("layer/export", params)
 
     def export_document(self, max_side: Optional[int] = None, dir: Optional[str] = None) -> Dict[str, Any]:
-        """Write the flattened document as PNG."""
+        """Write the flattened document as PNG; ``dir`` as for ``export_layer``."""
         params: Dict[str, Any] = {}
         if max_side:
             params["max_side"] = int(max_side)
@@ -190,7 +194,7 @@ class Host:
         return self.request("document/export", params)
 
     def export_selection(self, dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Write the selection mask cropped to its bounds, or None."""
+        """Write the selection mask cropped to its bounds, or None; ``dir`` as for ``export_layer``."""
         return self.request("selection/export", {"dir": dir} if dir else {})
 
     def edit(self, name: str, edits: List[Dict[str, Any]]) -> None:
