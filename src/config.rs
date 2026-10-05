@@ -104,6 +104,8 @@ pub struct Config {
     /// list of shortcuts. Commands not listed keep their defaults, including new defaults of
     /// later releases. The editor interprets the values and ignores ones it does not know.
     pub keybindings: toml::Table,
+    /// Command ids run from the command palette, most recent first.
+    pub recent_commands: Vec<String>,
 }
 
 impl Default for Config {
@@ -123,6 +125,7 @@ impl Default for Config {
             panes: crate::panes::Layout::default(),
             plugins: BTreeMap::new(),
             keybindings: toml::Table::new(),
+            recent_commands: Vec::new(),
         }
     }
 }
@@ -289,6 +292,14 @@ impl Config {
             table.insert(
                 "keybindings".into(),
                 toml::Value::Table(self.keybindings.clone()),
+            );
+        }
+        if self.recent_commands.is_empty() {
+            table.remove("recent_commands");
+        } else {
+            table.insert(
+                "recent_commands".into(),
+                toml::Value::try_from(&self.recent_commands)?,
             );
         }
         let parent = path.parent().context("Configuration path has no parent")?;

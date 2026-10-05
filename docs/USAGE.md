@@ -81,6 +81,17 @@ Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool
 
 The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
+### Command palette
+
+Press **Ctrl+K** (or choose **Help → Command Palette…**) to search every command, tool and plugin action. A filter field has focus as soon as the palette opens; type to narrow the list, and press **Ctrl+K** again, **Esc**, or click outside to close it.
+
+- **Matching** is fuzzy: the letters you type must appear in order, and word starts and consecutive letters rank higher. It looks at the command's name (the matched letters are highlighted), its category, other names such as “hsl” for Hue / Saturation, and its identifier. Several words must all match, so “layer new” works. With the interface in Chinese, the translated names and the English names and aliases both work.
+- **Order:** better matches first, then the commands you used most recently. With an empty filter the commands you ran lately come first, followed by everything grouped by category.
+- **Each row** shows the name, the category in grey and the shortcut now in effect on the right, so the palette also teaches the shortcuts.
+- **Keys:** **↑** / **↓** and **Page Up** / **Page Down** move the selection, **Enter** runs it and closes the palette. Hovering highlights a row and clicking runs it.
+- **Unavailable commands** (no document open, a job running, or a command of the other workspace) are greyed out and cannot run. In RAW Develop the palette lists the Develop commands and the ones that still apply.
+- The palette does not open over a dialog or while a text field has focus. The last 10 commands run from it are saved with your settings (`recent_commands`). Rebind Ctrl+K under **Settings → Keyboard Shortcuts**.
+
 ## Editing tools
 
 - **Navigator:** a sidebar pane, above Layers by default, shows a thumbnail of the whole composited document with a blue box marking the part currently visible on the canvas; it follows panning and zooming live. Drag the box to pan, or click anywhere on the thumbnail to centre the view there. Below it, type a zoom percentage into the field and press Enter, use the **−** / **+** buttons, or drag the slider (logarithmic, 1% to 6400%); all zoom about the centre of the canvas. Like every pane it can be collapsed from its header, resized, moved, or hidden from the **Window** menu, and the arrangement is remembered between sessions. The thumbnail is cached and refreshes shortly after you stop editing, switch tabs, or undo/redo. The Navigator is not shown in the RAW Develop workspace, which has its own view controls.
@@ -338,6 +349,7 @@ rulers = true # View → Rulers (off by default).
 show_grid = false # View → Show → Grid.
 show_guides = true # View → Show → Guides.
 lock_guides = false # View → Lock Guides.
+recent_commands = ["merge", "tool_hand"] # Run from the command palette, newest first (up to 10).
 
 [snap] # View → Snap and Snap To.
 enabled = true

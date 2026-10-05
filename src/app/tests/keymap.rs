@@ -20,7 +20,7 @@ fn overrides(pairs: &[(&str, &str)]) -> toml::Table {
 
 /// Command ids in the menu source: `item(ui, &items, "id", …)`, `labelled(…, "id", …)`,
 /// `check_item(…, "id", …)` and the tab bar's `action = Some("id")`.
-fn menu_commands() -> Vec<String> {
+pub(super) fn menu_commands() -> Vec<String> {
     let source = include_str!("../menus.rs");
     let mut ids = Vec::new();
     for start in ["item(", "labelled(", "check_item(", "action = Some("] {

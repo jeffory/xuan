@@ -24,7 +24,7 @@ pub(super) fn consume_exact(input: &mut InputState, mods: Modifiers, key: Key) -
 
 impl EditorApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.wants_keyboard_input() {
+        if self.palette.is_some() || ctx.wants_keyboard_input() {
             return;
         }
         let developing = self.develop.is_some();

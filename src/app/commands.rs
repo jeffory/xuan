@@ -852,6 +852,12 @@ pub(super) const COMMANDS: &[Command] = &[
         .when(always)
         .aliases(&["extensions"]),
     // Help
+    cmd("command_palette", "Command Palette…", C::Help)
+        .keys(&[ctrl(Key::K)])
+        .both()
+        .when(always)
+        .run(Run::App(super::palette::toggle))
+        .aliases(&["search", "commands", "actions", "find command"]),
     cmd("shortcuts", "Keyboard Shortcuts", C::Help)
         .keys(&[bare(Key::F1)])
         .both()

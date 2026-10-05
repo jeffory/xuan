@@ -27,6 +27,9 @@ mod ui;
 #[path = "tests/keymap.rs"]
 mod keymap;
 
+#[path = "tests/palette.rs"]
+mod command_palette;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

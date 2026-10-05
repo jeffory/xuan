@@ -23,6 +23,7 @@ mod layout_grid;
 mod levels_controls;
 mod menus;
 mod navigator;
+mod palette;
 mod panels;
 mod panes;
 mod photoshop;
@@ -405,6 +406,8 @@ pub struct EditorApp {
     config_dirty: bool,
     /// The command registry with the user's key bindings applied.
     keymap: commands::Keymap,
+    /// The command palette (Ctrl+K), while it is open.
+    palette: Option<palette::Palette>,
     /// Settings → Keyboard Shortcuts: search, key capture and a conflict waiting for an answer.
     key_editor: keybindings::KeyEditor,
     pane_drag: Option<panes::PaneDrag>,
@@ -581,6 +584,7 @@ impl EditorApp {
             config_path: None,
             config_dirty: false,
             keymap: Default::default(),
+            palette: None,
             key_editor: Default::default(),
             pane_drag: None,
             plugins: Default::default(),
@@ -1662,6 +1666,7 @@ impl EditorApp {
             self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
+        self.command_palette(ctx);
         // A proposal is accepted only through its Accept button. Anything that
         // closed or replaced its dialog discards it.
         if self.plugins.proposal.is_some() && self.dialog != Some(Dialog::PluginProposal) {

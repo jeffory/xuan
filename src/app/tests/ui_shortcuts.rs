@@ -62,6 +62,7 @@ use Effect::{Command, State};
 /// Checks for the registry entries that run something other than a command or a tool.
 fn app_effect(id: &str) -> Option<Effect> {
     Some(match id {
+        "command_palette" => State(|_| {}, |app| app.palette.is_some()),
         "show_transform" => State(
             |app| app.tool = Tool::Zoom,
             |app| app.tool == Tool::Move && app.show_controls,
@@ -271,6 +272,8 @@ fn documented_shortcuts_trigger_their_commands() {
                 ui.app_mut().command_trace = None;
                 ui.app_mut().command("select_all");
             }
+            // An open palette would take the next chord.
+            ui.app_mut().palette = None;
             press_and_check(&mut ui, command.id, chord, &effect);
             pressed += 1;
         }

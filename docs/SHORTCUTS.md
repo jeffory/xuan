@@ -1,6 +1,6 @@
 # Keyboard and pointer controls
 
-These are the default shortcuts. Each one can be changed, removed or added to in **Edit → Settings… → Keyboard Shortcuts**; the menus and **Help → Keyboard Shortcuts** (F1) always show the ones in effect.
+These are the default shortcuts. Each one can be changed, removed or added to in **Edit → Settings… → Keyboard Shortcuts**; the menus and **Help → Keyboard Shortcuts** (F1) always show the ones in effect. **Ctrl+K** opens the command palette, which finds any command by name and shows its shortcut.
 
 <!-- BEGIN GENERATED from the command registry (src/app/commands.rs); refresh with XUAN_UPDATE_DOCS=1 cargo test documented_shortcuts -->
 | Category | Command | Shortcut |
@@ -74,6 +74,7 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Tools | Increase Brush Size | ] |
 | Tools | Decrease Brush Hardness | Shift+[ |
 | Tools | Increase Brush Hardness | Shift+] |
+| Help | Command Palette… | Ctrl+K |
 | Help | Keyboard Shortcuts | F1 |
 <!-- END GENERATED -->
 

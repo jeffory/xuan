@@ -18,6 +18,9 @@ mod shortcuts;
 #[path = "ui_keybindings.rs"]
 mod keybindings;
 
+#[path = "ui_palette.rs"]
+mod palette;
+
 /// An `EditorApp` running inside a kittest harness at the usual 1280x860 window size.
 pub(super) struct UiTest {
     harness: Harness<'static, Option<EditorApp>>,
@@ -135,6 +138,34 @@ impl UiTest {
     /// Presses and releases a key chord, as the keyboard would.
     pub(super) fn press(&mut self, modifiers: egui::Modifiers, key: egui::Key) {
         self.harness.key_press_modifiers(modifiers, key);
+        self.settle();
+    }
+
+    /// Types `text` as the keyboard would, into whatever has focus.
+    pub(super) fn type_keys(&mut self, text: &str) {
+        self.harness
+            .input_mut()
+            .events
+            .push(egui::Event::Text(text.to_owned()));
+        self.settle();
+    }
+
+    /// Clicks the primary button at `pos`.
+    pub(super) fn click_at(&mut self, pos: egui::Pos2) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(pos));
+        self.harness.step();
+        self.harness.input_mut().events.push(button(true));
+        self.harness.step();
+        self.harness.input_mut().events.push(button(false));
         self.settle();
     }
 
