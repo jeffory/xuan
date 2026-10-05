@@ -231,6 +231,13 @@ impl EditorApp {
             );
         }
         self.plugins.install(manifests, errors);
+        if self.add_plugin_panes() {
+            self.save_config();
+        }
+    }
+
+    /// Add the panes of installed plugins that the layout does not know yet.
+    pub(super) fn add_plugin_panes(&mut self) -> bool {
         let mut changed = false;
         for manifest in &self.plugins.manifests {
             for pane in &manifest.panes {
@@ -241,9 +248,14 @@ impl EditorApp {
                 }
             }
         }
-        if changed {
-            self.save_config();
-        }
+        changed
+    }
+
+    /// The default sidebar: the built-in panes, then every installed plugin's.
+    pub(super) fn reset_panes(&mut self) {
+        self.config.panes.reset();
+        self.add_plugin_panes();
+        self.save_config();
     }
 
     pub(super) fn plugin_pane_title(&self, key: &str) -> Option<String> {

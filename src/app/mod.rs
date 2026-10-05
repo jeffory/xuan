@@ -1128,10 +1128,7 @@ impl EditorApp {
             }
         }
         match command {
-            "reset_panels" => {
-                self.config.panes.reset();
-                self.save_config();
-            }
+            "reset_panels" => self.reset_panes(),
             "plugins" => self.dialog = Some(Dialog::Plugins),
             "rerun_plugin" => self.rerun_plugin_action(),
             "develop" => {
