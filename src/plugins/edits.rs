@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     blend::BlendMode,
-    document::{Document, Layer, Mask, Transform},
+    document::{Document, Layer, MAX_PIXELS, MAX_SIDE, Mask, Transform},
 };
 
 /// Describe a document for `document/get` and the `document` field of jobs.
@@ -100,15 +100,113 @@ pub fn write_gray_png(image: &GrayImage, path: &Path) -> Result<()> {
         .with_context(|| format!("Cannot write {}", path.display()))
 }
 
-pub fn read_png(path: &Path) -> Result<RgbaImage> {
-    let image = crate::io::import_image(path)?;
-    crate::document::validate_size(image.width(), image.height())?;
-    Ok(image)
+/// Image outputs (`image`, `document`) one result may hold.
+pub const MAX_OUTPUTS: usize = 64;
+/// New layers and documents one result, edit batch or import may create.
+pub const MAX_LAYERS: usize = 32;
+/// Layers one imported file may have.
+pub const MAX_IMPORT_LAYERS: usize = 1000;
+/// Edits in one `document/edit` request or one result, all batches together.
+pub const MAX_EDITS: usize = 1000;
+/// Largest image file read for a plugin.
+const MAX_FILE: u64 = 512 * 1024 * 1024;
+
+/// Reads the images of one plugin result, edit batch or import, keeping a
+/// running total so a plugin cannot make the host decode more than
+/// [`MAX_PIXELS`] pixels, or create more layers than allowed, for one answer.
+/// Each image is checked against the budget from its header, before it is
+/// decoded.
+#[derive(Debug)]
+pub struct Reader {
+    pixels: u64,
+    layers: usize,
+    max_layers: usize,
+    edits: usize,
 }
 
+impl Reader {
+    pub fn new(max_layers: usize) -> Self {
+        Self {
+            pixels: 0,
+            layers: 0,
+            max_layers,
+            edits: 0,
+        }
+    }
+
+    pub fn rgba(&mut self, path: &Path) -> Result<RgbaImage> {
+        Ok(self.decode(path)?.to_rgba8())
+    }
+
+    pub fn gray(&mut self, path: &Path) -> Result<GrayImage> {
+        Ok(self.decode(path)?.to_luma8())
+    }
+
+    /// Count a layer or document about to be created.
+    pub fn add_layer(&mut self) -> Result<()> {
+        self.layers += 1;
+        ensure!(
+            self.layers <= self.max_layers,
+            "The plugin returned more than {} layers",
+            self.max_layers
+        );
+        Ok(())
+    }
+
+    /// Count edits about to be applied.
+    pub fn add_edits(&mut self, count: usize) -> Result<()> {
+        self.edits = self.edits.saturating_add(count);
+        ensure!(
+            self.edits <= MAX_EDITS,
+            "The plugin returned more than {MAX_EDITS} edits"
+        );
+        Ok(())
+    }
+
+    fn decode(&mut self, path: &Path) -> Result<image::DynamicImage> {
+        use image::ImageDecoder;
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .with_context(|| format!("Cannot read {}", path.display()))?
+            .take(MAX_FILE + 1)
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("Cannot read {}", path.display()))?;
+        ensure!(bytes.len() as u64 <= MAX_FILE, "Image exceeds 512 MiB");
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .with_context(|| format!("Cannot read {}", path.display()))?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_SIDE);
+        limits.max_image_height = Some(MAX_SIDE);
+        limits.max_alloc = Some(MAX_PIXELS * 8);
+        reader.limits(limits);
+        let decoder = reader
+            .into_decoder()
+            .with_context(|| format!("Cannot decode {}", path.display()))?;
+        let (width, height) = decoder.dimensions();
+        crate::document::validate_size(width, height)?;
+        let pixels = self
+            .pixels
+            .saturating_add(u64::from(width) * u64::from(height));
+        ensure!(
+            pixels <= MAX_PIXELS,
+            "The plugin's images exceed 100 megapixels in total"
+        );
+        self.pixels = pixels;
+        image::DynamicImage::from_decoder(decoder)
+            .with_context(|| format!("Cannot decode {}", path.display()))
+    }
+}
+
+/// Read one image a plugin wrote.
+pub fn read_png(path: &Path) -> Result<RgbaImage> {
+    Reader::new(0).rgba(path)
+}
+
+/// Read one mask a plugin wrote.
 pub fn read_gray_png(path: &Path) -> Result<GrayImage> {
-    let image = read_png(path)?;
-    Ok(image::DynamicImage::ImageRgba8(image).to_luma8())
+    Reader::new(0).gray(path)
 }
 
 /// Shrink so the longest side is at most `max_side`; returns the scale used.
@@ -290,10 +388,11 @@ pub enum Edit {
     },
 }
 
-/// Apply a batch. The caller clones the document first and only keeps the
-/// result when every edit succeeded, so a failing batch changes nothing.
-pub fn apply(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
-    ensure!(edits.len() <= 1000, "Too many edits in one batch");
+/// Apply a batch, reading its images through `reader`. The caller clones the
+/// document first and only keeps the result when every edit succeeded, so a
+/// failing batch changes nothing.
+pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Result<Vec<Uuid>> {
+    reader.add_edits(edits.len())?;
     let mut added = Vec::new();
     for edit in edits {
         match edit {
@@ -309,7 +408,8 @@ pub fn apply(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
                 opacity,
                 blend,
             } => {
-                let pixels = read_png(image)?;
+                reader.add_layer()?;
+                let pixels = reader.rgba(image)?;
                 let mut layer = Layer::image(
                     name.clone().unwrap_or_else(|| "Plugin layer".into()),
                     pixels,
@@ -325,7 +425,7 @@ pub fn apply(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
                 ensure!(layer.transform.valid(), "Invalid layer placement");
                 if let Some(mask) = mask {
                     layer.mask = Some(Mask {
-                        pixels: Arc::new(read_gray_png(mask)?),
+                        pixels: Arc::new(reader.gray(mask)?),
                         ..Mask::white()
                     });
                 }
@@ -343,7 +443,7 @@ pub fn apply(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
                 document.insert(layer);
             }
             Edit::ReplacePixels { layer, image, x, y } => {
-                let pixels = read_png(image)?;
+                let pixels = reader.rgba(image)?;
                 let target = find_mut(document, *layer)?;
                 ensure!(!target.locked, "Layer {} is locked", target.name);
                 ensure!(
@@ -418,7 +518,7 @@ pub fn apply(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
                 );
                 match mask {
                     Some(path) => {
-                        let pixels = Arc::new(read_gray_png(path)?);
+                        let pixels = Arc::new(reader.gray(path)?);
                         match &mut target.mask {
                             Some(mask) => mask.pixels = pixels,
                             None => {
@@ -435,7 +535,7 @@ pub fn apply(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
             Edit::SetSelection { mask } => {
                 document.selection = match mask {
                     Some(path) => {
-                        let image = read_gray_png(path)?;
+                        let image = reader.gray(path)?;
                         ensure!(
                             image.dimensions() == (document.width, document.height),
                             "The selection mask must match the document size"
@@ -538,6 +638,10 @@ mod tests {
     use super::*;
     use crate::document::Point;
 
+    fn run(document: &mut Document, edits: &[Edit]) -> Result<Vec<Uuid>> {
+        apply(document, edits, &mut Reader::new(MAX_LAYERS))
+    }
+
     fn png(dir: &Path, name: &str, color: [u8; 4], size: u32) -> PathBuf {
         let path = dir.join(name);
         write_png(
@@ -546,6 +650,93 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    /// A PNG that claims `width` × `height` but holds no real pixel data, so
+    /// only its header can be read.
+    fn huge_png(path: &Path, width: u32, height: u32) {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xedb8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        let mut file = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut chunk = |kind: &[u8], data: &[u8]| {
+            file.extend((data.len() as u32).to_be_bytes());
+            let body = [kind, data].concat();
+            file.extend(&body);
+            file.extend(crc(&body).to_be_bytes());
+        };
+        let mut header = Vec::new();
+        header.extend(width.to_be_bytes());
+        header.extend(height.to_be_bytes());
+        header.extend([8, 6, 0, 0, 0]);
+        chunk(b"IHDR", &header);
+        chunk(b"IDAT", &[0x78, 0x9c, 0x03, 0x00]);
+        chunk(b"IEND", &[]);
+        std::fs::write(path, file).unwrap();
+    }
+
+    #[test]
+    fn results_are_held_to_a_pixel_layer_and_edit_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        // 60 megapixels each: the first fits the budget (and then fails to
+        // decode), the second is refused from its header alone.
+        let big = dir.path().join("big.png");
+        huge_png(&big, 10_000, 6_000);
+        let mut reader = Reader::new(MAX_LAYERS);
+        let first = format!("{:#}", reader.rgba(&big).unwrap_err());
+        assert!(!first.contains("megapixels"), "{first}");
+        let second = format!("{:#}", reader.rgba(&big).unwrap_err());
+        assert!(second.contains("100 megapixels"), "{second}");
+        // A fresh reader starts a new budget; small images still fit.
+        let small = png(dir.path(), "small.png", [1, 2, 3, 255], 4);
+        assert_eq!(reader.pixels, 60_000_000);
+        assert!(reader.rgba(&small).is_ok());
+        assert!(Reader::new(0).gray(&small).is_ok());
+
+        let mut document = Document::new(8, 8).unwrap();
+        let add = Edit::AddLayer {
+            image: small.clone(),
+            name: None,
+            x: None,
+            y: None,
+            width: None,
+            height: None,
+            mask: None,
+            above: None,
+            opacity: None,
+            blend: None,
+        };
+        let too_many = vec![add.clone(); MAX_LAYERS + 1];
+        let error = run(&mut document.clone(), &too_many).unwrap_err();
+        assert!(error.to_string().contains("layers"), "{error}");
+        assert_eq!(
+            run(&mut document, &too_many[1..]).unwrap().len(),
+            MAX_LAYERS
+        );
+        // Batches of one result share the layer and edit counts.
+        let mut reader = Reader::new(2);
+        let mut copy = Document::new(8, 8).unwrap();
+        apply(&mut copy, &[add.clone()], &mut reader).unwrap();
+        apply(&mut copy, &[add.clone()], &mut reader).unwrap();
+        assert!(apply(&mut copy, &[add], &mut reader).is_err());
+        let select = Edit::Select {
+            layer: document.layers[0].id,
+        };
+        let mut reader = Reader::new(0);
+        apply(&mut document, &vec![select.clone(); 600], &mut reader).unwrap();
+        let error = apply(&mut document, &vec![select; 600], &mut reader).unwrap_err();
+        assert!(error.to_string().contains("edits"), "{error}");
     }
 
     #[test]
@@ -617,7 +808,7 @@ mod tests {
         let red = png(dir.path(), "red.png", [255, 0, 0, 255], 16);
         let mask = dir.path().join("mask.png");
         write_gray_png(&GrayImage::from_pixel(4, 4, image::Luma([128])), &mask).unwrap();
-        let added = apply(
+        let added = run(
             &mut document,
             &[
                 Edit::AddLayer {
@@ -654,7 +845,7 @@ mod tests {
         assert_eq!(document.layers[0].name, "Base");
         assert!(!document.layers[0].visible);
 
-        apply(
+        run(
             &mut document,
             &[
                 Edit::ReplacePixels {
@@ -679,7 +870,7 @@ mod tests {
         assert_eq!(document.active, Some(base));
 
         assert!(
-            apply(
+            run(
                 &mut document,
                 &[Edit::Set {
                     layer: base,
@@ -693,7 +884,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            apply(
+            run(
                 &mut document,
                 &[Edit::RemoveLayer {
                     layer: Uuid::new_v4()
@@ -701,10 +892,10 @@ mod tests {
             )
             .is_err()
         );
-        assert!(apply(&mut document, &[Edit::SetSelection { mask: Some(mask) }]).is_err());
+        assert!(run(&mut document, &[Edit::SetSelection { mask: Some(mask) }]).is_err());
         document.layers[0].locked = true;
         assert!(
-            apply(
+            run(
                 &mut document,
                 &[Edit::ReplacePixels {
                     layer: base,
@@ -715,7 +906,7 @@ mod tests {
             )
             .is_err()
         );
-        apply(&mut document, &[Edit::RemoveLayer { layer: added[0] }]).unwrap();
+        run(&mut document, &[Edit::RemoveLayer { layer: added[0] }]).unwrap();
         assert_eq!(document.layers.len(), 1);
         let selection = dir.path().join("sel.png");
         write_gray_png(
@@ -723,7 +914,7 @@ mod tests {
             &selection,
         )
         .unwrap();
-        apply(
+        run(
             &mut document,
             &[Edit::SetSelection {
                 mask: Some(selection),

@@ -687,7 +687,8 @@ impl EditorApp {
                     ));
                 };
                 let mut document = session.document.clone();
-                edits::apply(&mut document, &edits).map_err(internal)?;
+                let mut reader = edits::Reader::new(edits::MAX_LAYERS);
+                edits::apply(&mut document, &edits, &mut reader).map_err(internal)?;
                 session.history.begin(&name, &session.document);
                 session.document = document;
                 session.document.promote_image_masks();
@@ -1246,7 +1247,7 @@ impl EditorApp {
         }
     }
 
-    fn apply_job_result(&mut self, job: &PluginJob, value: Value) -> Result<()> {
+    pub(super) fn apply_job_result(&mut self, job: &PluginJob, value: Value) -> Result<()> {
         #[derive(serde::Deserialize)]
         #[serde(tag = "kind", rename_all = "snake_case")]
         enum Output {
@@ -1281,6 +1282,24 @@ impl EditorApp {
                 .unwrap_or(Value::Array(vec![])),
         )
         .context("The plugin returned malformed outputs")?;
+        ensure!(
+            outputs.len() <= edits::MAX_OUTPUTS,
+            "The plugin returned more than {} outputs",
+            edits::MAX_OUTPUTS
+        );
+        let edit_count: usize = (outputs.iter())
+            .map(|output| match output {
+                Output::Edit { edits } => edits.len(),
+                _ => 0,
+            })
+            .sum();
+        ensure!(
+            edit_count <= edits::MAX_EDITS,
+            "The plugin returned more than {} edits",
+            edits::MAX_EDITS
+        );
+        // Every image of the result shares one pixel and layer budget.
+        let mut reader = edits::Reader::new(edits::MAX_LAYERS);
         let manifest = self.plugins.manifest(&job.plugin).cloned();
         let generated = |source: Option<Uuid>, hash: Option<String>| Generated {
             plugin: job.plugin.clone(),
@@ -1310,7 +1329,8 @@ impl EditorApp {
                     y,
                     mask,
                 } => {
-                    let image = edits::read_png(&path)?;
+                    reader.add_layer()?;
+                    let image = reader.rgba(&path)?;
                     let name = name.unwrap_or_else(|| job.label.clone());
                     let session = self.sessions.iter().find(|s| s.document.id == job.document);
                     if job.into == ResultInto::Document
@@ -1344,7 +1364,7 @@ impl EditorApp {
                     };
                     if let Some(mask) = mask {
                         layer.mask = Some(xuan::document::Mask {
-                            pixels: Arc::new(edits::read_gray_png(&mask)?),
+                            pixels: Arc::new(reader.gray(&mask)?),
                             ..xuan::document::Mask::white()
                         });
                     }
@@ -1352,9 +1372,10 @@ impl EditorApp {
                     layers.push(layer);
                 }
                 Output::Document { path, name } => {
+                    reader.add_layer()?;
                     new_documents.push((
                         name.unwrap_or_else(|| job.label.clone()),
-                        edits::read_png(&path)?,
+                        reader.rgba(&path)?,
                     ));
                 }
                 Output::Edit { edits } => edit_batches.push(edits),
@@ -1391,7 +1412,7 @@ impl EditorApp {
         let session = &mut self.sessions[index];
         let mut document = session.document.clone();
         for batch in &edit_batches {
-            edits::apply(&mut document, batch)?;
+            edits::apply(&mut document, batch, &mut reader)?;
         }
         if let Some((id, pixels)) = replace
             && let Some(layer) = document.layers.iter_mut().find(|l| l.id == id)
@@ -1763,6 +1784,12 @@ impl EditorApp {
             document.resolution = resolution;
         }
         ensure!(!imported.layers.is_empty(), "The plugin returned no layers");
+        ensure!(
+            imported.layers.len() <= edits::MAX_IMPORT_LAYERS,
+            "The plugin returned more than {} layers",
+            edits::MAX_IMPORT_LAYERS
+        );
+        let mut reader = edits::Reader::new(edits::MAX_IMPORT_LAYERS);
         for layer in imported.layers {
             let edits = vec![edits::Edit::AddLayer {
                 image: layer.image,
@@ -1776,7 +1803,7 @@ impl EditorApp {
                 opacity: layer.opacity,
                 blend: layer.blend,
             }];
-            let added = edits::apply(&mut document, &edits)?;
+            let added = edits::apply(&mut document, &edits, &mut reader)?;
             if let (Some(false), Some(id)) = (layer.visible, added.first())
                 && let Some(layer) = document.layers.iter_mut().find(|l| l.id == *id)
             {

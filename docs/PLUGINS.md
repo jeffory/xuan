@@ -231,7 +231,11 @@ should answer with the error code `-32800`. The result lists outputs:
 Output kinds: `image` (a PNG placed at `x`,`y` in source coordinates, optional
 `mask` PNG and `name`), `document` (a PNG opened as a new tab), `edit` (a list of
 document edits, see below, applied as one undo step), `text` (shown in the
-status bar) and `none`. `action/estimate` with the same params may be answered
+status bar) and `none`. One result may hold at most 64 outputs, 32 new layers
+and documents, and 1,000 edits, and the images it refers to may add up to at
+most 100 megapixels; a larger result is refused as a whole. The same layer,
+edit and pixel limits apply to one `document/edit` request, and an import may
+return up to 1,000 layers within 100 megapixels. `action/estimate` with the same params may be answered
 with `{cost: "≈18 credits", seconds: 20}`; the dialog shows it before running.
 
 ### Reading and editing the document

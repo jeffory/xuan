@@ -252,6 +252,71 @@ fn a_secrets_file_that_fails_to_load_is_never_overwritten_or_quoted() {
     );
 }
 
+/// A finished job of the mock plugin, for feeding results straight in.
+fn mock_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
+    crate::app::plugins::PluginJob {
+        id: uuid::Uuid::new_v4(),
+        plugin: "mock".into(),
+        action: "echo".into(),
+        label: "Echo".into(),
+        document: app.session().unwrap().document.id,
+        _work_dir: xuan::plugins::private_dir("xuan-job-").unwrap(),
+        prepared: xuan::plugins::jobs::Prepared::none(),
+        regions: Vec::new(),
+        inputs: serde_json::json!({}),
+        into: xuan::plugins::manifest::ResultInto::Layer,
+        mask_to_regions: false,
+        progress: None,
+        message: String::new(),
+        cancelled: false,
+    }
+}
+
+#[test]
+fn oversized_results_are_refused_before_their_images_are_read() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    let job = mock_job(&app);
+    let fixture = dir.path().join("fixture.png");
+    let sessions = app.sessions.len();
+    let layers = app.session().unwrap().document.layers.len();
+    let error = |app: &mut EditorApp, result| {
+        format!("{:#}", app.apply_job_result(&job, result).unwrap_err())
+    };
+
+    // Too many outputs: refused without touching the (missing) files.
+    let outputs: Vec<_> = (0..=xuan::plugins::edits::MAX_OUTPUTS)
+        .map(|_| json!({"kind": "image", "path": dir.path().join("missing.png")}))
+        .collect();
+    let message = error(&mut app, json!({ "outputs": outputs }));
+    assert!(message.contains("outputs"), "{message}");
+    // Too many layers, even as new documents.
+    let outputs: Vec<_> = (0..=xuan::plugins::edits::MAX_LAYERS)
+        .map(|_| json!({"kind": "document", "path": fixture}))
+        .collect();
+    let message = error(&mut app, json!({ "outputs": outputs }));
+    assert!(message.contains("layers"), "{message}");
+    // Too many edits across batches.
+    let select = json!({"op": "select", "layer": app.session().unwrap().document.layers[0].id});
+    let batch = json!({"kind": "edit", "edits": vec![select; 600]});
+    let message = error(&mut app, json!({ "outputs": [batch.clone(), batch] }));
+    assert!(message.contains("edits"), "{message}");
+    assert_eq!(app.sessions.len(), sessions);
+    assert_eq!(app.session().unwrap().document.layers.len(), layers);
+    assert!(app.plugins.proposal.is_none());
+    // A result within the limits still works.
+    app.apply_job_result(
+        &job,
+        json!({"outputs": [{"kind": "image", "path": fixture}]}),
+    )
+    .unwrap();
+    assert!(app.plugins.proposal.is_some());
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::consume_exact;
