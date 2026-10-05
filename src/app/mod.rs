@@ -28,6 +28,7 @@ mod panels;
 mod panes;
 mod photoshop;
 mod pixel_grid;
+mod plugin_consent;
 mod plugin_dialogs;
 mod plugin_panes;
 mod plugins;
@@ -321,6 +322,8 @@ enum Dialog {
     Settings,
     DropChoice,
     PluginPermissions,
+    /// Confirm sending document data to a plugin that declares network hosts.
+    PluginConsent,
     Plugins,
     PluginProposal,
     GridSettings,

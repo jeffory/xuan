@@ -158,9 +158,14 @@ impl EditorApp {
         if config != self.config {
             i18n::set_language(config.language);
             let keys_changed = config.keybindings != self.config.keybindings;
+            let network_changed =
+                config.disable_network_plugins != self.config.disable_network_plugins;
             self.config = config;
             if keys_changed {
                 self.rebuild_keymap();
+            }
+            if network_changed {
+                self.apply_network_plugins_setting();
             }
             self.config_dirty = true;
             ctx.request_repaint();
@@ -263,7 +268,23 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
     });
     ui.add_space(8.0);
     ui.label(tr("Language changes apply immediately."));
-    ui.add_space(28.0);
+    ui.add_space(16.0);
+    widgets::checkbox(
+        ui,
+        &mut config.disable_network_plugins,
+        tr("Disable plugins that use the network"),
+    );
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(tr(
+                "Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect.",
+            ))
+            .small()
+            .color(theme::MUTED),
+        )
+        .wrap(),
+    );
+    ui.add_space(20.0);
     ui.label(egui::RichText::new(tr("Configuration file")).color(theme::MUTED));
     if let Ok(path) = Config::path() {
         ui.add(egui::Label::new(path.display().to_string()).wrap());

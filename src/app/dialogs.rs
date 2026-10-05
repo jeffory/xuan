@@ -104,6 +104,7 @@ impl EditorApp {
                 Dialog::Export => self.export_dialog(ctx),
                 Dialog::DropChoice => self.drop_dialog(ctx),
                 Dialog::PluginPermissions => self.plugin_permissions_dialog(ctx),
+                Dialog::PluginConsent => self.plugin_consent_dialog(ctx),
                 Dialog::Plugins => self.plugin_manager_dialog(ctx),
                 Dialog::PluginProposal => self.plugin_proposal_dialog(ctx),
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),

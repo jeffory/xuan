@@ -76,6 +76,14 @@ pub(super) struct PluginState {
     load_errors: Vec<LoadError>,
     /// When a plugin last opened a link.
     last_link: Option<std::time::Instant>,
+    /// The prompt before document data goes to a plugin that declares
+    /// network hosts, while it is open.
+    pub consent: Option<super::plugin_consent::ConsentRequest>,
+    /// Whether the user allowed exports a plugin asked for outside a
+    /// confirmed action, until its process stops.
+    pub export_answers: HashMap<String, bool>,
+    /// Export requests waiting for that answer.
+    pub held: Vec<(String, Request)>,
 }
 
 enum Pending {
@@ -110,6 +118,9 @@ pub(super) struct PluginJob {
     pub progress: Option<f32>,
     pub message: String,
     pub cancelled: bool,
+    /// The user confirmed sending its document data, so it may export more
+    /// while it runs.
+    pub consented: bool,
 }
 
 /// A plugin action in a menu.
@@ -120,6 +131,8 @@ pub(super) struct PluginMenuItem {
     pub shortcut: String,
     /// The plugin's name, id and folder, shown on hover.
     pub source: String,
+    /// Whether the registry lets it run now (see `command_enabled`).
+    pub enabled: bool,
 }
 
 /// A file a plugin imports or exports while the editor stays usable.
@@ -160,6 +173,8 @@ pub(super) struct ActionEdit {
     pub previous_tool: Tool,
     /// Where results go when the action leaves the choice to the user.
     pub into: ResultInto,
+    /// The user confirmed sending this run's document data.
+    pub consented: bool,
 }
 
 #[derive(Default)]
@@ -212,6 +227,17 @@ impl PluginState {
 
     pub fn running(&self, plugin: &str) -> bool {
         self.processes.contains_key(plugin)
+    }
+
+    pub(super) fn process_mut(&mut self, plugin: &str) -> Option<&mut Process> {
+        self.processes.get_mut(plugin)
+    }
+
+    /// Forget the answers and held requests of a plugin whose process
+    /// stopped or whose grant changed.
+    fn forget_session(&mut self, plugin: &str) {
+        self.export_answers.remove(plugin);
+        self.held.retain(|(id, _)| id != plugin);
     }
 
     pub fn log(&self, plugin: &str) -> Vec<String> {
@@ -431,7 +457,10 @@ impl EditorApp {
         let Some(manifest) = self.plugins.manifest(plugin) else {
             return false;
         };
-        self.plugin_enabled(plugin) && self.stored_grant(plugin) == Some(&grant_for(manifest))
+        self.plugin_enabled(plugin)
+            && self
+                .stored_grant(plugin)
+                .is_some_and(|grant| grant.covers(&grant_for(manifest)))
     }
 
     /// What the user last allowed for this plugin, which may no longer match it.
@@ -440,11 +469,20 @@ impl EditorApp {
     }
 
     pub(super) fn grant_plugin(&mut self, plugin: &str, granted: bool) {
-        let grant = if granted {
+        let mut grant = if granted {
             self.plugins.manifest(plugin).map(grant_for)
         } else {
             None
         };
+        // Answers stored with the grant last only while it covers the same
+        // folder, command and permissions.
+        if let (Some(old), Some(new)) = (self.stored_grant(plugin), &mut grant)
+            && old.covers(new)
+        {
+            new.send_without_asking = old.send_without_asking;
+        } else {
+            self.plugins.forget_session(plugin);
+        }
         // Secrets were entered for the folder the user allowed before; never
         // hand them to a plugin with the same id from another folder.
         if let (Some(old), Some(new)) = (self.stored_grant(plugin), &grant)
@@ -462,6 +500,7 @@ impl EditorApp {
     }
 
     pub(super) fn stop_plugin(&mut self, plugin: &str) {
+        self.plugins.forget_session(plugin);
         self.plugins.starting.remove(plugin);
         if let Some(mut process) = self.plugins.processes.remove(plugin) {
             let _ = process.request("shutdown", Value::Null);
@@ -481,6 +520,7 @@ impl EditorApp {
 
     /// Stop a plugin and fail what was waiting for it with `reason`.
     fn end_plugin(&mut self, plugin: &str, reason: &str) {
+        self.plugins.forget_session(plugin);
         self.plugins.starting.remove(plugin);
         if let Some(mut process) = self.plugins.processes.remove(plugin) {
             let _ = process.request("shutdown", Value::Null);
@@ -564,6 +604,12 @@ impl EditorApp {
                 "{} needs its permissions accepted first",
                 self.plugins.source(plugin)
             );
+            ensure!(
+                !self.plugin_offline(plugin),
+                "{} {}",
+                self.plugins.source(plugin),
+                tr("uses the network, and plugins that use the network are disabled")
+            );
             let data_dir = self.plugins.data_dir(plugin)?;
             let env = vec![
                 ("XUAN_PLUGIN_ID".to_owned(), plugin.to_owned()),
@@ -604,6 +650,7 @@ impl EditorApp {
         for (plugin, message) in incoming {
             self.dispatch_plugin_message(&plugin, message);
         }
+        self.release_held_requests();
         self.check_starting_plugins();
         self.check_format_jobs();
         self.apply_completed_results();
@@ -626,6 +673,13 @@ impl EditorApp {
     fn dispatch_plugin_message(&mut self, plugin: &str, message: Incoming) {
         match message {
             Incoming::Message(Message::Request(request)) => {
+                // Exports wait while the user is asked whether to send them.
+                if super::plugin_consent::EXPORT_METHODS.contains(&request.method.as_str())
+                    && self.export_answer(plugin).is_none()
+                {
+                    self.plugins.held.push((plugin.to_owned(), request));
+                    return;
+                }
                 let result = self.service_request(plugin, &request);
                 if let Some(process) = self.plugins.processes.get_mut(plugin) {
                     let _ = process.respond(request.id, result);
@@ -667,6 +721,7 @@ impl EditorApp {
         }
         let name = self.plugins.source(plugin);
         self.plugins.processes.remove(plugin);
+        self.plugins.forget_session(plugin);
         let failed: Vec<_> = self
             .plugins
             .jobs
@@ -701,6 +756,7 @@ impl EditorApp {
             .trim_end()
             .to_owned();
         self.plugins.starting.remove(plugin);
+        self.plugins.forget_session(plugin);
         if let Some(mut process) = self.plugins.processes.remove(plugin) {
             process.stop();
         }
@@ -761,6 +817,9 @@ impl EditorApp {
                 .session()
                 .map_or(Value::Null, |session| edits::describe(&session.document))),
             "layer/export" | "document/export" | "selection/export" => {
+                if let Some(error) = self.export_refused(plugin) {
+                    return Err(error);
+                }
                 // A folder the plugin names must be one of its own, unless
                 // its manifest allows writing elsewhere.
                 let dir = match string("dir") {
@@ -1118,11 +1177,17 @@ impl EditorApp {
             if !self.plugin_enabled(&manifest.plugin.id) {
                 continue;
             }
-            let source = format!(
+            let mut source = format!(
                 "{}\n{}",
                 self.plugins.source(&manifest.plugin.id),
                 manifest.dir.display()
             );
+            if self.plugin_offline(&manifest.plugin.id) {
+                source.push_str(&format!(
+                    "\n{}",
+                    tr("Off: plugins that use the network are disabled")
+                ));
+            }
             for action in &manifest.actions {
                 let id = format!("{}/{}", manifest.plugin.id, action.id);
                 let label = self.keymap.get(&id).map_or_else(
@@ -1135,6 +1200,7 @@ impl EditorApp {
                     action: action.id.clone(),
                     shortcut: self.keymap.shortcut(&id),
                     source: source.clone(),
+                    enabled: self.command_enabled(&id),
                 });
             }
         }
@@ -1159,6 +1225,14 @@ impl EditorApp {
             return;
         };
         if !self.plugin_enabled(plugin) {
+            return;
+        }
+        if self.plugin_offline(plugin) {
+            self.status = format!(
+                "{} {}",
+                self.plugins.source(plugin),
+                tr("uses the network, and plugins that use the network are disabled")
+            );
             return;
         }
         if !self.plugin_granted(plugin) {
@@ -1215,6 +1289,7 @@ impl EditorApp {
                 estimate: None,
                 previous_tool: self.tool,
                 into: ResultInto::Layer,
+                consented: false,
             });
             self.run_plugin_action();
             return;
@@ -1233,6 +1308,7 @@ impl EditorApp {
             } else {
                 ResultInto::Document
             },
+            consented: false,
         });
         if spec.regions_input().is_some() {
             self.set_tool(Tool::Region);
@@ -1263,15 +1339,29 @@ impl EditorApp {
         let spec = manifest.action(&edit.action).context("no action")?.clone();
         let regions = edit.regions.clone();
         let mut inputs = edit.values.clone();
+        // Before the user confirmed sending document data, an estimate gets
+        // neither the image nor the regions and texts.
+        let withheld = estimate && self.sends_need_consent(&edit.plugin);
         let document = self.session().map(|s| s.document.clone());
         let prepared = match (&document, spec.kind) {
             (Some(document), ActionKind::Edit)
-                if !estimate || spec.source.from != plugins::manifest::SourceKind::None =>
+                if !withheld
+                    && (!estimate || spec.source.from != plugins::manifest::SourceKind::None) =>
             {
                 jobs::prepare(document, &spec.source, &regions, work_dir)?
             }
             _ => Prepared::none(),
         };
+        if withheld {
+            for input in &spec.inputs {
+                if matches!(
+                    input.kind,
+                    InputKind::Text | InputKind::Multiline | InputKind::Path | InputKind::Secret
+                ) {
+                    inputs.remove(&input.id);
+                }
+            }
+        }
         if let Some(input) = spec.regions_input() {
             inputs.insert(input.id.clone(), Value::Array(prepared.regions.clone()));
         }
@@ -1345,8 +1435,25 @@ impl EditorApp {
             ));
             return;
         }
-        let document = self.session().map(|s| s.document.id);
         let chosen = edit.into;
+        // A run that sends document data to a plugin that declares network
+        // hosts waits for the user to confirm it.
+        let consented =
+            (self.plugins.action.as_mut()).is_some_and(|edit| std::mem::take(&mut edit.consented));
+        if !consented && self.sends_need_consent(&plugin) {
+            let items = self.action_consent_items(&spec);
+            if !items.is_empty() {
+                self.plugins.consent = Some(super::plugin_consent::ConsentRequest {
+                    plugin: plugin.clone(),
+                    action: Some(spec.id.clone()),
+                    items,
+                    dont_ask: false,
+                });
+                self.dialog = Some(Dialog::PluginConsent);
+                return;
+            }
+        }
+        let document = self.session().map(|s| s.document.id);
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
             let work_dir = plugins::private_dir("xuan-job-")?;
@@ -1376,6 +1483,7 @@ impl EditorApp {
                 progress: None,
                 message: String::new(),
                 cancelled: false,
+                consented,
             });
             Ok(())
         })();
@@ -1830,7 +1938,7 @@ impl EditorApp {
             }
             return;
         }
-        if !self.plugin_granted(&plugin) {
+        if !self.plugin_granted(&plugin) || self.plugin_offline(&plugin) {
             return;
         }
         let document = self.session().map(|s| edits::describe(&s.document));
@@ -1911,7 +2019,7 @@ impl EditorApp {
         self.plugins
             .manifests
             .iter()
-            .filter(|m| self.plugin_enabled(&m.plugin.id))
+            .filter(|m| self.plugin_available(&m.plugin.id))
             .find_map(|manifest| {
                 manifest
                     .import_extensions()
@@ -1925,7 +2033,7 @@ impl EditorApp {
         self.plugins
             .manifests
             .iter()
-            .filter(|m| self.plugin_enabled(&m.plugin.id))
+            .filter(|m| self.plugin_available(&m.plugin.id))
             .flat_map(|manifest| {
                 manifest
                     .formats
@@ -1949,7 +2057,7 @@ impl EditorApp {
         self.plugins
             .manifests
             .iter()
-            .filter(|m| self.plugin_enabled(&m.plugin.id))
+            .filter(|m| self.plugin_available(&m.plugin.id))
             .flat_map(|m| m.import_extensions().map(|(_, e)| e))
             .collect()
     }
@@ -2202,7 +2310,7 @@ impl EditorApp {
 }
 
 /// `text` on one line, without control characters, cut to `max` characters.
-fn one_line(text: &str, max: usize) -> String {
+pub(super) fn one_line(text: &str, max: usize) -> String {
     text.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(max)
@@ -2215,6 +2323,7 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
         dir: std::fs::canonicalize(&manifest.dir).unwrap_or_else(|_| manifest.dir.clone()),
         command: manifest.plugin.command.clone(),
         permissions: manifest.permissions.clone(),
+        send_without_asking: false,
     }
 }
 

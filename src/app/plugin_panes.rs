@@ -58,6 +58,24 @@ impl EditorApp {
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
+                if self.plugin_offline(&plugin) {
+                    let name = self.plugins.source(&plugin);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "{name} {}",
+                                tr("uses the network, and plugins that use the network are disabled.")
+                            ))
+                            .color(theme::MUTED),
+                        )
+                        .wrap(),
+                    );
+                    if widgets::button(ui, tr("Manage Plugins…")).clicked() {
+                        self.plugins.manager_selected = Some(plugin.clone());
+                        self.dialog = Some(super::Dialog::Plugins);
+                    }
+                    return;
+                }
                 if !self.plugin_granted(&plugin) {
                     let name = self.plugins.source(&plugin);
                     ui.add(

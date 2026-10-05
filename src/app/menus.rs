@@ -55,8 +55,12 @@ fn plugin_items(
     ui.separator();
     for item in items {
         let response = ui
-            .add(Button::new(&item.label).shortcut_text(&item.shortcut))
-            .on_hover_text(&item.source);
+            .add_enabled(
+                item.enabled,
+                Button::new(&item.label).shortcut_text(&item.shortcut),
+            )
+            .on_hover_text(&item.source)
+            .on_disabled_hover_text(&item.source);
         if response.clicked() {
             *action = Some((item.plugin.clone(), item.action.clone()));
             ui.close();

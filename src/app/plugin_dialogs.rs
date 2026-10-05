@@ -335,7 +335,10 @@ impl EditorApp {
         let mut open = true;
         let mut decision = None;
         let grant = super::plugins::grant_for(&manifest);
-        let previous = self.stored_grant(&plugin).filter(|g| **g != grant).cloned();
+        let previous = self
+            .stored_grant(&plugin)
+            .filter(|g| !g.covers(&grant))
+            .cloned();
         // The title names the plugin's id too: its name is its own choice.
         let source = self.plugins.source(&plugin);
         let title = if manifest.permissions.is_empty() {
@@ -352,7 +355,7 @@ impl EditorApp {
                     egui::Label::new(format!(
                         "{source} {} {}",
                         manifest.plugin.version,
-                        tr("asks for the following. Xuan reads and writes files for it only in its own folders unless it may use the file system, but the plugin runs with your rights and could reach anything you can; only run plugins you trust."),
+                        tr("runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it. The plugin can still read your files and contact any server, whatever it declares. Only run plugins you trust."),
                     ))
                     .wrap(),
                 );
@@ -443,6 +446,8 @@ impl EditorApp {
         let mut grant: Option<(String, bool)> = None;
         let mut enable: Option<(String, bool)> = None;
         let mut setting_changed: Option<(String, String, Value)> = None;
+        let mut ask_again: Option<String> = None;
+        let mut offline = self.config.disable_network_plugins;
         let plugin_dir = self
             .config_path
             .as_ref()
@@ -523,7 +528,9 @@ impl EditorApp {
                         }
                         ui.add_space(4.0);
                         ui.label(RichText::new(manifest.dir.display().to_string()).small().color(theme::MUTED));
-                        let status = if self.plugins.running(&id) {
+                        let status = if self.plugin_offline(&id) {
+                            tr("Off: plugins that use the network are disabled")
+                        } else if self.plugins.running(&id) {
                             tr("Running")
                         } else {
                             tr("Not running")
@@ -543,6 +550,19 @@ impl EditorApp {
                                     grant = Some((id.clone(), true));
                                 }
                             });
+                            if self.plugin_granted(&id)
+                                && self.stored_grant(&id).is_some_and(|g| g.send_without_asking)
+                            {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(tr("Gets document data without asking"))
+                                            .color(theme::MUTED),
+                                    );
+                                    if widgets::button(ui, tr("Ask Again")).clicked() {
+                                        ask_again = Some(id.clone());
+                                    }
+                                });
+                            }
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
@@ -612,6 +632,8 @@ impl EditorApp {
                     }
                 }
                 ui.separator();
+                widgets::checkbox(ui, &mut offline, tr("Disable plugins that use the network"))
+                    .on_hover_text(tr("Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect."));
                 ui.horizontal(|ui| {
                     if let Some(dir) = &plugin_dir {
                         ui.label(RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display())).small().color(theme::MUTED));
@@ -636,6 +658,12 @@ impl EditorApp {
         }
         if let Some((id, setting, value)) = setting_changed {
             self.set_plugin_setting(&id, &setting, value);
+        }
+        if let Some(id) = ask_again {
+            self.ask_before_sending_again(&id);
+        }
+        if offline != self.config.disable_network_plugins {
+            self.set_network_plugins_disabled(offline);
         }
         if reload {
             self.load_plugins();
@@ -801,11 +829,25 @@ fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest) {
     let mut any = false;
     if !permissions.network.is_empty() {
         any = true;
-        ui.label(format!(
-            "• {} {}",
-            tr("Connects to:"),
-            permissions.network.join(", ")
-        ));
+        ui.add(
+            egui::Label::new(format!(
+                "• {} {}",
+                tr("Says it connects to:"),
+                permissions.network.join(", ")
+            ))
+            .wrap(),
+        );
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "  {}",
+                    tr("Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.")
+                ))
+                .small()
+                .color(theme::MUTED),
+            )
+            .wrap(),
+        );
     }
     if !permissions.secrets.is_empty() {
         any = true;

@@ -106,6 +106,10 @@ pub struct Config {
     pub keybindings: toml::Table,
     /// Command ids run from the command palette, most recent first.
     pub recent_commands: Vec<String>,
+    /// "Disable plugins that use the network": plugins whose manifest declares
+    /// network hosts do not start and their actions are unavailable.
+    #[serde(default)]
+    pub disable_network_plugins: bool,
 }
 
 impl Default for Config {
@@ -126,6 +130,7 @@ impl Default for Config {
             plugins: BTreeMap::new(),
             keybindings: toml::Table::new(),
             recent_commands: Vec::new(),
+            disable_network_plugins: false,
         }
     }
 }
@@ -161,6 +166,22 @@ pub struct PluginGrant {
     pub dir: PathBuf,
     pub command: Vec<String>,
     pub permissions: crate::plugins::manifest::Permissions,
+    /// "Don't ask again for this plugin" in the prompt shown before document
+    /// data goes to a plugin that declares network hosts. It belongs to this
+    /// grant: a plugin whose folder, command or permissions change is
+    /// reviewed again and starts without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub send_without_asking: bool,
+}
+
+impl PluginGrant {
+    /// Whether both grants allow the same plugin: the same folder, command
+    /// and permissions. The answers stored with a grant do not count.
+    pub fn covers(&self, other: &Self) -> bool {
+        self.dir == other.dir
+            && self.command == other.command
+            && self.permissions == other.permissions
+    }
 }
 
 /// Plugin secrets such as API keys, kept out of `config.toml` in a file that
@@ -301,6 +322,10 @@ impl Config {
         );
         table.insert("panes".into(), toml::Value::try_from(&self.panes)?);
         table.insert("plugins".into(), toml::Value::try_from(&self.plugins)?);
+        table.insert(
+            "disable_network_plugins".into(),
+            toml::Value::Boolean(self.disable_network_plugins),
+        );
         if self.keybindings.is_empty() {
             table.remove("keybindings");
         } else {
@@ -419,6 +444,43 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), custom);
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("pixel_grid = false") && text.contains("pixel_grid_percent = 800"));
+    }
+
+    #[test]
+    fn network_settings_from_older_releases_load_and_roundtrip() {
+        // A configuration from before offline mode and send consent, with a grant.
+        let old = "language = 'en'\n\n[plugins.comfy]\nenabled = true\n\n\
+                   [plugins.comfy.grant]\ndir = '/p/comfy'\ncommand = ['python3', 'main.py']\n\n\
+                   [plugins.comfy.grant.permissions]\nnetwork = ['example.com']\n";
+        let config: Config = toml::from_str(&old.replace('\n', "\r\n")).unwrap();
+        assert!(!config.disable_network_plugins);
+        let grant = config.plugins["comfy"].grant.clone().unwrap();
+        assert!(!grant.send_without_asking);
+        assert_eq!(grant.permissions.network, ["example.com"]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut changed = config.clone();
+        changed.disable_network_plugins = true;
+        changed.plugins.get_mut("comfy").unwrap().grant = Some(PluginGrant {
+            send_without_asking: true,
+            ..grant.clone()
+        });
+        changed.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("disable_network_plugins = true"), "{text}");
+        assert!(text.contains("send_without_asking = true"), "{text}");
+        assert_eq!(Config::load(&path).unwrap(), changed);
+        // The stored answer does not change which plugin the grant covers.
+        let stored = changed.plugins["comfy"].grant.as_ref().unwrap();
+        assert!(stored.covers(&grant) && *stored != grant);
+        // Without the answer the field is left out, as in older files.
+        config.save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("send_without_asking")
+        );
     }
 
     #[test]

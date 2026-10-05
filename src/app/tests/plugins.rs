@@ -274,6 +274,7 @@ fn mock_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
         progress: None,
         message: String::new(),
         cancelled: false,
+        consented: false,
     }
 }
 

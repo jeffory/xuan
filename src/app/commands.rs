@@ -1257,7 +1257,7 @@ impl EditorApp {
                 command.scope.active(self.develop.is_some()) && (command.enabled)(self)
             }
             Some(Kind::Plugin { plugin, .. }) => {
-                self.develop.is_none() && self.plugin_enabled(plugin)
+                self.develop.is_none() && self.plugin_available(plugin)
             }
             None => false,
         }
