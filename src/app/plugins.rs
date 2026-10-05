@@ -198,6 +198,34 @@ impl EditorApp {
     }
 
     pub(super) fn install_plugins(&mut self, manifests: Vec<Manifest>, errors: Vec<LoadError>) {
+        // Plugins that went away or changed lose their process, and with it
+        // everything still waiting for that process.
+        let mut gone: Vec<String> = self
+            .plugins
+            .manifests
+            .iter()
+            .filter(|old| !manifests.contains(old))
+            .map(|old| old.plugin.id.clone())
+            .collect();
+        let orphans = (self.plugins.processes.keys())
+            .chain(self.plugins.jobs.iter().map(|job| &job.plugin))
+            .chain(self.plugins.pending.keys().map(|(plugin, _)| plugin))
+            .filter(|id| !manifests.iter().any(|m| &m.plugin.id == *id))
+            .cloned()
+            .collect::<Vec<_>>();
+        gone.extend(orphans);
+        gone.sort();
+        gone.dedup();
+        for plugin in &gone {
+            let name = self
+                .plugins
+                .manifest(plugin)
+                .map_or(plugin.clone(), |m| m.plugin.name.clone());
+            self.end_plugin(
+                plugin,
+                &format!("{name} {}", tr("was removed or changed by Reload")),
+            );
+        }
         self.plugins.install(manifests, errors);
         let mut changed = false;
         for manifest in &self.plugins.manifests {
@@ -256,6 +284,27 @@ impl EditorApp {
         }
         self.plugins.pending.retain(|(id, _), _| id != plugin);
         self.plugins.jobs.retain(|job| job.plugin != plugin);
+        for (key, pane) in &mut self.plugins.panes {
+            if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
+                pane.pending = false;
+            }
+        }
+    }
+
+    /// Stop a plugin and fail what was waiting for it with `reason`.
+    fn end_plugin(&mut self, plugin: &str, reason: &str) {
+        if let Some(mut process) = self.plugins.processes.remove(plugin) {
+            let _ = process.request("shutdown", Value::Null);
+            process.stop();
+        }
+        let failed: Vec<_> = (self.plugins.jobs.iter())
+            .filter(|job| job.plugin == plugin)
+            .map(|job| job.id)
+            .collect();
+        for id in failed {
+            self.finish_plugin_job(id, Err(reason.to_owned()));
+        }
+        self.plugins.pending.retain(|(id, _), _| id != plugin);
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
                 pane.pending = false;
@@ -991,8 +1040,16 @@ impl EditorApp {
         if let Some(job) = self.plugins.jobs.iter_mut().find(|job| job.id == id) {
             job.cancelled = true;
             let plugin = job.plugin.clone();
-            if let Some(process) = self.plugins.processes.get_mut(&plugin) {
-                let _ = process.notify("job/cancel", json!({"job": id}));
+            let notified = self
+                .plugins
+                .processes
+                .get_mut(&plugin)
+                .is_some_and(|process| {
+                    process.alive() && process.notify("job/cancel", json!({"job": id})).is_ok()
+                });
+            if !notified {
+                // Nothing will answer; end the job now.
+                self.finish_plugin_job(id, Err(tr("Cancelled").into()));
             }
         }
     }

@@ -22,6 +22,10 @@ use super::{
 
 const MAX_LOG_LINES: usize = 500;
 
+/// Request ids are unique across every process this host starts, so a stale
+/// request to an earlier process of a plugin never matches a later one's answer.
+static NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+
 /// Something the plugin sent, or the reason it stopped sending.
 #[derive(Debug)]
 pub enum Incoming {
@@ -39,7 +43,6 @@ pub struct Process {
     /// Messages a blocking [`Process::wait_for`] received but could not return,
     /// including [`Incoming::Closed`], handed out by the next [`Process::poll`].
     held: Vec<Incoming>,
-    next_id: i64,
     log: Arc<Mutex<VecDeque<String>>>,
     closed: Arc<AtomicBool>,
 }
@@ -142,7 +145,6 @@ impl Process {
             stdin,
             incoming,
             held: Vec::new(),
-            next_id: 1,
             log,
             closed,
         })
@@ -156,8 +158,7 @@ impl Process {
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Result<Id> {
-        let id = Id::Number(self.next_id);
-        self.next_id += 1;
+        let id = Id::Number(NEXT_ID.fetch_add(1, Ordering::Relaxed));
         self.send(&Message::request(id.clone(), method, params))?;
         Ok(id)
     }
@@ -409,6 +410,18 @@ done
         assert!(matches!(held.last(), Some(Incoming::Closed)), "{held:?}");
         assert!(process.poll().is_empty());
         assert!(!process.alive());
+    }
+
+    #[test]
+    fn request_ids_are_unique_across_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = mock(dir.path());
+        let mut first = Process::spawn(&manifest, &[]).unwrap();
+        let mut second = Process::spawn(&manifest, &[]).unwrap();
+        let a = first.request("ping", Value::Null).unwrap();
+        let b = second.request("ping", Value::Null).unwrap();
+        let c = first.request("ping", Value::Null).unwrap();
+        assert!(a != b && b != c && a != c, "{a:?} {b:?} {c:?}");
     }
 
     #[test]

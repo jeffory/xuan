@@ -427,6 +427,60 @@ fn a_plugin_that_crashes_during_a_blocking_call_is_cleaned_up() {
     assert!(app.plugins.running("mock"));
 }
 
+#[cfg(unix)]
+#[test]
+fn reloading_fails_the_jobs_of_removed_and_changed_plugins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    // The plugin never answers runs or renders.
+    std::fs::write(dir.path().join("plugin.sh"), CRASHING_IMPORT).unwrap();
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    let start = |app: &mut EditorApp| {
+        app.start_plugin_action("mock", "echo");
+        app.add_region(Point::new(1.0, 1.0), Point::new(8.0, 8.0));
+        app.run_plugin_action();
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert_eq!(app.plugins.jobs.len(), 1);
+    };
+    let key = "plugin:mock/info";
+
+    // Removed: the job ends with an error and the document is free again.
+    start(&mut app);
+    app.render_pane(key, "open", None);
+    app.install_plugins(vec![], vec![]);
+    assert!(app.plugins.jobs.is_empty());
+    assert!(!app.plugins.running("mock"));
+    assert!(
+        app.error.as_deref().is_some_and(|e| e.contains("Reload")),
+        "{:?}",
+        app.error
+    );
+    app.error = None;
+
+    // Re-added: a new process starts and new actions run.
+    let manifest = Manifest::load(dir.path()).unwrap();
+    app.install_plugins(vec![manifest.clone()], vec![]);
+    start(&mut app);
+    // Unchanged on reload: the process and its job are kept.
+    app.install_plugins(vec![manifest.clone()], vec![]);
+    assert_eq!(app.plugins.jobs.len(), 1);
+    assert!(app.plugins.running("mock"));
+    // Changed: the process restarts, so its job fails too.
+    let mut changed = manifest;
+    changed.plugin.version = "0.2.0".into();
+    app.install_plugins(vec![changed], vec![]);
+    assert!(app.plugins.jobs.is_empty());
+    assert!(!app.plugins.running("mock"));
+    app.error = None;
+    start(&mut app);
+    frame(&context, &mut app);
+    assert_eq!(app.plugins.jobs.len(), 1);
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::{builtin_for, consume_exact};
