@@ -1476,6 +1476,8 @@ impl EditorApp {
                 y: f32,
                 #[serde(default)]
                 mask: Option<PathBuf>,
+                #[serde(flatten)]
+                placed: jobs::Placed,
             },
             Document {
                 path: PathBuf,
@@ -1545,7 +1547,9 @@ impl EditorApp {
                     x,
                     y,
                     mask,
+                    placed,
                 } => {
+                    placed.validate()?;
                     reader.add_layer()?;
                     let image = reader.rgba(&path)?;
                     let name = name.unwrap_or_else(|| job.label.clone());
@@ -1567,16 +1571,27 @@ impl EditorApp {
                     {
                         replace = Some((
                             source,
-                            jobs::replace_pixels(&job.prepared, pixels, &image, x, y)?,
+                            jobs::replace_pixels(&job.prepared, pixels, &image, x, y, &placed)?,
                         ));
                         continue;
                     }
                     let mut layer = if job.prepared.export.is_some() {
-                        jobs::place_layer(&job.prepared, &name, image, x, y, regions)?
+                        jobs::place_layer(&job.prepared, &name, image, x, y, &placed, regions)?
                     } else {
                         let mut layer = Layer::image(name, image);
                         layer.transform.x = x;
                         layer.transform.y = y;
+                        ensure!(
+                            placed.fit.is_none(),
+                            "fit = \"source\" needs an action with a source"
+                        );
+                        let (w, h) = (layer.transform.width, layer.transform.height);
+                        layer.transform.width = placed
+                            .width
+                            .unwrap_or_else(|| placed.height.map_or(w, |height| height * w / h));
+                        layer.transform.height = placed
+                            .height
+                            .unwrap_or_else(|| placed.width.map_or(h, |width| width * h / w));
                         layer
                     };
                     if let Some(mask) = mask {

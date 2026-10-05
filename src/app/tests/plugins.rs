@@ -322,6 +322,35 @@ fn oversized_results_are_refused_before_their_images_are_read() {
     assert!(app.plugins.proposal.is_some());
 }
 
+#[test]
+fn image_outputs_may_declare_their_placed_size() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    let job = mock_job(&app);
+    let fixture = dir.path().join("fixture.png");
+    for (extra, ok) in [
+        (json!({"width": 0}), false),
+        (json!({"height": -3.0}), false),
+        (json!({"width": 1e9}), false),
+        (json!({"fit": "bogus"}), false),
+        (json!({"fit": "source"}), false),
+        (json!({"fit": "source", "width": 4}), false),
+        (json!({"width": 12.0, "height": 6.0}), true),
+    ] {
+        let mut output = json!({"kind": "image", "path": fixture});
+        output
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let result = app.apply_job_result(&job, json!({"outputs": [output]}));
+        assert_eq!(result.is_ok(), ok, "{extra}: {result:?}");
+    }
+}
+
 fn plugin_request(
     app: &mut EditorApp,
     method: &str,

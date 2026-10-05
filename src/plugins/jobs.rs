@@ -59,6 +59,46 @@ impl Region {
     }
 }
 
+/// How large an `image` output is placed, when not at its own pixel size
+/// divided by the export scale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+pub struct Placed {
+    /// Width in document units.
+    #[serde(default)]
+    pub width: Option<f32>,
+    /// Height in document units.
+    #[serde(default)]
+    pub height: Option<f32>,
+    /// `source`: cover the bounds of the source that was sent.
+    #[serde(default)]
+    pub fit: Option<Fit>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fit {
+    Source,
+}
+
+impl Placed {
+    pub fn validate(&self) -> Result<()> {
+        for (name, value) in [("width", self.width), ("height", self.height)] {
+            if let Some(value) = value {
+                ensure!(
+                    value.is_finite() && value > 0.0 && value <= crate::document::MAX_SIDE as f32,
+                    "The placed {name} must be between 0 and {} document units",
+                    crate::document::MAX_SIDE
+                );
+            }
+        }
+        ensure!(
+            self.fit.is_none() || (self.width.is_none() && self.height.is_none()),
+            "An image output gives either fit or a width and height, not both"
+        );
+        Ok(())
+    }
+}
+
 /// The source sent to a plugin and everything needed to place results back.
 #[derive(Clone, Debug)]
 pub struct Prepared {
@@ -128,17 +168,41 @@ impl Prepared {
         )
     }
 
+    /// The size in source pixels an image of `pixels` size covers once placed.
+    pub fn placed_size(&self, pixels: (u32, u32), placed: &Placed) -> Result<(f32, f32)> {
+        placed.validate()?;
+        let (w, h) = (pixels.0 as f32, pixels.1 as f32);
+        if placed.fit.is_some() {
+            return Ok((self.crop.2, self.crop.3));
+        }
+        if placed.width.is_none() && placed.height.is_none() {
+            return Ok((w / self.scale, h / self.scale));
+        }
+        // Document units per source pixel; a missing side keeps the aspect.
+        let (sw, sh) = (self.source_size.0 as f32, self.source_size.1 as f32);
+        ensure!(sw > 0.0 && sh > 0.0, "The action had no source image");
+        let (ux, uy) = (self.transform.width / sw, self.transform.height / sh);
+        let width = placed.width.or(placed.height.map(|v| v * w / h));
+        let height = placed.height.or(placed.width.map(|v| v * h / w));
+        Ok((width.unwrap_or(w) / ux, height.unwrap_or(h) / uy))
+    }
+
     /// The document transform of an output covering export pixels
     /// `x, y, width, height`.
     pub fn placement(&self, x: f32, y: f32, width: f32, height: f32) -> Transform {
+        self.placement_sized(x, y, (width / self.scale, height / self.scale))
+    }
+
+    /// As `placement`, for a size already in source pixels.
+    pub fn placement_sized(&self, x: f32, y: f32, size: (f32, f32)) -> Transform {
         sub_transform(
             self.transform,
             self.source_size,
             (
                 self.crop.0 + x / self.scale,
                 self.crop.1 + y / self.scale,
-                width / self.scale,
-                height / self.scale,
+                size.0,
+                size.1,
             ),
         )
     }
@@ -300,12 +364,14 @@ pub fn place_layer(
     image: RgbaImage,
     x: f32,
     y: f32,
+    placed: &Placed,
     regions: Option<&[Region]>,
 ) -> Result<Layer> {
     ensure!(prepared.export.is_some(), "The action had no source image");
+    let size = prepared.placed_size(image.dimensions(), placed)?;
     let (width, height) = (image.width() as f32, image.height() as f32);
     let mut layer = Layer::image(name, image);
-    layer.transform = prepared.placement(x, y, width, height);
+    layer.transform = prepared.placement_sized(x, y, size);
     ensure!(
         layer.transform.valid(),
         "The result does not fit the document"
@@ -403,7 +469,7 @@ pub fn box_blur(mask: &mut GrayImage, radius: u32) {
 
 /// Paste a result over the source layer's pixels, for `result.into = "replace"`.
 ///
-/// The result is scaled back to the layer's resolution first. That size is
+/// The result is scaled to the size it is placed at, in the layer's pixels. That size is
 /// checked before anything is allocated, so a large result for a source that
 /// was sent much smaller fails instead of exhausting memory.
 pub fn replace_pixels(
@@ -412,14 +478,22 @@ pub fn replace_pixels(
     image: &RgbaImage,
     x: f32,
     y: f32,
+    placed: &Placed,
 ) -> Result<RgbaImage> {
     let scale = f64::from(prepared.scale);
     ensure!(
         scale.is_finite() && scale > 0.0,
         "The source was prepared with an invalid scale"
     );
-    let side = |pixels: u32| (f64::from(pixels) / scale).round().max(1.0);
-    let (width, height) = (side(image.width()), side(image.height()));
+    let size = prepared.placed_size(image.dimensions(), placed)?;
+    ensure!(
+        size.0.is_finite() && size.1.is_finite(),
+        "The result does not fit the layer"
+    );
+    let (width, height) = (
+        f64::from(size.0).round().max(1.0),
+        f64::from(size.1).round().max(1.0),
+    );
     ensure!(
         width <= f64::from(u32::MAX) && height <= f64::from(u32::MAX),
         "The result is too large to scale back to the layer"
@@ -495,8 +569,16 @@ mod tests {
         );
 
         let result = RgbaImage::from_pixel(20, 20, image::Rgba([0, 255, 0, 255]));
-        let layer =
-            place_layer(&prepared, "Edit", result.clone(), 0.0, 0.0, Some(&regions)).unwrap();
+        let layer = place_layer(
+            &prepared,
+            "Edit",
+            result.clone(),
+            0.0,
+            0.0,
+            &Placed::default(),
+            Some(&regions),
+        )
+        .unwrap();
         assert_eq!(layer.transform.x, 200.0);
         let mask = &layer.mask.as_ref().unwrap().pixels;
         assert_eq!(mask.dimensions(), (20, 20));
@@ -507,6 +589,7 @@ mod tests {
             &result,
             0.0,
             0.0,
+            &Placed::default(),
         )
         .unwrap();
         assert_eq!(replaced.get_pixel(100, 75)[1], 255);
@@ -525,18 +608,22 @@ mod tests {
         let source = RgbaImage::new(4, 4);
         // 10k x 10k at that scale would be about 1.2M x 1.2M pixels.
         let huge = RgbaImage::new(10_000, 1);
-        let error = replace_pixels(&prepared, &source, &huge, 0.0, 0.0).unwrap_err();
+        let error =
+            replace_pixels(&prepared, &source, &huge, 0.0, 0.0, &Placed::default()).unwrap_err();
         assert!(format!("{error:#}").contains("too large"), "{error:#}");
         // Within the limit it still works.
         let small = RgbaImage::new(2, 2);
-        let pixels = replace_pixels(&prepared, &source, &small, 0.0, 0.0).unwrap();
+        let pixels =
+            replace_pixels(&prepared, &source, &small, 0.0, 0.0, &Placed::default()).unwrap();
         assert_eq!(pixels.dimensions(), (4, 4));
         for scale in [0.0, f32::NAN, f32::INFINITY, -1.0] {
             let prepared = Prepared {
                 scale,
                 ..Prepared::none()
             };
-            assert!(replace_pixels(&prepared, &source, &small, 0.0, 0.0).is_err());
+            assert!(
+                replace_pixels(&prepared, &source, &small, 0.0, 0.0, &Placed::default()).is_err()
+            );
         }
     }
 
@@ -585,6 +672,7 @@ mod tests {
             RgbaImage::new(200, 150),
             0.0,
             0.0,
+            &Placed::default(),
             Some(&[region]),
         )
         .unwrap();
@@ -615,7 +703,126 @@ mod tests {
         .unwrap();
         assert!(none.export.is_none());
         assert!(none.describe().is_null());
-        assert!(place_layer(&none, "x", RgbaImage::new(1, 1), 0.0, 0.0, None).is_err());
+        assert!(
+            place_layer(
+                &none,
+                "x",
+                RgbaImage::new(1, 1),
+                0.0,
+                0.0,
+                &Placed::default(),
+                None
+            )
+            .is_err()
+        );
+    }
+
+    fn layer_source(dir: &Path) -> (Document, Prepared) {
+        let document = document();
+        let source = Source {
+            from: SourceKind::Layer,
+            max_side: None,
+            crop_to_regions: false,
+            padding: 0.0,
+        };
+        let prepared = prepare(&document, &source, &[], dir).unwrap();
+        (document, prepared)
+    }
+
+    #[test]
+    fn a_double_size_result_can_cover_the_source_at_twice_the_density() {
+        let dir = tempfile::tempdir().unwrap();
+        let (document, prepared) = layer_source(dir.path());
+        let upscaled = RgbaImage::from_pixel(400, 300, image::Rgba([0, 255, 0, 255]));
+        let place = |placed: &Placed| {
+            place_layer(&prepared, "Up", upscaled.clone(), 0.0, 0.0, placed, None).unwrap()
+        };
+        // By default it lands at its pixel size, twice as large as the source here.
+        assert_eq!(place(&Placed::default()).transform.width, 800.0);
+        let fit = Placed {
+            fit: Some(Fit::Source),
+            ..Placed::default()
+        };
+        let layer = place(&fit);
+        let original = document.layers[0].transform;
+        assert_eq!(
+            (layer.transform.x, layer.transform.y),
+            (original.x, original.y)
+        );
+        assert_eq!(
+            (layer.transform.width, layer.transform.height),
+            (original.width, original.height)
+        );
+        assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (400, 300));
+        // Explicit sizes, and one side alone keeps the aspect ratio.
+        let sized = Placed {
+            width: Some(100.0),
+            height: Some(50.0),
+            fit: None,
+        };
+        let layer = place(&sized);
+        assert_eq!(
+            (layer.transform.width, layer.transform.height),
+            (100.0, 50.0)
+        );
+        let wide = Placed {
+            width: Some(100.0),
+            ..Placed::default()
+        };
+        let layer = place(&wide);
+        assert_eq!(
+            (layer.transform.width, layer.transform.height),
+            (100.0, 75.0)
+        );
+        // Replacing resamples to the source's own pixel grid.
+        let pixels = document.layers[0].pixels.as_ref().unwrap();
+        let replaced = replace_pixels(&prepared, pixels, &upscaled, 0.0, 0.0, &fit).unwrap();
+        assert_eq!(replaced.dimensions(), (200, 150));
+        assert_eq!(replaced.get_pixel(100, 75)[1], 255);
+        assert_eq!(replaced.get_pixel(100, 75)[0], 0);
+        // Placed at half the layer's size in document units, a quarter of its pixels.
+        let half = Placed {
+            width: Some(200.0),
+            height: Some(150.0),
+            fit: None,
+        };
+        let replaced = replace_pixels(&prepared, pixels, &upscaled, 0.0, 0.0, &half).unwrap();
+        assert_eq!(replaced.get_pixel(99, 74)[1], 255);
+        assert_eq!(replaced.get_pixel(100, 75)[1], 0);
+    }
+
+    #[test]
+    fn invalid_placed_sizes_are_rejected_and_budgets_still_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let (document, prepared) = layer_source(dir.path());
+        let image = RgbaImage::new(4, 4);
+        let place = |placed: &Placed| {
+            place_layer(&prepared, "x", image.clone(), 0.0, 0.0, placed, None).is_err()
+        };
+        for bad in [0.0, -5.0, f32::NAN, f32::INFINITY, 30_001.0] {
+            assert!(place(&Placed {
+                width: Some(bad),
+                ..Placed::default()
+            }));
+            assert!(place(&Placed {
+                height: Some(bad),
+                ..Placed::default()
+            }));
+        }
+        assert!(place(&Placed {
+            width: Some(10.0),
+            height: None,
+            fit: Some(Fit::Source),
+        }));
+        // Replacing is still limited to the document's size and pixel budgets.
+        let huge = Placed {
+            width: Some(30_000.0),
+            height: Some(30_000.0),
+            fit: None,
+        };
+        let pixels = document.layers[0].pixels.as_ref().unwrap();
+        let error = replace_pixels(&prepared, pixels, &image, 0.0, 0.0, &huge).unwrap_err();
+        assert!(format!("{error:#}").contains("too large"), "{error:#}");
     }
 
     #[test]
