@@ -1,0 +1,12 @@
+[package]
+name = "xuan-plugin"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Write plugins for the Xuan image editor"
+license = "MIT"
+repository = "https://github.com/jeffory/xuan"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

@@ -18,7 +18,7 @@ pub enum BlendMode {
     Saturation,
     Color,
     Luminosity,
-    // Added in .xuan format 6.
+    // Added in .xuan format 7.
     Dissolve,
     LinearBurn,
     DarkerColor,
@@ -36,7 +36,7 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
-    /// Every mode in code order: the first 13 are the modes .xuan format 1–5 knew.
+    /// Every mode in code order: the first 13 are the modes .xuan format 1–6 knew.
     pub const ALL: [Self; 27] = [
         Self::Normal,
         Self::Multiply,
@@ -110,7 +110,7 @@ impl BlendMode {
         Self::ALL.iter().position(|m| *m == self).unwrap_or(0) as u32
     }
 
-    /// Whether .xuan format 5 and earlier can store this mode.
+    /// Whether .xuan format 6 and earlier can store this mode.
     pub fn is_legacy(self) -> bool {
         self.code() < 13
     }

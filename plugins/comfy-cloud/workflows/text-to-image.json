@@ -1,0 +1,22 @@
+{
+  "1": {
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": { "title": "Xuan Prompt" },
+    "inputs": { "value": "" }
+  },
+  "2": {
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "Xuan Size" },
+    "inputs": { "width": 1024, "height": 1024, "batch_size": 1 }
+  },
+  "3": {
+    "class_type": "IdeogramV3",
+    "_meta": { "title": "Text to image (replace with your exported node)" },
+    "inputs": { "prompt": ["1", 0], "seed": "{{seed}}", "resolution": "{{width}}x{{height}}" }
+  },
+  "4": {
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" },
+    "inputs": { "images": ["3", 0], "filename_prefix": "xuan_generate" }
+  }
+}

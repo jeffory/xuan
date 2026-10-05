@@ -149,7 +149,7 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 6;
+const LATEST_VERSION: u32 = 7;
 
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
@@ -159,6 +159,8 @@ fn format_version(document: &Document) -> u32 {
             || l.adjustment.as_ref().is_some_and(|a| !a.is_legacy())
             || l.effects.is_some()
     }) {
+        7
+    } else if document.layers.iter().any(|l| l.generated.is_some()) {
         6
     } else if !document.guides.is_empty() || document.grid.is_some() {
         5
@@ -490,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn photoshop_blend_modes_round_trip_as_version_6() {
+    fn photoshop_blend_modes_round_trip_as_version_7() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("blend.xuan");
         let mut doc = Document::new(4, 4).unwrap();
@@ -504,7 +506,7 @@ mod tests {
         for mode in &crate::blend::BlendMode::ALL[13..] {
             doc.layers[0].blend = *mode;
             save(&doc, &path).unwrap();
-            assert_eq!(manifest_json(&path)["version"], 6, "{}", mode.name());
+            assert_eq!(manifest_json(&path)["version"], 7, "{}", mode.name());
             assert_eq!(load(&path).unwrap().layers[0].blend, *mode);
         }
         assert_eq!(
@@ -521,7 +523,7 @@ mod tests {
             let mut with_layer = doc.clone();
             with_layer.layers.push(layer);
             save(&with_layer, &path).unwrap();
-            assert_eq!(manifest_json(&path)["version"], 6);
+            assert_eq!(manifest_json(&path)["version"], 7);
             assert_eq!(load(&path).unwrap().layers[1].adjustment, Some(adjustment));
         }
         // And layer effects.
@@ -534,11 +536,34 @@ mod tests {
         with_effects.layers[0].effects = Some(effects.clone());
         let effects_path = directory.path().join("effects.xuan");
         save(&with_effects, &effects_path).unwrap();
-        assert_eq!(manifest_json(&effects_path)["version"], 6);
+        assert_eq!(manifest_json(&effects_path)["version"], 7);
         assert_eq!(
             load(&effects_path).unwrap().layers[0].effects,
-            Some(effects)
+            Some(effects.clone())
         );
+        // Plugin provenance alone stays version 6; with these features it is version 7,
+        // and both survive the round trip.
+        let generated = crate::document::Generated {
+            plugin: "example.plugin".into(),
+            version: "1.0.0".into(),
+            action: "outline".into(),
+            inputs: serde_json::json!({"radius": 3}),
+            source: Some(doc.layers[0].id),
+            source_hash: Some("fnv1a:0123456789abcdef".into()),
+            created: "2026-10-05T12:00:00Z".into(),
+        };
+        let mut provenance = doc.clone();
+        provenance.layers[0].generated = Some(generated.clone());
+        save(&provenance, &effects_path).unwrap();
+        assert_eq!(manifest_json(&effects_path)["version"], 6);
+        provenance.layers[0].effects = Some(effects.clone());
+        provenance.layers[0].blend = crate::blend::BlendMode::LinearDodge;
+        save(&provenance, &effects_path).unwrap();
+        assert_eq!(manifest_json(&effects_path)["version"], 7);
+        let loaded = load(&effects_path).unwrap();
+        assert_eq!(loaded.layers[0].generated, Some(generated));
+        assert_eq!(loaded.layers[0].effects, Some(effects));
+        assert_eq!(loaded.layers[0].blend, crate::blend::BlendMode::LinearDodge);
         // Out of range settings are refused on load.
         let mut manifest = manifest_json(&path);
         manifest["document"]["layers"][1]["adjustment"]["ColorBalance"]["shadows"][0] =

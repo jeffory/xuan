@@ -3,5 +3,9 @@
 *.tmp
 .agents/
 .codex/
+/plugins/*/target/
+/sdk/*/target/
+/sdk/*/Cargo.lock
+__pycache__/
 
 /testdata/raw/cache/

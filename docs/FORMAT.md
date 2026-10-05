@@ -22,12 +22,12 @@ The importer reads Compositor `.comp` directory packages, format versions 1–11
 | top-level `guides` (8) | `guides`; the project then saves as `.xuan` version 5. Packages hold no layout grid (upstream keeps it as an app preference), so `grid` stays unset |
 | `Invert` adjustment (7) | Invert adjustment layer |
 | `Gaussian Blur`, `Motion Blur`, `Add Noise` adjustments (9) | Filter layers. Settings beyond Xuan's ranges are reduced (blur radius to 100, motion distance to 200, noise amount to 100); the motion angle is negated because upstream measures it counterclockwise; Gaussian noise becomes uniform and the noise seed is not kept. Filter layers ignore blend modes and clipping |
-| `Black & White`, `Color Balance` adjustments (7) | The same adjustment layers (`blackWhiteSettings`, `colorBalanceSettings`; missing fields take upstream's defaults); the project then saves as `.xuan` version 6 |
+| `Black & White`, `Color Balance` adjustments (7) | The same adjustment layers (`blackWhiteSettings`, `colorBalanceSettings`; missing fields take upstream's defaults); the project then saves as `.xuan` version 7 |
 | `text` (content, `fontName`, `fontSize`, color) | Editable text: the PostScript name becomes a family plus bold/italic (`HelveticaNeue-BoldItalic` → Helvetica Neue, bold, italic) |
 | `text` alignment, `tracking`, `leading`, `boxSize`; `colorRuns` (10); `fontRuns` (11) | Not represented. The layer's PNG keeps the original look until the text is edited in Xuan |
 | text over 16 KiB or larger than 1024 px | Imported as plain pixels |
-| Photoshop blend modes (Linear Burn, Linear Dodge (Add), Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide) | The same blend modes; the project then saves as `.xuan` version 6 |
-| `effects` (stroke, shadow, color overlay, inner shadow, outer/inner glow) | Layer effects with the same settings (colors rounded to 8 bits; missing fields take upstream's defaults); the project then saves as `.xuan` version 6. Effects on folders or adjustment layers, which upstream never draws, are left out |
+| Photoshop blend modes (Linear Burn, Linear Dodge (Add), Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide) | The same blend modes; the project then saves as `.xuan` version 7 |
+| `effects` (stroke, shadow, color overlay, inner shadow, outer/inner glow) | Layer effects with the same settings (colors rounded to 8 bits; missing fields take upstream's defaults); the project then saves as `.xuan` version 7. Effects on folders or adjustment layers, which upstream never draws, are left out |
 | `shape` of kind `Line` | Imported as plain pixels |
 
 Whatever is left out or changed is counted, and the app shows a summary after opening the package ("Imported with changes …"). Clipping masks that relied on a left-out layer, or on a filter layer, are released and counted too.
@@ -61,7 +61,7 @@ single image masks are promoted to child layers when opened in the editor.
 
 Documents with guides or a layout grid of their own are written as version 5. Other
 documents keep the lowest version their content needs (1–4) and are written exactly as
-before, without the new keys. The reader accepts versions 1–5; older projects load with
+before, without the new keys. The reader accepts versions 1–6; older projects load with
 no guides and the app's default grid.
 
 The `document` object gains two optional keys:
@@ -81,16 +81,30 @@ Invalid guides or grid settings fail validation on load and save. Rulers, grid a
 visibility, Lock Guides and the Snap To settings are app preferences, not project data.
 Guides follow Crop, Canvas Size, Image Size and Flip Canvas.
 
-## Photoshop blend modes, adjustments and layer effects (version 6)
+## Plugin provenance (version 6)
+
+Documents with a layer produced by a plugin use version 6, which may also
+carry the guides and layout grid of version 5. The reader accepts versions
+1–6. Such a layer carries a `generated` object: the plugin `id` and
+`version`, the `action`, the `inputs` the user chose (regions in
+document coordinates with their fields), the `source` layer id, a `source_hash`
+of the pixels that were sent (`fnv1a:` prefix), and an RFC 3339 `created`
+timestamp. **Layer → Re-run Plugin Action…** uses it to repeat the action with
+the same inputs. Nothing else about the layer changes: its pixels and mask are
+stored like any image layer, so a reader without the plugin shows the result
+unchanged. See [PLUGINS.md](PLUGINS.md).
+
+## Photoshop blend modes, adjustments and layer effects (version 7)
 
 Documents in which a layer uses one of the blend modes added with Photoshop's full
 set, a Black & White or Color Balance adjustment, or layer effects are written as
-version 6; everything else keeps the lowest version its content
-needs (1–5). The reader accepts versions 1–6.
+version 7; everything else keeps the lowest version its content
+needs (1–6). A version 7 document may also carry anything the earlier versions can,
+including plugin provenance. The reader accepts versions 1–7.
 
 A layer's `blend` is one of the original `Normal`, `Multiply`, `Screen`, `Overlay`,
 `Darken`, `Lighten`, `Difference`, `ColorDodge`, `ColorBurn`, `Hue`, `Saturation`,
-`Color` and `Luminosity`, or, from version 6, `Dissolve`, `LinearBurn`, `DarkerColor`,
+`Color` and `Luminosity`, or, from version 7, `Dissolve`, `LinearBurn`, `DarkerColor`,
 `LinearDodge`, `LighterColor`, `SoftLight`, `HardLight`, `VividLight`, `LinearLight`,
 `PinLight`, `HardMix`, `Exclusion`, `Subtract` or `Divide`. The formulas are
 Photoshop's, computed in sRGB on straight colors. Dissolve keeps a pixel fully

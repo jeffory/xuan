@@ -37,6 +37,8 @@
 | Apply crop or polygon / Cancel | Enter / Escape |
 | Shortcut reference | F1 |
 
+Shortcuts match their modifiers exactly: Ctrl+Shift+I inverts the selection and never also runs Ctrl+I. Plugins can give their actions a shortcut, shown next to the action in its menu. A plugin shortcut always includes Ctrl or Alt (or is one of F1–F24) and never replaces a shortcut in the table above; a clashing one is ignored and reported in **Plugins → Manage Plugins…**. The panes in the right sidebar are shown or hidden from the **Window** menu.
+
 Copy an image in another app, or copy one or more image files in a file manager, then use Ctrl+V (or Edit → Paste) to add them as layers. External images are centered on the canvas; a new document is created if none is open. Local file URLs and absolute file paths can also be pasted. Multiple files are imported together in one undo step, without changing the source files. When a text field has focus, Ctrl+V pastes text into that field.
 
 Use **File → Open Image from Clipboard** to open copied pixels in a new document sized to the image, even when another document is open. Copied image files open in separate tabs. Clipboard images preserve transparency and prompt to save when closed.

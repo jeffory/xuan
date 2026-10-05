@@ -641,6 +641,7 @@ Rulers / Grid / Guides	标尺 / 网格 / 参考线
 Snap / Lock guides	对齐 / 锁定参考线
 Drag from a ruler	从标尺拖动
 New guide	新建参考线
+No document open	未打开文档
 Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
 Layer effects on folders or adjustment layers	文件夹或调整图层上的图层效果

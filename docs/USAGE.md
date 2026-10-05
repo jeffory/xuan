@@ -77,11 +77,13 @@ To compile the application or produce a release archive, see the [development gu
 
 ## Workspace
 
-Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar with a Navigator and a Layers panel. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
+Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
+
+The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
 ## Editing tools
 
-- **Navigator:** the top of the right sidebar shows a thumbnail of the whole composited document with a blue box marking the part currently visible on the canvas; it follows panning and zooming live. Drag the box to pan, or click anywhere on the thumbnail to centre the view there. Below it, type a zoom percentage into the field and press Enter, use the **−** / **+** buttons, or drag the slider (logarithmic, 1% to 6400%); all zoom about the centre of the canvas. Click the **Navigator** header's arrow to collapse the pane; the state is remembered between sessions. The thumbnail is cached and refreshes shortly after you stop editing, switch tabs, or undo/redo. The Navigator is not shown in the RAW Develop workspace, which has its own view controls.
+- **Navigator:** a sidebar pane, above Layers by default, shows a thumbnail of the whole composited document with a blue box marking the part currently visible on the canvas; it follows panning and zooming live. Drag the box to pan, or click anywhere on the thumbnail to centre the view there. Below it, type a zoom percentage into the field and press Enter, use the **−** / **+** buttons, or drag the slider (logarithmic, 1% to 6400%); all zoom about the centre of the canvas. Like every pane it can be collapsed from its header, resized, moved, or hidden from the **Window** menu, and the arrangement is remembered between sessions. The thumbnail is cached and refreshes shortly after you stop editing, switch tabs, or undo/redo. The Navigator is not shown in the RAW Develop workspace, which has its own view controls.
 - **Layers:** folders, Photoshop's 27 blend modes (in Photoshop's menu order and grouping: Normal and Dissolve; the darkening modes; the lightening modes; the contrast modes; Difference, Exclusion, Subtract and Divide; then Hue, Saturation, Color and Luminosity), opacity (select a folder to set its own opacity, which dims everything inside it on top of each layer's own; a folder's blend mode stays Normal, so its layers still blend with what is below them, as in upstream Compositor), visibility, locks, drag reordering/nesting, duplication, merge, clipping masks, linked or independent raster masks, and copying layers to another project tab.
 - **Layer effects:** **Layer → Layer Effects…** (also in a layer's right-click menu) adds a stroke (outside or inside), a drop shadow, a color overlay, an inner shadow, an outer glow and an inner glow to a pixel or text layer, with upstream Compositor's defaults. Tick an effect to show it, select it to change its size, angle, distance, blur, color and opacity, or remove it. Changes show on the canvas as you make them; **OK** keeps them as one undo step and **Cancel** puts back what the layer had. Effects are kept with the layer rather than painted into it, so they follow every later edit and can be changed or hidden at any time; the Layers panel marks such layers with “fx”. They follow the layer's mask, and the layer's opacity, folders, blend mode and clipping apply to them as well. Effects are drawn on the GPU when one is available.
 - **Transforms:** move, scale, rotate, flip, free perspective distortion, numeric controls, shared transforms for several layers or folders, and snapping to guides, the grid, layers and the canvas (see [Rulers, guides and grid](#rulers-guides-and-grid)). Original source pixels remain available during transforms. Move / Transform has **Ignore Transparent Pixels** checked by default to select only at visible pixels; uncheck it to select and drag anywhere inside a layer's bounds.
@@ -243,6 +245,28 @@ open as new documents. With a document open, one prompt covers the whole drop:
 a prompt; in a mixed drop they open after you answer, even if you cancel. Drops
 that arrive while a dialog, background job, error, save prompt, or Develop is
 open are queued and handled once it closes.
+
+## Plugins
+
+Plugins add menu actions, sidebar panes and file formats. Install one by
+placing its folder in the plugins directory shown under **Plugins → Manage
+Plugins…** (`~/.config/xuan/plugins/` on Linux, `%APPDATA%\xuan\plugins\` on
+Windows), then press **Reload**. Plugins that declare permissions, such as
+network access or an API key, ask for them before they first run. Their
+settings are edited in the same window.
+
+A plugin action opens a dialog built from the inputs it declared. Actions that
+work on marked parts of the image switch to the **Region** tool: drag boxes
+over the canvas, or add the current selection as a region, and fill in each
+box's details. The result arrives as a proposal above the canvas with
+**Compare**, **Accept** and **Discard**; accepting is one undo step. Generated
+layers remember what produced them, so **Layer → Re-run Plugin Action…** can
+repeat the action with changes.
+
+The repository ships examples under `plugins/`: a histogram pane (Python), a
+region inverter (Rust) and a Comfy Cloud client that edits or generates images
+with ComfyUI workflows. See [plugins](PLUGINS.md) for the manifest, the
+protocol and the SDKs.
 
 ## Current limits
 

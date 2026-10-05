@@ -247,7 +247,7 @@ pub enum Adjustment {
     Invert,
     /// Photoshop's Black & White (upstream's `BlackWhiteSettings`): how bright each family of
     /// colors becomes in gray, in percent (−200…300), ordered red, yellow, green, cyan, blue,
-    /// magenta; optionally tinted with a hue (0…360°) at a saturation (0…100%). Format 6.
+    /// magenta; optionally tinted with a hue (0…360°) at a saturation (0…100%). Format 7.
     BlackWhite {
         weights: [f32; 6],
         tint: bool,
@@ -256,7 +256,7 @@ pub enum Adjustment {
     },
     /// Photoshop's Color Balance (upstream's `ColorBalanceSettings`): for shadows, midtones and
     /// highlights, shifts toward red (from cyan), green (from magenta) and blue (from yellow), in
-    /// percent (−100…100). Format 6.
+    /// percent (−100…100). Format 7.
     ColorBalance {
         shadows: [f32; 3],
         midtones: [f32; 3],
@@ -281,7 +281,7 @@ impl Adjustment {
         preserve_luminosity: true,
     };
 
-    /// Whether .xuan format 5 and earlier can store this adjustment.
+    /// Whether .xuan format 6 and earlier can store this adjustment.
     pub fn is_legacy(&self) -> bool {
         !matches!(self, Self::BlackWhite { .. } | Self::ColorBalance { .. })
     }
@@ -311,6 +311,25 @@ pub struct ShapeStyle {
     pub corner_radius: f32,
 }
 
+/// Where a layer produced by a plugin came from, so the action can be repeated.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Generated {
+    pub plugin: String,
+    pub version: String,
+    pub action: String,
+    #[serde(default)]
+    pub inputs: serde_json::Value,
+    /// The layer the source pixels were taken from, if it still exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Uuid>,
+    /// Hash of the source pixels that were sent, to tell whether they changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    /// RFC 3339 timestamp.
+    #[serde(default)]
+    pub created: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
     pub id: Uuid,
@@ -335,9 +354,11 @@ pub struct Layer {
     pub text: Option<crate::text::TextStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<crate::raw::RawAsset>,
-    /// Stroke, shadows, overlay and glows drawn around the layer's pixels (format 6).
+    /// Stroke, shadows, overlay and glows drawn around the layer's pixels (format 7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<crate::layer_effects::LayerEffects>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<Generated>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -371,6 +392,7 @@ impl Layer {
             text: None,
             raw: None,
             effects: None,
+            generated: None,
             pixels: None,
         }
     }

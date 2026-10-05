@@ -15,6 +15,12 @@ mod snapping;
 #[path = "tests/stroke_smoothing.rs"]
 mod stroke_smoothing;
 
+#[path = "tests/plugins.rs"]
+mod plugins;
+
+#[path = "tests/plugin_examples.rs"]
+mod plugin_examples;
+
 #[path = "tests/ui.rs"]
 mod ui;
 

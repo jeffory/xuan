@@ -15,6 +15,8 @@ pub mod layer_effects;
 pub mod layout;
 pub mod operations;
 pub mod paint;
+pub mod panes;
+pub mod plugins;
 pub mod raw;
 pub mod render;
 pub mod retouch;

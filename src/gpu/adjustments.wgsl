@@ -41,7 +41,7 @@ fn blend(d: vec3<f32>, s: vec3<f32>, mode: u32) -> vec3<f32> {
         case 10u: { return set_lum(set_sat(d, sat(s)), lum(d)); }
         case 11u: { return set_lum(s, lum(d)); }
         case 12u: { return set_lum(d, lum(s)); }
-        // The modes added with .xuan format 6, in `BlendMode::ALL` order; see
+        // The modes added with .xuan format 7, in `BlendMode::ALL` order; see
         // `blend_channel` in blend.rs for the formulas. 13 (Dissolve) blends as
         // Normal once `composite` has thresholded its alpha.
         case 14u: { return max(d + s - 1.0, vec3(0.0)); }

@@ -6,8 +6,16 @@ use xuan::{
 
 impl EditorApp {
     pub(super) fn load_config(&mut self) {
-        match Config::path().and_then(|path| Config::load(&path)) {
-            Ok(config) => self.config = config,
+        match Config::path() {
+            Ok(path) => {
+                match Config::load(&path) {
+                    Ok(config) => self.config = config,
+                    Err(error) => {
+                        self.error = Some(format!("{}\n\n{error:#}", tr("Could not load settings")))
+                    }
+                }
+                self.config_path = Some(path);
+            }
             Err(error) => {
                 self.error = Some(format!("{}\n\n{error:#}", tr("Could not load settings")))
             }
@@ -36,16 +44,17 @@ impl EditorApp {
 
     /// Keep `config` in memory and write it to the configuration file.
     fn store_config(&mut self, config: Config) {
-        self.config = config.clone();
-        if let Err(error) = self.save_config(&config) {
-            self.error = Some(format!("{}\n\n{error:#}", tr("Could not save settings")));
-        }
+        self.config = config;
+        self.save_config();
     }
 
-    fn save_config(&self, config: &Config) -> anyhow::Result<()> {
-        match &self.config_path {
-            Some(path) => config.save(path),
-            None => Config::path().and_then(|path| config.save(&path)),
+    /// Write the current preferences. Headless sessions (tests) have no path
+    /// and keep them in memory, so they never touch the user's file.
+    pub(super) fn save_config(&mut self) {
+        if let Some(path) = &self.config_path
+            && let Err(error) = self.config.save(path)
+        {
+            self.error = Some(format!("{}\n\n{error:#}", tr("Could not save settings")));
         }
     }
 
@@ -111,9 +120,7 @@ impl EditorApp {
         let closing = !open || done || ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if self.config_dirty && (!editing || closing) {
             self.config_dirty = false;
-            if let Err(error) = self.save_config(&self.config) {
-                self.error = Some(format!("{}\n\n{error:#}", tr("Could not save settings")));
-            }
+            self.save_config();
         }
         if closing {
             self.dialog = None;
