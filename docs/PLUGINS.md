@@ -288,9 +288,10 @@ frame.
 Notifications from the plugin: `host/log` `{level, message}` and `host/status`
 `{message}`. The status bar shows a plugin's message, like the `text` output of
 a job, on one line after the plugin's name and id, as in `Mock (plugin mock):
-message`, so it cannot pass for Xuan's own. Notifications from the host: `document/changed` `{id, revision}`
-(sent to plugins with open panes or `refresh = "document"`), `settings/changed`
-`{settings, secrets}`.
+message`, so it cannot pass for Xuan's own. Notifications from the host: `document/changed` `{id, revision}`, sent to
+every running plugin after each edit of the current document (any plugin may
+read the document with `document/get`, so this reveals nothing more), and
+`settings/changed` `{settings, secrets}`.
 
 ### Panes
 

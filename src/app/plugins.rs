@@ -2326,6 +2326,41 @@ mod tests {
     }
 
     #[test]
+    fn the_protocol_docs_cover_every_method_the_host_speaks() {
+        let source = include_str!("plugins.rs");
+        let source = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
+        let docs = include_str!("../../docs/PLUGINS.md");
+        let mut methods = Vec::new();
+        for (index, _) in source.match_indices('"') {
+            let rest = &source[index + 1..];
+            let Some(end) = rest.find('"') else { continue };
+            let word = &rest[..end];
+            let quoted_method = word.split_once('/').is_some_and(|(a, b)| {
+                !a.is_empty()
+                    && !b.is_empty()
+                    && word
+                        .bytes()
+                        .all(|c| c.is_ascii_lowercase() || c == b'/' || c == b'_')
+            });
+            if quoted_method && !methods.contains(&word) {
+                methods.push(word);
+            }
+        }
+        assert!(methods.len() >= 15, "{methods:?}");
+        for method in methods {
+            assert!(
+                docs.contains(&format!("`{method}`")),
+                "{method} is not documented"
+            );
+        }
+        // Who receives `document/changed` matches the code: every running plugin.
+        assert!(source.contains("for process in self.plugins.processes.values_mut() {\n            let _ = process.notify(\"document/changed\""));
+        assert!(
+            docs.contains("`document/changed` `{id, revision}`, sent to\nevery running plugin")
+        );
+    }
+
+    #[test]
     fn timestamps_are_rfc3339_utc() {
         let text = timestamp();
         assert_eq!(text.len(), 20, "{text}");
