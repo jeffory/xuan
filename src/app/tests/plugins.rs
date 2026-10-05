@@ -485,6 +485,364 @@ fn image_outputs_may_declare_their_placed_size() {
     }
 }
 
+/// A grey mask PNG in `dir`, one of the mock plugin's folders.
+fn write_mask(
+    dir: &Path,
+    name: &str,
+    (width, height): (u32, u32),
+    value: impl Fn(u32, u32) -> u8,
+) -> std::path::PathBuf {
+    let path = dir.join(name);
+    image::GrayImage::from_fn(width, height, |x, y| image::Luma([value(x, y)]))
+        .save(&path)
+        .unwrap();
+    path
+}
+
+/// A document-sized selection, selected where `inside` holds.
+fn selection_where(app: &EditorApp, inside: impl Fn(u32, u32) -> bool) -> Arc<image::GrayImage> {
+    let document = &app.session().unwrap().document;
+    Arc::new(image::GrayImage::from_fn(
+        document.width,
+        document.height,
+        |x, y| image::Luma([if inside(x, y) { 255 } else { 0 }]),
+    ))
+}
+
+fn selection_at(app: &EditorApp, x: u32, y: u32) -> Option<u8> {
+    let selection = app.session().unwrap().document.selection.as_ref()?;
+    Some(selection.get_pixel(x, y)[0])
+}
+
+#[test]
+fn mask_outputs_combine_with_the_selection_in_every_mode() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.command("fill_fg");
+    let job = mock_job(&app);
+    let pixels = app.session().unwrap().document.layers[0].pixels.clone();
+    // Selected: the left half. The mask: the top half, and a half-selected
+    // bottom-right quarter.
+    let left = selection_where(&app, |x, _| x < 4);
+    let mask = write_mask(dir.path(), "mask.png", (8, 8), |x, y| {
+        match (x < 4, y < 4) {
+            (_, true) => 255,
+            (false, false) => 128,
+            (true, false) => 0,
+        }
+    });
+    // Pixels: both, mask only, selection only, the grey quarter.
+    let points = [(1, 1), (6, 1), (1, 6), (6, 6)];
+    for (mode, expected) in [
+        ("replace", [255, 255, 0, 128]),
+        ("add", [255, 255, 255, 128]),
+        ("subtract", [0, 0, 255, 0]),
+        ("intersect", [255, 0, 0, 0]),
+    ] {
+        app.session_mut().unwrap().document.selection = Some(left.clone());
+        app.session_mut().unwrap().history.commit();
+        let result = json!({"outputs": [{"kind": "mask", "path": mask, "mode": mode}]});
+        app.apply_job_result(&job, result).unwrap();
+        assert_eq!(app.dialog, Some(Dialog::PluginProposal));
+        // The proposed selection shows before it is accepted.
+        let shown = points.map(|(x, y)| selection_at(&app, x, y).unwrap());
+        assert_eq!(shown, expected, "{mode}");
+        app.resolve_proposal(true);
+        let accepted = points.map(|(x, y)| selection_at(&app, x, y).unwrap());
+        assert_eq!(accepted, expected, "{mode}");
+        let session = app.session().unwrap();
+        assert_eq!(session.history.undo_name(), Some("Echo"));
+        // Only the selection changed: no layers, no pixels.
+        assert_eq!(session.document.layers.len(), 1);
+        assert_eq!(session.document.layers[0].pixels, pixels);
+        // One undo step brings the previous selection back.
+        app.command("undo");
+        assert_eq!(
+            app.session().unwrap().document.selection,
+            Some(left.clone())
+        );
+    }
+    // Without a mode it replaces, and with no selection every mode starts from nothing.
+    app.session_mut().unwrap().document.selection = None;
+    app.apply_job_result(&job, json!({"outputs": [{"kind": "mask", "path": mask}]}))
+        .unwrap();
+    assert_eq!(selection_at(&app, 1, 1), Some(255));
+    app.resolve_proposal(true);
+    // Several masks apply in order.
+    let result = json!({"outputs": [
+        {"kind": "mask", "path": mask, "mode": "replace"},
+        {"kind": "mask", "path": mask, "mode": "subtract"},
+    ]});
+    app.apply_job_result(&job, result).unwrap();
+    assert_eq!(selection_at(&app, 1, 1), Some(0));
+    app.resolve_proposal(true);
+}
+
+#[test]
+fn a_discarded_mask_leaves_the_selection_and_compare_shows_the_old_one() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    let job = mock_job(&app);
+    let left = selection_where(&app, |x, _| x < 4);
+    app.session_mut().unwrap().document.selection = Some(left.clone());
+    app.session_mut().unwrap().history.commit();
+    let steps = app.session().unwrap().history.names().count();
+    let mask = write_mask(
+        dir.path(),
+        "mask.png",
+        (8, 8),
+        |_, y| if y < 4 { 255 } else { 0 },
+    );
+    let result = json!({"outputs": [{"kind": "mask", "path": mask}]});
+
+    app.apply_job_result(&job, result.clone()).unwrap();
+    assert_eq!(selection_at(&app, 6, 1), Some(255));
+    app.resolve_proposal(false);
+    assert_eq!(
+        app.session().unwrap().document.selection,
+        Some(left.clone())
+    );
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+    assert!(app.dialog.is_none());
+
+    // Compare swaps the old selection back in; accepting while comparing
+    // still applies the new one.
+    app.apply_job_result(&job, result).unwrap();
+    app.toggle_proposal_compare();
+    assert_eq!(
+        app.session().unwrap().document.selection,
+        Some(left.clone())
+    );
+    app.toggle_proposal_compare();
+    assert_eq!(selection_at(&app, 6, 1), Some(255));
+    app.toggle_proposal_compare();
+    app.resolve_proposal(true);
+    assert_eq!(selection_at(&app, 6, 1), Some(255));
+    assert_eq!(selection_at(&app, 1, 6), Some(0));
+    assert_eq!(app.session().unwrap().history.names().count(), steps + 1);
+}
+
+#[test]
+fn a_mask_fitted_to_the_source_covers_the_source_layer() {
+    use serde_json::json;
+    use xuan::plugins::{
+        jobs,
+        manifest::{Source, SourceKind},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    // The layer's 16x16 pixels are shown at half size from (4, 4).
+    let transform = &mut app.session_mut().unwrap().document.layers[0].transform;
+    (transform.x, transform.y, transform.width, transform.height) = (4.0, 4.0, 8.0, 8.0);
+    let mut job = mock_job(&app);
+    let source = Source {
+        from: SourceKind::Layer,
+        max_side: Some(16),
+        crop_to_regions: false,
+        padding: 0.0,
+    };
+    job.prepared = jobs::prepare(
+        &app.session().unwrap().document,
+        &source,
+        &[],
+        job._work_dir.path(),
+    )
+    .unwrap();
+    // A 2x2 mask, much smaller than the 16x16 source that was sent.
+    let mask = write_mask(dir.path(), "small.png", (2, 2), |_, _| 255);
+    let result = json!({"outputs": [{"kind": "mask", "path": mask, "fit": "source"}]});
+    app.apply_job_result(&job, result).unwrap();
+    for (x, y, expected) in [
+        (3, 3, 0),
+        (4, 4, 255),
+        (11, 11, 255),
+        (12, 12, 0),
+        (8, 2, 0),
+    ] {
+        assert_eq!(selection_at(&app, x, y), Some(expected), "({x}, {y})");
+    }
+    app.resolve_proposal(true);
+    // At its pixel size it covers two source pixels: one document unit.
+    let result = json!({"outputs": [{"kind": "mask", "path": mask, "x": 8, "y": 8}]});
+    app.apply_job_result(&job, result).unwrap();
+    assert_eq!(selection_at(&app, 8, 8), Some(255));
+    assert_eq!(selection_at(&app, 9, 9), Some(0));
+    assert_eq!(selection_at(&app, 4, 4), Some(0));
+    app.resolve_proposal(false);
+}
+
+#[test]
+fn a_read_only_plugin_can_propose_a_selection_but_not_edit_pixels() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    assert_eq!(
+        app.plugins.manifest("mock").unwrap().permissions.document,
+        xuan::plugins::manifest::DocumentAccess::Read
+    );
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.command("fill_fg");
+    let pixels = app.session().unwrap().document.layers[0].pixels.clone();
+    let job = mock_job(&app);
+    let mask = write_mask(
+        dir.path(),
+        "mask.png",
+        (8, 8),
+        |x, _| if x < 2 { 255 } else { 0 },
+    );
+    app.apply_job_result(&job, json!({"outputs": [{"kind": "mask", "path": mask}]}))
+        .unwrap();
+    app.resolve_proposal(true);
+    assert_eq!(selection_at(&app, 0, 0), Some(255));
+    assert_eq!(selection_at(&app, 5, 0), Some(0));
+    // Editing the document, even the selection, still needs `document = "edit"`.
+    let steps = app.session().unwrap().history.names().count();
+    for edits in [
+        json!([{"op": "set_selection", "mask": mask}]),
+        json!([{"op": "replace_pixels", "layer": app.session().unwrap().document.layers[0].id, "image": mask}]),
+    ] {
+        let error = plugin_request(
+            &mut app,
+            "document/edit",
+            json!({"name": "x", "edits": edits}),
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("document = \"edit\""),
+            "{}",
+            error.message
+        );
+    }
+    let error = plugin_request(&mut app, "host/run", json!({"action": "invert"})).unwrap_err();
+    assert!(
+        error.message.contains("document = \"edit\""),
+        "{}",
+        error.message
+    );
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps);
+    assert_eq!(session.document.layers[0].pixels, pixels);
+}
+
+#[test]
+fn a_proposed_selection_is_accepted_or_discarded_through_the_ui() {
+    use crate::app::tests::ui::UiTest;
+    use egui::accesskit::Role;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::with_document();
+    ui.isolate_config(config.path());
+    install_mock(ui.app_mut(), dir.path());
+    ui.app_mut()
+        .config
+        .panes
+        .set_hidden("plugin:mock/info", true);
+    ui.settle();
+    let job = mock_job(ui.app());
+    let mask = write_mask(dir.path(), "mask.png", (20, 16), |x, _| {
+        if x < 10 { 255 } else { 0 }
+    });
+    let result = json!({"outputs": [{"kind": "mask", "path": mask}]});
+    let steps = ui.app().session().unwrap().history.names().count();
+
+    ui.app_mut().apply_job_result(&job, result.clone()).unwrap();
+    ui.settle();
+    assert!(ui.has_role(Role::Button, "Accept"));
+    assert!(ui.has_role(Role::Button, "Discard"));
+    // The marching ants already show the proposed selection.
+    assert_eq!(selection_at(ui.app(), 2, 2), Some(255));
+    ui.click_role(Role::Button, "Discard");
+    assert!(ui.app().plugins.proposal.is_none());
+    assert_eq!(ui.app().session().unwrap().document.selection, None);
+    assert_eq!(ui.app().session().unwrap().history.names().count(), steps);
+
+    ui.app_mut().apply_job_result(&job, result).unwrap();
+    ui.settle();
+    ui.click_role(Role::Button, "Accept");
+    assert!(ui.app().plugins.proposal.is_none());
+    assert_eq!(selection_at(ui.app(), 2, 2), Some(255));
+    assert_eq!(selection_at(ui.app(), 15, 2), Some(0));
+    let history = &ui.app().session().unwrap().history;
+    assert_eq!(history.undo_name(), Some("Echo"));
+    assert_eq!(history.names().count(), steps + 1);
+}
+
+#[test]
+fn invalid_and_oversized_masks_are_refused() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    let job = mock_job(&app);
+    let left = selection_where(&app, |x, _| x < 4);
+    app.session_mut().unwrap().document.selection = Some(left.clone());
+    app.session_mut().unwrap().history.commit();
+    let mask = write_mask(dir.path(), "mask.png", (8, 8), |_, _| 255);
+    // Wider than any image Xuan opens: refused from its header.
+    let wide = write_mask(dir.path(), "wide.png", (30_001, 1), |_, _| 255);
+    let foreign = write_mask(outside.path(), "foreign.png", (8, 8), |_, _| 255);
+    let text = dir.path().join("not-a.png");
+    std::fs::write(&text, "not a png\r\n").unwrap();
+    let many: Vec<_> = (0..=xuan::plugins::edits::MAX_OUTPUTS)
+        .map(|_| json!({"kind": "mask", "path": mask}))
+        .collect();
+    for (output, message) in [
+        (json!({"kind": "mask", "path": wide}), "exceeds limit"),
+        (json!({"kind": "mask", "path": foreign}), "outside"),
+        (json!({"kind": "mask", "path": text}), "decode"),
+        (
+            json!({"kind": "mask", "path": dir.path().join("missing.png")}),
+            "Cannot read",
+        ),
+        (
+            json!({"kind": "mask", "path": mask, "mode": "xor"}),
+            "malformed",
+        ),
+        (json!({"kind": "mask"}), "malformed"),
+        (
+            json!({"kind": "mask", "path": mask, "fit": "source"}),
+            "source",
+        ),
+        (json!({"kind": "mask", "path": mask, "width": 0}), "width"),
+        (json!({"kind": "mask", "path": mask, "x": 1e9}), "fit"),
+        (json!(many), "outputs"),
+    ] {
+        let outputs = if output.is_array() {
+            output
+        } else {
+            json!([output])
+        };
+        let error = app
+            .apply_job_result(&job, json!({ "outputs": outputs }))
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains(message), "{message}: {error}");
+        assert!(app.plugins.proposal.is_none());
+        assert_eq!(
+            app.session().unwrap().document.selection,
+            Some(left.clone())
+        );
+    }
+}
+
 fn plugin_request(
     app: &mut EditorApp,
     method: &str,

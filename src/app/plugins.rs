@@ -23,6 +23,7 @@ use xuan::{
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
         ui::Node,
     },
+    selection::{self, SelectionMode},
 };
 
 use super::{
@@ -158,8 +159,16 @@ pub(super) struct Proposal {
     /// The plugin it comes from, as [`PluginState::source`] shows it.
     pub source: String,
     pub layers: Vec<Uuid>,
+    /// The selection before and after, when the result changes it.
+    pub selection: Option<ProposedSelection>,
     pub comparing: bool,
     pub message: Option<String>,
+}
+
+/// A selection a result proposes; Compare shows `before` in its place.
+pub(super) struct ProposedSelection {
+    pub before: Option<Arc<image::GrayImage>>,
+    pub after: Option<Arc<image::GrayImage>>,
 }
 
 /// The open action dialog.
@@ -1592,6 +1601,19 @@ impl EditorApp {
                 #[serde(default)]
                 name: Option<String>,
             },
+            /// A grey PNG that becomes the selection, combined with the
+            /// current one by `mode`.
+            Mask {
+                path: PathBuf,
+                #[serde(default)]
+                mode: SelectionMode,
+                #[serde(default)]
+                x: f32,
+                #[serde(default)]
+                y: f32,
+                #[serde(flatten)]
+                placed: jobs::Placed,
+            },
             Edit {
                 edits: Vec<edits::Edit>,
             },
@@ -1645,6 +1667,7 @@ impl EditorApp {
         let mut layers: Vec<Layer> = Vec::new();
         let mut replace: Option<(Uuid, image::RgbaImage)> = None;
         let mut edit_batches = Vec::new();
+        let mut masks = Vec::new();
         let regions =
             (!job.regions.is_empty() && job.mask_to_regions).then_some(job.regions.as_slice());
         for output in outputs {
@@ -1686,20 +1709,10 @@ impl EditorApp {
                     let mut layer = if job.prepared.export.is_some() {
                         jobs::place_layer(&job.prepared, &name, image, x, y, &placed, regions)?
                     } else {
+                        let transform =
+                            jobs::unsourced_placement(image.dimensions(), x, y, &placed)?;
                         let mut layer = Layer::image(name, image);
-                        layer.transform.x = x;
-                        layer.transform.y = y;
-                        ensure!(
-                            placed.fit.is_none(),
-                            "fit = \"source\" needs an action with a source"
-                        );
-                        let (w, h) = (layer.transform.width, layer.transform.height);
-                        layer.transform.width = placed
-                            .width
-                            .unwrap_or_else(|| placed.height.map_or(w, |height| height * w / h));
-                        layer.transform.height = placed
-                            .height
-                            .unwrap_or_else(|| placed.width.map_or(h, |width| width * h / w));
+                        layer.transform = transform;
                         layer
                     };
                     if let Some(mask) = mask {
@@ -1718,6 +1731,16 @@ impl EditorApp {
                         reader.rgba(&path)?,
                     ));
                 }
+                Output::Mask {
+                    path,
+                    mode,
+                    x,
+                    y,
+                    placed,
+                } => {
+                    placed.validate()?;
+                    masks.push((reader.gray(&path)?, mode, x, y, placed));
+                }
                 Output::Edit { edits } => edit_batches.push(edits),
                 Output::Text { text } => message = Some(text.chars().take(500).collect::<String>()),
                 Output::None => {}
@@ -1734,7 +1757,10 @@ impl EditorApp {
             self.current = self.sessions.len() - 1;
             self.session_mut().unwrap().history.mark_modified();
         }
-        let has_changes = !layers.is_empty() || replace.is_some() || !edit_batches.is_empty();
+        let has_changes = !layers.is_empty()
+            || replace.is_some()
+            || !edit_batches.is_empty()
+            || !masks.is_empty();
         if let Some(message) = &message {
             self.status = self.plugins.status_from(&job.plugin, message);
         }
@@ -1774,6 +1800,18 @@ impl EditorApp {
         for layer in layers {
             document.insert(layer);
         }
+        // Masks become the selection, in order, after every other change.
+        // Changing the selection is not a pixel edit, so any plugin may.
+        let before = (!masks.is_empty()).then(|| document.selection.clone());
+        for (mask, mode, x, y, placed) in masks {
+            let size = (document.width, document.height);
+            let coverage = jobs::place_mask(&job.prepared, size, &mask, x, y, &placed)?;
+            selection::combine(&mut document, coverage, mode);
+        }
+        let selection = before.map(|before| ProposedSelection {
+            before,
+            after: document.selection.clone(),
+        });
         document.validate()?;
         session.history.begin(&job.label, &session.document);
         session.document = document;
@@ -1783,6 +1821,7 @@ impl EditorApp {
             name: job.label.clone(),
             source: self.plugins.source(&job.plugin),
             layers: ids,
+            selection,
             comparing: false,
             message,
         });
@@ -1805,6 +1844,9 @@ impl EditorApp {
                         layer.visible = true;
                     }
                 }
+                if let Some(selection) = proposal.selection {
+                    session.document.selection = selection.after;
+                }
                 session.history.commit();
                 self.status = format!("{} {}", proposal.name, tr("applied"));
             } else {
@@ -1826,11 +1868,21 @@ impl EditorApp {
         let comparing = proposal.comparing;
         let layers = proposal.layers.clone();
         let document = proposal.document;
+        let selection = proposal.selection.as_ref().map(|selection| {
+            if comparing {
+                selection.before.clone()
+            } else {
+                selection.after.clone()
+            }
+        });
         if let Some(session) = self.sessions.iter_mut().find(|s| s.document.id == document) {
             for layer in &mut session.document.layers {
                 if layers.contains(&layer.id) {
                     layer.visible = !comparing;
                 }
+            }
+            if let Some(selection) = selection {
+                session.document.selection = selection;
             }
             session.invalidate();
         }

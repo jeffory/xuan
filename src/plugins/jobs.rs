@@ -392,6 +392,97 @@ pub fn place_layer(
     Ok(layer)
 }
 
+/// The document transform of an output of `pixels` size for an action
+/// without a source: `x, y` and the placed size are in document units, and
+/// the size defaults to the pixel size.
+pub fn unsourced_placement(
+    pixels: (u32, u32),
+    x: f32,
+    y: f32,
+    placed: &Placed,
+) -> Result<Transform> {
+    placed.validate()?;
+    ensure!(
+        placed.fit.is_none(),
+        "fit = \"source\" needs an action with a source"
+    );
+    let (w, h) = (pixels.0 as f32, pixels.1 as f32);
+    Ok(Transform {
+        x,
+        y,
+        width: placed
+            .width
+            .unwrap_or_else(|| placed.height.map_or(w, |height| height * w / h)),
+        height: placed
+            .height
+            .unwrap_or_else(|| placed.width.map_or(h, |width| width * h / w)),
+        ..Transform::new(pixels.0, pixels.1)
+    })
+}
+
+/// A `mask` output turned into selection coverage at document size: placed
+/// like an `image` output at export position `x, y`, sampled bilinearly, and
+/// empty wherever the mask does not reach. Grey values are partial coverage.
+pub fn place_mask(
+    prepared: &Prepared,
+    document_size: (u32, u32),
+    mask: &GrayImage,
+    x: f32,
+    y: f32,
+    placed: &Placed,
+) -> Result<GrayImage> {
+    let transform = if prepared.export.is_some() {
+        let size = prepared.placed_size(mask.dimensions(), placed)?;
+        prepared.placement_sized(x, y, size)
+    } else {
+        unsourced_placement(mask.dimensions(), x, y, placed)?
+    };
+    ensure!(transform.valid(), "The mask does not fit the document");
+    let (width, height) = document_size;
+    let mut coverage = GrayImage::new(width, height);
+    // Only the pixels under the placed mask's corners need sampling.
+    let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        .map(|(u, v)| transform.point(Point::new(u, v)));
+    let min_x = corners.iter().map(|c| c.x).fold(f32::INFINITY, f32::min);
+    let min_y = corners.iter().map(|c| c.y).fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|c| c.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let max_y = corners
+        .iter()
+        .map(|c| c.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let x0 = min_x.floor().clamp(0.0, width as f32) as u32;
+    let y0 = min_y.floor().clamp(0.0, height as f32) as u32;
+    let x1 = max_x.ceil().clamp(0.0, width as f32) as u32;
+    let y1 = max_y.ceil().clamp(0.0, height as f32) as u32;
+    let (mw, mh) = mask.dimensions();
+    let sample = |px: i64, py: i64| -> f32 {
+        let px = px.clamp(0, i64::from(mw) - 1) as u32;
+        let py = py.clamp(0, i64::from(mh) - 1) as u32;
+        f32::from(mask.get_pixel(px, py)[0])
+    };
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let unit = transform.inverse(Point::new(x as f32 + 0.5, y as f32 + 0.5));
+            if !(0.0..1.0).contains(&unit.x) || !(0.0..1.0).contains(&unit.y) {
+                continue;
+            }
+            let fx = unit.x * mw as f32 - 0.5;
+            let fy = unit.y * mh as f32 - 0.5;
+            let (ix, iy) = (fx.floor(), fy.floor());
+            let (tx, ty) = (fx - ix, fy - iy);
+            let (ix, iy) = (ix as i64, iy as i64);
+            let top = sample(ix, iy) * (1.0 - tx) + sample(ix + 1, iy) * tx;
+            let bottom = sample(ix, iy + 1) * (1.0 - tx) + sample(ix + 1, iy + 1) * tx;
+            let value = top * (1.0 - ty) + bottom * ty;
+            coverage.put_pixel(x, y, image::Luma([value.round().clamp(0.0, 255.0) as u8]));
+        }
+    }
+    Ok(coverage)
+}
+
 /// A soft-edged mask covering the regions, in the output layer's pixel grid.
 pub fn region_mask(
     prepared: &Prepared,
@@ -823,6 +914,49 @@ mod tests {
         let pixels = document.layers[0].pixels.as_ref().unwrap();
         let error = replace_pixels(&prepared, pixels, &image, 0.0, 0.0, &huge).unwrap_err();
         assert!(format!("{error:#}").contains("too large"), "{error:#}");
+    }
+
+    #[test]
+    fn masks_are_placed_like_images_and_sampled_to_document_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_document, prepared) = layer_source(dir.path());
+        // Left half selected, right half not.
+        let mask = GrayImage::from_fn(4, 2, |x, _| image::Luma([if x < 2 { 255 } else { 0 }]));
+        let fit = Placed {
+            fit: Some(Fit::Source),
+            ..Placed::default()
+        };
+        // Fitted over the layer, which sits at (20, 10) at 400 x 300 units.
+        let coverage = place_mask(&prepared, (400, 300), &mask, 0.0, 0.0, &fit).unwrap();
+        assert_eq!(coverage.dimensions(), (400, 300));
+        assert_eq!(coverage.get_pixel(100, 100)[0], 255);
+        assert_eq!(coverage.get_pixel(390, 100)[0], 0);
+        assert_eq!(coverage.get_pixel(10, 5)[0], 0, "outside the mask");
+        // Enlarged 100x, the edge between the halves is soft.
+        let edge = coverage.get_pixel(219, 100)[0];
+        assert!(edge > 0 && edge < 255, "{edge}");
+        // At its pixel size: four source pixels, eight document units.
+        let coverage =
+            place_mask(&prepared, (400, 300), &mask, 0.0, 0.0, &Placed::default()).unwrap();
+        assert_eq!(coverage.get_pixel(21, 11)[0], 255);
+        assert_eq!(coverage.get_pixel(30, 11)[0], 0);
+        // Without a source it is in document units, pixel for pixel.
+        let none = Prepared::none();
+        let coverage = place_mask(&none, (16, 16), &mask, 5.0, 6.0, &Placed::default()).unwrap();
+        let row: Vec<u8> = (4..10).map(|x| coverage.get_pixel(x, 6)[0]).collect();
+        assert_eq!(row, [0, 255, 255, 0, 0, 0]);
+        assert_eq!(coverage.get_pixel(5, 8)[0], 0);
+        assert!(place_mask(&none, (16, 16), &mask, 0.0, 0.0, &fit).is_err());
+        // Placed far outside the document it selects nothing.
+        let coverage = place_mask(&none, (16, 16), &mask, 500.0, 0.0, &Placed::default()).unwrap();
+        assert!(coverage.as_raw().iter().all(|&v| v == 0));
+        for bad in [f32::NAN, 0.0, 1e9] {
+            let placed = Placed {
+                width: Some(bad),
+                ..Placed::default()
+            };
+            assert!(place_mask(&prepared, (400, 300), &mask, 0.0, 0.0, &placed).is_err());
+        }
     }
 
     #[test]
