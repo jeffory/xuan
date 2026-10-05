@@ -117,10 +117,12 @@ const MAX_FILE: u64 = 512 * 1024 * 1024;
 /// own folders (the plugin folder, its data folder, and the scratch and work
 /// folders the host made for it), or anywhere when the manifest's
 /// `filesystem` permission allows it. Paths are resolved first, so a symlink
-/// cannot lead out of those folders.
+/// cannot lead out of those folders. Folders the host manages, such as the
+/// models folder, can be read but are never written into.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Access {
     roots: Vec<PathBuf>,
+    read_only: Vec<PathBuf>,
     read_anywhere: bool,
     write_anywhere: bool,
 }
@@ -130,6 +132,7 @@ impl Access {
     pub fn anywhere() -> Self {
         Self {
             roots: Vec::new(),
+            read_only: Vec::new(),
             read_anywhere: true,
             write_anywhere: true,
         }
@@ -138,6 +141,7 @@ impl Access {
     pub fn new(roots: impl IntoIterator<Item = PathBuf>, filesystem: FilesystemAccess) -> Self {
         let mut access = Self {
             roots: Vec::new(),
+            read_only: Vec::new(),
             read_anywhere: filesystem != FilesystemAccess::None,
             write_anywhere: filesystem == FilesystemAccess::Write,
         };
@@ -153,6 +157,19 @@ impl Access {
             && !self.roots.contains(&root)
         {
             self.roots.push(root);
+        }
+        self
+    }
+
+    /// Never write into `dir`, whether or not it exists yet, even with
+    /// `filesystem = "write"`.
+    pub fn read_only(mut self, dir: &Path) -> Self {
+        let resolved = std::fs::canonicalize(dir).ok().or_else(|| {
+            let parent = std::fs::canonicalize(dir.parent()?).ok()?;
+            Some(parent.join(dir.file_name()?))
+        });
+        if let Some(dir) = resolved {
+            self.read_only.push(dir);
         }
         self
     }
@@ -181,6 +198,11 @@ impl Access {
         ensure!(
             self.write_anywhere || self.inside(&resolved),
             "{} is outside the plugin's folders; writing elsewhere needs filesystem = \"write\" in its manifest",
+            dir.display()
+        );
+        ensure!(
+            !self.read_only.iter().any(|root| resolved.starts_with(root)),
+            "{} is managed by Xuan and cannot be written into",
             dir.display()
         );
         Ok(resolved)
@@ -894,6 +916,21 @@ mod tests {
         assert!(confined.writable_dir(root.path()).is_ok());
         assert!(confined.writable_dir(outside.path()).is_err());
         assert!(confined.writable_dir(&inside).is_err());
+        // A read-only folder inside can be read but not written into, even
+        // when writing anywhere is allowed, and even before it exists.
+        let models = root.path().join("models");
+        for filesystem in [FilesystemAccess::None, FilesystemAccess::Write] {
+            let access = Access::new([root.path().to_path_buf()], filesystem).read_only(&models);
+            std::fs::create_dir_all(models.join("sub")).unwrap();
+            let model = png(&models, "m.png", [1, 2, 3, 255], 2);
+            assert!(access.readable(&model).is_ok());
+            for dir in [models.clone(), models.join("sub")] {
+                let error = access.writable_dir(&dir).unwrap_err().to_string();
+                assert!(error.contains("managed by Xuan"), "{error}");
+            }
+            assert!(access.writable_dir(root.path()).is_ok());
+            std::fs::remove_dir_all(&models).unwrap();
+        }
         let mut reader = Reader::new(confined.clone(), 1);
         assert!(reader.rgba(&inside).is_ok());
         assert!(reader.rgba(&elsewhere).is_err());

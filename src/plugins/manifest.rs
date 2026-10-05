@@ -29,6 +29,9 @@ pub struct Manifest {
     pub panes: Vec<Pane>,
     #[serde(default)]
     pub formats: Vec<Format>,
+    /// Model files the host downloads and verifies for the plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<Model>,
     /// Folder the manifest was read from; the plugin runs there.
     #[serde(skip)]
     pub dir: PathBuf,
@@ -331,6 +334,10 @@ pub struct Action {
     pub description: String,
     #[serde(default)]
     pub inputs: Vec<Input>,
+    /// Ids of the declared models the action needs; Xuan offers to download
+    /// missing ones before it runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 impl Action {
@@ -581,6 +588,135 @@ pub struct Format {
     pub import: bool,
     #[serde(default)]
     pub export: bool,
+}
+
+/// Most models one plugin declares.
+pub const MAX_MODELS: usize = 16;
+/// Largest model file, in bytes.
+pub const MAX_MODEL_SIZE: u64 = 8 << 30;
+/// Longest model file name, `license` or `source`.
+const MAX_MODEL_TEXT: usize = 200;
+
+/// A `[[models]]` entry: a file the host downloads over https into the
+/// plugin's models folder, checks against `size` and `sha256`, and hands to
+/// the plugin by path. The plugin never downloads it itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Model {
+    pub id: String,
+    pub url: String,
+    /// SHA-256 of the file, as 64 hexadecimal digits.
+    pub sha256: String,
+    /// Exact size of the file in bytes.
+    pub size: u64,
+    /// File name in the models folder; by default the last part of the
+    /// URL's path, or the id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The model's licence, shown before downloading.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub license: String,
+    /// Where the model comes from (a project or paper), shown before downloading.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+impl Model {
+    /// The name of the verified file in the models folder.
+    pub fn file_name(&self) -> String {
+        if let Some(file) = &self.file {
+            return file.clone();
+        }
+        url::Url::parse(&self.url)
+            .ok()
+            .and_then(|url| {
+                let last = percent_decode(url.path_segments()?.next_back()?)?;
+                valid_model_file(&last).is_ok().then_some(last)
+            })
+            .unwrap_or_else(|| self.id.clone())
+    }
+
+    /// The host the model is downloaded from.
+    pub fn host(&self) -> String {
+        url::Url::parse(&self.url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_default()
+    }
+
+    /// The expected SHA-256 in lower case.
+    pub fn sha256(&self) -> String {
+        self.sha256.to_ascii_lowercase()
+    }
+
+    fn validate(&self) -> Result<()> {
+        validate_id(&self.id)?;
+        let url =
+            url::Url::parse(&self.url).with_context(|| format!("`{}` is not a URL", self.url))?;
+        ensure!(url.scheme() == "https", "url must use https");
+        ensure!(
+            url.host_str().is_some_and(|host| !host.is_empty()),
+            "url needs a host"
+        );
+        ensure!(
+            url.username().is_empty() && url.password().is_none(),
+            "url cannot contain a user name or password"
+        );
+        ensure!(
+            self.sha256.len() == 64 && self.sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+            "sha256 must be 64 hexadecimal digits"
+        );
+        ensure!(
+            (1..=MAX_MODEL_SIZE).contains(&self.size),
+            "size must be between 1 byte and {} GiB",
+            MAX_MODEL_SIZE >> 30
+        );
+        if let Some(file) = &self.file {
+            valid_model_file(file)?;
+        }
+        for (name, text) in [("license", &self.license), ("source", &self.source)] {
+            ensure!(
+                text.len() <= MAX_MODEL_TEXT && !text.chars().any(char::is_control),
+                "{name} must be one line of at most {MAX_MODEL_TEXT} bytes"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// A plain file name for the models folder: letters, digits, `.`, `-` and
+/// `_`, not hidden and not a partial download.
+fn valid_model_file(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= MAX_MODEL_TEXT
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+            && !name.starts_with(['.', '-'])
+            && !name.to_ascii_lowercase().ends_with(".part"),
+        "`{name}` is not a plain file name (use A-Z, a-z, 0-9, ., - and _; not starting with . or - or ending in .part)"
+    );
+    Ok(())
+}
+
+/// `%XX` escapes decoded, or `None` when the result is not UTF-8.
+fn percent_decode(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let Some(hex) = text.get(index + 1..index + 3)
+            && let Ok(byte) = u8::from_str_radix(hex, 16)
+        {
+            out.push(byte);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// A keyboard shortcut such as `Ctrl+Shift+E`, parsed from a manifest.
@@ -849,6 +985,33 @@ impl Manifest {
                 "action `{}` max_side must be between 16 and 30000",
                 action.id
             );
+        }
+        ensure!(
+            self.models.len() <= MAX_MODELS,
+            "a plugin can declare at most {MAX_MODELS} models"
+        );
+        ids.clear();
+        let mut files = std::collections::HashSet::new();
+        for model in &self.models {
+            model
+                .validate()
+                .with_context(|| format!("model `{}`", model.id))?;
+            ensure!(ids.insert(&model.id), "duplicate model `{}`", model.id);
+            let file = model.file_name();
+            ensure!(
+                files.insert(file.to_ascii_lowercase()),
+                "model `{}` uses the file name `{file}` of another model",
+                model.id
+            );
+        }
+        for action in &self.actions {
+            for model in &action.models {
+                ensure!(
+                    self.models.iter().any(|m| &m.id == model),
+                    "action `{}` needs model `{model}`, which is not in [[models]]",
+                    action.id
+                );
+            }
         }
         ids.clear();
         for pane in &self.panes {
@@ -1261,5 +1424,96 @@ import = true
             Value::Array(vec![])
         );
         assert_eq!(input("id = 'a'\ntype = 'text'").label(), "a");
+    }
+
+    #[test]
+    fn models_are_validated() {
+        let dir = Path::new(".");
+        let sha = "ab".repeat(32);
+        let model = |extra: &str| {
+            format!(
+                "[[models]]\nid = \"net\"\nurl = \"https://models.example/v1/net.onnx\"\nsha256 = \"{sha}\"\nsize = 1024\n{extra}\n"
+            )
+        };
+        let parse = |models: &str, action_models: &str| {
+            let text = EXAMPLE.replace(
+                "crop_to_regions = true }\n",
+                &format!("crop_to_regions = true }}\nmodels = [{action_models}]\n"),
+            );
+            Manifest::parse(&format!("{text}\n{models}"), dir).map_err(|e| format!("{e:#}"))
+        };
+        let manifest = parse(
+            &model("license = \"Apache-2.0\"\nsource = \"U2-Net\"\r"),
+            "\"net\"",
+        )
+        .unwrap();
+        let net = &manifest.models[0];
+        assert_eq!((net.size, net.file_name()), (1024, "net.onnx".into()));
+        assert_eq!(net.host(), "models.example");
+        assert_eq!(net.license, "Apache-2.0");
+        assert_eq!(manifest.action("precise-edit").unwrap().models, ["net"]);
+        assert!(parse("", "").unwrap().models.is_empty());
+        // Upper-case hashes are fine and compared in lower case.
+        let upper = model("").replace(&sha, &sha.to_uppercase());
+        assert_eq!(parse(&upper, "").unwrap().models[0].sha256(), sha);
+
+        for (models, expected) in [
+            (model("").replace("https://", "http://"), "https"),
+            (
+                model("").replace("https://", "https://user:pw@"),
+                "user name",
+            ),
+            (
+                model("").replace("https://models.example/v1/net.onnx", "net.onnx"),
+                "URL",
+            ),
+            (model("").replace(&sha, "abc"), "64 hexadecimal"),
+            (model("").replace(&sha, &"zz".repeat(32)), "64 hexadecimal"),
+            (model("").replace("size = 1024", "size = 0"), "size"),
+            (
+                model("").replace("size = 1024", "size = 8589934593"),
+                "8 GiB",
+            ),
+            (model("").replace("size = 1024\n", ""), "size"),
+            (
+                model("").replace("id = \"net\"", "id = \"Net!\""),
+                "identifier",
+            ),
+            (model("file = \"../escape.onnx\""), "plain file name"),
+            (model("file = \".verified.json\""), "plain file name"),
+            (model("file = \"net.part\""), "plain file name"),
+            (model("file = \"a/b\""), "plain file name"),
+            (model("license = \"two\\nlines\""), "one line"),
+            (
+                model(&format!("source = \"{}\"", "x".repeat(201))),
+                "one line",
+            ),
+            (format!("{}{}", model(""), model("")), "duplicate model"),
+            (
+                format!(
+                    "{}{}",
+                    model(""),
+                    model("").replace("id = \"net\"", "id = \"copy\"")
+                ),
+                "file name `net.onnx`",
+            ),
+            (
+                (0..=MAX_MODELS)
+                    .map(|n| {
+                        model(&format!("file = \"m{n}\""))
+                            .replace("id = \"net\"", &format!("id = \"m{n}\""))
+                    })
+                    .collect(),
+                "at most 16 models",
+            ),
+        ] {
+            let error = parse(&models, "").unwrap_err();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+        let error = parse(&model(""), "\"other\"").unwrap_err();
+        assert!(error.contains("needs model `other`"), "{error}");
+        // A file name not usable from the URL falls back to the id.
+        let odd = model("").replace("v1/net.onnx", "v1/%2E%2Ehidden");
+        assert_eq!(parse(&odd, "").unwrap().models[0].file_name(), "net");
     }
 }

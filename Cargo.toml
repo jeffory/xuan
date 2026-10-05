@@ -19,6 +19,13 @@ flate2 = "1.1"
 heic-rs = "0.1.1"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
 png = "0.18"
+# Model downloads (src/plugins/models.rs): a small blocking HTTPS client on
+# rustls with ring, so no OpenSSL; certificates are checked against the
+# system's trust store.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# SHA-256 of downloaded models, with ring's assembly, the same crate rustls uses.
+ring = "0.17"
 rawler = "=0.8.0"
 rayon = "1.11"
 raw-window-handle = "0.6"
@@ -56,6 +63,8 @@ rustix = { version = "1", features = ["process"] }
 [dev-dependencies]
 pollster = "0.4"
 egui_kittest = { version = "0.33.3", default-features = false }
+# A local HTTPS server for the model download tests.
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 wayland-server = "0.31"

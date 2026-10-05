@@ -5,6 +5,7 @@ pub mod host;
 pub mod install;
 pub mod jobs;
 pub mod manifest;
+pub mod models;
 pub mod protocol;
 pub mod sandbox;
 pub mod ui;
