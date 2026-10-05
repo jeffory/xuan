@@ -971,3 +971,25 @@ mod window_menu {
         assert!(!ui.harness.ctx.has_requested_repaint());
     }
 }
+
+mod about {
+    use super::*;
+
+    #[test]
+    fn about_shows_the_build_and_offers_to_copy_it() {
+        let mut ui = UiTest::new();
+        ui.app_mut().dialog = Some(Dialog::About);
+        ui.settle();
+        let build = xuan::buildinfo::current();
+        // Dev builds lead with "Build" (or "Development build"); releases with "Version".
+        let shown = build.display();
+        assert!(ui.has(&shown), "About should show {shown:?}");
+        if build.release {
+            assert!(shown.starts_with("Version"));
+        } else {
+            assert!(shown.starts_with("Build") || shown == "Development build");
+        }
+        assert!(ui.has("Copy version"));
+        ui.click("Copy version");
+    }
+}

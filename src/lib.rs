@@ -1,4 +1,5 @@
 pub mod blend;
+pub mod buildinfo;
 pub mod color;
 pub mod config;
 pub mod demo;

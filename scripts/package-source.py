@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -62,6 +63,7 @@ def main():
         ):
             shutil.copytree(ROOT / folder, source / folder, ignore=ignore)
         for filename in (
+            "build.rs",
             "Cargo.toml",
             "Cargo.lock",
             "LICENSE",
@@ -75,6 +77,22 @@ def main():
             dirs_exist_ok=True,
             ignore=ignore,
         )
+        # The tarball has no .git; build.rs reads the commit from this file instead.
+        commit = os.environ.get("XUAN_BUILD_COMMIT", "").strip()
+        if not commit:
+            try:
+                commit = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=ROOT,
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+            except (OSError, subprocess.CalledProcessError):
+                commit = ""
+        if commit:
+            (source / ".xuan-build-commit").write_text(
+                commit[:7] + "\n", encoding="utf-8", newline="\n"
+            )
         manifest = source / "Cargo.toml"
         content = manifest.read_text(encoding="utf-8")
         if "rawler" not in tomllib.loads(content).get("patch", {}).get("crates-io", {}):

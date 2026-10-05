@@ -121,7 +121,13 @@ impl EditorApp {
                             ui.label(tr("A space for your next composition."));
                             ui.add_space(12.0);
                             ui.label(tr("Native image editor · Rust + egui + wgpu"));
-                            ui.label(format!("{} {}", tr("Version"), env!("CARGO_PKG_VERSION")));
+                            let build = xuan::buildinfo::current();
+                            ui.horizontal(|ui| {
+                                ui.label(build.display_with(|text| tr(text).to_owned()));
+                                if ui.small_button(tr("Copy version")).clicked() {
+                                    ui.ctx().copy_text(build.cli());
+                                }
+                            });
                             ui.add_space(12.0);
                             ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
                             ui.label(tr("Free and open source, under the MIT license."));

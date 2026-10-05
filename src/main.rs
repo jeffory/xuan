@@ -6,9 +6,15 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+/// The `--version` text (see `xuan::buildinfo`); clap wants it for the program's lifetime.
+fn version_text() -> &'static str {
+    static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TEXT.get_or_init(|| xuan::buildinfo::current().cli_version())
+}
+
 #[derive(Debug, Parser)]
 #[command(
-    version,
+    version = version_text(),
     about,
     after_help = "Projects use .xuan; original .comp directory packages and Photoshop .psd/.psb files can also be opened."
 )]
