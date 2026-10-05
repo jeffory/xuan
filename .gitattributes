@@ -1,0 +1,35 @@
+# Text files are stored and checked out with LF line endings on every platform, so tests that
+# read files byte for byte (docs/SHORTCUTS.md, translation catalogs, fixture lists) see the same
+# text on Windows.
+* text=auto eol=lf
+
+# Binary files: never convert line endings or diff them as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tif binary
+*.tiff binary
+*.webp binary
+*.bmp binary
+*.gif binary
+*.heic binary
+*.heif binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.xuan binary
+*.psd binary
+*.nef binary
+*.NEF binary
+*.cr2 binary
+*.CR2 binary
+*.cr3 binary
+*.raf binary
+*.arw binary
+*.dng binary
+*.bin binary
+*.icc binary

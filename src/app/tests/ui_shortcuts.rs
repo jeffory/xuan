@@ -13,6 +13,11 @@ use egui::{Key, Modifiers};
 
 const DOC_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/SHORTCUTS.md");
 const DOC: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/SHORTCUTS.md"));
+
+/// The document with LF line endings: a Windows checkout may have CRLF.
+fn doc() -> String {
+    DOC.replace("\r\n", "\n")
+}
 const BEGIN: &str = "<!-- BEGIN GENERATED from the command registry (src/app/commands.rs); refresh with XUAN_UPDATE_DOCS=1 cargo test documented_shortcuts -->\n";
 const END: &str = "<!-- END GENERATED -->";
 const OTHER_HEADING: &str = "## Other keys and pointer controls";
@@ -150,7 +155,8 @@ const DIALOG_ONLY: &[&str] = &["Ctrl+Enter"];
 
 /// The shortcut column of the hand-written table, split into individual tokens.
 fn other_tokens() -> Vec<String> {
-    let table = DOC
+    let doc = doc();
+    let table = doc
         .split_once(OTHER_HEADING)
         .expect("docs/SHORTCUTS.md lost its second table")
         .1;
@@ -214,14 +220,16 @@ fn press_and_check(ui: &mut UiTest, name: &str, chord: commands::Chord, effect: 
 fn documented_shortcuts_trigger_their_commands() {
     // The command table is the registry's.
     let generated = generated_table();
-    let documented = DOC
+    let doc = doc();
+    let documented = doc
         .split_once(BEGIN)
         .and_then(|(_, rest)| rest.split_once(END))
         .map(|(table, _)| table)
         .expect("docs/SHORTCUTS.md lost its generated block");
     if documented != generated {
         if std::env::var_os("XUAN_UPDATE_DOCS").is_some() {
-            let text = DOC.replacen(
+            // Written with LF line endings, like the generated table.
+            let text = doc.replacen(
                 &format!("{BEGIN}{documented}{END}"),
                 &format!("{BEGIN}{generated}{END}"),
                 1,
