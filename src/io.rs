@@ -22,8 +22,10 @@ const MAX_ASSET: u64 = 512 * 1024 * 1024;
 
 mod compositor;
 mod heif;
+pub mod psd;
 
-pub use compositor::{Dropped, ImportReport};
+pub use compositor::{Dropped, ImportReport, ImportSource};
+pub use psd::is_photoshop;
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -276,11 +278,13 @@ pub fn load_compositor(path: &Path) -> Result<Document> {
     compositor::load(path).map(|(document, _)| document)
 }
 
-/// Open a project like [`load`], also returning what a Compositor import left out. `.xuan`
-/// projects always load completely, so their report is empty.
+/// Open a project like [`load`], also returning what a Compositor or Photoshop import left out
+/// or changed. `.xuan` projects always load completely, so their report is empty.
 pub fn load_with_report(path: &Path) -> Result<(Document, ImportReport)> {
     if path.is_dir() {
         compositor::load(path)
+    } else if is_photoshop(path) {
+        psd::load(path, psd::PixelBudget::default())
     } else {
         Ok((load(path)?, ImportReport::default()))
     }

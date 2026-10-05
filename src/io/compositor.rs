@@ -63,6 +63,35 @@ pub enum Dropped {
     FilterSettings,
     /// A clipping mask released because its layer or base became a filter or was left out.
     ClippingMask,
+    // Photoshop imports (`super::psd`).
+    /// A Photoshop layer whose blend mode Xuan does not know, drawn as Normal.
+    PhotoshopBlendMode(&'static str),
+    /// A Photoshop adjustment layer Xuan cannot represent, left out.
+    PhotoshopAdjustment(&'static str),
+    /// A Photoshop folder whose blend mode is not pass-through; Xuan folders pass through.
+    FolderBlendMode(&'static str),
+    /// A Photoshop layer with layer effects, which were left out.
+    PhotoshopEffects,
+    /// Photoshop type that Xuan cannot edit (vertical, warped, rotated or unreadable),
+    /// imported as its pixels.
+    PhotoshopTextAsPixels,
+    /// Photoshop type with several styles; the first style is editable.
+    PhotoshopTextStyles,
+    /// A vector shape that is not a plain filled rectangle or ellipse, imported as its pixels.
+    VectorAsPixels,
+    /// A vector mask (or a mask rendered from one), left out.
+    VectorMask,
+    /// A shape stored without pixels that Xuan cannot draw (gradient or pattern filled, or an
+    /// unreadable path): left out.
+    VectorLeftOut,
+    /// A smart object, imported as its pixels.
+    SmartObject,
+    /// A solid color, gradient or pattern fill layer, imported as its pixels.
+    FillLayer,
+    /// A layer cropped to the canvas so the file fits Xuan's memory limits.
+    CroppedToCanvas,
+    /// A clipping mask whose base is a folder or a left-out layer, released.
+    ClippingBase,
 }
 
 impl Dropped {
@@ -79,20 +108,80 @@ impl Dropped {
             Self::LineShape => tr("Live line shapes (imported as pixels)").into(),
             Self::FilterSettings => tr("Blur or noise settings adapted to Xuan").into(),
             Self::ClippingMask => tr("Clipping masks on blur or noise layers").into(),
+            Self::PhotoshopBlendMode(name) => {
+                format!("{} “{name}” ({})", tr("Blend mode"), tr("drawn as Normal"))
+            }
+            Self::PhotoshopAdjustment(name) => {
+                format!("{} “{name}” ({})", tr("Adjustment layer"), tr("left out"))
+            }
+            Self::FolderBlendMode(name) => {
+                format!(
+                    "{} “{name}” ({})",
+                    tr("Folder blend mode"),
+                    tr("passes through")
+                )
+            }
+            Self::PhotoshopEffects => tr("Layers with layer effects (effects left out)").into(),
+            Self::PhotoshopTextAsPixels => {
+                tr("Vertical, warped or transformed text (imported as pixels)").into()
+            }
+            Self::PhotoshopTextStyles => {
+                tr("Text with several styles (kept until the text is edited)").into()
+            }
+            Self::VectorAsPixels => tr("Vector shapes (imported as pixels)").into(),
+            Self::VectorMask => tr("Vector masks (left out)").into(),
+            Self::VectorLeftOut => {
+                tr("Shapes saved without pixels that Xuan can't draw (left out)").into()
+            }
+            Self::SmartObject => tr("Smart objects (imported as pixels)").into(),
+            Self::FillLayer => tr("Fill layers (imported as pixels)").into(),
+            Self::CroppedToCanvas => {
+                tr("Layers cropped to the canvas to fit the memory limit").into()
+            }
+            Self::ClippingBase => tr("Clipping masks on folders or left-out layers").into(),
         }
     }
 }
 
-/// What a Compositor import left out or changed. Empty for `.xuan` projects and for packages
-/// Xuan represents completely.
+/// The kind of file an [`ImportReport`] describes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImportSource {
+    #[default]
+    Compositor,
+    Photoshop,
+}
+
+/// What a Compositor or Photoshop import left out or changed. Empty for `.xuan` projects and
+/// for files Xuan represents completely.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportReport {
+    source: ImportSource,
     dropped: BTreeMap<Dropped, usize>,
 }
 
 impl ImportReport {
-    fn add(&mut self, item: Dropped) {
+    /// An empty report for a file of this kind.
+    pub fn new(source: ImportSource) -> Self {
+        Self {
+            source,
+            dropped: BTreeMap::new(),
+        }
+    }
+
+    pub fn source(&self) -> ImportSource {
+        self.source
+    }
+
+    pub(super) fn add(&mut self, item: Dropped) {
         *self.dropped.entry(item).or_default() += 1;
+    }
+
+    /// One translated line per kind of change, with how often it occurred.
+    pub fn lines(&self) -> Vec<String> {
+        self.dropped
+            .iter()
+            .map(|(item, count)| format!("{}: {count}", item.label()))
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -109,12 +198,17 @@ impl ImportReport {
         if self.is_empty() {
             return None;
         }
-        let mut text = tr(
-            "Imported with changes. These parts of the Compositor project aren't supported yet:",
-        )
+        let mut text = tr(match self.source {
+            ImportSource::Compositor => {
+                "Imported with changes. These parts of the Compositor project aren't supported yet:"
+            }
+            ImportSource::Photoshop => {
+                "Imported with changes. These parts of the Photoshop file aren't supported yet:"
+            }
+        })
         .to_owned();
-        for (item, count) in &self.dropped {
-            text.push_str(&format!("\n• {}: {count}", item.label()));
+        for line in self.lines() {
+            text.push_str(&format!("\n• {line}"));
         }
         Some(text)
     }
@@ -417,7 +511,7 @@ fn comp_sampling_adjustment(
 }
 
 /// Font family, bold and italic from a PostScript name such as `HelveticaNeue-BoldItalic`.
-fn font_from_postscript(name: &str) -> (String, bool, bool) {
+pub(super) fn font_from_postscript(name: &str) -> (String, bool, bool) {
     let (family, style) = name.split_once('-').unwrap_or((name, ""));
     let family = family
         .strip_suffix("PSMT")

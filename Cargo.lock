@@ -5043,6 +5043,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "flate2",
  "heic-rs",
  "image",
  "png 0.18.1",

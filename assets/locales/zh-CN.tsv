@@ -707,3 +707,41 @@ Restore the default shortcut	恢复默认快捷键
 Change the keys that run commands	更改运行命令的按键
 Other	其他
 Customize…	自定义…
+Imported with changes. These parts of the Photoshop file aren't supported yet:	已导入，但有改动。Photoshop 文件的以下部分暂不支持：
+Folder blend mode	文件夹混合模式
+passes through	按“穿透”处理
+Layers with layer effects (effects left out)	带图层效果的图层（效果已省略）
+Vertical, warped or transformed text (imported as pixels)	竖排、变形或经过变换的文字（以像素导入）
+Text with several styles (kept until the text is edited)	包含多种样式的文字（编辑文字前保持原样）
+Vector shapes (imported as pixels)	矢量形状（以像素导入）
+Vector masks (left out)	矢量蒙版（已省略）
+Shapes saved without pixels that Xuan can't draw (left out)	未保存像素且 Xuan 无法绘制的形状（已省略）
+Smart objects (imported as pixels)	智能对象（以像素导入）
+Fill layers (imported as pixels)	填充图层（以像素导入）
+Layers cropped to the canvas to fit the memory limit	为符合内存限制而裁切到画布的图层
+Clipping masks on folders or left-out layers	文件夹或已省略图层上的剪贴蒙版
+Photoshop files are limited to 1 GiB	Photoshop 文件不能超过 1 GiB
+The Photoshop file is damaged or incomplete	Photoshop 文件已损坏或不完整
+The Photoshop file's layers don't fit in the 100-megapixel limit, even when cropped to the canvas	即使裁切到画布，Photoshop 文件的图层仍超出 1 亿像素的限制
+This is not a Photoshop file	这不是 Photoshop 文件
+This Photoshop file version isn't supported	不支持此 Photoshop 文件版本
+Only 8-bit RGB Photoshop files can be imported. In Photoshop, choose Image → Mode → RGB Color and 8 Bits/Channel, then save again.	只能导入 8 位 RGB 的 Photoshop 文件。请在 Photoshop 中选择“图像 → 模式 → RGB 颜色”和“8 位/通道”，然后重新存储。
+This Photoshop file uses the {} color mode.	此 Photoshop 文件使用 {} 颜色模式。
+This Photoshop file uses {} bits per channel.	此 Photoshop 文件每通道 {} 位。
+Bitmap	位图
+Grayscale	灰度
+Indexed Color	索引颜色
+CMYK	CMYK
+Multichannel	多通道
+Duotone	双色调
+Lab	Lab
+unknown	未知
+A Photoshop layer's bounds are out of range	Photoshop 图层的边界超出范围
+The Photoshop file has too many layers	Photoshop 文件的图层过多
+This Photoshop file uses an unsupported compression method	此 Photoshop 文件使用了不支持的压缩方式
+The Photoshop file's folders are nested too deeply	Photoshop 文件的文件夹嵌套过深
+Background	背景
+Blend mode	混合模式
+drawn as Normal	按“正常”绘制
+Adjustment layer	调整图层
+left out	已省略
