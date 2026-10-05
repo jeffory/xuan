@@ -17,6 +17,7 @@ pub mod operations;
 pub mod paint;
 pub mod panes;
 pub mod plugins;
+pub mod provenance;
 pub mod raw;
 pub mod render;
 pub mod retouch;

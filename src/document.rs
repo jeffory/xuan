@@ -359,6 +359,9 @@ pub struct Layer {
     pub effects: Option<crate::layer_effects::LayerEffects>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated: Option<Generated>,
+    /// The model and sampler a plugin reported for the pixels (format 8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::Provenance>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -393,6 +396,7 @@ impl Layer {
             raw: None,
             effects: None,
             generated: None,
+            provenance: None,
             pixels: None,
         }
     }
@@ -665,6 +669,9 @@ impl Document {
             }
             if let Some(adjustment) = &layer.adjustment {
                 crate::effects::validate_adjustment(adjustment)?;
+            }
+            if let Some(provenance) = &layer.provenance {
+                provenance.validate()?;
             }
             if let Some(effects) = &layer.effects {
                 effects.validate()?;

@@ -74,6 +74,7 @@ pub fn describe_layer(layer: &Layer) -> Value {
         "pixel_height": height,
         "has_mask": layer.mask.is_some(),
         "generated": layer.generated,
+        "provenance": layer.provenance,
     })
 }
 

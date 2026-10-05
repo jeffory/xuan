@@ -92,6 +92,40 @@ impl DropPosition {
     }
 }
 
+/// What made a generated layer, read-only: the plugin and action, and the
+/// model details it reported, with a button that copies them as JSON.
+fn generation_info(ui: &mut egui::Ui, layer: &Layer) {
+    let Some(generated) = &layer.generated else {
+        return;
+    };
+    egui::CollapsingHeader::new(RichText::new(tr("Generation")).size(11.0))
+        .id_salt("generation_info")
+        .show(ui, |ui| {
+            let small = |text: String| {
+                egui::Label::new(RichText::new(text).size(11.0).color(theme::MUTED)).wrap()
+            };
+            ui.add(small(format!(
+                "{}: {} ({})",
+                tr("Plugin"),
+                generated.plugin,
+                generated.action
+            )));
+            match &layer.provenance {
+                Some(provenance) => {
+                    for (name, value) in provenance.rows() {
+                        ui.add(small(format!("{name}: {value}")));
+                    }
+                    if ui.button(tr("Copy")).clicked() {
+                        ui.ctx().copy_text(provenance.to_json());
+                    }
+                }
+                None => {
+                    ui.add(small(tr("The plugin reported no model details.").into()));
+                }
+            }
+        });
+}
+
 fn rows(document: &Document, collapsed: &std::collections::HashSet<Uuid>) -> Vec<(Layer, usize)> {
     fn visit(
         document: &Document,
@@ -238,6 +272,9 @@ impl EditorApp {
                         actions.appearance = Some((blend, opacity, locked));
                     }
                 });
+                if let Some(active) = active.filter(|l| l.generated.is_some()) {
+                    generation_info(ui, active);
+                }
             });
     }
 

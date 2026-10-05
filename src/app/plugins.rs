@@ -23,6 +23,7 @@ use xuan::{
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
         ui::Node,
     },
+    provenance::{Provenance, Redactor},
     selection::{self, SelectionMode},
 };
 
@@ -551,6 +552,23 @@ impl EditorApp {
                 pane.queued = None;
             }
         }
+    }
+
+    /// Keeps a plugin's secrets, by name and by value, out of provenance.
+    fn provenance_redactor(&self, plugin: &str) -> Redactor {
+        let names = self.plugins.manifest(plugin).into_iter().flat_map(|m| {
+            (m.permissions.secrets.iter())
+                .chain(
+                    m.settings
+                        .iter()
+                        .filter(|s| s.kind == InputKind::Secret)
+                        .map(|s| &s.id),
+                )
+                .map(String::as_str)
+        });
+        let values = (self.plugins.secrets.0.get(plugin).into_iter())
+            .flat_map(|m| m.values().map(String::as_str));
+        Redactor::new(names, values)
     }
 
     /// Settings values for `initialize` and `settings/changed`.
@@ -1614,6 +1632,8 @@ impl EditorApp {
                 y: f32,
                 #[serde(default)]
                 mask: Option<PathBuf>,
+                #[serde(default)]
+                provenance: Option<Value>,
                 #[serde(flatten)]
                 placed: jobs::Placed,
             },
@@ -1621,6 +1641,8 @@ impl EditorApp {
                 path: PathBuf,
                 #[serde(default)]
                 name: Option<String>,
+                #[serde(default)]
+                provenance: Option<Value>,
             },
             /// A grey PNG that becomes the selection, combined with the
             /// current one by `mode`.
@@ -1683,10 +1705,13 @@ impl EditorApp {
             source_hash: hash,
             created: timestamp(),
         };
+        // What a layer's provenance must never hold: this plugin's secrets.
+        let redactor = self.provenance_redactor(&job.plugin);
+        let mut stripped = 0;
         let mut message = None;
         let mut new_documents = Vec::new();
         let mut layers: Vec<Layer> = Vec::new();
-        let mut replace: Option<(Uuid, image::RgbaImage)> = None;
+        let mut replace: Option<(Uuid, image::RgbaImage, Option<Provenance>)> = None;
         let mut edit_batches = Vec::new();
         let mut masks = Vec::new();
         let regions =
@@ -1699,17 +1724,19 @@ impl EditorApp {
                     x,
                     y,
                     mask,
+                    provenance,
                     placed,
                 } => {
                     placed.validate()?;
                     reader.add_layer()?;
+                    let provenance = take_provenance(provenance, &redactor, &mut stripped)?;
                     let image = reader.rgba(&path)?;
                     let name = name.unwrap_or_else(|| job.label.clone());
                     let session = self.sessions.iter().find(|s| s.document.id == job.document);
                     if job.into == ResultInto::Document
                         || (job.prepared.export.is_none() && session.is_none())
                     {
-                        new_documents.push((name, image));
+                        new_documents.push((name, image, provenance));
                         continue;
                     }
                     let source_layer = job.prepared.layer.filter(|id| {
@@ -1724,6 +1751,7 @@ impl EditorApp {
                         replace = Some((
                             source,
                             jobs::replace_pixels(&job.prepared, pixels, &image, x, y, &placed)?,
+                            provenance,
                         ));
                         continue;
                     }
@@ -1743,13 +1771,20 @@ impl EditorApp {
                         });
                     }
                     layer.generated = Some(generated(source_layer, job.prepared.hash.clone()));
+                    layer.provenance = provenance;
                     layers.push(layer);
                 }
-                Output::Document { path, name } => {
+                Output::Document {
+                    path,
+                    name,
+                    provenance,
+                } => {
                     reader.add_layer()?;
+                    let provenance = take_provenance(provenance, &redactor, &mut stripped)?;
                     new_documents.push((
                         name.unwrap_or_else(|| job.label.clone()),
                         reader.rgba(&path)?,
+                        provenance,
                     ));
                 }
                 Output::Mask {
@@ -1767,10 +1802,11 @@ impl EditorApp {
                 Output::None => {}
             }
         }
-        for (name, image) in new_documents {
+        for (name, image, provenance) in new_documents {
             let mut document = Document::new(image.width(), image.height())?;
             let mut layer = Layer::image(&name, image);
             layer.generated = Some(generated(None, None));
+            layer.provenance = provenance;
             document.layers = vec![layer];
             document.active = Some(document.layers[0].id);
             document.selected = [document.layers[0].id].into();
@@ -1784,6 +1820,14 @@ impl EditorApp {
             || !masks.is_empty();
         if let Some(message) = &message {
             self.status = self.plugins.status_from(&job.plugin, message);
+        }
+        if stripped > 0 {
+            self.status = format!(
+                "{} {} {}",
+                job.label,
+                stripped,
+                tr("provenance entries that looked like secrets were removed")
+            );
         }
         if !has_changes {
             return Ok(());
@@ -1801,9 +1845,10 @@ impl EditorApp {
         for batch in &edit_batches {
             edits::apply(&mut document, batch, &mut reader)?;
         }
-        if let Some((id, pixels)) = replace
+        if let Some((id, pixels, provenance)) = replace
             && let Some(layer) = document.layers.iter_mut().find(|l| l.id == id)
         {
+            layer.provenance = provenance;
             layer.raw = None;
             layer.text = None;
             layer.shape = None;
@@ -2447,6 +2492,21 @@ fn regions_from_value(value: &Value) -> Vec<Region> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The provenance a plugin reported with an output, without secrets, counting
+/// the entries removed.
+fn take_provenance(
+    reported: Option<Value>,
+    redactor: &Redactor,
+    stripped: &mut usize,
+) -> Result<Option<Provenance>> {
+    let Some(reported) = reported.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let (record, removed) = Provenance::from_plugin(&reported, redactor)?;
+    *stripped += removed;
+    Ok(record)
 }
 
 fn timestamp() -> String {

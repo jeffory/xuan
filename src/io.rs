@@ -157,12 +157,14 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 7;
+const LATEST_VERSION: u32 = 8;
 
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
-    if document.layers.iter().any(|l| {
+    if document.layers.iter().any(|l| l.provenance.is_some()) {
+        8
+    } else if document.layers.iter().any(|l| {
         !l.blend.is_legacy()
             || l.adjustment.as_ref().is_some_and(|a| !a.is_legacy())
             || l.effects.is_some()
@@ -574,6 +576,72 @@ mod tests {
         assert_eq!(loaded.layers[0].generated, Some(generated));
         assert_eq!(loaded.layers[0].effects, Some(effects));
         assert_eq!(loaded.layers[0].blend, crate::blend::BlendMode::LinearDodge);
+        // Model provenance makes it version 8, whatever else the document uses; without it
+        // nothing changes, and version 7 files still open.
+        let record = crate::provenance::Provenance {
+            model: Some("sdxl.safetensors".into()),
+            sampler: Some("euler".into()),
+            steps: Some(30),
+            seed: Some(42),
+            cfg: Some(7.5),
+            request_id: Some("r-1".into()),
+            extra: [("lora".to_string(), serde_json::json!(["a"]))].into(),
+            ..Default::default()
+        };
+        let mut recorded = provenance.clone();
+        recorded.layers[0].provenance = Some(record.clone());
+        let recorded_path = directory.path().join("provenance.xuan");
+        save(&recorded, &recorded_path).unwrap();
+        assert_eq!(manifest_json(&recorded_path)["version"], 8);
+        let loaded = load(&recorded_path).unwrap();
+        assert_eq!(loaded.layers[0].provenance, Some(record.clone()));
+        assert_eq!(loaded.layers[0].generated, recorded.layers[0].generated);
+        assert_eq!(loaded.layers[0].effects, recorded.layers[0].effects);
+        assert_eq!(loaded.layers[0].blend, crate::blend::BlendMode::LinearDodge);
+        // Alone it is still version 8, and a layer without it adds no key.
+        let mut alone = doc.clone();
+        alone.layers[0].provenance = Some(record.clone());
+        save(&alone, &recorded_path).unwrap();
+        assert_eq!(manifest_json(&recorded_path)["version"], 8);
+        save(&provenance, &recorded_path).unwrap();
+        let unused = manifest_json(&recorded_path);
+        assert_eq!(unused["version"], 7);
+        assert!(unused["document"]["layers"][0].get("provenance").is_none());
+        assert!(load(&recorded_path).unwrap().layers[0].provenance.is_none());
+        // A hostile file with a secret, an unknown key or an oversized record is refused.
+        for bad in [
+            serde_json::json!({"extra": {"api_key": "x"}}),
+            serde_json::json!({"nope": 1}),
+            serde_json::json!({"model": "x".repeat(300)}),
+        ] {
+            let mut manifest = manifest_json(&recorded_path);
+            manifest["version"] = 8.into();
+            manifest["document"]["layers"][0]["provenance"] = bad;
+            let hostile = directory.path().join("hostile.xuan");
+            let mut archive = ZipArchive::new(File::open(&recorded_path).unwrap()).unwrap();
+            let image = zip_read(
+                &mut archive,
+                &format!("images/{}.png", doc.layers[0].id),
+                MAX_ASSET,
+            )
+            .unwrap();
+            let mut writer = ZipWriter::new(File::create(&hostile).unwrap());
+            writer
+                .start_file("manifest.json", SimpleFileOptions::default())
+                .unwrap();
+            writer
+                .write_all(&serde_json::to_vec(&manifest).unwrap())
+                .unwrap();
+            writer
+                .start_file(
+                    format!("images/{}.png", doc.layers[0].id),
+                    SimpleFileOptions::default(),
+                )
+                .unwrap();
+            writer.write_all(&image).unwrap();
+            writer.finish().unwrap();
+            assert!(load(&hostile).is_err(), "{manifest}");
+        }
         // Out of range settings are refused on load.
         let mut manifest = manifest_json(&path);
         manifest["document"]["layers"][1]["adjustment"]["ColorBalance"]["shadows"][0] =
