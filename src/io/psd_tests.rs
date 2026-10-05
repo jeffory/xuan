@@ -1379,6 +1379,26 @@ fn shape_layers_without_pixels_are_drawn_from_their_path() {
     );
     let (document, report) = open(&spec);
     let find = |name| document.layers.iter().find(|l| l.name == name).unwrap();
+    // A hostile path too costly to fill is left out rather than drawn for minutes.
+    let canvas = Rect {
+        left: 0,
+        top: 0,
+        right: 30_000,
+        bottom: 3_000,
+    };
+    let zigzag: Vec<(f64, f64)> = (0..MAX_PATH_KNOTS)
+        .map(|i| ((i % 2) as f64, i as f64 / MAX_PATH_KNOTS as f64))
+        .collect();
+    let mut hostile = LayerSpec::blank("Zigzag")
+        .with(b"SoCo", solid_color(1.0, 1.0, 1.0))
+        .with(b"vmsk", vector_mask(&zigzag, false));
+    hostile.channels.clear();
+    let (record_bytes, _) = record(&hostile, false);
+    let mut reader = Reader::new(&record_bytes);
+    let parsed = read_record(&mut reader, false).unwrap();
+    let started = std::time::Instant::now();
+    assert!(draw_vector(&parsed, canvas, MAX_PIXELS).is_none());
+    assert!(started.elapsed().as_secs() < 5);
     let cc = find("CC rectangle");
     assert_eq!(cc.shape.as_ref().unwrap().color, [0, 255, 0, 255]);
     let old = find("Old shape");
@@ -1806,6 +1826,12 @@ fn too_many_layers_or_channels_are_rejected() {
     let mut f = file.clone();
     patch(&mut f, record + 16, &57_u16.to_be_bytes());
     assert!(error(&f).contains("damaged"));
+    // Thousands of tiny additional information blocks in one record.
+    let mut crowded = LayerSpec::blank("Crowded");
+    for _ in 0..MAX_LAYER_BLOCKS + 1 {
+        crowded = crowded.with(b"zzzz", Vec::new());
+    }
+    assert!(error(&bytes(&PsdSpec::layers(1, 1, vec![crowded]))).contains("damaged"));
     // Ten thousand layers are fine.
     let many = PsdSpec::layers(1, 1, vec![LayerSpec::blank("x"); MAX_LAYERS]);
     assert_eq!(open(&many).0.layers.len(), MAX_LAYERS);

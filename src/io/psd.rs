@@ -56,6 +56,8 @@ const MAX_CHANNELS: u16 = 56;
 const MAX_RECT_SIDE: i64 = 300_000;
 /// Positions `Transform::valid` accepts; layers further out are cropped to the canvas.
 const MAX_POSITION: i64 = 1_000_000;
+/// Additional layer information blocks per layer record.
+const MAX_LAYER_BLOCKS: usize = 256;
 /// Folder nesting Xuan's documents allow.
 pub const MAX_FOLDER_DEPTH: usize = 64;
 /// Bytes one ZIP-compressed channel may inflate to (it is decoded row by row).
@@ -604,6 +606,8 @@ fn read_record<'a>(reader: &mut Reader<'a>, psb: bool) -> Result<Record<'a>> {
         if signature != b"8BIM" && signature != b"8B64" {
             break;
         }
+        // Photoshop writes a few dozen blocks; thousands of tiny ones would only cost memory.
+        ensure!(record.extra.len() < MAX_LAYER_BLOCKS, damaged());
         let key: [u8; 4] = extra.array()?;
         let long = signature == b"8B64" || (psb && PSB_LONG_KEYS.contains(&&key));
         let data = extra.section(long)?.rest();
@@ -1156,6 +1160,8 @@ const VECTOR_KEYS: [&[u8; 4]; 2] = [b"vmsk", b"vsms"];
 const CURVE_STEPS: usize = 16;
 /// Vector path knots read from one layer.
 const MAX_PATH_KNOTS: usize = 10_000;
+/// Edge-row visits allowed when drawing one path; larger paths are left out.
+const MAX_FILL_WORK: u64 = 200_000_000;
 
 /// A vector mask (`vmsk`/`vsms`: version, flags, then 26-byte path records) as closed polygons in
 /// document pixels, or `None` for a path that cannot be drawn. Knot coordinates are 8.24 fixed
@@ -1311,7 +1317,10 @@ fn draw_vector(record: &Record<'_>, canvas: Rect, pixels_left: u64) -> Option<(R
         bottom: bottom.ceil().min(1e9) as i64,
     }
     .intersect(canvas);
-    if area.is_empty() || area.area() > pixels_left {
+    // Filling visits every edge on every sample row in the worst case.
+    let edges: usize = polygons.iter().map(Vec::len).sum();
+    let work = (edges as u64).saturating_mul(area.height().max(0) as u64 * 4);
+    if area.is_empty() || area.area() > pixels_left || work > MAX_FILL_WORK {
         return None;
     }
     Some((fill_polygons(&polygons, area, color), area))
@@ -1428,7 +1437,9 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
     let runs = engine
         .walk(&["EngineDict", "StyleRun", "RunArray"])
         .map_or(&[][..], Engine::array);
-    let style_of = |run: &Engine| run.walk(&["StyleSheet", "StyleSheetData"]).cloned();
+    fn style_of(run: &Engine) -> Option<&Engine> {
+        run.walk(&["StyleSheet", "StyleSheetData"])
+    }
     let first = style_of(runs.first()?)?;
     let size = first.get("FontSize")?.number()? * xx;
     let fonts = engine
@@ -1466,11 +1477,7 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
         strikethrough: flag("Strikethrough"),
     };
     style.validate().ok()?;
-    if runs
-        .iter()
-        .skip(1)
-        .any(|run| style_of(run).as_ref() != Some(&first))
-    {
+    if runs.iter().skip(1).any(|run| style_of(run) != Some(first)) {
         report.add(Dropped::PhotoshopTextStyles);
     }
     let justification = engine
