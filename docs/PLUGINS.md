@@ -54,8 +54,64 @@ Xuan enforces the permissions for what it does on a plugin's behalf: it edits
 documents only for plugins that declare `document = "edit"`, hands over only
 the declared secrets, and reads and writes files only in the plugin's own
 folders (see [Files](#files)) unless `filesystem` allows more. It cannot
-limit what the plugin process itself does, which runs with the user's rights,
-so install plugins you trust.
+limit what the plugin process itself does, which runs with the user's rights:
+it can read any file the user can and contact any server, whatever its
+manifest declares. `permissions.network` in particular is not enforced. The
+permission dialog says so, and Xuan asks before it hands document data to a
+plugin that declares network hosts (see [Network](#network)). Install
+plugins you trust.
+
+### Network
+
+A plugin that lists hosts under `permissions.network` is treated as one that
+sends data off the machine. A plugin that lists none gets no prompts, but
+nothing stops it from connecting either.
+
+**Asking before sending.** When an action of such a plugin would send
+document data, Xuan shows **Send to *Plugin (plugin id)*?** before anything
+is sent. It names the declared hosts and lists exactly what goes with this
+run: the source image (the active layer's pixels, the flattened image, or the
+flattened image inside the selection, with any crop around the regions and
+the `max_side` limit), the positions and sizes of the regions and their text
+fields, and each non-empty `text`, `multiline` or `path` input. Other inputs
+are listed by name, and the document's size and layer names and positions
+(which `action/run` always carries) are mentioned. An action that sends none
+of this data runs without a prompt.
+
+- **Send** starts the job. While a job the user confirmed runs, the plugin
+  may also export other layers or the whole image without another prompt.
+- **Cancel** sends nothing. An action with inputs keeps its dialog open; one
+  without inputs is dropped.
+- **Don't ask again for this plugin** (applied with **Send**) is stored as
+  `send_without_asking = true` in the plugin's grant in `config.toml`. It goes
+  away with the grant: when the folder, command or permissions change and the
+  plugin is reviewed again, when the user revokes it, or when the user presses
+  **Ask Again** in **Plugins → Manage Plugins…**.
+
+Until the user chose "Don't ask again", `action/estimate` reaches such a
+plugin with `source: null` and without its regions and `text`, `multiline`,
+`path` or `secret` inputs, since it is sent as soon as the dialog opens.
+
+**Exports outside an action.** `layer/export`, `document/export` and
+`selection/export` from a plugin that declares network hosts are answered at
+once while one of its confirmed jobs runs or after "Don't ask again".
+Otherwise, for example from a pane, the request is held unanswered and Xuan
+asks once, as soon as no other dialog is open, naming what was asked for.
+The answer covers every export the plugin asks for until its process stops
+(it is disabled, revoked, reloaded, crashes or Xuan quits); a refused export
+fails with `-32800`. `document/get`, the `document` field of `action/run` and
+`pane/render`, and `document/changed` carry only the document's structure
+(size, layer ids, names and positions, the selection's bounds), so they are
+not held. Saving through a plugin's file format is not prompted either: the
+user chose that format in the Export dialog.
+
+**Offline mode.** **Disable plugins that use the network**, in **Settings →
+General** and at the bottom of **Plugins → Manage Plugins…**, is stored as
+`disable_network_plugins = true` in `config.toml`. While it is on, plugins
+that declare network hosts are stopped and never started: their panes say
+why they are empty, their actions are disabled in the menus, the command
+palette and shortcuts, and their file formats are not offered. Plugins that
+declare no hosts keep working. Turning it off starts their panes again.
 
 ## Manifest
 
@@ -69,7 +125,7 @@ command = ["python3", "main.py"]  # run inside the plugin folder
 protocol = 1                      # protocol version this plugin speaks
 
 [permissions]
-network = ["cloud.comfy.org"]     # hosts the plugin connects to (informational)
+network = ["cloud.comfy.org"]     # hosts it says it connects to; not enforced, see "Network"
 secrets = ["api_key"]             # settings of type "secret" it receives
 document = "edit"                 # "read" (default) or "edit"
 filesystem = "none"               # "none" (default), "read" or "write": where the host reads and writes for it
@@ -288,7 +344,8 @@ layer's pixels. The SDKs have helpers: `job.image(path, fit_source=True)` or
 ### Reading and editing the document
 
 Plugins ask the host for data with these requests. Each is answered on the next
-frame.
+frame, except that an export from a plugin that declares network hosts may
+wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
@@ -377,7 +434,7 @@ format always wins over a plugin's.
 
 ### Errors
 
-Standard JSON-RPC error objects. Reserved codes: `-32800` cancelled,
+Standard JSON-RPC error objects. Reserved codes: `-32800` cancelled (also the answer to an export the user refused),
 `-32001` needs setup (the message is shown with a button that opens the
 plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.retry_after` in seconds).
 
@@ -401,8 +458,10 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
   (hover a menu item for the plugin's id and folder), and permission
   prompts, errors and proposals name the plugin with its id, for example
   `Mock (plugin mock)`.
-- Pixels never leave the user's machine unless the plugin sends them somewhere;
-  the permissions dialog says which hosts a plugin declared.
+- Pixels never leave the user's machine unless the plugin sends them somewhere.
+  Xuan cannot prevent that; it asks before handing document data to a plugin
+  that declares network hosts, and offline mode keeps such plugins from
+  running (see [Network](#network)).
 - `host/run` may call the view commands `fit`, `actual`, `zoom_in` and
   `zoom_out`. A plugin that declares `document = "edit"` may also call
   commands that make one undoable document edit: `undo`, `redo`, `new_layer`,

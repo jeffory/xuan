@@ -16,8 +16,10 @@ and **#7** (MCP server and client).
    add WASM or embedded scripting. Models run in the plugin's own process or
    virtualenv; Xuan never links onnxruntime, torch or a model.
 2. **Make network access enforceable or stop calling it a permission.**
-   `permissions.network` is informational today. Say so in the grant dialog now;
-   add a "pixels leave this machine" confirmation per plugin and host next.
+   Done in #39 for the cheap part: the grant dialog says `permissions.network`
+   is not enforced, a per-run prompt asks before document data goes to a plugin
+   that declares hosts, and offline mode disables such plugins. OS-level
+   enforcement is a separate step; see the spike in section 5.
 3. **Add three small host features that every generative plugin needs:** a
    result that declares its placed size (upscale), canvas extension (outpaint)
    and a `mask` output kind that becomes a selection (segmentation, #5).
@@ -176,20 +178,19 @@ local job with no network.
 **Missing or weak.**
 
 - **`permissions.network` is only a label.** The plugin process can contact any
-  host. The docs say so ("informational"), but the grant dialog should say it too
-  in plain words: "this plugin can send data anywhere". Real enforcement needs OS
-  sandboxing (Linux network namespaces or seccomp, Windows AppContainer, macOS
-  sandbox), which is large and platform-specific. Recommend a cheap step now
-  (wording) and a spike on Linux bubblewrap or Windows AppContainer later.
-- **No "pixels leave this machine" prompt.** Consent is given once at grant
-  time. For a plugin that declares network hosts, add a per-run confirmation
-  that names the hosts and what is sent (layer, composite, selection, mask,
-  prompt), with "don't ask again for this plugin and host". Declared hosts are
-  already in the manifest, so the prompt needs no plugin changes. Plugins
-  declaring no network need no prompt, which gives "offline by default".
-- **Offline-by-default** follows from the grant model but has no switch. Add a
-  global setting "Disable plugins that declare network access" for people who
-  want a guarantee.
+  host. Since #39 the grant dialog says so in plain words. Real enforcement
+  needs OS sandboxing; see the spike below.
+- **"Pixels leave this machine" prompt.** Done in #39 (see "Network" in
+  [PLUGINS.md](PLUGINS.md#network)): for a plugin that declares network hosts,
+  each run that sends document data names the hosts and lists what is sent
+  (layer, composite or selection pixels, regions and their texts, prompts and
+  other text inputs), with **Send**, **Cancel** and "Don't ask again for this
+  plugin", stored in the grant. Exports the plugin asks for outside a
+  confirmed action wait for a once-per-process answer. The answer is per
+  plugin, not per host: the host cannot tell which declared host data goes to.
+- **Offline mode.** Done in #39: "Disable plugins that use the network" keeps
+  plugins that declare hosts from starting. It relies on the declaration, so it
+  is a guarantee only together with OS enforcement for the others.
 - **Keyring.** Secrets are in a 0600 file (#33 F18). The keyring crates need a
   desktop secret service that headless sessions lack, so a file fallback must
   stay. Treat the keyring as an optional front end, later.
@@ -203,6 +204,44 @@ local job with no network.
 - **Local-model plugins are not sandboxed** either; a model file can be hostile.
   Prefer formats that do not execute code (ONNX, safetensors) over pickles, and
   say so in plugin guidance.
+
+### Spike: enforcing network access in the OS (#39)
+
+No code yet; this compares the options for making `permissions.network`
+real. Two goals are possible: **no network at all** for plugins that declare no
+hosts, and **only the declared hosts** for the others. The second is much
+harder everywhere: hosts are names, the OS filters addresses, and CDNs share
+and rotate them, so an allow-list really needs a filtering HTTP(S) proxy that
+the sandboxed plugin is forced through. Both goals also cut off `localhost`, so
+a plugin that talks to a local ComfyUI or Ollama would have to declare
+`localhost` and be treated as a network plugin.
+
+| Option | Platform | What it gives | Feasibility | Packaging impact |
+| --- | --- | --- | --- | --- |
+| **seccomp filter** set in `pre_exec` (deny `socket()` for `AF_INET`, `AF_INET6`, `AF_PACKET`; keep `AF_UNIX`), e.g. with the pure-Rust `seccompiler` crate | Linux 3.5+ | No network at all, inherited by every child process; unprivileged with `no_new_privs` | Good. Small, testable, one code path in `host.rs` next to the process group setup | None: no helper binary, works in deb, rpm and AppImage, and inside Flatpak or Snap (filters stack) |
+| **Landlock** network rules | Linux 6.7+ (ABI 4) | Deny TCP `connect`/`bind`, by port only; UDP not covered | Partial: too new for many LTS kernels, and port rules cannot express hosts | None |
+| **bubblewrap** `bwrap --unshare-net` (or `unshare(CLONE_NEWUSER \| CLONE_NEWNET)` directly) | Linux | Empty network namespace (only its own loopback) | Works where unprivileged user namespaces are allowed; Ubuntu 23.10+ restricts them through AppArmor except for `bwrap`'s own profile; not available nested inside Flatpak | `bwrap` becomes a runtime dependency (deb/rpm `Depends`); an AppImage cannot rely on it; host allow-lists still need a proxy (`pasta`/`slirp4netns` plus filtering) |
+| **AppContainer** without the `internetClient` capability | Windows 8+ | No network, loopback blocked too | Medium: launch through `STARTUPINFOEX` with `SECURITY_CAPABILITIES`, which composes with the Job Object we already use. The container also loses file access: Xuan must grant its SID read access to the plugin folder and execute access to the interpreter, and a Python installed under the user profile does not run without changing ACLs there | No installer change; needs more `windows` crate features. ACL changes on user folders are hard to undo cleanly |
+| **WFP** filters or a firewall rule per program | Windows | Per-program, even per-address rules | Poor: needs administrator rights or a service, and plugins share `python.exe`, so a rule per program cannot tell them apart | An elevated installer component or service; rejected |
+| `sandbox-exec` profiles | macOS | Deny network | Deprecated API; macOS is not a release target | — |
+
+**Recommendation.**
+
+1. Do not attempt per-host allow-lists. Keep the per-run prompt for plugins
+   that declare hosts; they stay unsandboxed and the prompt is the control.
+2. Enforce "no network" for plugins that declare **no** hosts on Linux with a
+   seccomp filter applied in the child before `exec`. It is unprivileged, adds
+   no dependency, works in every package format, and turns offline mode into
+   a real guarantee on Linux. Ship it first behind a setting, report a blocked
+   `socket()` in the plugin log, and make it the default after a release.
+3. On Windows, prototype AppContainer for the same "no network" case only once
+   the Linux path has proven the UX; ship it opt-in and document that
+   interpreters must be installed for all users. Skip WFP.
+4. Leave bubblewrap and Landlock aside: bubblewrap adds a dependency and does
+   not work in all the places Xuan is packaged, and Landlock cannot express
+   what is needed on the kernels users have.
+
+Track the Linux and Windows steps as separate tickets.
 
 ## 6. Format
 
@@ -256,7 +295,7 @@ a cosmetic change and not worth breaking existing installs.
 
 | Goal | Already works | Missing | Recommendation |
 | --- | --- | --- | --- |
-| **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`. | Local ComfyUI/diffusers plugin; model download story; run-time network consent. | Ship a local-ComfyUI variant of the Comfy example; add the consent prompt and `models_dir`. |
+| **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin; model download story. | Ship a local-ComfyUI variant of the Comfy example; add `models_dir`. |
 | **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare. | Canvas extension for outpainting; a simple "selection as mask" input; hard-edge versus feathered mask control. | Add `extend` to the source and an `extend_canvas` edit op. |
 | **Background removal / segmentation** | `selection/export`, `set_selection` and `set_mask` edits, `replace` results. | A `mask` output that becomes a selection (#5); a shipped model and licence decision (#5). | Do the host `mask` output here, and the model and Select Subject UI in #5, implemented as a first-party ONNX plugin. |
 | **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Result placed-size control; model download; large-image speed. | Add `width`/`height` to image outputs; later an ONNX Real-ESRGAN backend. |
