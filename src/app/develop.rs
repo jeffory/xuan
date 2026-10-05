@@ -1318,11 +1318,14 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, inte
                     tr("Cannot sample this area. Choose a clear, unexposed film edge.").into(),
                 );
             }
-        } else {
-            d.settings.custom_wb = raw::sample_white_balance(raw, source);
+        } else if let Some(wb) = raw::sample_white_balance(raw, source) {
+            d.settings.custom_wb = wb;
             d.settings.white_balance = WhiteBalance::Custom;
             d.settings.tint = 0.0;
             d.picker = false;
+        } else {
+            d.notice =
+                Some(tr("Cannot sample this area. Choose a neutral area of the image.").into());
         }
     } else if !force_pan
         && d.draw_overlay

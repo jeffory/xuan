@@ -39,22 +39,55 @@ fn temperature_wb(raw: &DecodedRaw, temperature: f32) -> [f32; 3] {
     neutral.map(|v| (neutral[1] / v.max(0.001)).clamp(0.01, 100.0))
 }
 
-pub fn sample_white_balance(raw: &DecodedRaw, point: Point) -> [f32; 3] {
-    let x = (point.x * raw.camera.width() as f32) as i32;
-    let y = (point.y * raw.camera.height() as f32) as i32;
+/// Half-width of the square patch averaged by the eyedroppers (a 7x7 patch).
+const PATCH_RADIUS: i32 = 3;
+
+/// Average camera RGB over the patch around `point`, a normalized source-image
+/// coordinate (already mapped through [`source_point`] when sampling the edited
+/// view). This is the single implementation behind both eyedroppers.
+///
+/// Returns `None` when `point` lies outside the image (the display shows those
+/// areas as transparent) or when no pixel in the patch is usable. Patch offsets
+/// that fall outside the image are skipped rather than clamped, so edge pixels
+/// are not over-weighted. Non-finite pixels are always rejected; when
+/// `require_positive` is set, pixels with any channel at or below the noise
+/// floor are rejected too.
+pub(crate) fn sample_camera_patch(
+    raw: &DecodedRaw,
+    point: Point,
+    require_positive: bool,
+) -> Option<[f32; 3]> {
+    if !(0.0..=1.0).contains(&point.x) || !(0.0..=1.0).contains(&point.y) {
+        return None;
+    }
+    let (width, height) = (raw.camera.width() as i32, raw.camera.height() as i32);
+    let x = ((point.x * width as f32) as i32).min(width - 1);
+    let y = ((point.y * height as f32) as i32).min(height - 1);
     let mut sum = [0.0; 3];
-    for dy in -3..=3 {
-        for dx in -3..=3 {
-            let p = raw.camera.get_pixel(
-                (x + dx).clamp(0, raw.camera.width() as i32 - 1) as u32,
-                (y + dy).clamp(0, raw.camera.height() as i32 - 1) as u32,
-            );
-            for c in 0..3 {
-                sum[c] += p[c];
+    let mut count = 0_u32;
+    for py in (y - PATCH_RADIUS).max(0)..=(y + PATCH_RADIUS).min(height - 1) {
+        for px in (x - PATCH_RADIUS).max(0)..=(x + PATCH_RADIUS).min(width - 1) {
+            let pixel = raw.camera.get_pixel(px as u32, py as u32);
+            if pixel
+                .0
+                .iter()
+                .all(|v| v.is_finite() && (!require_positive || *v > 0.00001))
+            {
+                for c in 0..3 {
+                    sum[c] += pixel[c];
+                }
+                count += 1;
             }
         }
     }
-    sum.map(|v| (sum[1] / v.max(0.00001)).clamp(0.01, 100.0))
+    (count > 0).then(|| sum.map(|v| v / count as f32))
+}
+
+/// White-balance multipliers that neutralize the patch around `point`, or `None`
+/// when the patch cannot be sampled or has no green signal to normalize against.
+pub fn sample_white_balance(raw: &DecodedRaw, point: Point) -> Option<[f32; 3]> {
+    let mean = sample_camera_patch(raw, point, false)?;
+    (mean[1] > 0.00001).then(|| mean.map(|v| (mean[1] / v.max(0.00001)).clamp(0.01, 100.0)))
 }
 
 pub fn auto_exposure(raw: &DecodedRaw) -> f32 {

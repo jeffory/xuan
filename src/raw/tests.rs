@@ -599,6 +599,99 @@ fn negative_analysis_respects_crop_and_film_base_sampling() {
 }
 
 #[test]
+fn eyedroppers_share_patch_sampling_at_edges_and_through_geometry() {
+    let mut raw = synthetic();
+    let mean = |xs: std::ops::RangeInclusive<u32>, ys: std::ops::RangeInclusive<u32>| {
+        let mut sum = [0.0_f32; 3];
+        let mut count = 0.0;
+        for y in ys {
+            for x in xs.clone() {
+                for c in 0..3 {
+                    sum[c] += raw.camera.get_pixel(x, y)[c];
+                }
+                count += 1.0;
+            }
+        }
+        sum.map(|v| v / count)
+    };
+    let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
+    let wb = |m: [f32; 3]| m.map(|v| m[1] / v);
+    // Interior and corner patches average only real pixels; edges are not repeated.
+    let interior = mean(29..=35, 21..=27);
+    let corner = mean(0..=3, 0..=3);
+    let far_corner = mean(60..=63, 44..=47);
+    assert!(close(
+        sample_film_base(&raw, Point::new(0.5, 0.5)).unwrap(),
+        interior
+    ));
+    assert!(close(
+        sample_film_base(&raw, Point::new(0.0, 0.0)).unwrap(),
+        corner
+    ));
+    assert!(close(
+        sample_film_base(&raw, Point::new(1.0, 1.0)).unwrap(),
+        far_corner
+    ));
+    assert!(close(
+        sample_white_balance(&raw, Point::new(0.0, 0.0)).unwrap(),
+        wb(corner)
+    ));
+    // Points the display renders as transparent cannot be sampled by either picker.
+    for point in [Point::new(-0.01, 0.5), Point::new(0.5, 1.01)] {
+        assert!(sample_film_base(&raw, point).is_none());
+        assert!(sample_white_balance(&raw, point).is_none());
+    }
+    // Picker points follow the same inverse geometry as rendering.
+    let rotated = DevelopSettings {
+        rotation: 180.0,
+        ..Default::default()
+    };
+    let source = source_point(Point::new(0.25, 0.25), &rotated, 64.0 / 48.0);
+    assert!(source.distance(Point::new(0.75, 0.75)) < 1e-5);
+    assert!(close(
+        sample_white_balance(&raw, source).unwrap(),
+        wb(mean(45..=51, 33..=39))
+    ));
+    let tilted = DevelopSettings {
+        rotation: 20.0,
+        ..Default::default()
+    };
+    let outside = source_point(Point::new(0.0, 0.0), &tilted, 64.0 / 48.0);
+    assert!(sample_white_balance(&raw, outside).is_none());
+    // Non-finite pixels never poison either average.
+    raw.camera
+        .put_pixel(32, 24, Rgb([f32::NAN, f32::INFINITY, 0.2]));
+    let wb_nan = sample_white_balance(&raw, Point::new(0.5, 0.5)).unwrap();
+    assert!(wb_nan.iter().all(|v| v.is_finite()));
+    assert!(
+        sample_film_base(&raw, Point::new(0.5, 0.5))
+            .unwrap()
+            .iter()
+            .all(|v| v.is_finite())
+    );
+    // Dark pixels are real data for white balance but meaningless film transmission.
+    raw.camera = Rgb32FImage::from_fn(64, 48, |x, _| {
+        if x < 32 {
+            Rgb([0.0; 3])
+        } else {
+            Rgb([0.4, 0.2, 0.1])
+        }
+    });
+    let edge = Point::new(32.0 / 64.0, 0.5);
+    assert!(close(
+        sample_film_base(&raw, edge).unwrap(),
+        [0.4, 0.2, 0.1]
+    ));
+    assert!(close(
+        sample_white_balance(&raw, edge).unwrap(),
+        [0.5, 1.0, 2.0]
+    ));
+    // A patch without green signal cannot define neutral multipliers.
+    raw.camera.fill(0.0);
+    assert!(sample_white_balance(&raw, Point::new(0.5, 0.5)).is_none());
+}
+
+#[test]
 fn negative_settings_are_backward_compatible_and_reject_invalid_values() {
     let old: DevelopSettings = serde_json::from_str(r#"{"exposure": 1.0}"#).unwrap();
     assert!(!old.negative.enabled);

@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{DecodedRaw, DevelopSettings, source_point};
+use super::{DecodedRaw, DevelopSettings, process::sample_camera_patch, source_point};
 use crate::document::Point;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -117,26 +117,6 @@ pub fn analyze_negative(raw: &DecodedRaw, settings: &DevelopSettings) -> Negativ
 /// Average a small patch of unexposed film. No white balance or camera matrix is
 /// applied: all three channels must refer to the same linear signal as inversion.
 pub fn sample_film_base(raw: &DecodedRaw, point: Point) -> Option<[f32; 3]> {
-    if !(0.0..=1.0).contains(&point.x) || !(0.0..=1.0).contains(&point.y) {
-        return None;
-    }
-    let x = (point.x * raw.camera.width() as f32) as i32;
-    let y = (point.y * raw.camera.height() as f32) as i32;
-    let mut sum = [0.0; 3];
-    let mut count = 0.0;
-    for dy in -3..=3 {
-        for dx in -3..=3 {
-            let pixel = raw.camera.get_pixel(
-                (x + dx).clamp(0, raw.camera.width() as i32 - 1) as u32,
-                (y + dy).clamp(0, raw.camera.height() as i32 - 1) as u32,
-            );
-            if pixel.0.iter().all(|v| v.is_finite() && *v > 0.00001) {
-                for c in 0..3 {
-                    sum[c] += pixel[c];
-                }
-                count += 1.0;
-            }
-        }
-    }
-    (count > 0.0).then(|| sum.map(|v| (v / count).clamp(0.00001, 16.0)))
+    // Inversion takes log10(base / signal), so only positive transmission counts.
+    sample_camera_patch(raw, point, true).map(|mean| mean.map(|v| v.clamp(0.00001, 16.0)))
 }
