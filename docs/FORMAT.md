@@ -34,6 +34,45 @@ Whatever is left out or changed is counted, and the app shows a summary after op
 
 The package is untrusted input. Besides the limits above, the importer rejects (and opens nothing for) manifests that break upstream's rules: unknown versions, blend modes, adjustment kinds or shape kinds; fields used before the version that introduced them (folder opacity or guides before 8, blur/noise before 9, `colorRuns` before 10, `fontRuns` before 11); folders with a blend mode other than Normal; more than 1,000 guides, duplicate guide IDs or positions beyond ±1,000,000; values outside upstream's ranges (blur radius 0.1–250, motion angle ±90 and distance 1–2,000, noise 0.1–400, font size 1–2,000, colors 0–1, tracking −100–1,000, leading 0–5,000, paragraph boxes 16–30,000 per side and 200 million square pixels); text over 100,000 UTF-16 units; text runs that overlap, are empty, overflow or end past the text; run font names over 200 characters or with line breaks; text on layers without pixels; malformed `effects` records or effect settings outside upstream's ranges; asset names other than `<layer UUID>.png` / `.mask.png`, symlinked assets and paths leaving the package; more than 64 nested folder levels and folder cycles. The manifest is limited to 4 MiB (and serde_json's nesting limit of 128), each asset to 512 MiB, and decoded images to 30,000 pixels per side and 100 megapixels of layers plus 100 megapixels of masks. Hierarchy and clipping checks use an index, so a 10,000-layer project validates in linear time.
 
+## Importing Photoshop files
+
+The importer reads Photoshop documents, PSD (version 1) and PSB (version 2, with 8-byte section, channel and PackBits row lengths), following Adobe's *Photoshop File Formats Specification* and upstream Compositor's importer (`Compositor/IO/PSD/`) for scope and mapping. Like upstream, it takes **8-bit RGB** only: Bitmap, Grayscale, Indexed Color, CMYK, Multichannel, Duotone and Lab files, and 1-, 16- and 32-bit files, are refused with a message naming the mode or depth. Import is one-way; Save creates a `.xuan` file.
+
+The file is read in memory: the header, color mode data (skipped), image resources (only ResolutionInfo is used; malformed resources are ignored), layer records, channel data (raw, PackBits, ZIP and ZIP with prediction) and, for files without layer records, the merged image (raw or PackBits). Groups come from section dividers (`lsct`/`lsdk`), names from `luni` (else Mac OS Roman), fill opacity from `iOpa`.
+
+| Photoshop feature | In Xuan |
+| --- | --- |
+| Pixel layers: position, opacity, visibility, names | Editable |
+| Fill opacity | Multiplied into the layer opacity (kept at layer opacity when the layer has effects, as upstream does) |
+| Groups (folders) and their opacity | Editable folders. Folders always pass through; another folder blend mode is reported |
+| Layer masks: bounds, default color, disabled, linked | Editable masks on the layer's grid (a black-default mask covers only its stored area) |
+| Masks rendered from vector data, vector masks on pixel layers | Left out |
+| Clipping | Editable clipping to the nearest unclipped layer below in the same folder; clipping onto a folder or a left-out layer is released |
+| Blend modes Normal, Darken, Multiply, Color Burn, Lighten, Screen, Color Dodge, Overlay, Difference, Hue, Saturation, Color, Luminosity | Editable |
+| Dissolve, Linear Burn, Darker Color, Linear Dodge (Add), Lighter Color, Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide, unknown keys | Drawn as Normal. One table (`BLEND_MODES` in `src/io/psd.rs`) maps keys to modes |
+| Levels, Curves, Exposure, Invert adjustment layers | Editable adjustment layers (no blend mode) |
+| Other adjustment layers (Hue/Saturation, Brightness/Contrast, Color Balance, Black & White, …) | Left out, with the layer |
+| Solid-filled rectangle, rounded rectangle (equal radii) and ellipse shapes without a stroke (`vogk` + `SoCo`/`vscg`) | Editable live shapes |
+| Other shapes and vector content | Photoshop's pixels; solid shapes saved without pixels are drawn from their path; others are left out |
+| Horizontal type (`TySh`) without rotation, skew or warp, 1–1,024 px | Editable text (content, font, size, color, bold, italic, underline, strikethrough), keeping Photoshop's pixels until edited. Alignment, tracking, leading, paragraph boxes and further style runs are not represented |
+| Vertical, warped, rotated or unreadable type | Photoshop's pixels |
+| Smart objects, fill layers (solid, gradient, pattern) | Photoshop's pixels (a solid fill saved without pixels covers the canvas) |
+| Layer effects | Left out |
+| Files without layers | The merged image, as one layer named Background |
+
+Before anything is applied, the app shows what will change (the same `ImportReport` as `.comp` imports, counted per kind); Cancel leaves everything as it was. Files Xuan represents completely open without asking. Imported as a layer, a file's layers arrive in a folder named after it, centered on the canvas.
+
+The file is untrusted input. Every read is bounds checked, and every section, record, block and channel length is checked against the bytes that remain before it is used, so truncated files are rejected wherever they end (only the merged image may be missing when layers exist). Nothing is allocated from a declared size before it has been checked: raw channels must hold `width × height` bytes, PackBits row tables are read and summed against the data (each row needs at least two bytes per 128 pixels) before a plane is allocated, and ZIP channels inflate row by row. Limits:
+
+- Files up to 1 GiB; canvases up to 30,000 pixels per side and 100 megapixels.
+- At most 10,000 layer records and 56 channels per layer or document.
+- Layer and mask bounds up to 300,000 pixels per side (slightly inverted bounds, which Photoshop writes for empty layers, read as empty).
+- 100 megapixels of layers and 100 megapixels of masks, less what the open document holds when importing as a layer. When the layers do not fit, or lie beyond ±1,000,000 pixels, every layer and mask is cropped to the canvas (and reported); a file that still does not fit is refused.
+- ZIP channels up to 400 MB inflated.
+- 64 nested folders; unbalanced folders are rejected.
+- Descriptors nest at most 32 levels and 100,000 values; text engine data nests at most 64 levels and 1,000,000 values; vector paths up to 10,000 knots.
+- PackBits runs that would write past a row or read past its bytes, unknown compression methods, invalid ZIP data and out-of-range bounds reject the file. Unreadable descriptors only turn a layer into pixels.
+
 ## Embedded RAW (version 2)
 
 Documents containing RAW layers are written as version 2, preventing older readers from silently dropping the source. Ordinary documents continue to use version 1, and the reader supports both versions.
