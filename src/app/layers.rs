@@ -134,6 +134,7 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
+                    self.navigator_pane(ui);
                     self.layer_controls(ui, &mut actions);
                     ui.separator();
                     let height = (ui.available_height() - 40.0).max(40.0);

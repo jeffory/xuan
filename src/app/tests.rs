@@ -6,6 +6,9 @@ mod canvas_preview;
 #[path = "tests/eyedropper.rs"]
 mod eyedropper;
 
+#[path = "tests/navigator.rs"]
+mod navigator;
+
 #[path = "tests/stroke_smoothing.rs"]
 mod stroke_smoothing;
 

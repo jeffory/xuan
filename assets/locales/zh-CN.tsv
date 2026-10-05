@@ -590,3 +590,4 @@ Content-Aware	内容识别
 Create Texture	创建纹理
 Proximity Match	近似匹配
 Spot Healing works on layer pixels, not masks	污点修复只能用于图层像素，不能用于蒙版
+Navigator	导航器

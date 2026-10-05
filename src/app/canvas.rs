@@ -29,6 +29,22 @@ pub(super) enum ZoomAnchor {
     Center,
 }
 
+/// Smallest and largest zoom factor the editor allows.
+pub(super) const ZOOM_LIMITS: RangeInclusive<f32> = 0.01..=64.0;
+
+/// Screen position of the image's top-left corner: the image is centred in
+/// `viewport` and then offset by `pan`. Every image/screen mapping derives from this.
+pub(super) fn image_origin(viewport: Rect, image_size: Vec2, zoom: f32, pan: Vec2) -> Pos2 {
+    viewport.center() - image_size * zoom * 0.5 + pan
+}
+
+/// Change `zoom` to `new_zoom` keeping the point `focus` (an offset from the
+/// viewport centre) stationary. A zero `focus` zooms about the centre.
+pub(super) fn zoom_about(zoom: &mut f32, pan: &mut Vec2, new_zoom: f32, focus: Vec2) {
+    *pan += (focus - *pan) * (1.0 - new_zoom / *zoom);
+    *zoom = new_zoom;
+}
+
 /// Pan horizontally and zoom using the unpanned image center.
 pub(super) fn scroll_canvas(
     ui: &egui::Ui,
@@ -52,8 +68,7 @@ pub(super) fn scroll_canvas(
             ZoomAnchor::Pointer => ui.input(|i| i.pointer.hover_pos()).unwrap_or(center),
             ZoomAnchor::Center => center,
         };
-        *pan += (focus - center - *pan) * (1.0 - new_zoom / *zoom);
-        *zoom = new_zoom;
+        zoom_about(zoom, pan, new_zoom, focus - center);
     }
     pan.x += scroll.x;
     true
@@ -167,7 +182,16 @@ impl EditorApp {
                     session.document.width as f32,
                     session.document.height as f32,
                 ) * zoom;
-                let origin = viewport.center() - size * 0.5 + session.pan;
+                let origin = image_origin(
+                    viewport,
+                    vec2(
+                        session.document.width as f32,
+                        session.document.height as f32,
+                    ),
+                    zoom,
+                    session.pan,
+                );
+                self.canvas_viewport = Some(viewport);
                 let canvas = Rect::from_min_size(origin, size);
                 self.canvas_rect = Some(canvas);
                 let visible = canvas.intersect(viewport);
@@ -459,7 +483,7 @@ impl EditorApp {
                         ZoomAnchor::Pointer,
                         &mut session.zoom,
                         &mut session.pan,
-                        0.01..=64.0,
+                        ZOOM_LIMITS,
                     ) {
                         session.fit = false;
                     }
@@ -676,6 +700,12 @@ impl EditorApp {
                         Stroke::new(2.0_f32, theme::ACCENT),
                         StrokeKind::Inside,
                     );
+                }
+                // The Navigator is drawn before the canvas, so it saw last frame's view.
+                if let Some(session) = self.session()
+                    && self.navigator_view != Some((viewport, session.zoom, session.pan))
+                {
+                    ctx.request_repaint();
                 }
             });
     }
@@ -901,7 +931,8 @@ impl EditorApp {
             }
             Tool::Zoom => {
                 if let Some(s) = self.session_mut() {
-                    s.zoom = (s.zoom * if modifiers.alt { 0.8 } else { 1.25 }).clamp(0.01, 64.0);
+                    s.zoom = (s.zoom * if modifiers.alt { 0.8 } else { 1.25 })
+                        .clamp(*ZOOM_LIMITS.start(), *ZOOM_LIMITS.end());
                 }
             }
             Tool::Lasso if self.polygonal => {

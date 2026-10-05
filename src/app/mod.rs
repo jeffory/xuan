@@ -16,6 +16,7 @@ mod jobs;
 mod layers;
 mod levels_controls;
 mod menus;
+mod navigator;
 mod panels;
 mod pixel_grid;
 mod settings;
@@ -195,6 +196,7 @@ struct Session {
     preview_size: [u32; 2],
     composite: Option<Arc<RgbaImage>>,
     thumbnails: HashMap<(Uuid, bool), layers::LayerThumbnail>,
+    navigator: navigator::ThumbnailCache,
     collapsed: HashSet<Uuid>,
     sample_cache: Option<eyedropper::SampleCache>,
     /// Full renders made for eyedropper sampling; lets tests check the cache.
@@ -220,6 +222,7 @@ impl Session {
             preview_size: [0, 0],
             composite: None,
             thumbnails: HashMap::new(),
+            navigator: navigator::ThumbnailCache::default(),
             collapsed: HashSet::new(),
             sample_cache: None,
             sample_renders: 0,
@@ -476,6 +479,10 @@ pub struct EditorApp {
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
+    /// Area the canvas occupied last frame, for the Navigator's viewport box.
+    canvas_viewport: Option<egui::Rect>,
+    /// Viewport, zoom and pan the Navigator last drew; a change schedules a repaint.
+    navigator_view: Option<(egui::Rect, f32, Vec2)>,
 }
 
 impl EditorApp {
@@ -626,6 +633,8 @@ impl EditorApp {
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
+            canvas_viewport: None,
+            navigator_view: None,
         };
         if demo {
             app.add_demo();
@@ -1428,7 +1437,7 @@ impl EditorApp {
             "zoom_in" | "zoom_out" => {
                 if let Some(session) = self.session_mut() {
                     session.zoom = (session.zoom * if command == "zoom_in" { 1.25 } else { 0.8 })
-                        .clamp(0.01, 64.0);
+                        .clamp(*canvas::ZOOM_LIMITS.start(), *canvas::ZOOM_LIMITS.end());
                     session.fit = false;
                 }
             }
