@@ -1,11 +1,16 @@
 //! Blocking the network for plugins that declare no network hosts.
 //!
 //! With "Block network for plugins that don't declare it" on, Xuan starts a
-//! plugin whose manifest lists no `permissions.network` hosts under a seccomp
-//! filter on Linux. The filter is installed in the child between `fork` and
-//! `exec`, so it covers the plugin's command, its interpreter and every
-//! process it starts, and it cannot be removed. It makes these system calls
-//! fail with `EACCES`:
+//! plugin whose manifest lists no `permissions.network` hosts so that the
+//! operating system keeps it off the network: under a seccomp filter on
+//! Linux, in an AppContainer on Windows. When that cannot be done, the
+//! plugin does not start. It is never run unblocked while the setting is on.
+//!
+//! # Linux
+//!
+//! The filter is installed in the child between `fork` and `exec`, so it
+//! covers the plugin's command, its interpreter and every process it starts,
+//! and it cannot be removed. It makes these system calls fail with `EACCES`:
 //!
 //! - `socket` and `socketpair` for every address family except `AF_UNIX`
 //!   and `AF_NETLINK`. An allow-list rather than a deny-list, so that
@@ -30,12 +35,60 @@
 //! rights, and anything it can reach over a Unix socket (D-Bus, a systemd
 //! user manager, a local proxy) can connect for it.
 //!
-//! When the filter cannot be installed, the plugin does not start.
-//! It is never run unfiltered while the setting is on.
+//! # Windows
+//!
+//! The plugin runs in an AppContainer named `Xuan.Plugin.<id>` (see
+//! [`container_name`]), created on first use and kept afterwards, with no
+//! capabilities: neither `internetClient` nor `privateNetworkClientServer`.
+//! Windows refuses its connections to other machines and to `localhost`:
+//! an AppContainer never reaches loopback without a firewall exemption,
+//! which needs administrator rights. Its subprocesses inherit the container.
+//! See `windows.rs` for how it is started.
+//!
+//! The container confines files too: it opens only what its SID, or `ALL
+//! APPLICATION PACKAGES`, is allowed in the access control lists. So before
+//! the plugin starts, Xuan adds inheritable allow entries for the
+//! container's SID to these folders, unless one is already there:
+//!
+//! - read and execute: the plugin folder, the folder of the program it runs
+//!   when that is outside the plugin folder (for `python3`, the folder of the
+//!   `python3.exe` found on `PATH`, which also holds the standard library),
+//!   and a virtual environment's base interpreter (`home` in `pyvenv.cfg`).
+//!   Folders `ALL APPLICATION PACKAGES` can already read, such as
+//!   `C:\Windows` and `C:\Program Files`, are left alone; changing them
+//!   would need administrator rights. When the interpreter's folder cannot
+//!   be changed the plugin still starts, with a note in its log, and fails
+//!   there if the interpreter cannot run.
+//! - read, write and delete ([`share`]): its data folder, its scratch
+//!   folder, which is also its `TEMP` and `TMP` ([`temp_env`]), and the
+//!   `work_dir` of each job, import and export.
+//!
+//! The entries stay, so a later start finds them and changes nothing, and so
+//! does the container profile.
+use std::path::Path;
+
 use super::manifest::Permissions;
 
 /// Whether Xuan can block a plugin's network on this platform.
-pub const SUPPORTED: bool = cfg!(target_os = "linux");
+pub const SUPPORTED: bool = cfg!(any(target_os = "linux", windows));
+
+/// Whether a blocked plugin can open only the files Xuan shares with it
+/// ([`share`]), and so needs its own temporary folder ([`temp_env`]).
+pub const CONFINES_FILES: bool = cfg!(windows);
+
+/// What the permission dialog and Manage Plugins say for a blocked plugin.
+pub const BLOCKED_LABEL: &str = if cfg!(windows) {
+    "Network blocked by Xuan (Windows)"
+} else {
+    "Network blocked by Xuan (Linux)"
+};
+
+/// The first line of a blocked plugin's log.
+pub const LOG_NOTE: &str = if cfg!(windows) {
+    "Network blocked by Xuan: the plugin runs in an AppContainer without network capabilities, so its connections fail, also to localhost"
+} else {
+    "Network blocked by Xuan: opening sockets other than Unix sockets fails with EACCES"
+};
 
 /// Whether a plugin runs with its network blocked: the setting is on, the
 /// platform supports it, and the plugin declares no network hosts. A plugin
@@ -48,9 +101,63 @@ pub fn blocks_network(setting: bool, permissions: &Permissions) -> bool {
 pub use linux::{available, block_network};
 
 /// Arrange for `command` to start with its network blocked.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub fn block_network(_command: &mut std::process::Command) -> anyhow::Result<()> {
-    anyhow::bail!("Xuan can block a plugin's network only on Linux")
+    anyhow::bail!("Xuan can block a plugin's network only on Linux and Windows")
+}
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::{Contained, spawn};
+
+#[cfg(any(windows, test))]
+mod plan;
+
+/// Let the blocked plugin `plugin` read, write and delete in `dir` and in
+/// everything created there later. Needed only where [`CONFINES_FILES`];
+/// elsewhere it does nothing.
+pub fn share(plugin: &str, dir: &Path) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        windows::share(plugin, dir)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (plugin, dir);
+        Ok(())
+    }
+}
+
+/// The environment that makes `scratch` a blocked plugin's temporary
+/// folder where [`CONFINES_FILES`], since the user's own is closed to it.
+/// Empty elsewhere.
+pub fn temp_env(scratch: &Path) -> Vec<(String, String)> {
+    if !CONFINES_FILES {
+        return Vec::new();
+    }
+    let scratch = scratch.display().to_string();
+    vec![("TEMP".into(), scratch.clone()), ("TMP".into(), scratch)]
+}
+
+/// The AppContainer a plugin runs in on Windows: `Xuan.Plugin.<id>`. A name
+/// has at most 64 characters, so a longer one keeps the start of the id
+/// followed by a hash of all of it.
+#[cfg(any(windows, test))]
+pub fn container_name(plugin: &str) -> String {
+    const PREFIX: &str = "Xuan.Plugin.";
+    const MAX: usize = 64;
+    let name = format!("{PREFIX}{plugin}");
+    if name.len() <= MAX {
+        return name;
+    }
+    // FNV-1a: stable across releases, unlike std's hasher.
+    let hash = (plugin.bytes()).fold(0x811c_9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+    });
+    // Ids are ASCII, so every index is a character boundary.
+    let kept = &plugin[..MAX - PREFIX.len() - 9];
+    format!("{PREFIX}{kept}.{hash:08x}")
 }
 
 #[cfg(target_os = "linux")]
@@ -244,10 +351,46 @@ mod tests {
             secrets: vec!["key".into()],
             ..Permissions::default()
         };
-        assert_eq!(blocks_network(true, &none), cfg!(target_os = "linux"));
-        assert_eq!(blocks_network(true, &editing), cfg!(target_os = "linux"));
+        let platform = cfg!(any(target_os = "linux", windows));
+        assert_eq!(blocks_network(true, &none), platform);
+        assert_eq!(blocks_network(true, &editing), platform);
         assert!(!blocks_network(true, &hosts));
         assert!(!blocks_network(false, &none));
         assert!(!blocks_network(false, &hosts));
+    }
+
+    #[test]
+    fn container_names_fit_in_64_characters_and_stay_distinct() {
+        assert_eq!(container_name("histogram"), "Xuan.Plugin.histogram");
+        let long = "a".repeat(52);
+        assert_eq!(container_name(&long), format!("Xuan.Plugin.{long}"));
+        let longer = "a".repeat(64);
+        let other = format!("{}b", "a".repeat(63));
+        let (name, other_name) = (container_name(&longer), container_name(&other));
+        assert_eq!((name.len(), other_name.len()), (64, 64));
+        assert_ne!(name, other_name);
+        assert!(name.starts_with(&format!("Xuan.Plugin.{}.", "a".repeat(43))));
+        // Stable across releases: a new name would be a new container,
+        // without the access granted to the old one.
+        assert_eq!(name, format!("Xuan.Plugin.{}.d96f0f85", "a".repeat(43)));
+        // The characters Windows allows: [-_. A-Za-z0-9].
+        let allowed = |b: u8| b.is_ascii_alphanumeric() || b"._-".contains(&b);
+        assert!(name.bytes().all(allowed));
+    }
+
+    #[test]
+    fn a_private_temporary_folder_only_where_files_are_confined() {
+        let env = temp_env(Path::new("scratch"));
+        assert_eq!(env.is_empty(), !CONFINES_FILES);
+        if !CONFINES_FILES {
+            share("p", Path::new("missing")).unwrap();
+        }
+        let label = if cfg!(windows) {
+            "(Windows)"
+        } else {
+            "(Linux)"
+        };
+        assert!(BLOCKED_LABEL.ends_with(label));
+        assert!(LOG_NOTE.starts_with("Network blocked by Xuan"));
     }
 }

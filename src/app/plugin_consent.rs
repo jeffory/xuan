@@ -1,6 +1,6 @@
 //! Asking before document data goes to a plugin that declares network hosts,
 //! offline mode, which keeps such plugins from starting at all, and blocking
-//! the network of plugins that declare none (Linux only).
+//! the network of plugins that declare none (Linux and Windows).
 //!
 //! Xuan cannot stop a plugin that declares hosts from connecting anywhere, so
 //! these rules cover what Xuan itself hands over: the source image of an
@@ -64,7 +64,7 @@ impl EditorApp {
 
     /// Whether the plugin starts with its network blocked: "Block network
     /// for plugins that don't declare it" is on, it declares no network
-    /// hosts, and this is Linux.
+    /// hosts, and this is Linux or Windows.
     pub(super) fn plugin_network_blocked(&self, plugin: &str) -> bool {
         self.plugins.manifest(plugin).is_some_and(|m| {
             sandbox::blocks_network(self.config.block_undeclared_network(), &m.permissions)

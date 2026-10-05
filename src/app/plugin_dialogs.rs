@@ -672,7 +672,7 @@ impl EditorApp {
                     .on_hover_text(super::plugin_consent::offline_mode_note(&self.config));
                 if sandbox::SUPPORTED {
                     widgets::checkbox(ui, &mut block, tr("Block network for plugins that don't declare it"))
-                        .on_hover_text(tr("Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
+                        .on_hover_text(tr("Plugins that declare no network hosts cannot connect to the network, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
                 }
                 ui.horizontal(|ui| {
                     if let Some(dir) = &plugin_dir {
@@ -887,12 +887,12 @@ impl EditorApp {
 pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
     if blocked {
-        ui.label(format!("• {}", tr("Network blocked by Xuan (Linux)")));
+        ui.label(format!("• {}", tr(sandbox::BLOCKED_LABEL)));
         ui.add(
             egui::Label::new(
                 RichText::new(format!(
                     "  {}",
-                    tr("It cannot open network sockets, not even to this computer.")
+                    tr("It cannot connect to the network, not even to this computer.")
                 ))
                 .small()
                 .color(theme::MUTED),

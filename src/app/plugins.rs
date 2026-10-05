@@ -21,6 +21,7 @@ use xuan::{
         jobs::{self, Prepared, Region},
         manifest::{Action, ActionKind, DocumentAccess, InputKind, Menu, ResultInto},
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
+        sandbox,
         ui::Node,
     },
     provenance::{Provenance, Redactor},
@@ -634,6 +635,16 @@ impl EditorApp {
         }
     }
 
+    /// A new private folder for one job, import or export of the plugin. A
+    /// plugin in an AppContainer is given access to it.
+    fn plugin_work_dir(&self, plugin: &str, prefix: &str) -> Result<tempfile::TempDir> {
+        let dir = plugins::private_dir(prefix)?;
+        if sandbox::CONFINES_FILES && self.plugin_network_blocked(plugin) {
+            sandbox::share(plugin, dir.path())?;
+        }
+        Ok(dir)
+    }
+
     /// Start the plugin process if needed. Fails when it is not granted.
     fn plugin_process(&mut self, plugin: &str) -> Result<&mut Process> {
         self.reap_plugin(plugin);
@@ -664,7 +675,7 @@ impl EditorApp {
             // Only files unchanged since they were verified, looked up
             // before the process starts.
             let models = self.model_paths(plugin);
-            let env = vec![
+            let mut env = vec![
                 ("XUAN_PLUGIN_ID".to_owned(), plugin.to_owned()),
                 ("XUAN_DATA_DIR".to_owned(), data_dir.display().to_string()),
                 (
@@ -676,7 +687,19 @@ impl EditorApp {
             let context = self.context.clone();
             let wake: plugins::host::Wake = Arc::new(move || context.request_repaint());
             let blocked = self.plugin_network_blocked(plugin);
-            let mut process = match Process::spawn(&manifest, &env, Some(wake), blocked) {
+            let start = || -> Result<Process> {
+                if blocked && sandbox::CONFINES_FILES {
+                    // In its AppContainer the plugin opens only what it is
+                    // given: its data folder, and its scratch folder, which
+                    // is its temporary folder too.
+                    sandbox::share(plugin, &data_dir)?;
+                    let scratch = self.plugins.scratch_dir(plugin)?;
+                    sandbox::share(plugin, &scratch)?;
+                    env.extend(sandbox::temp_env(&scratch));
+                }
+                Process::spawn(&manifest, &env, Some(wake), blocked)
+            };
+            let mut process = match start() {
                 Ok(process) => process,
                 Err(error) if blocked => {
                     return Err(error.context(format!(
@@ -1548,7 +1571,7 @@ impl EditorApp {
         let document = self.session().map(|s| s.document.id);
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
-            let work_dir = plugins::private_dir("xuan-job-")?;
+            let work_dir = self.plugin_work_dir(&plugin, "xuan-job-")?;
             let (params, prepared, regions, inputs) =
                 self.action_params(job, work_dir.path(), false)?;
             let process = self.plugin_process(&plugin)?;
@@ -2300,7 +2323,7 @@ impl EditorApp {
                 tr("Accept the plugin's permissions, then open the file again")
             );
         }
-        let work_dir = plugins::private_dir("xuan-import-")?;
+        let work_dir = self.plugin_work_dir(plugin, "xuan-import-")?;
         let params = json!({"format": format, "path": path, "work_dir": work_dir.path()});
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         let label = format!("{} {name}", tr("Opening"));
@@ -2334,7 +2357,7 @@ impl EditorApp {
                 tr("Accept the plugin's permissions in Plugins → Manage Plugins… first")
             );
         }
-        let work_dir = plugins::private_dir("xuan-export-")?;
+        let work_dir = self.plugin_work_dir(plugin, "xuan-export-")?;
         let export = edits::export_composite(&document, None, work_dir.path(), "image.png")?;
         let params = json!({
             "format": format,
