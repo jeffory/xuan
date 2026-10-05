@@ -190,7 +190,7 @@ impl PluginState {
     }
 
     /// Whether the plugin's process has not answered `initialize` yet.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn starting(&self, plugin: &str) -> bool {
         self.starting.contains_key(plugin)
     }
