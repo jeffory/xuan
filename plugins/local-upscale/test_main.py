@@ -136,10 +136,11 @@ class Action(unittest.TestCase):
         main.plugin.settings = {}
         main.plugin.host.notify = lambda *args, **kwargs: None
 
-    def test_the_action_writes_a_new_document_of_the_right_size(self):
+    def test_the_action_returns_a_layer_fitted_to_the_source(self):
         with tempfile.TemporaryDirectory() as folder:
             outputs = main.upscale_action(self.job(folder, scale="3", sharpen=0.4))
-            self.assertEqual(outputs[0]["kind"], "document")
+            self.assertEqual(outputs[0]["kind"], "image")
+            self.assertEqual(outputs[0]["fit"], "source")
             with open(outputs[0]["path"], "rb") as handle:
                 width, height, _ = decode_png(handle.read())
             self.assertEqual((width, height), (12, 9))

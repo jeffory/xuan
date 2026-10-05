@@ -361,6 +361,15 @@ pub enum Output {
         y: f32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mask: Option<PathBuf>,
+        /// Placed width in document units, instead of the pixel width.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f32>,
+        /// Placed height in document units, instead of the pixel height.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f32>,
+        /// `"source"`: cover the bounds of the source that was sent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fit: Option<String>,
     },
     Document {
         path: PathBuf,
@@ -384,19 +393,78 @@ impl Output {
             x,
             y,
             mask: None,
+            width: None,
+            height: None,
+            fit: None,
+        }
+    }
+
+    /// Place an image at `width` x `height` document units rather than its
+    /// pixel size. A higher-resolution result then keeps its extra pixels at
+    /// a higher pixel density. Giving only one side keeps the aspect ratio.
+    pub fn with_size(self, width: Option<f32>, height: Option<f32>) -> Self {
+        match self {
+            Self::Image {
+                path,
+                name,
+                x,
+                y,
+                mask,
+                ..
+            } => Self::Image {
+                path,
+                name,
+                x,
+                y,
+                mask,
+                width,
+                height,
+                fit: None,
+            },
+            other => other,
+        }
+    }
+
+    /// Place an image over the bounds of the source that was sent (`fit =
+    /// "source"`), however many pixels it has.
+    pub fn fit_source(self) -> Self {
+        match self {
+            Self::Image {
+                path, name, x, y, mask, ..
+            } => Self::Image {
+                path,
+                name,
+                x,
+                y,
+                mask,
+                width: None,
+                height: None,
+                fit: Some("source".into()),
+            },
+            other => other,
         }
     }
 
     pub fn with_mask(self, mask: impl Into<PathBuf>) -> Self {
         match self {
             Self::Image {
-                path, name, x, y, ..
+                path,
+                name,
+                x,
+                y,
+                width,
+                height,
+                fit,
+                ..
             } => Self::Image {
                 path,
                 name,
                 x,
                 y,
                 mask: Some(mask.into()),
+                width,
+                height,
+                fit,
             },
             other => other,
         }
@@ -886,6 +954,16 @@ mod tests {
         let value = serde_json::to_value(&output).unwrap();
         assert_eq!(value["kind"], "image");
         assert_eq!(value["mask"], "/tmp/m.png");
+        assert!(value.get("width").is_none() && value.get("fit").is_none());
+        let fitted = Output::image("/tmp/out.png", None, 0.0, 0.0)
+            .with_mask("/tmp/m.png")
+            .fit_source();
+        let value = serde_json::to_value(&fitted).unwrap();
+        assert_eq!((value["fit"].as_str(), value["mask"].as_str()), (Some("source"), Some("/tmp/m.png")));
+        let sized = Output::image("/tmp/out.png", None, 0.0, 0.0).with_size(Some(40.0), None);
+        let value = serde_json::to_value(&sized).unwrap();
+        assert_eq!(value["width"], 40.0);
+        assert!(value.get("height").is_none() && value.get("fit").is_none());
         assert_eq!(
             serde_json::to_value(Output::None).unwrap(),
             json!({"kind": "none"})

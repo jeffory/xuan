@@ -71,7 +71,12 @@ def upscale_action(job):
     path = job.path("upscaled.png")
     with open(path, "wb") as handle:
         handle.write(encode_png(out_w, out_h, rgba))
-    return [job.new_document(path, f"Upscaled {scale}x"), job.text(f"Upscaled to {out_w}x{out_h}")]
+    # fit_source puts the larger image over the original at the original's size,
+    # so the layer keeps the extra pixels as a higher pixel density.
+    return [
+        job.image(path, name=f"Upscaled {scale}x", fit_source=True),
+        job.text(f"Upscaled to {out_w}x{out_h}"),
+    ]
 
 
 @plugin.estimate("upscale")

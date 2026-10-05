@@ -261,7 +261,7 @@ should answer with the error code `-32800`. The result lists outputs:
 ```
 
 Output kinds: `image` (a PNG placed at `x`,`y` in source coordinates, optional
-`mask` PNG and `name`), `document` (a PNG opened as a new tab), `edit` (a list of
+`mask` PNG and `name`; see below for its placed size), `document` (a PNG opened as a new tab), `edit` (a list of
 document edits, see below, applied as one undo step), `text` (shown in the
 status bar) and `none`. One result may hold at most 64 outputs, 32 new layers
 and documents, and 1,000 edits, and the images it refers to may add up to at
@@ -269,6 +269,21 @@ most 100 megapixels; a larger result is refused as a whole. The same layer,
 edit and pixel limits apply to one `document/edit` request, and an import may
 return up to 1,000 layers within 100 megapixels. `action/estimate` with the same params may be answered
 with `{cost: "≈18 credits", seconds: 20}`; the dialog shows it before running.
+
+**Placed size.** An `image` normally lands at its pixel size divided by the
+export scale, so a 2x upscale would cover twice the area of its source. Give
+it a size instead and the pixels are fitted to that size: `width` and/or
+`height` in document units (one side alone keeps the aspect ratio), or
+`"fit": "source"` to cover the bounds of the source that was sent, at `x`,`y`
+from its top-left. A higher-resolution result then sits exactly over the
+source with a higher pixel density. `fit` cannot be combined with `width` or
+`height`, and an action without a source cannot use `fit`. Sizes must be
+finite, above 0 and at most 30,000 document units; the image's own pixels
+still count against the size and 100-megapixel limits. With `result.into =
+"replace"` the result is resampled to the size it is placed at, in the source
+layer's pixels. The SDKs have helpers: `job.image(path, fit_source=True)` or
+`width=`/`height=` in Python, and `Output::image(..).fit_source()` or
+`.with_size(width, height)` in Rust.
 
 ### Reading and editing the document
 

@@ -1,7 +1,9 @@
 # Local Upscale plugin
 
 Enlarges the active layer 2x, 3x or 4x with a Lanczos resampler and an optional
-unsharp mask, and opens the result as a new document (**Image → Upscale…**).
+unsharp mask (**Image → Upscale…**). The result is a new layer above the
+original, placed at the original's size with `fit = "source"`, so it keeps the
+extra pixels as a higher pixel density instead of landing 2x too large.
 Standard library only; it declares no network access and no secrets, so the
 pixels never leave the machine.
 
@@ -48,8 +50,7 @@ check) -> (width, height, rgba)` (see `upscale.py`). To add Real-ESRGAN:
 
 ## Limits of the host today
 
-- A result image is placed at its pixel size in source coordinates, so an
-  upscaled layer would land 2x too large over the original. That is why this
-  plugin opens a new document. See `docs/GENERATIVE.md` for the proposal to
-  let a result declare its placed size.
+- The result is a layer, not a replacement: `result.into = "replace"` would
+  scale the larger image back down to the layer's own pixels and lose the
+  point of upscaling.
 - Pixels travel as PNG files, which is slow for very large images.

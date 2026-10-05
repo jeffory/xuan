@@ -86,8 +86,9 @@ server in Xuan should reuse the `document/*` and `document/edit` code paths
   divided by the export scale (`place_layer`, `replace_pixels` in `jobs.rs`).
   A 2x upscale of a layer therefore lands twice as large as the original, and
   the `replace` mode scales it back down, which defeats the purpose. The
-  prototype plugin avoids this by opening a new document. Add optional
-  `width`/`height` (or `fit = "source"`) to the `image` output.
+  prototype plugin first avoided this by opening a new document. Done (#35):
+  `image` outputs take optional `width`/`height` in document units, or
+  `fit = "source"`, and the prototype now returns a layer at the source's size.
 - **Canvas extension.** No edit op changes the canvas size. Outpainting needs
   "grow the canvas by N pixels on each side, then fill". Add an `extend_canvas`
   edit op, or a source option `extend = {left, top, right, bottom}` that sends a
@@ -265,8 +266,8 @@ a cosmetic change and not worth breaking existing installs.
 
 `plugins/local-upscale` is a Python plugin using only the standard library: a
 Lanczos resampler with an optional unsharp mask, premultiplied-alpha aware. It
-declares no network, secrets or edit rights, opens its result as a new
-document, and loads additional backends from `backend_<name>.py`, which is where
+declares no network, secrets or edit rights, returns its result as a layer
+placed over the source at the source's size, and loads additional backends from `backend_<name>.py`, which is where
 an ONNX Real-ESRGAN implementation would go (onnxruntime in the plugin's own
 virtualenv, never in Xuan). See its README for how to try it and for the
 backend steps. Tests: `python3 -m unittest discover -s plugins/local-upscale`.

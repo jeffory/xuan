@@ -6,8 +6,8 @@ description = "Enlarge the active layer 2x to 4x on this machine. A pure-Python 
 command = ["python3", "main.py"]
 protocol = 1
 
-# No network, no secrets, no document edits: the result opens as a new document
-# and the pixels never leave the machine.
+# No network, no secrets, no document edits: the result is a new layer over the
+# source and the pixels never leave the machine.
 [permissions]
 document = "read"
 filesystem = "none"
@@ -34,8 +34,8 @@ label = "Upscale…"
 menu = "Image"
 kind = "edit"
 source = { from = "layer" }
-result = { into = "document" }
-description = "Enlarge the active layer into a new document. Everything stays on this computer."
+result = { into = "layer" }
+description = "Enlarge the active layer into a new layer of the same size, with more pixels. Everything stays on this computer."
 
 [[actions.inputs]]
 id = "scale"

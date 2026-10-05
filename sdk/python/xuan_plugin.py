@@ -257,12 +257,30 @@ class Job:
 
     # Output helpers; return a list of these from an action handler.
     @staticmethod
-    def image(path: str, name: Optional[str] = None, x: float = 0, y: float = 0, mask: Optional[str] = None) -> Dict[str, Any]:
+    def image(
+        path: str,
+        name: Optional[str] = None,
+        x: float = 0,
+        y: float = 0,
+        mask: Optional[str] = None,
+        width: Optional[float] = None,
+        height: Optional[float] = None,
+        fit_source: bool = False,
+    ) -> Dict[str, Any]:
+        """An image output. ``width``/``height`` (document units) or
+        ``fit_source=True`` (cover the source that was sent) place a result of
+        any pixel size at that size, so extra pixels become higher density."""
         output: Dict[str, Any] = {"kind": "image", "path": path, "x": x, "y": y}
         if name:
             output["name"] = name
         if mask:
             output["mask"] = mask
+        if width is not None:
+            output["width"] = width
+        if height is not None:
+            output["height"] = height
+        if fit_source:
+            output["fit"] = "source"
         return output
 
     @staticmethod
