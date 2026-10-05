@@ -218,7 +218,7 @@ def load_workflow(name):
     raise NeedsSetup(f"Workflow {name} not found in {os.path.join(HERE, 'workflows')} or {plugin.data_dir}")
 
 
-def fill(workflow, values, source_ref=None):
+def fill(workflow, values, source_ref=None, mask_ref=None):
     """Set node inputs by title ("Xuan Prompt", "Xuan Source", …) and expand
     {{placeholders}} in every string input."""
     workflow = copy.deepcopy(workflow)
@@ -230,6 +230,8 @@ def fill(workflow, values, source_ref=None):
         lowered = title.lower()
         if source_ref is not None and lowered in ("xuan source", "load image") and "image" in inputs:
             inputs["image"] = source_ref
+        if mask_ref is not None and lowered == "xuan mask" and "image" in inputs:
+            inputs["image"] = mask_ref
         if lowered == "xuan prompt":
             for key in ("text", "prompt", "string", "value"):
                 if key in inputs and isinstance(inputs[key], str):
@@ -275,7 +277,7 @@ def precise_edit_prompt(job):
 # --- Running --------------------------------------------------------------
 
 
-def run_workflow(job, workflow_name, values, with_source):
+def run_workflow(job, workflow_name, values, with_source, with_mask=False):
     client = Client()
     entry = {"id": job.id[:8], "action": job.action, "state": "uploading", "started": time.time()}
     with history_lock:
@@ -288,7 +290,14 @@ def run_workflow(job, workflow_name, values, with_source):
         job.progress(0.05, "Uploading source")
         asset = client.upload(job.source_path)
         source_ref = asset.get("name") or asset.get("id") or asset
-    workflow = fill(load_workflow(workflow_name), values, source_ref)
+    mask_ref = None
+    if with_mask:
+        if not job.selection_mask_path:
+            raise RpcError(INVALID_PARAMS, "this action needs the selection as a mask")
+        job.progress(0.08, "Uploading mask")
+        asset = client.upload(job.selection_mask_path)
+        mask_ref = asset.get("name") or asset.get("id") or asset
+    workflow = fill(load_workflow(workflow_name), values, source_ref, mask_ref)
     job.check_cancelled()
     job.progress(0.1, "Submitting")
     submitted = client.submit(workflow)
@@ -348,6 +357,15 @@ def precise_edit(job):
     return [image_output(path, "Precise Edit") for path in results] + [job.text("Comfy Cloud credits were used")]
 
 
+@plugin.action("inpaint")
+def inpaint(job):
+    values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0)}
+    results = run_workflow(job, "inpaint", values, with_source=True, with_mask=True)
+    # The selection mask (feathered by the host) also masks the result layer,
+    # so only the selected area changes.
+    return [image_output(path, "Inpaint", mask=job.selection_mask_path) for path in results]
+
+
 @plugin.action("generate")
 def generate(job):
     values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0), "width": job.inputs.get("width", 1024), "height": job.inputs.get("height", 1024)}
@@ -362,8 +380,11 @@ def run_custom(job):
     return [image_output(path, "Comfy result") for path in results]
 
 
-def image_output(path, name):
-    return {"kind": "image", "path": path, "name": name, "x": 0, "y": 0}
+def image_output(path, name, mask=None):
+    output = {"kind": "image", "path": path, "name": name, "x": 0, "y": 0}
+    if mask:
+        output["mask"] = mask
+    return output
 
 
 @plugin.estimate("precise-edit")

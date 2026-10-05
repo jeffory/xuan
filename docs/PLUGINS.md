@@ -90,7 +90,8 @@ document data, Xuan shows **Send to *Plugin (plugin id)*?** before anything
 is sent. It names the declared hosts and lists exactly what goes with this
 run: the source image (the active layer's pixels, the flattened image, or the
 flattened image inside the selection, with any crop around the regions and
-the `max_side` limit), the positions and sizes of the regions and their text
+the `max_side` limit), the selection as a mask when the action asks for one
+(only if something is selected), the positions and sizes of the regions and their text
 fields, and each non-empty `text`, `multiline` or `path` input. Other inputs
 are listed by name, and the document's size and layer names and positions
 (which `action/run` always carries) are mentioned. An action that sends none
@@ -314,6 +315,47 @@ only a padded crop around the regions instead of the whole image. The host
 records the scale and offset, so the plugin only ever thinks in source pixels
 and every result is placed back where it came from.
 
+#### Selection mask
+
+An action that edits only the selected area (inpainting) sets
+`source.mask = "selection"`. The host then writes the current selection to
+`selection.png` in the job's work directory and gives its path as
+`source.mask` in `action/run` (and `action/estimate`, once the user agreed to
+send document data). The mask is an 8-bit grey PNG with **exactly the size of
+the source export**: the same crop, the same `max_side` scaling and the same
+pixels, so pixel `(x, y)` of the mask covers pixel `(x, y)` of `source.path`.
+White is selected, black is not, grey is partly selected. It works with every
+`source.from` except `none`; with `selection` the crop is the mask's bounds.
+
+```toml
+source = { from = "composite", max_side = 2048, mask = "selection",
+           mask_grow = 4, mask_feather = 6, mask_empty = "error" }
+```
+
+- `mask_grow` grows (positive) or shrinks (negative) the selection by that many
+  document pixels, with a square reach. Selections touching the document edge
+  do not shrink from the edge.
+- `mask_feather` softens the edge with a blur of that radius in document
+  pixels. Grow is applied first, then feather. Both are applied on the
+  host before export, and both are clamped to 256 (larger values in a manifest
+  are rejected). A `selection` source is cropped to the grown and feathered
+  mask, so the extra margin is not cut off.
+- `mask_empty` says what happens when nothing is selected. `"error"` (the
+  default) refuses to start the action and says "Select an area first", before
+  anything is sent. `"white"` sends an all-selected mask and `"black"` an
+  all-unselected one, for actions where the mask is optional.
+- `mask_grow`, `mask_feather` and `mask_empty` need `source.mask`, and
+  `source.mask` needs an `edit` action with a source.
+
+The mask is document data: a network plugin's send prompt lists "The selection,
+as a mask", and the file lives only in the job's work directory, which the
+host deletes with the job. The Rust SDK reads it with
+`job.selection_mask_path()` and the Python SDK with `job.selection_mask_path`.
+A plugin can return the same file as the `mask` of its image output so the
+result layer is masked by the selection (see `plugins/comfy-cloud`). `regions`
+stay the right tool for several separate edits with their own text; the
+selection mask is for one area.
+
 `result.into` chooses where image outputs go: `layer` (a new layer above the
 source, the default), `replace` (the source layer's pixels), `document` (a new
 tab), or `ask` (the dialog offers **New layer** / **New document**). With `mask_to_regions`, a new layer gets a mask built from the
@@ -374,7 +416,8 @@ refused with an invalid-params error.
              "regions": [{"index": 1, "x": 333, "y": 500, "width": 111, "height": 143,
                           "mask": null, "fields": {"desc": "Change the earring", "type": "obj"}}]},
   "source": {"path": "/tmp/xuan/jobs/0c2d…/source.png", "width": 896, "height": 1152,
-             "layer": "6f0a…", "scale": 0.5, "offset": {"x": 120, "y": 80}},
+             "layer": "6f0a…", "scale": 0.5, "offset": {"x": 120, "y": 80},
+             "mask": "/tmp/xuan/jobs/0c2d…/selection.png"},
   "document": {"id": "…", "width": 1792, "height": 2304, "active": "6f0a…", "layers": [ … ]}
 }}
 ```

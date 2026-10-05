@@ -82,6 +82,33 @@ class DownloadTargets(unittest.TestCase):
         self.assertEqual(tuple(manifest["permissions"]["network"]), main.NETWORK)
 
 
+class Inpaint(unittest.TestCase):
+    def test_the_manifest_asks_for_the_selection_mask(self):
+        with open(os.path.join(os.path.dirname(main.__file__), "plugin.toml"), "rb") as handle:
+            manifest = tomllib.load(handle)
+        action = next(a for a in manifest["actions"] if a["id"] == "inpaint")
+        self.assertEqual(action["source"]["mask"], "selection")
+        self.assertEqual(action["source"]["from"], "composite")
+
+    def test_the_mask_node_gets_the_uploaded_mask(self):
+        workflow = main.load_workflow("inpaint")
+        filled = main.fill(workflow, {"prompt": "a hat", "seed": 7}, "src-asset", "mask-asset")
+        by_title = {n["_meta"]["title"]: n for n in filled.values()}
+        self.assertEqual(by_title["Xuan Source"]["inputs"]["image"], "src-asset")
+        self.assertEqual(by_title["Xuan Mask"]["inputs"]["image"], "mask-asset")
+        self.assertEqual(by_title["Xuan Prompt"]["inputs"]["value"], "a hat")
+        # Without a mask the template is left alone.
+        plain = main.fill(workflow, {}, "src-asset")
+        self.assertEqual(
+            next(n for n in plain.values() if n["_meta"]["title"] == "Xuan Mask")["inputs"]["image"],
+            "selection.png",
+        )
+
+    def test_the_result_is_masked_by_the_selection(self):
+        self.assertEqual(main.image_output("a.png", "X", mask="m.png")["mask"], "m.png")
+        self.assertNotIn("mask", main.image_output("a.png", "X"))
+
+
 class Requests(unittest.TestCase):
     def setUp(self):
         self.sent = []

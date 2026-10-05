@@ -26,6 +26,7 @@ their *title* (right-click a node → Title):
 | Title | What is set |
 | --- | --- |
 | `Xuan Source` (or a `Load Image` node) | `image` ← the uploaded source |
+| `Xuan Mask` (a `Load Image (as Mask)` node) | `image` ← the uploaded selection mask |
 | `Xuan Prompt` | `text` / `prompt` / `string` ← the prompt |
 | `Xuan Seed` | `seed` / `noise_seed` ← the seed |
 | `Xuan Size` | `width`, `height` |
@@ -40,6 +41,12 @@ The three actions use these files:
   `bbox` in 0–1000 and `desc`), which is written into the `Xuan Prompt` node,
   so you do not need the *Create Bounding Boxes* node in the graph: Load Image →
   Ideogram edit node → Save Image is enough.
+- **Inpaint Selection…** → `workflows/inpaint.json`. The selection is sent as
+  a mask PNG (white is the area to repaint) the same size and crop as the
+  source image, grown by 4 px and feathered by 6 px (`mask_grow` and
+  `mask_feather` in `plugin.toml`). With nothing selected the action refuses to
+  run. The result layer is masked by the same mask. **Precise Edit** keeps using
+  boxes (`regions`) because it describes several edits, not one mask.
 - **Generate Image…** → `workflows/text-to-image.json`.
 - **Run Comfy Workflow…** → any file name you type.
 

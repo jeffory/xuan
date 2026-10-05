@@ -249,6 +249,12 @@ class Job:
         return self.source.get("path") if self.source else None
 
     @property
+    def selection_mask_path(self) -> Optional[str]:
+        """The selection as a grey PNG the size of ``source_path`` (white
+        selected, black not), when the action sets ``source.mask = "selection"``."""
+        return self.source.get("mask") if self.source else None
+
+    @property
     def regions(self) -> List[Dict[str, Any]]:
         for value in self.inputs.values():
             if isinstance(value, list) and value and isinstance(value[0], dict) and "index" in value[0]:

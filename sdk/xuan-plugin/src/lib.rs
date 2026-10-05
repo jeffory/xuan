@@ -278,6 +278,10 @@ pub struct Source {
     pub layer: Option<String>,
     #[serde(default = "one")]
     pub scale: f32,
+    /// The selection as a grey PNG the size of `path`, when the action sets
+    /// `source.mask = "selection"` (white selected, black not).
+    #[serde(default)]
+    pub mask: Option<PathBuf>,
 }
 
 /// One `action/run`.
@@ -322,6 +326,12 @@ impl Job {
 
     pub fn source_path(&self) -> Option<&Path> {
         self.source.as_ref().map(|s| s.path.as_path())
+    }
+
+    /// The selection mask sent with the source (`source.mask = "selection"`),
+    /// a grey PNG with the same size and crop as [`Job::source_path`].
+    pub fn selection_mask_path(&self) -> Option<&Path> {
+        self.source.as_ref().and_then(|s| s.mask.as_deref())
     }
 
     /// A named input, deserialized.
@@ -988,6 +998,19 @@ mod tests {
             "{text}"
         );
         assert_eq!(settings.secret("api_key"), Some("sk-live-123"));
+    }
+
+    #[test]
+    fn a_job_source_carries_the_selection_mask_path() {
+        let with: Source = serde_json::from_value(json!({
+            "path": "/j/source.png", "width": 8, "height": 6, "mask": "/j/selection.png",
+        }))
+        .unwrap();
+        assert_eq!(with.mask.as_deref(), Some(Path::new("/j/selection.png")));
+        let without: Source =
+            serde_json::from_value(json!({"path": "/j/source.png", "width": 8, "height": 6, "mask": null}))
+                .unwrap();
+        assert!(without.mask.is_none());
     }
 
     #[test]

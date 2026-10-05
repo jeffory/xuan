@@ -76,6 +76,25 @@ type = "seed"
 label = "Seed"
 
 [[actions]]
+id = "inpaint"
+label = "Inpaint Selection…"
+menu = "Filter"
+kind = "edit"
+description = "Select the area to change, describe what belongs there. Runs workflows/inpaint.json with the flattened image and the selection as a mask (grown a little and feathered, so the edit blends in)."
+source = { from = "composite", max_side = 2048, mask = "selection", mask_grow = 4, mask_feather = 6 }
+result = { into = "layer", mask_to_regions = false }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "What to paint"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+
+[[actions]]
 id = "generate"
 label = "Generate Image…"
 menu = "Plugins"
