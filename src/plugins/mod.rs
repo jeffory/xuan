@@ -2,6 +2,7 @@
 //! `docs/PLUGINS.md` for the manifest and the protocol.
 pub mod edits;
 pub mod host;
+pub mod install;
 pub mod jobs;
 pub mod manifest;
 pub mod protocol;
@@ -49,6 +50,11 @@ pub fn data_dir(config_dir: &Path, plugin: &str) -> PathBuf {
 /// the host and a plugin exchange. Other local users cannot read the pixels
 /// in it or plant files there.
 pub fn private_dir(prefix: &str) -> std::io::Result<tempfile::TempDir> {
+    private_dir_in(prefix, &std::env::temp_dir())
+}
+
+/// [`private_dir`] inside `parent`.
+pub fn private_dir_in(prefix: &str, parent: &Path) -> std::io::Result<tempfile::TempDir> {
     let mut builder = tempfile::Builder::new();
     builder.prefix(prefix);
     #[cfg(unix)]
@@ -56,7 +62,33 @@ pub fn private_dir(prefix: &str) -> std::io::Result<tempfile::TempDir> {
         use std::os::unix::fs::PermissionsExt;
         builder.permissions(std::fs::Permissions::from_mode(0o700));
     }
-    builder.tempdir()
+    builder.tempdir_in(parent)
+}
+
+/// The plugin folders directly under `dir`: those holding a `plugin.toml`.
+/// Hidden folders (a name starting with `.`) are skipped; the installer
+/// builds a plugin in one before moving it into place.
+pub fn plugin_folders(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut folders: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| {
+            !path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+        })
+        .filter(|path| path.join(manifest::MANIFEST_FILE).is_file())
+        .collect();
+    folders.sort();
+    folders
+}
+
+/// Why a plugin is not loaded, or not installed, when another folder has a
+/// plugin with the same id.
+pub fn conflict_message(id: &str) -> String {
+    format!("another folder also has a plugin with the id `{id}`")
 }
 
 /// Load every `*/plugin.toml` under the directories. Folders that share an
@@ -66,15 +98,7 @@ pub fn discover(dirs: &[PathBuf]) -> (Vec<Manifest>, Vec<LoadError>) {
     let mut manifests: Vec<Manifest> = Vec::new();
     let mut errors = Vec::new();
     for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        let mut folders: Vec<PathBuf> = entries
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|path| path.join(manifest::MANIFEST_FILE).is_file())
-            .collect();
-        folders.sort();
-        for folder in folders {
+        for folder in plugin_folders(dir) {
             match Manifest::load(&folder) {
                 Ok(manifest) => manifests.push(manifest),
                 Err(error) => errors.push(LoadError {
@@ -101,8 +125,8 @@ pub fn discover(dirs: &[PathBuf]) -> (Vec<Manifest>, Vec<LoadError>) {
         errors.push(LoadError {
             dir: manifest.dir.clone(),
             error: format!(
-                "another folder also has a plugin with the id `{}`; neither is loaded",
-                manifest.plugin.id
+                "{}; neither is loaded",
+                conflict_message(&manifest.plugin.id)
             ),
         });
         false

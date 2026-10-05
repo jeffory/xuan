@@ -44,6 +44,10 @@ pub struct Info {
     pub command: Vec<String>,
     #[serde(default = "default_protocol")]
     pub protocol: u32,
+    /// The Xuan versions the plugin works with, as a semver range such as
+    /// `">=0.3, <0.5"`. Plugins whose range excludes this Xuan are refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_xuan: Option<String>,
 }
 
 fn default_protocol() -> u32 {
@@ -661,6 +665,26 @@ fn clip(text: &str, max: usize) -> &str {
     &text[..end]
 }
 
+/// This Xuan's version, which `requires_xuan` ranges are matched against.
+pub const XUAN_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Whether a `requires_xuan` range admits `version`. A pre-release build
+/// counts as its release (`0.4.0-dev` as `0.4.0`), so plugins need not
+/// mention pre-releases in their range.
+pub fn check_xuan_version(range: &str, version: &str) -> Result<()> {
+    let requirement = semver::VersionReq::parse(range)
+        .with_context(|| format!("requires_xuan `{range}` is not a semver range"))?;
+    let mut current =
+        semver::Version::parse(version).with_context(|| format!("`{version}` is not a version"))?;
+    current.pre = semver::Prerelease::EMPTY;
+    current.build = semver::BuildMetadata::EMPTY;
+    ensure!(
+        requirement.matches(&current),
+        "plugin requires Xuan {range}, but this is Xuan {version}"
+    );
+    Ok(())
+}
+
 pub fn validate_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
@@ -701,6 +725,9 @@ impl Manifest {
             "plugin speaks protocol {} but this Xuan speaks {PROTOCOL}",
             self.plugin.protocol
         );
+        if let Some(range) = &self.plugin.requires_xuan {
+            check_xuan_version(range, XUAN_VERSION)?;
+        }
         let mut ids = std::collections::HashSet::new();
         for setting in &self.settings {
             setting
@@ -1116,6 +1143,43 @@ import = true
         );
         let generate = "{ from = \"composite\", extend = { left = 8 } }\nkind = \"generate\"";
         assert!(error(generate, "").contains("composite"));
+    }
+
+    #[test]
+    fn requires_xuan_admits_or_refuses_this_version() {
+        let dir = Path::new(".");
+        let with = |range: &str| {
+            let text = EXAMPLE.replace(
+                "command = [",
+                &format!("requires_xuan = \"{range}\"\ncommand = ["),
+            );
+            Manifest::parse(&text, dir).map_err(|e| format!("{e:#}"))
+        };
+        let range = format!(">={XUAN_VERSION}");
+        let ok = with(&range).unwrap();
+        assert_eq!(ok.plugin.requires_xuan.as_deref(), Some(range.as_str()));
+        assert!(
+            Manifest::parse(EXAMPLE, dir)
+                .unwrap()
+                .plugin
+                .requires_xuan
+                .is_none()
+        );
+        let error = with("<0.0.1").unwrap_err();
+        assert!(
+            error.contains("<0.0.1") && error.contains(XUAN_VERSION),
+            "{error}"
+        );
+        assert!(with("not a range").unwrap_err().contains("semver"));
+        assert!(check_xuan_version(">=0.3, <0.5", "0.3.0").is_ok());
+        assert!(check_xuan_version(">=0.3, <0.5", "0.4.9").is_ok());
+        assert!(check_xuan_version(">=0.3, <0.5", "0.4.0-dev").is_ok());
+        let error = check_xuan_version(">=0.3, <0.5", "0.5.0").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "plugin requires Xuan >=0.3, <0.5, but this is Xuan 0.5.0"
+        );
+        assert!(check_xuan_version("^0.2", "0.3.0").is_err());
     }
 
     #[test]

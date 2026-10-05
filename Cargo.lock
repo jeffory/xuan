@@ -5064,6 +5064,7 @@ dependencies = [
  "rfd",
  "rustix 1.1.5",
  "seccompiler",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",

@@ -656,7 +656,7 @@ mod tree {
 
 /// A command naming a file inside the plugin folder runs from there; anything
 /// else is looked up on `PATH`.
-fn resolve(program: &str, dir: &Path) -> std::path::PathBuf {
+pub(crate) fn resolve(program: &str, dir: &Path) -> std::path::PathBuf {
     let path = Path::new(program);
     if path.is_absolute() {
         return path.to_path_buf();
