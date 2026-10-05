@@ -9,6 +9,9 @@ mod eyedropper;
 #[path = "tests/navigator.rs"]
 mod navigator;
 
+#[path = "tests/snapping.rs"]
+mod snapping;
+
 #[path = "tests/stroke_smoothing.rs"]
 mod stroke_smoothing;
 
@@ -814,7 +817,7 @@ fn benchmark_large_image_editing() {
             None,
         )];
         app.tool = tool;
-        app.snap = false;
+        app.config.snap.enabled = false;
         for _ in 0..3 {
             frame(&context, &mut app);
         }
@@ -1091,6 +1094,8 @@ fn native_clipboard_shortcuts_copy_cut_and_paste_selected_pixels() {
     app.sessions
         .push(Session::new(document, "Clipboard".into(), None));
     app.set_tool(Tool::Marquee);
+    // At this zoom the 1 px margin is within the snap reach of the canvas edge.
+    app.config.snap.enabled = false;
     drag(
         &context,
         &mut app,
@@ -2373,7 +2378,7 @@ fn canvas_layers(app: &mut EditorApp) -> [Uuid; 2] {
     let document = &mut app.session_mut().unwrap().document;
     document.layers = vec![bottom, top];
     document.select(ids[0], false);
-    app.snap = false;
+    app.config.snap.enabled = false;
     ids
 }
 
@@ -2845,7 +2850,7 @@ fn transform_handles_and_control_drag_distortion_change_geometry() {
     app.dimensions = [64, 48];
     app.new_document();
     app.command("fill_fg");
-    app.snap = false;
+    app.config.snap.enabled = false;
     app.lock_ratio = false;
     drag(
         &context,

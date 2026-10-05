@@ -1108,3 +1108,63 @@ pub fn selectable_value<T: PartialEq>(
     }
     response
 }
+
+/// A menu toggle: a check mark when `checked`, the label, and a right-aligned shortcut hint. Its
+/// accessible label is "<label> <shortcut>", like other menu items.
+pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Response {
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), FontId::proportional(12.0), theme::TEXT);
+    let hint = ui.painter().layout_no_wrap(
+        shortcut.to_owned(),
+        FontId::proportional(12.0),
+        theme::MUTED,
+    );
+    let gap = if shortcut.is_empty() { 0.0 } else { 24.0 };
+    let width = galley.size().x + hint.size().x + 32.0 + gap;
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width().max(width), 22.0), Sense::click());
+    let accessible = if shortcut.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label} {shortcut}")
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            checked,
+            &accessible,
+        )
+    });
+    let enabled = ui.is_enabled();
+    let text = if enabled { theme::TEXT } else { theme::MUTED };
+    if enabled && (response.hovered() || response.has_focus()) {
+        ui.painter().rect_filled(rect, 4.0, theme::ACCENT);
+    }
+    if checked {
+        let center = pos2(rect.left() + 10.0, rect.center().y);
+        ui.painter().add(egui::Shape::line(
+            vec![
+                center + vec2(-3.0, 0.0),
+                center + vec2(-1.0, 2.5),
+                center + vec2(4.0, -3.0),
+            ],
+            Stroke::new(1.3_f32, text),
+        ));
+    }
+    ui.painter().galley(
+        pos2(rect.left() + 23.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        text,
+    );
+    ui.painter().galley(
+        pos2(
+            rect.right() - 8.0 - hint.size().x,
+            rect.center().y - hint.size().y / 2.0,
+        ),
+        hint,
+        theme::MUTED,
+    );
+    response
+}

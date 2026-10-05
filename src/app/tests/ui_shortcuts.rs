@@ -75,6 +75,11 @@ fn expected(chord: &str) -> Option<Effect> {
         "Ctrl+Plus" => Command("zoom_in"),
         "Ctrl+Minus" => Command("zoom_out"),
         "F1" => Command("shortcuts"),
+        "Ctrl+R" => Command("toggle_rulers"),
+        "Ctrl+'" => Command("toggle_grid"),
+        "Ctrl+;" => Command("toggle_guides"),
+        "Ctrl+Shift+;" => Command("toggle_snap"),
+        "Ctrl+Alt+;" => Command("lock_guides"),
 
         "V" => Effect::Tool(Tool::Move),
         "M" => Effect::Tool(Tool::Marquee),

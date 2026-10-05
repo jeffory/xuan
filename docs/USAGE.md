@@ -83,7 +83,7 @@ Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool
 
 - **Navigator:** the top of the right sidebar shows a thumbnail of the whole composited document with a blue box marking the part currently visible on the canvas; it follows panning and zooming live. Drag the box to pan, or click anywhere on the thumbnail to centre the view there. Below it, type a zoom percentage into the field and press Enter, use the **−** / **+** buttons, or drag the slider (logarithmic, 1% to 6400%); all zoom about the centre of the canvas. Click the **Navigator** header's arrow to collapse the pane; the state is remembered between sessions. The thumbnail is cached and refreshes shortly after you stop editing, switch tabs, or undo/redo. The Navigator is not shown in the RAW Develop workspace, which has its own view controls.
 - **Layers:** folders, 13 blend modes, opacity, visibility, locks, drag reordering/nesting, duplication, merge, clipping masks, linked or independent raster masks, and copying layers to another project tab.
-- **Transforms:** move, scale, rotate, flip, free perspective distortion, numeric controls, shared transforms for several layers or folders, and snapping to edges and centers. Original source pixels remain available during transforms. Move / Transform has **Ignore Transparent Pixels** checked by default to select only at visible pixels; uncheck it to select and drag anywhere inside a layer's bounds.
+- **Transforms:** move, scale, rotate, flip, free perspective distortion, numeric controls, shared transforms for several layers or folders, and snapping to guides, the grid, layers and the canvas (see [Rulers, guides and grid](#rulers-guides-and-grid)). Original source pixels remain available during transforms. Move / Transform has **Ignore Transparent Pixels** checked by default to select only at visible pixels; uncheck it to select and drag anywhere inside a layer's bounds.
 - **Selections:** rectangle, ellipse, freehand/polygonal lasso, contiguous/global magic wand, add/subtract/intersect, inverse, feather, outline movement, and moving or duplicating selected pixels.
 - **Paint:** brush, pencil, eraser, aligned/unaligned clone stamp with layer/all-layer sampling, spot healing, blur/smudge, gradients, rectangles, rounded rectangles, ellipses, and eyedropper. Live shapes redraw at the new size until their pixels are edited.
 - **Eyedropper (I):** a bubble beside the pointer shows the colour under it (top half) over the current brush colour (bottom half), and flips away from the canvas edges. Press and drag to sample continuously; the brush colour updates live and the release keeps it. **Esc** while dragging restores the colour from before the press. The tool options choose the source (current layer or all visible layers) and the sample size (single pixel, 3×3 or 5×5 average). Documents with filter layers are rendered once per edit and reused, so dragging stays smooth.
@@ -91,7 +91,7 @@ Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool
 - **Adjustments:** editable Hue/Saturation color ranges, per-channel Levels and Curves, Exposure, Gradient Map, Grain, and Invert. Apply directly or add an adjustment layer, with live preview and selection coverage.
 - **Filters:** Gaussian and Motion Blur with expanded bounds, Add Noise, Lens Correction, content-aware fill, and edge-color background removal. Filtering and expensive retouching run in cancellable workers.
 - **RAW Develop:** Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW open in a dedicated Develop workspace. Adjust white balance, exposure, tone curves, HSL, monochrome and split toning, noise reduction, sharpening, manual lens correction, crop, and brush/gradient masks. Compare before/after and inspect clipping or full-resolution detail. Develop creates an embedded RAW layer; double-click it to edit the original RAW again. Save `.xuan` to retain the source and adjustments, or export a 16-bit sRGB TIFF directly from Develop. See [RAW workflow and limits](RAW.md).
-- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
+- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, rulers, guides and a layout grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
 
 Double-click a layer name to rename it inline. Press Enter or click elsewhere to
 save, or Escape to cancel. **Rename…** in the layer's context menu opens the same
@@ -99,6 +99,52 @@ inline editor. Double-click elsewhere on a text, RAW, filter, or adjustment row
 to reopen its settings.
 
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
+
+### Rulers, guides and grid
+
+**View → Rulers** (Ctrl+R) shows rulers along the top and left of the canvas,
+measured in document pixels from the image's top-left corner. Numbered ticks are
+roughly 70 points apart at any zoom, in steps of 1, 2, 5, 10, 20, 25, 50, 100 pixels
+and so on, with ten small ticks between them.
+
+Drag from the top ruler to create a horizontal guide, or from the left ruler for a
+vertical one. With the Move tool, drag a guide to move it (the pointer changes over
+it; transform handles take priority), or drag it back onto a ruler to delete it.
+Escape cancels the drag. Guides are cyan lines across the whole view, including the
+area around the canvas. **View → Show → Guides** (Ctrl+;) hides and shows them,
+**View → Lock Guides** (Ctrl+Alt+;) stops them from being created or moved, and
+**View → Clear Guides** removes them all. Creating, moving, deleting and clearing
+guides are undo steps, and guides follow the canvas through Crop, Canvas Size,
+Image Size and Flip Canvas. Guides are saved in `.xuan` projects.
+
+**View → Show → Grid** (Ctrl+') draws a non-printing layout grid over the
+document: a major line every 64 pixels split into eight subdivisions by default.
+**View → Grid Settings…** sets the color (Light Gray by default, eight other presets
+or a custom color from the swatch), the style of the major lines (lines, dashed
+lines or dots), their opacity (45% by default; subdivisions are fainter), the pixels
+between gridlines (2–4096) and the subdivisions (1–64, no finer than a pixel). The
+grid shows while the dialog is open and changes preview live; **Cancel** puts the
+previous grid back and **Restore Defaults** returns to 64 pixels, eight
+subdivisions, Light Gray lines at 45%. **OK** saves the grid in the current project
+(an undo step) and makes it the default for projects without a grid of their own.
+Subdivisions closer than 4 points on screen are left out. The layout grid is
+separate from the pixel grid: both can be on, and the layout grid is drawn on top,
+on the same physical screen pixels, so where both mark a pixel boundary they share
+one line.
+
+**View → Snap** (Ctrl+Shift+;) turns snapping on and off, and **View → Snap To**
+chooses the targets: **Guides**, **Grid**, **Layers** (the edges and centres of
+other visible layers) and **Document Bounds** (the canvas edges and centre). All but
+the grid are on by default; hidden guides or a hidden grid never snap. Snapping
+applies when moving layers and selected pixels, dragging resize handles (of an
+unrotated layer), drawing marquees, shapes and crops (their start and dragged
+corner), moving a selection outline, and dragging guides. A target pulls when it is
+within 10 screen points, whatever the zoom; the nearest one wins, and a guide wins
+a tie over the canvas, layers and grid. A magenta line marks what the drag snapped
+to. Hold Ctrl while dragging to move freely.
+
+The rulers, grid and guide visibility, Lock Guides, the snap settings and the
+default grid are app preferences, saved in the configuration file.
 
 ### Pencil
 
@@ -250,7 +296,28 @@ The file is created when a preference changes. For example:
 ```toml
 language = "zh-CN" # Use "en" for English (the default).
 title_bar = "system" # Or "compact" (the default) or "macos".
+rulers = true # View → Rulers (off by default).
+show_grid = false # View → Show → Grid.
+show_guides = true # View → Show → Guides.
+lock_guides = false # View → Lock Guides.
+
+[snap] # View → Snap and Snap To.
+enabled = true
+guides = true
+grid = false
+layers = true
+bounds = true
+
+[grid] # The default layout grid (View → Grid Settings…).
+spacing = 64
+subdivisions = 8
+color = "light_gray" # Or light_blue, light_red, green, medium_blue, yellow, magenta, cyan, black, custom.
+custom_color = [179, 179, 179]
+style = "lines" # Or "dashed_lines" or "dots".
+opacity = 45
 ```
+
+Missing options keep their defaults, so files from older releases still load.
 
 Invalid or unreadable configuration is reported and the app starts with defaults.
 Saving uses an atomic replacement and preserves other TOML options. An invalid

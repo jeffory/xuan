@@ -82,7 +82,6 @@ Actual Pixels	实际像素
 Zoom In	放大
 Zoom Out	缩小
 Show Transform Controls	显示变换控件
-Snap to Canvas and Layers	吸附到画布与图层
 Keyboard Shortcuts	键盘快捷键
 About Xuan	关于 Xuan
 Close window	关闭窗口
@@ -591,3 +590,40 @@ Create Texture	创建纹理
 Proximity Match	近似匹配
 Spot Healing works on layer pixels, not masks	污点修复只能用于图层像素，不能用于蒙版
 Navigator	导航器
+Show	显示
+Grid	网格
+Guides	参考线
+Grid Settings…	网格设置…
+Grid Settings	网格设置
+Rulers	标尺
+Snap	对齐
+Snap To	对齐到
+Document Bounds	文档边界
+Lock Guides	锁定参考线
+Clear Guides	清除参考线
+New Guide	新建参考线
+Move Guide	移动参考线
+Delete Guide	删除参考线
+Style	样式
+Gridline every	网格线间隔
+pixels	像素
+Subdivisions	子网格
+A subdivision every	每隔
+pixels.	像素一条子网格线。
+Use no more subdivisions than the pixels between gridlines.	子网格数不能超过网格线之间的像素数。
+Restore Defaults	恢复默认值
+Choose a custom grid color	选择自定义网格颜色
+Light Gray	浅灰色
+Light Blue	浅蓝色
+Light Red	浅红色
+Medium Blue	中蓝色
+Cyan	青色
+Black	黑色
+Custom	自定义
+Lines	直线
+Dashed Lines	虚线
+Dots	点线
+Rulers / Grid / Guides	标尺 / 网格 / 参考线
+Snap / Lock guides	对齐 / 锁定参考线
+Drag from a ruler	从标尺拖动
+New guide	新建参考线

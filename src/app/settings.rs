@@ -25,6 +25,15 @@ impl EditorApp {
         self.store_config(config);
     }
 
+    /// A View menu preference (rulers, grid, guides, snapping): apply now and remember it.
+    pub(super) fn set_view_option(&mut self, change: impl FnOnce(&mut Config)) {
+        let mut config = self.config.clone();
+        change(&mut config);
+        if config != self.config {
+            self.store_config(config);
+        }
+    }
+
     /// Keep `config` in memory and write it to the configuration file.
     fn store_config(&mut self, config: Config) {
         self.config = config.clone();

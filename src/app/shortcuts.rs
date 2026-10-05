@@ -57,6 +57,13 @@ impl EditorApp {
             (shift, Key::G, "ungroup"),
             (shift, Key::I, "invert_selection"),
             (ctrl | Modifiers::ALT, Key::G, "clip"),
+            // Shift+; types a colon on many layouts, so either key toggles snapping.
+            (shift, Key::Semicolon, "toggle_snap"),
+            (shift, Key::Colon, "toggle_snap"),
+            (ctrl | Modifiers::ALT, Key::Semicolon, "lock_guides"),
+            (ctrl, Key::Semicolon, "toggle_guides"),
+            (ctrl, Key::Quote, "toggle_grid"),
+            (ctrl, Key::R, "toggle_rulers"),
             (ctrl, Key::Comma, "settings"),
             (ctrl, Key::N, "new"),
             (ctrl, Key::O, "open"),

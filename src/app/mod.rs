@@ -11,16 +11,21 @@ mod eyedropper;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;
+mod grid_settings;
+mod guides;
 mod icons;
 mod jobs;
 mod layers;
+mod layout_grid;
 mod levels_controls;
 mod menus;
 mod navigator;
 mod panels;
 mod pixel_grid;
+mod rulers;
 mod settings;
 mod shortcuts;
+mod snap;
 mod stroke_smoothing;
 mod tablet;
 #[cfg(test)]
@@ -320,6 +325,7 @@ enum Dialog {
     About,
     Settings,
     DropChoice,
+    GridSettings,
 }
 
 struct EffectEdit {
@@ -369,6 +375,8 @@ struct Gesture {
     clone_offset: Point,
     source: Option<Arc<RgbaImage>>,
     reference: Option<Transform>,
+    /// The selection's bounds when the drag moves a selection outline: [min, max].
+    selection_bounds: Option<[Point; 2]>,
 }
 
 impl Gesture {
@@ -437,7 +445,6 @@ pub struct EditorApp {
     auto_select: bool,
     ignore_transparent_pixels: bool,
     show_controls: bool,
-    snap: bool,
     lock_ratio: bool,
     clone_source: Option<Point>,
     clone_offset: Option<Point>,
@@ -449,7 +456,12 @@ pub struct EditorApp {
     last_brush: Option<Point>,
     gesture: Option<Gesture>,
     crop_rect: Option<(Point, Point)>,
-    guides: Vec<(bool, f32)>,
+    /// Lines a drag has snapped to, drawn across the canvas while it lasts.
+    snap_lines: Vec<snap::SnapLine>,
+    /// A guide being dragged out of a ruler or moved.
+    guide_drag: Option<guides::GuideDrag>,
+    /// View → Grid Settings… while it is open.
+    grid_edit: Option<grid_settings::GridEdit>,
     dialog: Option<Dialog>,
     dimensions: [u32; 2],
     resolution: f32,
@@ -596,7 +608,6 @@ impl EditorApp {
             auto_select: true,
             ignore_transparent_pixels: true,
             show_controls: true,
-            snap: true,
             lock_ratio: true,
             clone_source: None,
             clone_offset: None,
@@ -608,7 +619,9 @@ impl EditorApp {
             last_brush: None,
             gesture: None,
             crop_rect: None,
-            guides: Vec::new(),
+            snap_lines: Vec::new(),
+            guide_drag: None,
+            grid_edit: None,
             dialog: None,
             dimensions: [1920, 1080],
             resolution: 72.0,
@@ -930,7 +943,8 @@ impl EditorApp {
             session.history.cancel(&mut session.document);
             session.invalidate();
         }
-        self.guides.clear();
+        self.snap_lines.clear();
+        self.cancel_guide_drag();
     }
 
     fn start_adjustment(&mut self, adjustment: Adjustment, as_layer: bool) {
@@ -1422,6 +1436,21 @@ impl EditorApp {
                     xuan::effects::apply_adjustment(doc, &Adjustment::Invert, mask)
                 });
             }
+            "toggle_rulers" => self.set_view_option(|config| config.rulers = !config.rulers),
+            "toggle_grid" => self.set_view_option(|config| config.show_grid = !config.show_grid),
+            "toggle_guides" => {
+                self.cancel_guide_drag();
+                self.set_view_option(|config| config.show_guides = !config.show_guides);
+            }
+            "toggle_snap" => {
+                self.set_view_option(|config| config.snap.enabled = !config.snap.enabled)
+            }
+            "lock_guides" => {
+                self.cancel_guide_drag();
+                self.set_view_option(|config| config.lock_guides = !config.lock_guides);
+            }
+            "clear_guides" => self.clear_guides(),
+            "grid_settings" => self.open_grid_settings(),
             "settings" => self.dialog = Some(Dialog::Settings),
             "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "about" => self.dialog = Some(Dialog::About),

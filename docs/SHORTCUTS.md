@@ -20,6 +20,8 @@
 | Fit / Actual pixels | Ctrl+0 / Ctrl+1 |
 | Zoom in / out | Ctrl+Plus / Ctrl+Minus, or mouse wheel |
 | Show transform / Hide controls | Ctrl+T / Ctrl+H |
+| Rulers / Grid / Guides | Ctrl+R / Ctrl+' / Ctrl+; |
+| Snap / Lock guides | Ctrl+Shift+; / Ctrl+Alt+; |
 | Move / Marquee / Lasso / Wand / Crop | V / M / L / W / C |
 | Brush / Eraser / Heal / Clone / Blur | B / E / J / S / R |
 | Switch between Brush and Pencil | Shift+B (B selects whichever you used last) |
@@ -42,6 +44,8 @@ Use **File → Open Image from Clipboard** to open copied pixels in a new docume
 For a marquee selection, Ctrl+C copies the active layer's selected pixels. If no layer is active, it copies the visible canvas within the selection. Ctrl+V places those pixels on a new layer at their original position. Ctrl+Shift+C always copies the visible composite; Ctrl+X requires an active layer. Successful copies show the copied dimensions in the status bar.
 
 Shift with a selection adds coverage, Alt subtracts, and Shift+Alt intersects. Drag inside a selection to move its outline; hold Ctrl to move selected pixels, or Ctrl+Alt to duplicate them. The contextual header also offers explicit selection modes.
+
+Drag from the top or left ruler (View → Rulers) to create a guide. With the Move tool, drag a guide to move it, or drop it on a ruler to delete it; Escape cancels the drag. Hold Ctrl while dragging layers, handles, marquees, shapes, selections or guides to bypass View → Snap To.
 
 Move handles scale the selected layers, the circular handle rotates them, and Ctrl-dragging a corner applies perspective distortion. Shift constrains movement or rotation; the Link control toggles the size ratio. Alt-drag duplicates a layer. The mask thumbnail targets the mask for painting and transformations. Its context menu controls linking and visibility.
 

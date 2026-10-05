@@ -26,6 +26,13 @@ pub(super) struct GridLines {
     pub thickness: f32,
 }
 
+/// The leading edge of the one-physical-pixel line covering screen position `x`. The layout grid
+/// and guides use it too, so a line that falls on a pixel boundary lands on the same physical
+/// pixel as the pixel grid's line there instead of doubling up beside it.
+pub(super) fn align_to_pixel(x: f32, pixels_per_point: f32) -> f32 {
+    (x * pixels_per_point).floor() / pixels_per_point
+}
+
 /// 0 below the threshold, rising linearly to 1 a quarter of the threshold above
 /// it. Both values are zoom percentages, in the same units.
 pub(super) fn grid_strength(zoom_percent: f32, threshold_percent: u32) -> f32 {
@@ -59,7 +66,7 @@ pub(super) fn grid_lines(
             return Vec::new();
         }
         (first as u32..=last as u32)
-            .map(|i| ((origin + i as f32 * scale) * ppp).floor() / ppp)
+            .map(|i| align_to_pixel(origin + i as f32 * scale, ppp))
             .collect()
     };
     GridLines {

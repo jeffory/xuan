@@ -123,6 +123,38 @@ impl UiTest {
         self.press(egui::Modifiers::NONE, key);
     }
 
+    /// Presses the primary button at `from`, moves to `to` in a few steps and releases there.
+    pub(super) fn drag(&mut self, from: egui::Pos2, to: egui::Pos2) {
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(from));
+        self.harness.step();
+        self.harness.input_mut().events.push(button(from, true));
+        self.harness.step();
+        for step in 1..=4 {
+            let pos = from + (to - from) * (step as f32 / 4.0);
+            self.harness
+                .input_mut()
+                .events
+                .push(egui::Event::PointerMoved(pos));
+            self.harness.step();
+        }
+        self.harness.input_mut().events.push(button(to, false));
+        self.settle();
+    }
+
+    /// Keeps preferences changed by the test in `directory` instead of the user's own file.
+    pub(super) fn isolate_config(&mut self, directory: &Path) {
+        self.app_mut().config_path = Some(directory.join("config.toml"));
+    }
+
     /// Delivers files dropped onto the window.
     pub(super) fn drop_files(&mut self, paths: &[&Path]) {
         self.harness.input_mut().dropped_files = paths
@@ -371,5 +403,221 @@ mod drop_prompt {
         ui.press(egui::Modifiers::CTRL, egui::Key::W);
         assert!(ui.app().close_tab.is_none());
         assert!(ui.app().dialog == Some(Dialog::DropChoice));
+    }
+}
+
+mod rulers_and_guides {
+    use super::*;
+    use crate::app::rulers::RULER_SIZE;
+    use egui::{Key, Modifiers, Pos2, pos2};
+    use xuan::layout::GuideAxis;
+
+    fn document() -> (tempfile::TempDir, UiTest) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(directory.path());
+        (directory, ui)
+    }
+
+    /// The screen position of document point (`x`, `y`).
+    fn at(ui: &UiTest, x: f32, y: f32) -> Pos2 {
+        let origin = ui.app().canvas_rect.unwrap().min;
+        let zoom = ui.app().session().unwrap().zoom;
+        origin + egui::vec2(x, y) * zoom
+    }
+
+    fn guides(ui: &UiTest) -> Vec<xuan::layout::Guide> {
+        ui.app().session().unwrap().document.guides.clone()
+    }
+
+    #[test]
+    fn ctrl_r_toggles_the_rulers() {
+        let (directory, mut ui) = document();
+        let before = ui.app().canvas_viewport.unwrap();
+        assert!(!ui.app().config.rulers);
+        ui.press(Modifiers::CTRL, Key::R);
+        assert!(ui.app().config.rulers);
+        // The rulers take a strip along the top and left of the canvas.
+        let with_rulers = ui.app().canvas_viewport.unwrap();
+        assert_eq!(
+            with_rulers.min,
+            before.min + egui::vec2(RULER_SIZE, RULER_SIZE)
+        );
+        assert_eq!(with_rulers.max, before.max);
+        // The choice is remembered.
+        let saved = xuan::config::Config::load(&directory.path().join("config.toml")).unwrap();
+        assert!(saved.rulers);
+        // R alone is still the Blur tool.
+        assert!(ui.app().tool != Tool::Blur);
+        ui.press(Modifiers::CTRL, Key::R);
+        assert!(!ui.app().config.rulers);
+        assert_eq!(ui.app().canvas_viewport.unwrap(), before);
+    }
+
+    #[test]
+    fn dragging_from_a_ruler_creates_a_guide_and_dropping_it_back_deletes_it() {
+        let (_directory, mut ui) = document();
+        ui.open_menu("View");
+        ui.click("Rulers Ctrl+R");
+        assert!(ui.app().config.rulers);
+        let viewport = ui.app().canvas_viewport.unwrap();
+        let top_ruler = pos2(viewport.center().x, viewport.top() - RULER_SIZE / 2.0);
+        let left_ruler = pos2(viewport.left() - RULER_SIZE / 2.0, viewport.center().y);
+
+        // Out of the top ruler: a horizontal guide where the pointer is released.
+        ui.drag(top_ruler, at(&ui, 6.0, 5.0));
+        let created = guides(&ui);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].axis, GuideAxis::Horizontal);
+        assert!((created[0].position - 5.0).abs() < 1e-3, "{created:?}");
+        assert!(ui.app().guide_drag.is_none());
+        assert_eq!(
+            ui.app().session().unwrap().history.undo_name(),
+            Some("New Guide")
+        );
+
+        // Out of the left ruler: a vertical guide.
+        ui.drag(left_ruler, at(&ui, 3.0, 12.0));
+        let created = guides(&ui);
+        assert_eq!(created.len(), 2);
+        assert_eq!(created[1].axis, GuideAxis::Vertical);
+        assert!((created[1].position - 3.0).abs() < 1e-3);
+
+        // With the Move tool, a guide can be moved...
+        assert!(ui.app().tool == Tool::Move);
+        ui.drag(at(&ui, 6.0, 5.0), at(&ui, 6.0, 11.0));
+        let moved = guides(&ui);
+        assert!((moved[0].position - 11.0).abs() < 1e-3, "{moved:?}");
+        assert_eq!(moved[0].id, created[0].id);
+        // ...without moving the layer under it.
+        assert_eq!(
+            ui.app().session().unwrap().document.layers[0].transform.y,
+            0.0
+        );
+
+        // Dropped back on a ruler, it is deleted.
+        ui.drag(at(&ui, 6.0, 11.0), top_ruler);
+        let left = guides(&ui);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].axis, GuideAxis::Vertical);
+        ui.press(Modifiers::CTRL, Key::Z);
+        assert_eq!(guides(&ui).len(), 2);
+    }
+
+    #[test]
+    fn locked_or_hidden_guides_cannot_be_dragged() {
+        let (_directory, mut ui) = document();
+        ui.press(Modifiers::CTRL, Key::R);
+        let viewport = ui.app().canvas_viewport.unwrap();
+        let top_ruler = pos2(viewport.center().x, viewport.top() - RULER_SIZE / 2.0);
+        ui.press(Modifiers::CTRL | Modifiers::ALT, Key::Semicolon);
+        assert!(ui.app().config.lock_guides);
+        ui.drag(top_ruler, at(&ui, 6.0, 5.0));
+        assert!(guides(&ui).is_empty());
+        ui.press(Modifiers::CTRL | Modifiers::ALT, Key::Semicolon);
+        ui.drag(top_ruler, at(&ui, 6.0, 5.0));
+        assert_eq!(guides(&ui).len(), 1);
+        // Hidden guides are not grabbed.
+        ui.press(Modifiers::CTRL, Key::Semicolon);
+        assert!(!ui.app().config.show_guides);
+        ui.drag(at(&ui, 6.0, 5.0), at(&ui, 6.0, 9.0));
+        assert_eq!(guides(&ui)[0].position, 5.0);
+    }
+
+    #[test]
+    fn view_clear_guides_removes_them_in_one_undoable_step() {
+        let (_directory, mut ui) = document();
+        ui.open_menu("View");
+        assert!(!ui.enabled("Clear Guides"), "nothing to clear yet");
+        ui.key(Key::Escape);
+        ui.press(Modifiers::CTRL, Key::R);
+        let viewport = ui.app().canvas_viewport.unwrap();
+        ui.drag(
+            pos2(viewport.center().x, viewport.top() - 4.0),
+            at(&ui, 4.0, 4.0),
+        );
+        ui.drag(
+            pos2(viewport.left() - 4.0, viewport.center().y),
+            at(&ui, 13.0, 4.0),
+        );
+        assert_eq!(guides(&ui).len(), 2);
+
+        ui.open_menu("View");
+        ui.click("Clear Guides");
+        assert!(guides(&ui).is_empty());
+        assert_eq!(
+            ui.app().session().unwrap().history.undo_name(),
+            Some("Clear Guides")
+        );
+        ui.press(Modifiers::CTRL, Key::Z);
+        assert_eq!(guides(&ui).len(), 2);
+    }
+
+    #[test]
+    fn snap_to_menu_toggles_each_target() {
+        let (_directory, mut ui) = document();
+        let before = ui.app().config.snap;
+        ui.open_menu("View");
+        ui.click("Snap To ⏵");
+        ui.click("Grid");
+        assert_eq!(ui.app().config.snap.grid, !before.grid);
+        ui.press(Modifiers::CTRL | Modifiers::SHIFT, Key::Semicolon);
+        assert!(!ui.app().config.snap.enabled);
+        ui.press(Modifiers::CTRL, Key::Quote);
+        assert!(ui.app().config.show_grid);
+    }
+
+    #[test]
+    fn grid_settings_previews_cancels_restores_defaults_and_applies() {
+        use xuan::layout::GridSettings;
+        let (directory, mut ui) = document();
+        assert!(!ui.app().showing_grid());
+        ui.open_menu("View");
+        ui.click("Grid Settings…");
+        assert!(ui.app().dialog == Some(Dialog::GridSettings));
+        // The grid shows while the dialog is open, and follows the fields.
+        assert!(ui.app().showing_grid());
+        ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 32;
+        ui.settle();
+        assert_eq!(ui.app().grid_settings().spacing, 32);
+        ui.click("Cancel");
+        assert!(ui.app().dialog.is_none());
+        assert_eq!(ui.app().grid_settings(), GridSettings::default());
+        assert!(!ui.app().showing_grid());
+
+        ui.open_menu("View");
+        ui.click("Grid Settings…");
+        {
+            let draft = &mut ui.app_mut().grid_edit.as_mut().unwrap().draft;
+            draft.spacing = 100;
+            draft.subdivisions = 4;
+            draft.opacity = 80;
+        }
+        ui.settle();
+        ui.click("Restore Defaults");
+        assert_eq!(ui.app().grid_edit.unwrap().draft, GridSettings::default());
+        // More subdivisions than pixels can't be applied.
+        ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 64;
+        ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 10;
+        ui.settle();
+        assert!(!ui.enabled("OK"));
+        ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 8;
+        ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 100;
+        ui.settle();
+        ui.click("OK");
+        assert!(ui.app().dialog.is_none());
+        let expected = GridSettings {
+            spacing: 100,
+            ..GridSettings::default()
+        };
+        // Kept in the project as an undo step, and as the default for other projects.
+        assert_eq!(ui.app().session().unwrap().document.grid, Some(expected));
+        assert_eq!(ui.app().config.grid, expected);
+        let saved = xuan::config::Config::load(&directory.path().join("config.toml")).unwrap();
+        assert_eq!(saved.grid, expected);
+        // As upstream, the grid's visibility goes back to what it was.
+        assert!(!ui.app().showing_grid());
+        ui.press(Modifiers::CTRL, Key::Z);
+        assert_eq!(ui.app().session().unwrap().document.grid, None);
     }
 }

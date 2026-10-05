@@ -47,7 +47,28 @@ fn item(
     command: &'static str,
     action: &mut Option<&'static str>,
 ) {
-    if ui.add(Button::new(label).shortcut_text(shortcut)).clicked() {
+    // Without a shortcut the accessible label is just the name, with no trailing space.
+    let button = if shortcut.is_empty() {
+        Button::new(label)
+    } else {
+        Button::new(label).shortcut_text(shortcut)
+    };
+    if ui.add(button).clicked() {
+        *action = Some(command);
+        ui.close();
+    }
+}
+
+/// A menu toggle with a shortcut hint, run as a command so the key chord does the same thing.
+fn check_item(
+    ui: &mut egui::Ui,
+    checked: bool,
+    label: &str,
+    shortcut: &str,
+    command: &'static str,
+    action: &mut Option<&'static str>,
+) {
+    if widgets::menu_check(ui, checked, label, shortcut).clicked() {
         *action = Some(command);
         ui.close();
     }
@@ -451,11 +472,80 @@ impl EditorApp {
                                     &mut self.show_controls,
                                     tr("Show Transform Controls"),
                                 );
-                                widgets::checkbox(
+                            });
+                            // Rulers, grid, guides and snapping, as upstream's View menu.
+                            ui.separator();
+                            ui.add_enabled_ui(has_doc, |ui| {
+                                ui.menu_button(tr("Show"), |ui| {
+                                    check_item(
+                                        ui,
+                                        self.config.show_grid,
+                                        tr("Grid"),
+                                        "Ctrl+'",
+                                        "toggle_grid",
+                                        &mut action,
+                                    );
+                                    check_item(
+                                        ui,
+                                        self.config.show_guides,
+                                        tr("Guides"),
+                                        "Ctrl+;",
+                                        "toggle_guides",
+                                        &mut action,
+                                    );
+                                });
+                                item(ui, tr("Grid Settings…"), "", "grid_settings", &mut action);
+                                check_item(
                                     ui,
-                                    &mut self.snap,
-                                    tr("Snap to Canvas and Layers"),
+                                    self.config.rulers,
+                                    tr("Rulers"),
+                                    "Ctrl+R",
+                                    "toggle_rulers",
+                                    &mut action,
                                 );
+                                ui.separator();
+                                check_item(
+                                    ui,
+                                    self.config.snap.enabled,
+                                    tr("Snap"),
+                                    "Ctrl+Shift+;",
+                                    "toggle_snap",
+                                    &mut action,
+                                );
+                                let mut snap = self.config.snap;
+                                ui.menu_button(tr("Snap To"), |ui| {
+                                    ui.add_enabled_ui(snap.enabled, |ui| {
+                                        for (value, label) in [
+                                            (&mut snap.guides, tr("Guides")),
+                                            (&mut snap.grid, tr("Grid")),
+                                            (&mut snap.layers, tr("Layers")),
+                                            (&mut snap.bounds, tr("Document Bounds")),
+                                        ] {
+                                            if widgets::menu_check(ui, *value, label, "").clicked()
+                                            {
+                                                *value = !*value;
+                                            }
+                                        }
+                                    });
+                                });
+                                if snap != self.config.snap {
+                                    self.set_view_option(|config| config.snap = snap);
+                                }
+                                ui.separator();
+                                check_item(
+                                    ui,
+                                    self.config.lock_guides,
+                                    tr("Lock Guides"),
+                                    "Ctrl+Alt+;",
+                                    "lock_guides",
+                                    &mut action,
+                                );
+                                let has_guides = self
+                                    .session()
+                                    .is_some_and(|s| !s.document.guides.is_empty());
+                                ui.add_enabled_ui(has_guides, |ui| {
+                                    item(ui, tr("Clear Guides"), "", "clear_guides", &mut action);
+                                });
                             });
                         });
                         menu_bar_button(ui, tr("Help"), |ui| {

@@ -35,6 +35,7 @@ impl EditorApp {
                 Dialog::Text => self.text_dialog(ctx),
                 Dialog::Export => self.export_dialog(ctx),
                 Dialog::DropChoice => self.drop_dialog(ctx),
+                Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::Shortcuts => {
                     let mut open = true;
                     widgets::Window::new(tr("Keyboard shortcuts"))
@@ -57,6 +58,9 @@ impl EditorApp {
                                         ("Ctrl+A / Ctrl+D", tr("Select all / Deselect")),
                                         ("Ctrl+C / Ctrl+V", tr("Copy / Paste image")),
                                         ("Ctrl+0 / Ctrl+1", tr("Fit / Actual pixels")),
+                                        ("Ctrl+R / Ctrl+' / Ctrl+;", tr("Rulers / Grid / Guides")),
+                                        ("Ctrl+Shift+; / Ctrl+Alt+;", tr("Snap / Lock guides")),
+                                        (tr("Drag from a ruler"), tr("New guide")),
                                         (
                                             "V / M / L / W / C",
                                             tr("Move / Marquee / Lasso / Wand / Crop"),
