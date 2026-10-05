@@ -58,6 +58,8 @@ fn compositor_import_opens_and_reports_what_it_left_out() {
         "documentID": uuid::Uuid::new_v4(), "width": 2, "height": 2, "activeLayerID": id,
         "layers": [{"id": id, "name": "Photo", "isVisible": true, "imageFile": format!("{id}.png"),
             "blendMode": "Hard Mix", "effects": {"stroke": {"size": 2}},
+            "shape": {"kind": "Line", "red": 0, "green": 0, "blue": 0, "cornerRadius": 0,
+                "lineWidth": 3, "start": [0, 0], "end": [1, 1]},
             "transform": {"origin": [0, 0], "size": [2, 2], "rotation": 0}}],
     });
     std::fs::write(
@@ -73,8 +75,15 @@ fn compositor_import_opens_and_reports_what_it_left_out() {
         "saving must not overwrite the package"
     );
     let notice = app.notice.clone().unwrap();
-    assert!(notice.contains("“Hard Mix”"), "{notice}");
-    assert!(notice.contains("Layer effects"), "{notice}");
+    assert!(notice.contains("Live line shapes"), "{notice}");
+    // Photoshop blend modes and layer effects come across.
+    let layer = &app.session().unwrap().document.layers[0];
+    assert_eq!(layer.blend, xuan::blend::BlendMode::HardMix);
+    assert_eq!(layer.effects.as_ref().unwrap().stroke.unwrap().size, 2.0);
+    assert!(
+        !notice.contains("Hard Mix") && !notice.contains("Layer effects"),
+        "{notice}"
+    );
     keyboard_frame(&context, &mut app, Vec::new(), egui::Modifiers::NONE);
     assert!(app.notice.is_some());
 }
