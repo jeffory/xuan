@@ -274,7 +274,7 @@ impl EditorApp {
         if id == panes::LAYERS {
             self.layers_pane(ui, enabled);
         } else {
-            self.plugin_pane(ui, id);
+            self.plugin_pane(ui, id, enabled);
         }
     }
 }

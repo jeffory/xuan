@@ -613,6 +613,94 @@ fn reset_panel_layout_keeps_the_installed_plugin_panes() {
     assert!(entries.iter().any(|(id, _, visible)| id == key && *visible));
 }
 
+fn click(context: &egui::Context, app: &mut EditorApp, pos: Pos2) {
+    pointer_frame(context, app, pos, None, egui::Modifiers::NONE);
+    pointer_frame(context, app, pos, Some(true), egui::Modifiers::NONE);
+    pointer_frame(context, app, pos, Some(false), egui::Modifiers::NONE);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_proposal_is_never_accepted_without_the_accept_button() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    // A second plugin, not yet granted, whose pane offers "Review Permissions…".
+    std::fs::copy(dir.path().join("plugin.sh"), other.path().join("plugin.sh")).unwrap();
+    let guarded = Manifest::parse(
+        &MANIFEST
+            .replace("id = \"mock\"", "id = \"guarded\"")
+            .replace("shortcut = \"Ctrl+Shift+E\"\n", "")
+            .replace(
+                "[[actions]]",
+                "[permissions]\nnetwork = [\"example.com\"]\n\n[[actions]]",
+            ),
+        other.path(),
+    )
+    .unwrap();
+    let mock = app.plugins.manifest("mock").unwrap().clone();
+    app.install_plugins(vec![mock, guarded], vec![]);
+    app.config.panes.set_hidden("plugin:mock/info", true);
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    let button = |context: &egui::Context, app: &mut EditorApp| {
+        frame(context, app)
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Review Permissions…" => {
+                    Some(text.pos + Vec2::new(5.0, 5.0))
+                }
+                _ => None,
+            })
+            .expect("the pane offers to review permissions")
+    };
+    let propose = |context: &egui::Context, app: &mut EditorApp| {
+        app.start_plugin_action("mock", "echo");
+        app.run_plugin_action();
+        run_until(context, app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        assert_eq!(echoed(app, 0), 1);
+    };
+    let steps = app.session().unwrap().history.names().count();
+
+    // While the proposal is open, the pane takes no clicks.
+    propose(&context, &mut app);
+    let pos = button(&context, &mut app);
+    click(&context, &mut app, pos);
+    frame(&context, &mut app);
+    assert_eq!(app.dialog, Some(Dialog::PluginProposal));
+    assert!(app.plugins.proposal.is_some());
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+
+    // Whatever replaces the proposal's dialog discards it; nothing is committed.
+    app.dialog = Some(Dialog::PluginPermissions);
+    app.plugins.permission_request = Some((
+        "guarded".into(),
+        super::super::plugins::PendingStart::Action("echo".into()),
+    ));
+    frame(&context, &mut app);
+    assert!(app.plugins.proposal.is_none());
+    assert_eq!(echoed(&app, 0), 0);
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+    assert_ne!(
+        app.session().unwrap().history.undo_name(),
+        Some("Echo Source")
+    );
+    app.dialog = None;
+    app.plugins.permission_request = None;
+
+    // With nothing open, the same button works.
+    frame(&context, &mut app);
+    let pos = button(&context, &mut app);
+    click(&context, &mut app, pos);
+    assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::{builtin_for, consume_exact};

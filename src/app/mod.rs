@@ -1595,11 +1595,16 @@ impl EditorApp {
             self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
+        // A proposal is accepted only through its Accept button. Anything that
+        // closed or replaced its dialog discards it.
+        if self.plugins.proposal.is_some() && self.dialog != Some(Dialog::PluginProposal) {
+            self.resolve_proposal(false);
+        }
         if self.gesture.is_none()
             && self.effect.is_none()
             && self.text_edit.is_none()
             && self.job.is_none()
-            && self.dialog != Some(Dialog::PluginProposal)
+            && self.plugins.proposal.is_none()
             && !ctx.input(|i| i.pointer.any_down())
             && let Some(session) = self.session_mut()
         {

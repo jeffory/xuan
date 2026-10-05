@@ -26,7 +26,13 @@ struct Pane<'a> {
 }
 
 impl EditorApp {
-    pub(super) fn plugin_pane(&mut self, ui: &mut egui::Ui, key: &str) {
+    /// Draw a plugin pane. While a dialog is open (`enabled` is false) it is
+    /// shown but takes no input, like the built-in panes.
+    pub(super) fn plugin_pane(&mut self, ui: &mut egui::Ui, key: &str, enabled: bool) {
+        ui.add_enabled_ui(enabled, |ui| self.plugin_pane_contents(ui, key));
+    }
+
+    fn plugin_pane_contents(&mut self, ui: &mut egui::Ui, key: &str) {
         let Some((plugin, _)) = key.strip_prefix("plugin:").and_then(|k| k.split_once('/')) else {
             return;
         };
