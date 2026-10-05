@@ -23,6 +23,7 @@ and **#7** (MCP server and client).
 3. **Add three small host features that every generative plugin needs:** a
    result that declares its placed size (upscale), canvas extension (outpaint)
    and a `mask` output kind that becomes a selection (segmentation, #5).
+   The placed size is done in #35 and the `mask` output in #37.
 4. **Give models a home:** a per-plugin `models_dir` with a manifest-declared,
    hash-checked download, shown to the user with its size before it starts.
 5. **Defer C2PA, plugin signing and the OS keyring.** Record the provenance we
@@ -100,7 +101,11 @@ server in Xuan should reuse the `document/*` and `document/edit` code paths
   Segmentation (#5) wants a plain `mask` output kind: a result that the host
   turns into a selection (replace, add, intersect) after Accept, with the same
   proposal bar. This is the dedicated path #5 needs; the model itself lives in
-  a plugin.
+  a plugin. Done (#37): a `mask` output is a grey PNG, placed like an `image`
+  (including `fit = "source"`), that becomes a soft selection combined by
+  `replace`, `add`, `subtract` or `intersect`, as a proposal and one undo
+  step, without `document = "edit"`. `plugins/select-bright` shows it with a
+  backend hook where a segmentation model would go.
 - **Higher bit depth** (16-bit or float) is not supported anywhere. Models are
   8-bit; skip until Xuan's own pipeline changes.
 
@@ -139,7 +144,7 @@ local job with no network.
 | --- | --- | --- |
 | Text-to-image | ComfyUI (local or cloud), diffusers, or a hosted API | Comfy example already covers the cloud path. A local ComfyUI plugin is the same code with a `localhost` base URL. |
 | Inpaint / outpaint | Same, with a mask workflow | Needs the host features in section 2. |
-| Background removal, segmentation | ONNX Runtime in the plugin (U2-Net, IS-Net, SAM-class models) | Plugin returns a mask. #5 decides which model and licence ship. |
+| Background removal, segmentation | ONNX Runtime in the plugin (U2-Net, IS-Net, SAM-class models) | Plugin returns a `mask` output (#37); `select-bright` has a backend hook. #5 decides which model and licence ship. |
 | Upscaling | Real-ESRGAN or similar via ONNX Runtime in the plugin | `local-upscale` has a backend hook. |
 | Prompt assist, captioning | Ollama or llama.cpp over localhost | A pane or action that returns `text` or fills an input. |
 | Style transfer, colorize, denoise | Same ONNX pattern | Per-model plugins. |
@@ -297,7 +302,7 @@ a cosmetic change and not worth breaking existing installs.
 | --- | --- | --- | --- |
 | **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin; model download story. | Ship a local-ComfyUI variant of the Comfy example; add `models_dir`. |
 | **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare. | Canvas extension for outpainting; a simple "selection as mask" input; hard-edge versus feathered mask control. | Add `extend` to the source and an `extend_canvas` edit op. |
-| **Background removal / segmentation** | `selection/export`, `set_selection` and `set_mask` edits, `replace` results. | A `mask` output that becomes a selection (#5); a shipped model and licence decision (#5). | Do the host `mask` output here, and the model and Select Subject UI in #5, implemented as a first-party ONNX plugin. |
+| **Background removal / segmentation** | `selection/export`, `set_selection` and `set_mask` edits, `replace` results, a `mask` output that becomes a selection (#37) and the `select-bright` prototype. | A shipped model and licence decision (#5). | The host `mask` output is done; do the model and Select Subject UI in #5, implemented as a first-party ONNX plugin. |
 | **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Result placed-size control; model download; large-image speed. | Add `width`/`height` to image outputs; later an ONNX Real-ESRGAN backend. |
 | **Others** (style transfer, colorize, denoise, captions) | Same job/result machinery; `text` output for captions; panes for assist UIs. | Nothing specific. | Plugins only; no host work. |
 
@@ -310,3 +315,10 @@ placed over the source at the source's size, and loads additional backends from 
 an ONNX Real-ESRGAN implementation would go (onnxruntime in the plugin's own
 virtualenv, never in Xuan). See its README for how to try it and for the
 backend steps. Tests: `python3 -m unittest discover -s plugins/local-upscale`.
+
+`plugins/select-bright` is the same pattern for segmentation: it sends the
+composite at most 1024 pixels on a side, returns a grey `mask` output with
+`fit = "source"`, and Xuan proposes it as the selection. Its built-in backend
+selects by brightness; a `backend_<name>.py` with a `segment` function is
+where an ONNX U²-Net or IS-Net model would go. It needs only `document =
+"read"`. Tests: `python3 -m unittest discover -s plugins/select-bright`.

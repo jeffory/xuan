@@ -20,6 +20,7 @@ plugins under `plugins/`:
 | `plugins/invert-regions` | Rust | A region action with per-region fields, a pane that reads the composite |
 | `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; three actions |
 | `plugins/local-upscale` | Python | A local, offline job with no permissions beyond reading; a swappable model backend |
+| `plugins/select-bright` | Python | A `mask` result that becomes the selection; a placeholder for a segmentation model |
 
 Both SDKs read requests on the main thread and run handlers on worker threads,
 so a handler may call the editor (`host.document()`, `host.export_layer()`, …)
@@ -51,7 +52,8 @@ permissions change, the plugin asks again. Folders that share a plugin id are
 reported and none of them is loaded.
 
 Xuan enforces the permissions for what it does on a plugin's behalf: it edits
-documents only for plugins that declare `document = "edit"`, hands over only
+documents only for plugins that declare `document = "edit"` (see
+[What `document` allows](#what-document-allows)), hands over only
 the declared secrets, and reads and writes files only in the plugin's own
 folders (see [Files](#files)) unless `filesystem` allows more. It cannot
 limit what the plugin process itself does, which runs with the user's rights:
@@ -60,6 +62,20 @@ manifest declares. `permissions.network` in particular is not enforced. The
 permission dialog says so, and Xuan asks before it hands document data to a
 plugin that declares network hosts (see [Network](#network)). Install
 plugins you trust.
+
+### What `document` allows
+
+| | `document = "read"` (default) | `document = "edit"` |
+| --- | --- | --- |
+| `document/get`, `layer/export`, `document/export`, `selection/export` | yes | yes |
+| Action results (`image`, `document`, `mask`, `edit`, `text`), as a proposal the user accepts or discards | yes | yes |
+| `document/edit`, including its `set_selection` op | no | yes |
+| `host/run` commands that edit the document | no | yes |
+
+A `mask` result changes only the selection, never pixels, and only after the
+user accepts it, so it needs no `document = "edit"`: a read-only segmentation
+plugin can propose a selection. Changing the selection directly with
+`document/edit` still needs `"edit"`.
 
 ### Network
 
@@ -317,7 +333,8 @@ should answer with the error code `-32800`. The result lists outputs:
 ```
 
 Output kinds: `image` (a PNG placed at `x`,`y` in source coordinates, optional
-`mask` PNG and `name`; see below for its placed size), `document` (a PNG opened as a new tab), `edit` (a list of
+`mask` PNG and `name`; see below for its placed size), `document` (a PNG opened as a new tab), `mask` (a grey
+PNG that becomes the selection, see below), `edit` (a list of
 document edits, see below, applied as one undo step), `text` (shown in the
 status bar) and `none`. One result may hold at most 64 outputs, 32 new layers
 and documents, and 1,000 edits, and the images it refers to may add up to at
@@ -340,6 +357,33 @@ still count against the size and 100-megapixel limits. With `result.into =
 layer's pixels. The SDKs have helpers: `job.image(path, fit_source=True)` or
 `width=`/`height=` in Python, and `Output::image(..).fit_source()` or
 `.with_size(width, height)` in Rust.
+
+**Masks.** A `mask` output turns a grey PNG into the document's selection:
+
+```json
+{"kind": "mask", "path": "…/mask.png", "mode": "replace", "fit": "source"}
+```
+
+White is selected, black is not, and grey is partly selected (Xuan's
+selection has 256 levels, so a soft matte stays soft); a colour PNG is read
+as its luminance. `mode` combines it with the current selection like the
+selection tools do: `replace` (the default), `add` (the larger coverage),
+`subtract` (the current coverage minus the mask's) or `intersect` (the
+smaller). It is placed exactly like an `image`: at `x`,`y` in source
+coordinates, at its pixel size divided by the export scale unless it gives
+`width`/`height` or `"fit": "source"`, so a model can return a 320x320 matte
+for any source. It is resampled smoothly onto the document's pixels, and
+nothing outside it is selected. Several masks apply in order. The selection
+changes only through a proposal: the new selection shows at once,
+**Compare** shows the old one, **Accept** makes it one undo step named after
+the action and **Discard** restores the old one. A mask is read from the
+plugin's folders and counts against the result's 100-megapixel budget like
+an image; a file that is missing, not an image or larger than 30,000 pixels
+on a side refuses the whole result. It needs no `document = "edit"` (see
+[What `document` allows](#what-document-allows)). The SDKs have helpers:
+`job.mask(path, mode="add", fit_source=True)` in Python (and
+`encode_gray_png` to write one), and `Output::mask(path,
+MaskMode::Add).fit_source()` in Rust.
 
 ### Reading and editing the document
 
