@@ -52,6 +52,8 @@ pub(super) struct PluginState {
     config_dir: Option<PathBuf>,
     scratch: HashMap<String, tempfile::TempDir>,
     pub jobs: Vec<PluginJob>,
+    /// Finished jobs whose results wait, in order, for the editor to be free.
+    pub completed: std::collections::VecDeque<(PluginJob, Value)>,
     pub panes: HashMap<String, PaneState>,
     pub proposal: Option<Proposal>,
     pub action: Option<ActionEdit>,
@@ -431,8 +433,10 @@ impl EditorApp {
         for (plugin, message) in incoming {
             self.dispatch_plugin_message(&plugin, message);
         }
+        self.apply_completed_results();
         self.refresh_panes_for_changes();
         if !self.plugins.jobs.is_empty()
+            || !self.plugins.completed.is_empty()
             || self
                 .plugins
                 .pending
@@ -1074,8 +1078,39 @@ impl EditorApp {
                 return;
             }
         };
-        if let Err(error) = self.apply_job_result(&job, value) {
-            self.error = Some(format!("{}: {error:#}", job.label));
+        if !self.ready_for_plugin_result() {
+            self.status = format!(
+                "{} {}",
+                job.label,
+                tr("finished; its result is shown when the editor is free")
+            );
+        }
+        self.plugins.completed.push_back((job, value));
+        self.apply_completed_results();
+    }
+
+    /// Whether a job result can be shown now: nothing else is open or under way
+    /// that a proposal would interrupt.
+    fn ready_for_plugin_result(&self) -> bool {
+        self.dialog.is_none()
+            && self.error.is_none()
+            && self.plugins.proposal.is_none()
+            && self.job.is_none()
+            && self.gesture.is_none()
+            && self.effect.is_none()
+            && self.text_edit.is_none()
+            && self.develop.is_none()
+    }
+
+    /// Apply finished results in the order their jobs finished, one at a time:
+    /// a result that becomes a proposal waits for the user before the next.
+    pub(super) fn apply_completed_results(&mut self) {
+        while self.ready_for_plugin_result()
+            && let Some((job, value)) = self.plugins.completed.pop_front()
+        {
+            if let Err(error) = self.apply_job_result(&job, value) {
+                self.error = Some(format!("{}: {error:#}", job.label));
+            }
         }
     }
 
@@ -1221,10 +1256,6 @@ impl EditorApp {
             bail!("{}", tr("The document was closed"));
         };
         self.current = index;
-        if self.dialog.is_some() || self.job.is_some() || self.gesture.is_some() {
-            // Wait for the user to finish; the result is applied next frame.
-            bail!("{}", tr("The editor is busy; run the action again"));
-        }
         let session = &mut self.sessions[index];
         let mut document = session.document.clone();
         for batch in &edit_batches {

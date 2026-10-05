@@ -481,6 +481,93 @@ fn reloading_fails_the_jobs_of_removed_and_changed_plugins() {
     assert_eq!(app.plugins.jobs.len(), 1);
 }
 
+fn echoed(app: &EditorApp, index: usize) -> usize {
+    app.sessions[index]
+        .document
+        .layers
+        .iter()
+        .filter(|l| l.name == "Echoed")
+        .count()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_result_that_finishes_while_a_dialog_is_open_is_applied_afterwards() {
+    let dir = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+
+    app.start_plugin_action("mock", "echo");
+    app.run_plugin_action();
+    // The user opens Manage Plugins while the job runs.
+    app.dialog = Some(Dialog::Plugins);
+    run_until(&context, &mut app, |app| app.plugins.jobs.is_empty());
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.plugins.proposal.is_none());
+    assert_eq!(app.plugins.completed.len(), 1);
+    assert_eq!(echoed(&app, 0), 0);
+
+    app.dialog = None;
+    frame(&context, &mut app);
+    assert_eq!(app.dialog, Some(Dialog::PluginProposal));
+    assert!(app.plugins.completed.is_empty());
+    assert_eq!(echoed(&app, 0), 1);
+    app.resolve_proposal(true);
+    assert_eq!(echoed(&app, 0), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn results_for_two_documents_are_proposed_one_after_the_other() {
+    let dir = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    for _ in 0..2 {
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+    }
+    let ids: Vec<_> = app.sessions.iter().map(|s| s.document.id).collect();
+    for index in 0..2 {
+        app.current = index;
+        app.start_plugin_action("mock", "echo");
+        app.run_plugin_action();
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
+    assert_eq!(app.plugins.jobs.len(), 2);
+
+    // The first result is proposed; the second waits instead of being lost.
+    run_until(&context, &mut app, |app| {
+        app.plugins.jobs.is_empty() && app.plugins.proposal.is_some()
+    });
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let first = app.plugins.proposal.as_ref().unwrap().document;
+    assert_eq!(app.plugins.completed.len(), 1);
+    app.resolve_proposal(true);
+    frame(&context, &mut app);
+    let second = app.plugins.proposal.as_ref().unwrap().document;
+    assert_ne!(first, second);
+    assert_eq!(app.dialog, Some(Dialog::PluginProposal));
+    app.resolve_proposal(true);
+    assert!(app.plugins.completed.is_empty());
+    assert!(ids.contains(&first) && ids.contains(&second));
+    assert_eq!((echoed(&app, 0), echoed(&app, 1)), (1, 1));
+    for session in &app.sessions {
+        assert_eq!(session.history.undo_name(), Some("Echo Source"));
+    }
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::{builtin_for, consume_exact};
