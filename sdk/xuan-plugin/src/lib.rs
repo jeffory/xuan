@@ -1031,9 +1031,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(with.mask.as_deref(), Some(Path::new("/j/selection.png")));
-        let without: Source =
-            serde_json::from_value(json!({"path": "/j/source.png", "width": 8, "height": 6, "mask": null}))
-                .unwrap();
+        let without: Source = serde_json::from_value(
+            json!({"path": "/j/source.png", "width": 8, "height": 6, "mask": null}),
+        )
+        .unwrap();
         assert!(without.mask.is_none());
     }
 
