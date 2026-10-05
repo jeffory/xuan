@@ -245,9 +245,47 @@ pub enum Adjustment {
         seed: u32,
     },
     Invert,
+    /// Photoshop's Black & White (upstream's `BlackWhiteSettings`): how bright each family of
+    /// colors becomes in gray, in percent (−200…300), ordered red, yellow, green, cyan, blue,
+    /// magenta; optionally tinted with a hue (0…360°) at a saturation (0…100%). Format 6.
+    BlackWhite {
+        weights: [f32; 6],
+        tint: bool,
+        tint_hue: f32,
+        tint_saturation: f32,
+    },
+    /// Photoshop's Color Balance (upstream's `ColorBalanceSettings`): for shadows, midtones and
+    /// highlights, shifts toward red (from cyan), green (from magenta) and blue (from yellow), in
+    /// percent (−100…100). Format 6.
+    ColorBalance {
+        shadows: [f32; 3],
+        midtones: [f32; 3],
+        highlights: [f32; 3],
+        preserve_luminosity: bool,
+    },
 }
 
 impl Adjustment {
+    /// Photoshop's defaults for Black & White (reds 40, yellows 60, greens 40, cyans 60, blues 20,
+    /// magentas 80; a 20% tint at 40° when tinting).
+    pub const BLACK_WHITE: Self = Self::BlackWhite {
+        weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0],
+        tint: false,
+        tint_hue: 40.0,
+        tint_saturation: 20.0,
+    };
+    pub const COLOR_BALANCE: Self = Self::ColorBalance {
+        shadows: [0.0; 3],
+        midtones: [0.0; 3],
+        highlights: [0.0; 3],
+        preserve_luminosity: true,
+    };
+
+    /// Whether .xuan format 5 and earlier can store this adjustment.
+    pub fn is_legacy(&self) -> bool {
+        !matches!(self, Self::BlackWhite { .. } | Self::ColorBalance { .. })
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::HueSaturation { .. } => "Hue/Saturation",
@@ -260,6 +298,8 @@ impl Adjustment {
             Self::GradientMap { .. } => "Gradient Map",
             Self::Grain { .. } | Self::FilmGrain { .. } => "Grain",
             Self::Invert => "Invert",
+            Self::BlackWhite { .. } => "Black & White",
+            Self::ColorBalance { .. } => "Color Balance",
         }
     }
 }

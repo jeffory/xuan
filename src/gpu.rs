@@ -709,6 +709,38 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
                 ];
             }
             Adjustment::Invert => p.flags[1] = 7,
+            // 12 and 13 are the standalone-mask and filter-layer steps in composite.wgsl.
+            Adjustment::BlackWhite {
+                weights,
+                tint,
+                tint_hue,
+                tint_saturation,
+            } => {
+                p.flags[1] = 14;
+                p.first = [weights[0], weights[1], weights[2], weights[3]];
+                p.second = [
+                    weights[4],
+                    weights[5],
+                    *tint_hue,
+                    if *tint { *tint_saturation } else { 0.0 },
+                ];
+            }
+            Adjustment::ColorBalance {
+                shadows,
+                midtones,
+                highlights,
+                preserve_luminosity,
+            } => {
+                p.flags[1] = 15;
+                p.first = [
+                    shadows[0],
+                    shadows[1],
+                    shadows[2],
+                    if *preserve_luminosity { 1.0 } else { 0.0 },
+                ];
+                p.second = [midtones[0], midtones[1], midtones[2], 0.0];
+                p.points[0] = [highlights[0], highlights[1], highlights[2], 0.0];
+            }
         }
     }
     p
@@ -1294,6 +1326,18 @@ mod tests {
             Adjustment::GradientMap {
                 shadows: [20, 40, 70, 255],
                 highlights: [200, 220, 150, 255],
+            },
+            Adjustment::BlackWhite {
+                weights: [-40.0, 120.0, 40.0, 250.0, -100.0, 80.0],
+                tint: true,
+                tint_hue: 213.0,
+                tint_saturation: 45.0,
+            },
+            Adjustment::ColorBalance {
+                shadows: [40.0, -20.0, 10.0],
+                midtones: [-30.0, 20.0, 50.0],
+                highlights: [20.0, 0.0, -40.0],
+                preserve_luminosity: true,
             },
             Adjustment::FilmGrain {
                 amount: 60.0,

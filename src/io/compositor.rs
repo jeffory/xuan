@@ -42,8 +42,6 @@ const XUAN_ONLY_BLEND_MODES: [BlendMode; 3] = [
     BlendMode::DarkerColor,
     BlendMode::LighterColor,
 ];
-/// Adjustment kinds Xuan has no equivalent for; their layers are left out.
-const UNSUPPORTED_ADJUSTMENTS: [&str; 2] = ["Black & White", "Color Balance"];
 /// Keys of a layer's `effects` record (stroke, drop shadow, color overlay, inner shadow, glows).
 const EFFECT_KINDS: [&str; 6] = [
     "stroke",
@@ -59,8 +57,6 @@ const EFFECT_KINDS: [&str; 6] = [
 pub enum Dropped {
     /// One stroke, shadow, color overlay or glow effect (visible or hidden).
     LayerEffect,
-    /// An adjustment layer of this kind, left out.
-    Adjustment(&'static str),
     /// A text layer whose alignment, tracking, leading or paragraph box Xuan ignores.
     TextLayout,
     /// A text layer with per-letter colors (version 10).
@@ -81,9 +77,6 @@ impl Dropped {
     fn label(self) -> String {
         match self {
             Self::LayerEffect => tr("Layer effects (stroke, shadow, color overlay, glow)").into(),
-            Self::Adjustment(name) => {
-                format!("{} “{name}” ({})", tr("Adjustment layer"), tr("left out"))
-            }
             Self::TextLayout => {
                 tr("Text alignment, spacing or paragraph box (kept until the text is edited)")
                     .into()
@@ -93,7 +86,7 @@ impl Dropped {
             Self::TextAsPixels => tr("Text beyond Xuan's limits (imported as pixels)").into(),
             Self::LineShape => tr("Live line shapes (imported as pixels)").into(),
             Self::FilterSettings => tr("Blur or noise settings adapted to Xuan").into(),
-            Self::ClippingMask => tr("Clipping masks on blur, noise or left-out layers").into(),
+            Self::ClippingMask => tr("Clipping masks on blur or noise layers").into(),
         }
     }
 }
@@ -217,8 +210,6 @@ pub(super) enum ImportedAdjustment {
     Adjustment(Adjustment),
     /// Blur and noise adjustments sample neighbors; Xuan has them as filter layers.
     Filter(Filter),
-    /// A kind Xuan cannot represent yet.
-    Unsupported(&'static str),
 }
 
 pub(super) fn comp_adjustment(
@@ -229,9 +220,6 @@ pub(super) fn comp_adjustment(
     let kind = value["kind"]
         .as_str()
         .context("Adjustment kind is missing")?;
-    if let Some(name) = UNSUPPORTED_ADJUSTMENTS.iter().find(|name| **name == kind) {
-        return Ok(ImportedAdjustment::Unsupported(name));
-    }
     let result = match kind {
         "Hue/Saturation" => {
             let hsv = &value["hsvSettings"];
@@ -352,6 +340,37 @@ pub(super) fn comp_adjustment(
             }
         }
         "Invert" => Adjustment::Invert,
+        // Upstream's BlackWhiteSettings and ColorBalanceSettings (Document/ImageAdjustments.swift);
+        // missing fields take upstream's defaults.
+        "Black & White" => {
+            let settings = &value["blackWhiteSettings"];
+            let Adjustment::BlackWhite {
+                weights: defaults, ..
+            } = Adjustment::BLACK_WHITE
+            else {
+                unreachable!()
+            };
+            let keys = ["reds", "yellows", "greens", "cyans", "blues", "magentas"];
+            Adjustment::BlackWhite {
+                weights: std::array::from_fn(|i| number(settings, keys[i], defaults[i])),
+                tint: settings["tint"].as_bool().unwrap_or(false),
+                tint_hue: number(settings, "tintHue", 40.0),
+                tint_saturation: number(settings, "tintSaturation", 20.0),
+            }
+        }
+        "Color Balance" => {
+            let settings = &value["colorBalanceSettings"];
+            let tone = |prefix: &str| {
+                ["CyanRed", "MagentaGreen", "YellowBlue"]
+                    .map(|pair| number(settings, &format!("{prefix}{pair}"), 0.0))
+            };
+            Adjustment::ColorBalance {
+                shadows: tone("shadow"),
+                midtones: tone("mid"),
+                highlights: tone("highlight"),
+                preserve_luminosity: settings["preserveLuminosity"].as_bool().unwrap_or(true),
+            }
+        }
         "Gaussian Blur" | "Motion Blur" | "Add Noise" => {
             ensure!(version >= 9, "{kind} adjustments need project version 9");
             let filter = comp_sampling_adjustment(kind, value, report)?;
@@ -643,7 +662,6 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
     );
     let mut image_pixels = 0;
     let mut mask_pixels = 0;
-    let mut left_out = HashSet::new();
     for record in records {
         let id = identifier(&record["id"])?.context("Missing layer ID")?;
         let mut layer = Layer::blank(
@@ -681,12 +699,6 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
         };
         if !record["effects"].is_null() {
             comp_effects(&record["effects"], &mut report)?;
-        }
-        if let Some(ImportedAdjustment::Unsupported(kind)) = adjustment {
-            // Nothing else of the layer can be shown without its adjustment.
-            report.add(Dropped::Adjustment(kind));
-            left_out.insert(id);
-            continue;
         }
         if let Some(name) = record["imageFile"].as_str() {
             ensure!(
@@ -762,11 +774,11 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
                 }
                 layer.filter = Some(filter);
             }
-            Some(ImportedAdjustment::Unsupported(_)) | None => {}
+            None => {}
         }
         document.layers.push(layer);
     }
-    // Xuan's filter layers neither clip nor serve as clipping bases, and left-out layers are gone.
+    // Xuan's filter layers neither clip nor serve as clipping bases.
     let filters: HashSet<Uuid> = document
         .layers
         .iter()
@@ -775,7 +787,7 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
         .collect();
     for layer in &mut document.layers {
         if let Some(base) = layer.clip_to
-            && (layer.filter.is_some() || filters.contains(&base) || left_out.contains(&base))
+            && (layer.filter.is_some() || filters.contains(&base))
         {
             layer.clip_to = None;
             report.add(Dropped::ClippingMask);
@@ -789,7 +801,7 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
         .collect();
     let active = identifier(&manifest["activeLayerID"])?;
     ensure!(
-        active.is_none_or(|id| ids.contains_key(&id) || left_out.contains(&id)),
+        active.is_none_or(|id| ids.contains_key(&id)),
         "Missing active layer"
     );
     document.active = active

@@ -182,6 +182,25 @@ fn processing_adjustments_and_composition_match_cpu() {
                 Point::new(1.0, 1.0),
             ],
         },
+        Adjustment::BLACK_WHITE,
+        Adjustment::BlackWhite {
+            weights: [-40.0, 120.0, 40.0, 250.0, -100.0, 80.0],
+            tint: true,
+            tint_hue: 213.0,
+            tint_saturation: 45.0,
+        },
+        Adjustment::ColorBalance {
+            shadows: [40.0, -20.0, 10.0],
+            midtones: [-30.0, 20.0, 50.0],
+            highlights: [20.0, 0.0, -40.0],
+            preserve_luminosity: true,
+        },
+        Adjustment::ColorBalance {
+            shadows: [-100.0, 100.0, -60.0],
+            midtones: [30.0, -70.0, 0.0],
+            highlights: [100.0, 40.0, -100.0],
+            preserve_luminosity: false,
+        },
     ] {
         let mut document = Document::new(120, 100).unwrap();
         let mut layer = Layer::image("source", source.clone());

@@ -699,4 +699,34 @@ mod layer_appearance {
         ui.click("Soft Light");
         assert_eq!(active(&ui).blend, xuan::blend::BlendMode::SoftLight);
     }
+
+    #[test]
+    fn black_white_and_color_balance_layers_come_from_the_layer_menu() {
+        use xuan::document::Adjustment;
+        let mut ui = UiTest::with_document();
+        ui.open_menu("Layer");
+        ui.click("New Adjustment Layer ⏵");
+        ui.click("Black & White");
+        assert!(ui.has("Reds") && ui.has("Magentas") && ui.has("Tint"));
+        ui.click("Apply");
+        assert_eq!(active(&ui).adjustment, Some(Adjustment::BLACK_WHITE));
+
+        ui.open_menu("Layer");
+        ui.click("New Adjustment Layer ⏵");
+        ui.click("Color Balance");
+        assert!(ui.has("Cyan – Red") && ui.has("Preserve Luminosity"));
+        // Each tonal range has its own sliders.
+        ui.click("Shadows");
+        ui.click("Preserve Luminosity");
+        ui.click("Apply");
+        assert_eq!(
+            active(&ui).adjustment,
+            Some(Adjustment::ColorBalance {
+                shadows: [0.0; 3],
+                midtones: [0.0; 3],
+                highlights: [0.0; 3],
+                preserve_luminosity: false,
+            })
+        );
+    }
 }

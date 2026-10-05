@@ -618,16 +618,25 @@ mod tests {
         invert.parent = Some(outer.id);
         doc.layers = vec![base, outer, inner, red];
         // Red at a quarter over blue.
-        assert_eq!(render_pixels(&doc, 1, 1).get_pixel(0, 0).0, [64, 0, 191, 255]);
+        assert_eq!(
+            render_pixels(&doc, 1, 1).get_pixel(0, 0).0,
+            [64, 0, 191, 255]
+        );
         doc.layers[2].opacity = 1.0;
-        assert_eq!(render_pixels(&doc, 1, 1).get_pixel(0, 0).0, [128, 0, 128, 255]);
+        assert_eq!(
+            render_pixels(&doc, 1, 1).get_pixel(0, 0).0,
+            [128, 0, 128, 255]
+        );
         // An adjustment inside the folder is dimmed too: half an inversion of (128, 0, 128).
         doc.layers.push(invert);
         let pixel = render_pixels(&doc, 1, 1).get_pixel(0, 0).0;
         assert_eq!(pixel, [128, 128, 128, 255]);
         // At zero opacity nothing inside the folder draws.
         doc.layers[1].opacity = 0.0;
-        assert_eq!(render_pixels(&doc, 1, 1).get_pixel(0, 0).0, [0, 0, 255, 255]);
+        assert_eq!(
+            render_pixels(&doc, 1, 1).get_pixel(0, 0).0,
+            [0, 0, 255, 255]
+        );
     }
 
     #[test]

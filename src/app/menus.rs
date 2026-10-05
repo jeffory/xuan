@@ -126,6 +126,8 @@ pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
             roughness: 50.0,
             seed: 1,
         },
+        Adjustment::BLACK_WHITE,
+        Adjustment::COLOR_BALANCE,
     ] {
         if ui.button(tr(adjustment.name())).clicked() {
             result = Some(adjustment);

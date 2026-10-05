@@ -130,7 +130,7 @@ fn load_compositor_for_test(directory: &TempDir) -> Document {
 }
 
 #[test]
-fn version_7_imports_invert_and_leaves_out_unsupported_adjustments() {
+fn version_7_imports_invert_black_white_and_color_balance() {
     let (invert, mono, balance, clipped) = (
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -146,22 +146,66 @@ fn version_7_imports_invert_and_leaves_out_unsupported_adjustments() {
             adjustment(invert, json!({"kind": "Invert"})),
             adjustment(
                 mono,
-                json!({"kind": "Black & White", "blackWhiteSettings": {}}),
+                json!({"kind": "Black & White", "blackWhiteSettings": {
+                    "reds": -20, "yellows": 150, "greens": 40, "cyans": 60, "blues": 300,
+                    "magentas": -200, "tint": true, "tintHue": 210, "tintSaturation": 35}}),
             ),
-            adjustment(balance, json!({"kind": "Color Balance"})),
+            // Settings left out take upstream's defaults.
+            adjustment(
+                balance,
+                json!({"kind": "Color Balance", "colorBalanceSettings": {
+                "shadowCyanRed": 10, "midMagentaGreen": -25, "highlightYellowBlue": 100,
+                "preserveLuminosity": false}}),
+            ),
             clipped_layer,
         ],
     );
-    // The active layer was left out, so the topmost remaining layer becomes active.
     value["activeLayerID"] = json!(upper(mono));
     let (document, report) = import(&value).unwrap();
-    assert_eq!(document.layers.len(), 3);
+    assert_eq!(document.layers.len(), 5);
     assert_eq!(find(&document, invert).adjustment, Some(Adjustment::Invert));
-    assert_eq!(find(&document, clipped).clip_to, None);
-    assert_eq!(document.active, Some(clipped));
-    assert_eq!(report.count(Dropped::Adjustment("Black & White")), 1);
-    assert_eq!(report.count(Dropped::Adjustment("Color Balance")), 1);
-    assert_eq!(report.count(Dropped::ClippingMask), 1);
+    assert_eq!(
+        find(&document, mono).adjustment,
+        Some(Adjustment::BlackWhite {
+            weights: [-20.0, 150.0, 40.0, 60.0, 300.0, -200.0],
+            tint: true,
+            tint_hue: 210.0,
+            tint_saturation: 35.0,
+        })
+    );
+    assert_eq!(
+        find(&document, balance).adjustment,
+        Some(Adjustment::ColorBalance {
+            shadows: [10.0, 0.0, 0.0],
+            midtones: [0.0, -25.0, 0.0],
+            highlights: [0.0, 0.0, 100.0],
+            preserve_luminosity: false,
+        })
+    );
+    // Clipped to the Color Balance layer, as in upstream.
+    assert_eq!(find(&document, clipped).clip_to, Some(balance));
+    assert_eq!(document.active, Some(mono));
+    assert!(report.is_empty(), "{report:?}");
+    // Upstream's defaults when the settings are missing.
+    let mut defaults = value.clone();
+    defaults["layers"][2]["adjustment"] = json!({"kind": "Black & White"});
+    defaults["layers"][3]["adjustment"] = json!({"kind": "Color Balance"});
+    let (document, _) = import(&defaults).unwrap();
+    assert_eq!(
+        find(&document, mono).adjustment,
+        Some(Adjustment::BLACK_WHITE)
+    );
+    assert_eq!(
+        find(&document, balance).adjustment,
+        Some(Adjustment::COLOR_BALANCE)
+    );
+    // Out of upstream's ranges.
+    let mut wrong = value.clone();
+    wrong["layers"][2]["adjustment"]["blackWhiteSettings"]["reds"] = json!(301);
+    assert!(import(&wrong).is_err());
+    let mut wrong = value;
+    wrong["layers"][3]["adjustment"]["colorBalanceSettings"]["shadowCyanRed"] = json!(-101);
+    assert!(import(&wrong).is_err());
 }
 
 #[test]
@@ -428,7 +472,6 @@ fn summarizes_what_the_import_left_out_in_each_language() {
 
     let every = [
         Dropped::LayerEffect,
-        Dropped::Adjustment("Color Balance"),
         Dropped::TextLayout,
         Dropped::TextColors,
         Dropped::TextFonts,

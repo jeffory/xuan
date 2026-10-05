@@ -523,6 +523,97 @@ impl EditorApp {
                                 widgets::checkbox(ui, monochrome, tr("Monochromatic")).changed();
                         }
                         Adjustment::Invert => {}
+                        Adjustment::BlackWhite {
+                            weights,
+                            tint,
+                            tint_hue,
+                            tint_saturation,
+                        } => {
+                            for (weight, name) in weights
+                                .iter_mut()
+                                .zip(["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"])
+                            {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(weight, -200.0..=300.0)
+                                            .text(tr(name))
+                                            .suffix("%")
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                            }
+                            changed |= widgets::checkbox(ui, tint, tr("Tint")).changed();
+                            ui.add_enabled_ui(*tint, |ui| {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(tint_hue, 0.0..=360.0)
+                                            .text(tr("Hue"))
+                                            .suffix("°")
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(tint_saturation, 0.0..=100.0)
+                                            .text(tr("Saturation"))
+                                            .suffix("%")
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                            });
+                            if widgets::button(ui, tr("Default")).clicked() {
+                                if let Adjustment::BlackWhite {
+                                    weights: defaults, ..
+                                } = Adjustment::BLACK_WHITE
+                                {
+                                    *weights = defaults;
+                                }
+                                changed = true;
+                            }
+                        }
+                        Adjustment::ColorBalance {
+                            shadows,
+                            midtones,
+                            highlights,
+                            preserve_luminosity,
+                        } => {
+                            let tone_id = ui.id().with("color_balance_tone");
+                            let mut tone = ui.data(|d| d.get_temp::<usize>(tone_id).unwrap_or(1));
+                            widgets::segmented(
+                                ui,
+                                &mut tone,
+                                &[
+                                    (0, tr("Shadows")),
+                                    (1, tr("Midtones")),
+                                    (2, tr("Highlights")),
+                                ],
+                            );
+                            ui.data_mut(|d| d.insert_temp(tone_id, tone));
+                            let values = match tone {
+                                0 => shadows,
+                                2 => highlights,
+                                _ => midtones,
+                            };
+                            for (value, (low, high)) in values.iter_mut().zip([
+                                ("Cyan", "Red"),
+                                ("Magenta", "Green"),
+                                ("Yellow", "Blue"),
+                            ]) {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(value, -100.0..=100.0)
+                                            .text(format!("{} – {}", tr(low), tr(high)))
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                            }
+                            changed |= widgets::checkbox(
+                                ui,
+                                preserve_luminosity,
+                                tr("Preserve Luminosity"),
+                            )
+                            .changed();
+                        }
                     }
                 }
                 if let Some(filter) = &mut edit.filter {

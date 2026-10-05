@@ -79,6 +79,7 @@ const SCENES: &[&str] = &[
     "layer_mask",
     "clipping_mask",
     "adjustment_layers",
+    "black_white_color_balance",
     "text_and_shapes",
     "raw_default",
     "raw_negative",
@@ -138,6 +139,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("layer_mask", layer_mask()),
         composite("clipping_mask", clipping_mask()),
         composite("adjustment_layers", adjustment_layers()),
+        composite("black_white_color_balance", black_white_color_balance()),
         composite("text_and_shapes", text_and_shapes()),
     ];
     if let Some(raw) = raw_fixture() {
@@ -411,6 +413,49 @@ fn adjustment_layers() -> Document {
         levels,
         base,
         invert,
+    ])
+}
+
+/// One quadrant each, over the gradient and a band of hues: Black & White at Photoshop's
+/// defaults (top left) and tinted (bottom left); Color Balance preserving luminosity (top right)
+/// and not, at 70% opacity (bottom right).
+fn black_white_color_balance() -> Document {
+    let quadrant = |index: u32| Mask {
+        pixels: Arc::new(GrayImage::from_fn(2, 2, |x, y| {
+            Luma([if x + y * 2 == index { 255 } else { 0 }])
+        })),
+        ..Mask::white()
+    };
+    let mut plain = adjustment("Black & White", Adjustment::BLACK_WHITE);
+    plain.mask = Some(quadrant(0));
+    let mut tinted = adjustment(
+        "Tinted",
+        Adjustment::BlackWhite {
+            weights: [-40.0, 120.0, 40.0, 250.0, -100.0, 80.0],
+            tint: true,
+            tint_hue: 30.0,
+            tint_saturation: 45.0,
+        },
+    );
+    tinted.mask = Some(quadrant(2));
+    let balance = |preserve_luminosity| Adjustment::ColorBalance {
+        shadows: [40.0, -20.0, 10.0],
+        midtones: [-30.0, 20.0, 50.0],
+        highlights: [20.0, 0.0, -40.0],
+        preserve_luminosity,
+    };
+    let mut preserving = adjustment("Color Balance", balance(true));
+    preserving.mask = Some(quadrant(1));
+    let mut shifting = adjustment("Color Balance 2", balance(false));
+    shifting.mask = Some(quadrant(3));
+    shifting.opacity = 0.7;
+    document(vec![
+        Layer::image("Gradient", gradient()),
+        placed(Layer::image("Hues", hue_ramp(SIZE, 128)), 0.0, 64.0),
+        plain,
+        tinted,
+        preserving,
+        shifting,
     ])
 }
 

@@ -22,7 +22,7 @@ The importer reads Compositor `.comp` directory packages, format versions 1–11
 | top-level `guides` (8) | `guides`; the project then saves as `.xuan` version 5. Packages hold no layout grid (upstream keeps it as an app preference), so `grid` stays unset |
 | `Invert` adjustment (7) | Invert adjustment layer |
 | `Gaussian Blur`, `Motion Blur`, `Add Noise` adjustments (9) | Filter layers. Settings beyond Xuan's ranges are reduced (blur radius to 100, motion distance to 200, noise amount to 100); the motion angle is negated because upstream measures it counterclockwise; Gaussian noise becomes uniform and the noise seed is not kept. Filter layers ignore blend modes and clipping |
-| `Black & White`, `Color Balance` adjustments (7) | Left out, with the layer |
+| `Black & White`, `Color Balance` adjustments (7) | The same adjustment layers (`blackWhiteSettings`, `colorBalanceSettings`; missing fields take upstream's defaults); the project then saves as `.xuan` version 6 |
 | `text` (content, `fontName`, `fontSize`, color) | Editable text: the PostScript name becomes a family plus bold/italic (`HelveticaNeue-BoldItalic` → Helvetica Neue, bold, italic) |
 | `text` alignment, `tracking`, `leading`, `boxSize`; `colorRuns` (10); `fontRuns` (11) | Not represented. The layer's PNG keeps the original look until the text is edited in Xuan |
 | text over 16 KiB or larger than 1024 px | Imported as plain pixels |
@@ -81,10 +81,10 @@ Invalid guides or grid settings fail validation on load and save. Rulers, grid a
 visibility, Lock Guides and the Snap To settings are app preferences, not project data.
 Guides follow Crop, Canvas Size, Image Size and Flip Canvas.
 
-## Photoshop blend modes (version 6)
+## Photoshop blend modes and adjustments (version 6)
 
 Documents in which a layer uses one of the blend modes added with Photoshop's full
-set are written as version 6; everything else keeps the lowest version its content
+set, or a Black & White or Color Balance adjustment, are written as version 6; everything else keeps the lowest version its content
 needs (1–5). The reader accepts versions 1–6.
 
 A layer's `blend` is one of the original `Normal`, `Multiply`, `Screen`, `Overlay`,
@@ -96,3 +96,15 @@ Photoshop's, computed in sRGB on straight colors. Dissolve keeps a pixel fully
 opaque with a probability equal to its coverage (alpha × opacity × masks), using a
 fixed hash of the document pixel's coordinates, so the pattern is the same on every
 machine and between the CPU and GPU renderers.
+
+Two adjustment kinds are added, following upstream Compositor's settings and ranges:
+
+- `{"BlackWhite": {"weights": [r, y, g, c, b, m], "tint": bool, "tint_hue": number,
+  "tint_saturation": number}}`: how bright reds, yellows, greens, cyans, blues and
+  magentas become in gray, each −200–300 (%). With `tint`, the gray becomes the
+  lightness of a color at `tint_hue` (0–360°) and `tint_saturation` (0–100%).
+- `{"ColorBalance": {"shadows": [cr, mg, yb], "midtones": [...], "highlights": [...],
+  "preserve_luminosity": bool}}`: shifts toward red (from cyan), green (from magenta)
+  and blue (from yellow), each −100–100, for each tonal range.
+
+Values outside these ranges fail validation on load and save.

@@ -154,7 +154,11 @@ const LATEST_VERSION: u32 = 6;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
-    if document.layers.iter().any(|l| !l.blend.is_legacy()) {
+    if document
+        .layers
+        .iter()
+        .any(|l| !l.blend.is_legacy() || l.adjustment.as_ref().is_some_and(|a| !a.is_legacy()))
+    {
         6
     } else if !document.guides.is_empty() || document.grid.is_some() {
         5
@@ -507,6 +511,48 @@ mod tests {
             manifest_json(&path)["document"]["layers"][0]["blend"],
             "Divide"
         );
+        // So do Black & White and Color Balance adjustment layers.
+        doc.layers[0].blend = crate::blend::BlendMode::Normal;
+        use crate::document::Adjustment;
+        for adjustment in [Adjustment::BLACK_WHITE, Adjustment::COLOR_BALANCE] {
+            let mut layer = Layer::blank(adjustment.name(), 4, 4);
+            layer.pixels = None;
+            layer.adjustment = Some(adjustment.clone());
+            let mut with_layer = doc.clone();
+            with_layer.layers.push(layer);
+            save(&with_layer, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 6);
+            assert_eq!(load(&path).unwrap().layers[1].adjustment, Some(adjustment));
+        }
+        // Out of range settings are refused on load.
+        let mut manifest = manifest_json(&path);
+        manifest["document"]["layers"][1]["adjustment"]["ColorBalance"]["shadows"][0] =
+            serde_json::json!(500.0);
+        manifest["pixel_layers"] = serde_json::json!([doc.layers[0].id]);
+        let broken = directory.path().join("broken.xuan");
+        let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let image = zip_read(
+            &mut archive,
+            &format!("images/{}.png", doc.layers[0].id),
+            MAX_ASSET,
+        )
+        .unwrap();
+        let mut writer = ZipWriter::new(File::create(&broken).unwrap());
+        writer
+            .start_file("manifest.json", SimpleFileOptions::default())
+            .unwrap();
+        writer
+            .write_all(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        writer
+            .start_file(
+                format!("images/{}.png", doc.layers[0].id),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(&image).unwrap();
+        writer.finish().unwrap();
+        assert!(load(&broken).is_err());
     }
 
     fn write_manifest(path: &Path, manifest: &Value) {

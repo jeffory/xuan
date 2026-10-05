@@ -313,6 +313,11 @@ Levels	色阶
 Curves	曲线
 Exposure	曝光
 Gradient Map	渐变映射
+Black & White	黑白
+Color Balance	色彩平衡
+Midtones	中间调
+Preserve Luminosity	保持明度
+Default	默认值
 Film Grain	胶片颗粒
 Invert	反相
 Gaussian Blur	高斯模糊
@@ -639,12 +644,10 @@ New guide	新建参考线
 Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
 Layer effects (stroke, shadow, color overlay, glow)	图层效果（描边、阴影、颜色叠加、发光）
-Adjustment layer	调整图层
-left out	已省略
 Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
 Per-letter text colors (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
 Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
 Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以像素导入）
 Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
 Blur or noise settings adapted to Xuan	已按 Xuan 调整的模糊或杂色设置
-Clipping masks on blur, noise or left-out layers	模糊、杂色或已省略图层上的剪贴蒙版
+Clipping masks on blur or noise layers	模糊或杂色图层上的剪贴蒙版
