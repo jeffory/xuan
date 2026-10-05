@@ -4,7 +4,7 @@ use std::{
     collections::VecDeque,
     io::{BufRead, BufReader, Read, Write},
     path::Path,
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -158,7 +158,7 @@ pub struct Process {
     child: Option<Child>,
     /// The plugin's whole process tree, so its subprocesses die with it.
     tree: Option<tree::Tree>,
-    stdin: Option<ChildStdin>,
+    stdin: Option<Box<dyn Write + Send>>,
     incoming: Receiver<(Incoming, usize)>,
     budget: Arc<Budget>,
     /// Messages a blocking [`Process::wait_for`] received but could not return,
@@ -191,26 +191,14 @@ impl Process {
             .split_first()
             .context("plugin has no command")?;
         let program = resolve(program, &manifest.dir);
-        let mut command = Command::new(&program);
-        command
-            .args(args)
-            .current_dir(&manifest.dir)
-            .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
-        tree::prepare(&mut command);
-        if block_network {
-            super::sandbox::block_network(&mut command).with_context(|| {
-                format!("Cannot block the network for plugin {}", manifest.plugin.id)
-            })?;
-        }
-        let mut child = command.spawn().with_context(|| {
+        let Started {
+            child,
+            tree,
+            stdin,
+            stdout,
+            stderr,
+            notes,
+        } = start(manifest, &program, args, env, block_network).with_context(|| {
             format!(
                 "Cannot start `{}` for plugin {}{}",
                 program.display(),
@@ -222,13 +210,15 @@ impl Process {
                 }
             )
         })?;
-        let tree = tree::Tree::attach(&child);
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take().context("plugin stdout")?;
-        let stderr = child.stderr.take().context("plugin stderr")?;
         let (send, incoming) = mpsc::channel();
         let closed = Arc::new(AtomicBool::new(false));
         let log = Arc::new(Mutex::new(VecDeque::new()));
+        if block_network {
+            push_log(&log, super::sandbox::LOG_NOTE.into());
+        }
+        for note in notes {
+            push_log(&log, note);
+        }
         let budget = Arc::new(Budget::default());
         {
             let send = send.clone();
@@ -307,17 +297,10 @@ impl Process {
                 })
                 .context("plugin log thread")?;
         }
-        if block_network {
-            push_log(
-                &log,
-                "Network blocked by Xuan: opening sockets other than Unix sockets fails with EACCES"
-                    .into(),
-            );
-        }
         Ok(Self {
             child: Some(child),
             tree,
-            stdin,
+            stdin: Some(stdin),
             incoming,
             budget,
             held: Vec::new(),
@@ -360,7 +343,7 @@ impl Process {
     pub fn alive(&mut self) -> bool {
         !self.closed.load(Ordering::Relaxed)
             && self.stdin.is_some()
-            && (self.child.as_mut()).is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+            && (self.child.as_mut()).is_some_and(Child::running)
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Result<Id> {
@@ -517,14 +500,137 @@ pub const STOP_GRACE: Duration = Duration::from_secs(1);
 /// of it. Subprocesses outlive a plugin that exits on its own, so the tree
 /// is killed either way.
 fn reap(mut child: Child, tree: Option<tree::Tree>, deadline: std::time::Instant) {
-    while std::time::Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+    while std::time::Instant::now() < deadline && child.running() {
         std::thread::sleep(Duration::from_millis(10));
     }
     if let Some(tree) = &tree {
         tree.kill();
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    child.kill_and_wait();
+}
+
+/// The plugin's main process.
+enum Child {
+    Std(std::process::Child),
+    /// Started in an AppContainer, which `std::process` cannot do.
+    #[cfg(windows)]
+    Contained(super::sandbox::Contained),
+}
+
+impl Child {
+    fn running(&mut self) -> bool {
+        match self {
+            Self::Std(child) => matches!(child.try_wait(), Ok(None)),
+            #[cfg(windows)]
+            Self::Contained(child) => matches!(child.exited(), Ok(false)),
+        }
+    }
+
+    fn kill_and_wait(&mut self) {
+        match self {
+            Self::Std(child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            #[cfg(windows)]
+            Self::Contained(child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
+/// A plugin process just started, with its pipes.
+struct Started {
+    child: Child,
+    tree: Option<tree::Tree>,
+    stdin: Box<dyn Write + Send>,
+    stdout: Box<dyn Read + Send>,
+    stderr: Box<dyn Read + Send>,
+    /// Lines for the start of its log.
+    notes: Vec<String>,
+}
+
+/// Start `program` for the plugin, with its network blocked if asked: on
+/// Linux under the filter of [`super::sandbox`], on Windows in an
+/// AppContainer. Fails rather than start it unblocked.
+fn start(
+    manifest: &Manifest,
+    program: &Path,
+    args: &[String],
+    env: &[(String, String)],
+    block_network: bool,
+) -> Result<Started> {
+    #[cfg(windows)]
+    if block_network {
+        return start_contained(manifest, program, args, env);
+    }
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(&manifest.dir)
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    tree::prepare(&mut command);
+    #[cfg(not(windows))]
+    if block_network {
+        super::sandbox::block_network(&mut command).with_context(|| {
+            format!("Cannot block the network for plugin {}", manifest.plugin.id)
+        })?;
+    }
+    let mut child = command.spawn()?;
+    let stdin = child.stdin.take().context("plugin stdin")?;
+    let stdout = child.stdout.take().context("plugin stdout")?;
+    let stderr = child.stderr.take().context("plugin stderr")?;
+    let child = Child::Std(child);
+    let tree = tree::Tree::attach(&child);
+    Ok(Started {
+        child,
+        tree,
+        stdin: Box::new(stdin),
+        stdout: Box::new(stdout),
+        stderr: Box::new(stderr),
+        notes: Vec::new(),
+    })
+}
+
+/// Start the plugin in its AppContainer. It is created suspended and joins
+/// the Job Object before it runs, so nothing it starts can escape the job.
+#[cfg(windows)]
+fn start_contained(
+    manifest: &Manifest,
+    program: &Path,
+    args: &[String],
+    env: &[(String, String)],
+) -> Result<Started> {
+    let mut contained = super::sandbox::spawn(manifest, program, args, env)?;
+    let (Some(stdin), Some(stdout), Some(stderr)) = (
+        contained.stdin.take(),
+        contained.stdout.take(),
+        contained.stderr.take(),
+    ) else {
+        bail!("plugin pipes");
+    };
+    let notes = std::mem::take(&mut contained.notes);
+    let tree = tree::Tree::attach_handle(contained.handle());
+    // Dropped unresumed on failure, which kills it.
+    contained.resume().context("Cannot resume the plugin")?;
+    Ok(Started {
+        child: Child::Contained(contained),
+        tree,
+        stdin: Box::new(stdin),
+        stdout: Box::new(stdout),
+        stderr: Box::new(stderr),
+        notes,
+    })
 }
 
 impl Drop for Process {
@@ -545,7 +651,9 @@ fn push_log(log: &Mutex<VecDeque<String>>, line: String) {
 /// Grouping a plugin with its subprocesses.
 #[cfg(unix)]
 mod tree {
-    use std::process::{Child, Command};
+    use std::process::Command;
+
+    use super::Child;
 
     /// The plugin's process group, which its subprocesses join unless they
     /// leave it on purpose.
@@ -559,6 +667,7 @@ mod tree {
 
     impl Tree {
         pub fn attach(child: &Child) -> Option<Self> {
+            let Child::Std(child) = child;
             Some(Self(rustix::process::Pid::from_child(child)))
         }
 
@@ -573,10 +682,11 @@ mod tree {
 #[cfg(windows)]
 mod tree {
     use std::{
-        os::windows::io::AsRawHandle,
-        process::{Child, Command},
+        os::windows::io::{AsRawHandle, RawHandle},
+        process::Command,
     };
 
+    use super::Child;
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HANDLE},
         System::JobObjects::{
@@ -588,7 +698,8 @@ mod tree {
 
     /// A Job Object holding the plugin. Processes it starts join the job too,
     /// and closing the job kills them all. The plugin joins right after it is
-    /// spawned, so only something it starts in its first instant can escape.
+    /// spawned, so only something it starts in its first instant can escape;
+    /// one started in an AppContainer joins before it runs.
     pub struct Tree(HANDLE);
 
     // SAFETY: a job handle may be used and closed from any thread.
@@ -598,6 +709,14 @@ mod tree {
 
     impl Tree {
         pub fn attach(child: &Child) -> Option<Self> {
+            match child {
+                Child::Std(child) => Self::attach_handle(child.as_raw_handle()),
+                Child::Contained(child) => Self::attach_handle(child.handle()),
+            }
+        }
+
+        /// Put the process `process` in a new job.
+        pub fn attach_handle(process: RawHandle) -> Option<Self> {
             // SAFETY: plain Win32 calls on a job handle this function owns and
             // on the child's process handle, which outlives the calls.
             unsafe {
@@ -614,8 +733,7 @@ mod tree {
                     (&raw const limits).cast(),
                     std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 ) != 0;
-                let assigned =
-                    configured && AssignProcessToJobObject(job, child.as_raw_handle()) != 0;
+                let assigned = configured && AssignProcessToJobObject(job, process) != 0;
                 assigned.then_some(tree)
             }
         }
@@ -643,7 +761,9 @@ mod tree {
 /// Elsewhere only the plugin process itself is stopped.
 #[cfg(not(any(unix, windows)))]
 mod tree {
-    use std::process::{Child, Command};
+    use std::process::Command;
+
+    use super::Child;
 
     pub struct Tree;
 
@@ -1194,5 +1314,236 @@ for line in sys.stdin:
                 );
             }
         }
+    }
+}
+
+/// Plugins started in an AppContainer on Windows. They need Python: the
+/// Windows CI job installs it (`pythonLocation`), elsewhere they are skipped.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::plugins::sandbox;
+    use serde_json::json;
+
+    /// Answers `initialize`, and `probe` with the outcome of each attempt
+    /// (0 for success, else the exception and its Windows error or errno),
+    /// one of them from a process it starts.
+    const PROBE: &str = r#"
+import json, os, socket, subprocess, sys, tempfile
+
+def attempt(action):
+    try:
+        action()
+        return 0
+    except OSError as error:
+        return f"{type(error).__name__} {getattr(error, 'winerror', None) or error.errno}"
+
+def connect():
+    socket.create_connection(("127.0.0.1", int(os.environ["XUAN_TEST_PORT"])), timeout=5).close()
+
+def read_own():
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe.py")) as file:
+        file.read()
+
+def read_secret():
+    with open(os.environ["XUAN_TEST_SECRET"]) as file:
+        file.read()
+
+def write_data():
+    with open(os.path.join(os.environ["XUAN_DATA_DIR"], "written.txt"), "w") as file:
+        file.write("ok")
+
+def write_temp():
+    with tempfile.NamedTemporaryFile() as file:
+        file.write(b"ok")
+
+CHILD = "import os, socket\ntry:\n socket.create_connection(('127.0.0.1', int(os.environ['XUAN_TEST_PORT'])), timeout=5).close(); print(0)\nexcept OSError as e:\n print(type(e).__name__, getattr(e, 'winerror', None) or e.errno)"
+
+def probe():
+    child = subprocess.run([sys.executable, "-c", CHILD], capture_output=True, text=True)
+    return {
+        "connect": attempt(connect),
+        "child_connect": 0 if child.stdout.strip() == "0" else child.stdout.strip() or child.stderr,
+        "read_own": attempt(read_own),
+        "read_secret": attempt(read_secret),
+        "write_data": attempt(write_data),
+        "write_temp": attempt(write_temp),
+    }
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        result = {"protocol": 1}
+    elif method == "probe":
+        result = probe()
+    else:
+        result = None
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+    if method == "shutdown":
+        break
+"#;
+
+    /// The Python of the CI job, or `None` (and the test is skipped) where
+    /// there is none. On CI a missing Python fails the test instead.
+    fn python() -> Option<PathBuf> {
+        let python = std::env::var_os("pythonLocation")
+            .map(|dir| PathBuf::from(dir).join("python.exe"))
+            .filter(|path| path.is_file());
+        if python.is_none() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "the Windows CI job should provide Python through setup-python"
+            );
+            eprintln!("skipped: no Python from setup-python (pythonLocation)");
+        }
+        python
+    }
+
+    struct Fixture {
+        manifest: Manifest,
+        env: Vec<(String, String)>,
+        data: tempfile::TempDir,
+        scratch: tempfile::TempDir,
+        _plugin: tempfile::TempDir,
+        _secret: tempfile::TempDir,
+        _listener: std::net::TcpListener,
+    }
+
+    fn fixture(python: &Path) -> Fixture {
+        let plugin = tempfile::tempdir().unwrap();
+        std::fs::write(plugin.path().join("probe.py"), PROBE).unwrap();
+        // A literal TOML string: the path has backslashes.
+        let manifest = Manifest::parse(
+            &format!(
+                "[plugin]\nid = \"probe-test\"\nname = \"Probe\"\nversion = \"1\"\ncommand = ['{}', \"probe.py\"]\n",
+                python.display()
+            ),
+            plugin.path(),
+        )
+        .unwrap();
+        let secret = tempfile::tempdir().unwrap();
+        let secret_file = secret.path().join("secret.txt");
+        std::fs::write(&secret_file, "secret").unwrap();
+        // Connections wait in the backlog; nothing needs to accept them.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let env = vec![
+            (
+                "XUAN_DATA_DIR".to_owned(),
+                data.path().display().to_string(),
+            ),
+            (
+                "XUAN_TEST_PORT".to_owned(),
+                listener.local_addr().unwrap().port().to_string(),
+            ),
+            (
+                "XUAN_TEST_SECRET".to_owned(),
+                secret_file.display().to_string(),
+            ),
+            ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
+        ];
+        Fixture {
+            manifest,
+            env,
+            data,
+            scratch,
+            _plugin: plugin,
+            _secret: secret,
+            _listener: listener,
+        }
+    }
+
+    /// Start the plugin, check that it talks JSON-RPC over its pipes, and
+    /// return its probe and its log.
+    fn run(fixture: &Fixture, block: bool) -> (Value, Vec<String>) {
+        let mut env = fixture.env.clone();
+        if block {
+            // What the editor does for a blocked plugin (`plugin_process`).
+            sandbox::share("probe-test", fixture.data.path()).unwrap();
+            sandbox::share("probe-test", fixture.scratch.path()).unwrap();
+            env.extend(sandbox::temp_env(fixture.scratch.path()));
+        }
+        let mut process = Process::spawn(&fixture.manifest, &env, None, block)
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        let id = process.initialize(json!({"protocol": 1})).unwrap();
+        let (result, _) = process
+            .wait_for(&id, Duration::from_secs(60))
+            .unwrap_or_else(|e| panic!("{e:#}: {:?}", process.log()));
+        assert_eq!(result, json!({"protocol": 1}));
+        process.set_ready().unwrap();
+        let id = process.request("probe", Value::Null).unwrap();
+        let (probe, _) = process
+            .wait_for(&id, Duration::from_secs(60))
+            .unwrap_or_else(|e| panic!("{e:#}: {:?}", process.log()));
+        let id = process.request("shutdown", Value::Null).unwrap();
+        process.wait_for(&id, Duration::from_secs(20)).unwrap();
+        (probe, process.log())
+    }
+
+    #[test]
+    fn a_blocked_plugin_cannot_connect_or_read_other_files_but_talks_over_its_pipes() {
+        let Some(python) = python() else {
+            return;
+        };
+        let fixture = fixture(&python);
+        assert!(sandbox::blocks_network(true, &fixture.manifest.permissions));
+        // Twice: the second start reuses the container and finds the access
+        // it was given.
+        for _ in 0..2 {
+            let (probe, log) = run(&fixture, true);
+            // Not captured by the test harness, so CI logs show how the
+            // container refuses.
+            let _ = writeln!(std::io::stderr(), "blocked probe: {probe}");
+            for blocked in ["connect", "child_connect", "read_secret"] {
+                assert_ne!(probe[blocked], 0, "{blocked}: {probe} {log:?}");
+            }
+            for allowed in ["read_own", "write_data", "write_temp"] {
+                assert_eq!(probe[allowed], 0, "{allowed}: {probe} {log:?}");
+            }
+            assert_eq!(log.first().map(String::as_str), Some(sandbox::LOG_NOTE));
+        }
+    }
+
+    #[test]
+    fn an_unblocked_plugin_connects() {
+        let Some(python) = python() else {
+            return;
+        };
+        let fixture = fixture(&python);
+        let (probe, log) = run(&fixture, false);
+        for allowed in [
+            "connect",
+            "child_connect",
+            "read_own",
+            "read_secret",
+            "write_data",
+        ] {
+            assert_eq!(probe[allowed], 0, "{allowed}: {probe} {log:?}");
+        }
+        assert!(
+            !log.iter().any(|l| l.contains("Network blocked")),
+            "{log:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_program_does_not_start_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = Manifest::parse(
+            "[plugin]\nid = \"missing-test\"\nname = \"M\"\nversion = \"1\"\ncommand = [\"./does-not-exist\"]\n",
+            dir.path(),
+        )
+        .unwrap();
+        let error = Process::spawn(&manifest, &[], None, true)
+            .err()
+            .expect("it must not start");
+        assert!(
+            format!("{error:#}").contains("with its network blocked"),
+            "{error:#}"
+        );
     }
 }

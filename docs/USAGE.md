@@ -287,13 +287,18 @@ from running at all, turn on **Disable plugins that use the network** in
 **Settings → General** or at the bottom of **Plugins → Manage Plugins…**:
 their panes show why they are empty and their actions are greyed out.
 
-On Linux, **Block network for plugins that don't declare it**, next to it,
-keeps every plugin that declares no network hosts from opening network
-connections, `localhost` included; the permission dialog and **Manage
-Plugins…** then show **Network blocked by Xuan (Linux)** for it. It is off by
-default for now. A plugin that talks to a server on your own machine, such as
-ComfyUI or Ollama, has to declare it as a host to keep working. If Xuan cannot
-block a plugin's network, it does not start the plugin. See
+On Linux and Windows, **Block network for plugins that don't declare it**,
+next to it, keeps every plugin that declares no network hosts from opening
+network connections, `localhost` included; the permission dialog and
+**Manage Plugins…** then show **Network blocked by Xuan (Linux)** or
+**Network blocked by Xuan (Windows)** for it. On Windows such a plugin runs
+in an AppContainer, which also keeps it out of your files: it reads only its
+own folder and its interpreter, and writes only its data and work folders.
+Use a Python installed normally (from python.org, for all users or just
+you), not the Microsoft Store one. It is off by default for now. A plugin
+that talks to a server on your own machine, such as ComfyUI or Ollama, has
+to declare it as a host to keep working. If Xuan cannot block a plugin's
+network, it does not start the plugin. See
 [Blocking the network](PLUGINS.md#blocking-the-network).
 
 A plugin action opens a dialog built from the inputs it declared. Actions that
