@@ -391,11 +391,16 @@ pub enum Output {
         /// `"source"`: cover the bounds of the source that was sent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fit: Option<String>,
+        /// Model and sampler details; see [`Output::with_provenance`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance: Option<Value>,
     },
     Document {
         path: PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance: Option<Value>,
     },
     /// A grey PNG that becomes the selection; see [`Output::mask`].
     Mask {
@@ -433,6 +438,7 @@ impl Output {
             width: None,
             height: None,
             fit: None,
+            provenance: None,
         }
     }
 
@@ -507,6 +513,7 @@ impl Output {
                 width,
                 height,
                 fit,
+                provenance,
                 ..
             } => Self::Image {
                 path,
@@ -517,15 +524,32 @@ impl Output {
                 width,
                 height,
                 fit,
+                provenance,
             },
             other => other,
         }
+    }
+
+    /// Record how an `image` or `document` output was made, shown in the
+    /// layer's info and saved with the project. Known keys: `model`,
+    /// `model_hash`, `weights_sha256` (64 hex digits), `sampler`, `scheduler`,
+    /// `steps`, `seed`, `cfg`, `service`, `request_id`, and an `extra` object
+    /// for anything else. Strings are limited to 256 bytes and the whole
+    /// record to 8 KiB; unknown keys fail the result. Secret-like keys
+    /// (`api_key`, `token`, `authorization`, `password`, `secret`, ...) and
+    /// your secrets' values are removed by the host: never put them here.
+    pub fn with_provenance(mut self, value: Value) -> Self {
+        if let Self::Image { provenance, .. } | Self::Document { provenance, .. } = &mut self {
+            *provenance = Some(value);
+        }
+        self
     }
 
     pub fn document(path: impl Into<PathBuf>, name: Option<&str>) -> Self {
         Self::Document {
             path: path.into(),
             name: name.map(str::to_owned),
+            provenance: None,
         }
     }
 
@@ -1014,11 +1038,30 @@ mod tests {
     }
 
     #[test]
+    fn provenance_is_serialized_on_images_and_documents_only() {
+        let record = json!({"model": "sdxl", "seed": 7, "extra": {"lora": "a"}});
+        let image = Output::image("/tmp/out.png", None, 0.0, 0.0)
+            .with_provenance(record.clone())
+            .with_mask("/tmp/m.png");
+        let value = serde_json::to_value(&image).unwrap();
+        assert_eq!(value["provenance"], record);
+        assert_eq!(value["mask"], "/tmp/m.png");
+        let document = Output::document("/tmp/d.png", None).with_provenance(record.clone());
+        assert_eq!(serde_json::to_value(&document).unwrap()["provenance"], record);
+        // Other outputs ignore it.
+        let text = Output::text("hi").with_provenance(record);
+        assert!(serde_json::to_value(&text).unwrap().get("provenance").is_none());
+        let back: Output = serde_json::from_value(serde_json::to_value(&image).unwrap()).unwrap();
+        assert_eq!(back, image);
+    }
+
+    #[test]
     fn outputs_serialize_with_the_protocol_tags() {
         let output = Output::image("/tmp/out.png", Some("Out"), 1.0, 2.0).with_mask("/tmp/m.png");
         let value = serde_json::to_value(&output).unwrap();
         assert_eq!(value["kind"], "image");
         assert_eq!(value["mask"], "/tmp/m.png");
+        assert!(value.get("provenance").is_none());
         assert!(value.get("width").is_none() && value.get("fit").is_none());
         let fitted = Output::image("/tmp/out.png", None, 0.0, 0.0)
             .with_mask("/tmp/m.png")

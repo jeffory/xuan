@@ -272,10 +272,21 @@ class Job:
         width: Optional[float] = None,
         height: Optional[float] = None,
         fit_source: bool = False,
+        provenance: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """An image output. ``width``/``height`` (document units) or
         ``fit_source=True`` (cover the source that was sent) place a result of
-        any pixel size at that size, so extra pixels become higher density."""
+        any pixel size at that size, so extra pixels become higher density.
+
+        ``provenance`` records how the image was made; it is shown in the
+        layer's info and saved with the project. Known keys: ``model``,
+        ``model_hash``, ``weights_sha256`` (64 hex digits), ``sampler``,
+        ``scheduler``, ``steps``, ``seed``, ``cfg``, ``service``,
+        ``request_id`` and an ``extra`` dict for anything else. Strings are
+        limited to 256 bytes, the whole record to 8 KiB; unknown keys fail
+        the result. The host removes secret-like keys (``api_key``,
+        ``token``, ``authorization``, ``password``, ``secret``...) and your
+        secrets' values, but do not put them here."""
         output: Dict[str, Any] = {"kind": "image", "path": path, "x": x, "y": y}
         if name:
             output["name"] = name
@@ -287,6 +298,8 @@ class Job:
             output["height"] = height
         if fit_source:
             output["fit"] = "source"
+        if provenance:
+            output["provenance"] = provenance
         return output
 
     MASK_MODES = ("replace", "add", "subtract", "intersect")
@@ -319,10 +332,14 @@ class Job:
         return output
 
     @staticmethod
-    def new_document(path: str, name: Optional[str] = None) -> Dict[str, Any]:
+    def new_document(
+        path: str, name: Optional[str] = None, provenance: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         output: Dict[str, Any] = {"kind": "document", "path": path}
         if name:
             output["name"] = name
+        if provenance:
+            output["provenance"] = provenance
         return output
 
     @staticmethod

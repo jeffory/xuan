@@ -182,3 +182,29 @@ follow the layer's pixels through its own mask; the result is drawn at the layer
 opacity (and its folders'), in its blend mode, and clipped like the layer itself. A
 layer clipped to one with effects is clipped to the effects too. Folders, masks,
 adjustment and filter layers cannot have effects.
+
+## Model provenance (version 8)
+
+A layer a plugin produced may also carry a `provenance` object beside its `generated`
+object: the model, sampler and service request the plugin reported with its result. A
+document in which any layer has one is written as version 8; everything else keeps the
+lowest version its content needs (1-7), so files that never used it stay readable by older
+builds. A version 8 document may also carry anything the earlier versions can, such as
+layer effects and `generated`. The reader accepts versions 1-8.
+
+The object is strict. Unknown keys fail validation (anything else belongs under `extra`):
+
+| Key | Type |
+| --- | --- |
+| `model`, `model_hash`, `sampler`, `scheduler`, `service`, `request_id` | string, at most 256 bytes, no control characters |
+| `weights_sha256` | exactly 64 hexadecimal digits |
+| `steps` | integer 0-1,000,000 |
+| `seed` | integer 0-18,446,744,073,709,551,615 |
+| `cfg` | finite number, at most 1,000,000 in magnitude |
+| `extra` | object of up to 32 entries with keys of 1-64 bytes; values are strings (256 bytes), finite numbers, booleans, nulls and objects or arrays of up to 32 entries, nested at most 4 levels counting `extra` itself |
+
+The serialized object is at most 8 KiB. Loading and saving refuse a record that breaks
+these limits or holds a key that looks like a credential. Plugin results are stored through
+the same checks and with secrets removed; see [PLUGINS.md](PLUGINS.md#provenance). The
+record is metadata only: pixels, masks and rendering are unaffected, and the layer panel
+shows it read-only. It is not C2PA content credentials, and exports do not carry it.

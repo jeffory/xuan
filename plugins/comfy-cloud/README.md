@@ -34,6 +34,12 @@ their *title* (right-click a node → Title):
 Any string input may also use `{{prompt}}`, `{{seed}}`, `{{width}}`,
 `{{height}}` and `{{quality}}` placeholders.
 
+Each result layer records its provenance (see Layer panel → Generation): the
+first checkpoint (`ckpt_name`, `unet_name` or `model_name`), `sampler_name`,
+`scheduler`, `steps`, `cfg` and seed found in the workflow that was submitted,
+the server's host name as `service` and the Comfy job id as `request_id`.
+Details a workflow does not have are left out; the API key is never included.
+
 The three actions use these files:
 
 - **Precise Edit…** → `workflows/precise-edit.json`. The boxes you draw become

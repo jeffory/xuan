@@ -6,6 +6,7 @@ Run with the system Python, no packages needed:
 """
 import email.message
 import io
+import json
 import os
 import sys
 import tempfile
@@ -156,6 +157,48 @@ class Redirects(unittest.TestCase):
     def test_redirects_to_plain_http_elsewhere_are_refused(self):
         with self.assertRaises(urllib.error.HTTPError):
             self.redirect(BASE + "/a", "http://storage.example/x")
+
+
+class Provenance(unittest.TestCase):
+    WORKFLOW = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl_base.safetensors"}},
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"seed": "42", "steps": 28, "cfg": 6.5, "sampler_name": "euler", "scheduler": "karras", "model": ["1", 0]},
+        },
+        "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "x"}},
+    }
+
+    def test_the_model_sampler_and_seed_the_workflow_used_are_reported(self):
+        record = main.provenance_of(self.WORKFLOW, {"seed": 7}, "job-1", BASE)
+        self.assertEqual(
+            record,
+            {
+                "model": "sdxl_base.safetensors",
+                "sampler": "euler",
+                "scheduler": "karras",
+                "steps": 28,
+                "cfg": 6.5,
+                "seed": 42,
+                "service": "cloud.comfy.org",
+                "request_id": "job-1",
+            },
+        )
+
+    def test_a_workflow_without_details_falls_back_to_the_seed_we_sent(self):
+        record = main.provenance_of({"1": {"inputs": {"prompt": ["0", 0], "seed": "{{seed}}"}}}, {"seed": 7}, "j", BASE)
+        self.assertEqual(record["seed"], 7)
+        self.assertNotIn("model", record)
+        self.assertNotIn("steps", record)
+
+    def test_no_key_ever_reaches_the_provenance(self):
+        workflow = {"1": {"inputs": {"ckpt_name": "m", "api_key_comfy_org": "sk-secret"}}}
+        record = main.provenance_of(workflow, {}, "j", BASE)
+        self.assertNotIn("sk-secret", json.dumps(record))
+        output = main.image_output("/tmp/a.png", "Generated", record)
+        self.assertEqual(output["kind"], "image")
+        self.assertEqual(output["provenance"]["model"], "m")
+        self.assertNotIn("sk-secret", json.dumps(output))
 
 
 class SdkSecrets(unittest.TestCase):

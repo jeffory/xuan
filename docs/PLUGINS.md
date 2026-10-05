@@ -437,7 +437,8 @@ Output kinds: `image` (a PNG placed at `x`,`y` in source coordinates, optional
 `mask` PNG and `name`; see below for its placed size), `document` (a PNG opened as a new tab), `mask` (a grey
 PNG that becomes the selection, see below), `edit` (a list of
 document edits, see below, applied as one undo step), `text` (shown in the
-status bar) and `none`. One result may hold at most 64 outputs, 32 new layers
+status bar) and `none`. An `image` or `document` output may also carry a
+`provenance` object, see [Provenance](#provenance). One result may hold at most 64 outputs, 32 new layers
 and documents, and 1,000 edits, and the images it refers to may add up to at
 most 100 megapixels; a larger result is refused as a whole. The same layer,
 edit and pixel limits apply to one `document/edit` request, and an import may
@@ -486,6 +487,44 @@ on a side refuses the whole result. It needs no `document = "edit"` (see
 `encode_gray_png` to write one), and `Output::mask(path,
 MaskMode::Add).fit_source()` in Rust.
 
+### Provenance
+
+A generative plugin can say what it actually used. Add `provenance` to an `image`
+(or `document`) output and the host stores it with the layer's `generated` record
+(`.xuan` format 8, [FORMAT.md](FORMAT.md#model-provenance-version-8)), and **Generation** in
+the layers panel shows it read-only with a **Copy** button for the JSON:
+
+```json
+{"kind": "image", "path": "…/result.png", "provenance": {
+  "model": "sdxl_base_1.0.safetensors", "weights_sha256": "9e3c…(64 hex digits)",
+  "sampler": "euler", "scheduler": "karras", "steps": 28, "seed": 1234, "cfg": 6.5,
+  "service": "cloud.comfy.org", "request_id": "job-7f3a", "extra": {"lora": "detail-v2"}}}
+```
+
+Every key is optional: `model`, `model_hash`, `weights_sha256`, `sampler`,
+`scheduler`, `steps`, `seed`, `cfg`, `service`, `request_id` and a free-form `extra`
+object. The schema is strict: **unknown keys are rejected**, they do not fall back to
+`extra` (put anything else there yourself). Strings are at most 256 bytes without control
+characters, `steps` and `seed` are non-negative integers, numbers are finite, `extra` nests
+at most four levels with at most 32 entries per object or list, and the whole record is at
+most 8 KiB. A malformed record refuses the whole result with a message naming the problem;
+`null` or `{}` means none. Only `image` and `document` outputs use it: a `mask` output
+becomes a selection, not a layer, so there is nothing to attach it to. With `result.into =
+"replace"` the record replaces the layer's previous one. Re-running an action records the
+new result's own provenance.
+
+**Secrets are never stored.** Before checking the schema, the host removes, at any depth:
+any key whose name looks like a credential (it contains `api_key`, `token`,
+`authorization`, `password`/`passwd`, `secret`, `credential`, `bearer`, `cookie` or
+`private_key`, ignoring case and punctuation, so `max_tokens` goes too), a key equal to one of the plugin's declared secret
+names, and any key, string or list item that contains one of the plugin's current secret
+values (of four or more characters). The status line says how many entries were removed,
+never their names or values, and error messages do not quote values. The check is a safety
+net, not a licence: do not put credentials, signed URLs or prompts you consider private
+into it. The SDKs have helpers: `job.image(path, provenance={...})` in Python and
+`Output::image(..).with_provenance(json!({...}))` in Rust. `document/get` lists a layer's
+`provenance` too.
+
 ### Reading and editing the document
 
 Plugins ask the host for data with these requests. Each is answered on the next
@@ -494,7 +533,7 @@ wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
-| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, layers: [{id, name, kind, visible, locked, opacity, blend, parent, x, y, width, height, rotation, generated?}]}` |
+| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, layers: [{id, name, kind, visible, locked, opacity, blend, parent, x, y, width, height, rotation, generated?, provenance?}]}` |
 | `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale}` |
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |

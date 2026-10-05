@@ -28,6 +28,7 @@ from xuan_plugin import (  # noqa: E402
     INVALID_PARAMS,
     RATE_LIMITED,
     Cancelled,
+    Job,
     NeedsSetup,
     Plugin,
     RpcError,
@@ -252,6 +253,47 @@ def fill(workflow, values, source_ref=None, mask_ref=None):
     return workflow
 
 
+def _number(value, integer=False):
+    """``value`` as a finite number (numeric strings count), else None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    if integer:
+        return int(number) if number == int(number) and number >= 0 else None
+    return number
+
+
+def provenance_of(workflow, values, request_id, base):
+    """What the submitted workflow says about how the image was made, for the
+    layer's provenance: model, sampler, steps, cfg and seed from its nodes
+    (the first of each), the server and the job id. Nothing from ``extra_data``
+    or the API key is looked at. Missing details are left out."""
+    found = {}
+    for node in workflow.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for key, field in (("ckpt_name", "model"), ("unet_name", "model"), ("model_name", "model"), ("sampler_name", "sampler"), ("scheduler", "scheduler")):
+            if isinstance(inputs.get(key), str) and inputs[key] and field not in found:
+                found[field] = inputs[key][:256]
+        for key, field, integer in (("steps", "steps", True), ("cfg", "cfg", False), ("seed", "seed", True), ("noise_seed", "seed", True)):
+            number = _number(inputs.get(key), integer)
+            if number is not None and field not in found:
+                found[field] = number
+    if "seed" not in found:
+        seed = _number(values.get("seed"), True)
+        if seed is not None:
+            found["seed"] = seed
+    found["service"] = urllib.parse.urlsplit(base).hostname or "Comfy Cloud"
+    found["request_id"] = str(request_id)[:256]
+    return found
+
+
 def precise_edit_prompt(job):
     source = job.source or {}
     width = float(source.get("width") or 1)
@@ -347,44 +389,41 @@ def run_workflow(job, workflow_name, values, with_source, with_mask=False):
         client.download(output, destination)
         results.append(destination)
     entry["state"] = "done"
-    return results
+    return results, provenance_of(workflow, values, job_id, client.base)
 
 
 @plugin.action("precise-edit")
 def precise_edit(job):
     values = {"prompt": precise_edit_prompt(job), "seed": job.inputs.get("seed", 0), "quality": job.inputs.get("quality", "medium")}
-    results = run_workflow(job, "precise-edit", values, with_source=True)
-    return [image_output(path, "Precise Edit") for path in results] + [job.text("Comfy Cloud credits were used")]
+    results, provenance = run_workflow(job, "precise-edit", values, with_source=True)
+    return [image_output(path, "Precise Edit", provenance) for path in results] + [job.text("Comfy Cloud credits were used")]
 
 
 @plugin.action("inpaint")
 def inpaint(job):
     values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0)}
-    results = run_workflow(job, "inpaint", values, with_source=True, with_mask=True)
+    results, provenance = run_workflow(job, "inpaint", values, with_source=True, with_mask=True)
     # The selection mask (feathered by the host) also masks the result layer,
     # so only the selected area changes.
-    return [image_output(path, "Inpaint", mask=job.selection_mask_path) for path in results]
+    return [image_output(path, "Inpaint", provenance, mask=job.selection_mask_path) for path in results]
 
 
 @plugin.action("generate")
 def generate(job):
     values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0), "width": job.inputs.get("width", 1024), "height": job.inputs.get("height", 1024)}
-    results = run_workflow(job, "text-to-image", values, with_source=False)
-    return [image_output(path, "Generated") for path in results]
+    results, provenance = run_workflow(job, "text-to-image", values, with_source=False)
+    return [image_output(path, "Generated", provenance) for path in results]
 
 
 @plugin.action("run-workflow")
 def run_custom(job):
     values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0)}
-    results = run_workflow(job, job.inputs.get("workflow") or "my-workflow.json", values, with_source=True)
-    return [image_output(path, "Comfy result") for path in results]
+    results, provenance = run_workflow(job, job.inputs.get("workflow") or "my-workflow.json", values, with_source=True)
+    return [image_output(path, "Comfy result", provenance) for path in results]
 
 
-def image_output(path, name, mask=None):
-    output = {"kind": "image", "path": path, "name": name, "x": 0, "y": 0}
-    if mask:
-        output["mask"] = mask
-    return output
+def image_output(path, name, provenance=None, mask=None):
+    return Job.image(path, name=name, mask=mask, provenance=provenance)
 
 
 @plugin.estimate("precise-edit")

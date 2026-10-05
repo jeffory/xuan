@@ -28,8 +28,8 @@ and **#7** (MCP server and client).
 4. **Give models a home:** a per-plugin `models_dir` with a manifest-declared,
    hash-checked download, shown to the user with its size before it starts.
 5. **Defer C2PA, plugin signing and the OS keyring.** Record the provenance we
-   already store, add the model and prompt to it, and revisit when there is a
-   plugin registry.
+   already store, add the model and sampler to it (done in #40), and revisit
+   when there is a plugin registry.
 
 ## 1. Plugin model
 
@@ -275,20 +275,25 @@ the manifest on load.
 
 **Missing.**
 
-- **Model identity.** The inputs hold a model *choice* if the plugin exposes
-  one, but a plugin cannot record what it actually used (resolved checkpoint,
-  weights hash, sampler, steps, service request id). Add an optional
-  `provenance` object to an `image` output (free-form JSON, size-limited) that
-  the host stores next to `generated` and shows in the layer's properties.
-  This is a format change (a new optional field; bump to the next version
-  when it is written).
-- **Secrets must never reach provenance.** Today inputs cannot contain secrets;
-  keep it that way when adding `provenance`.
+- ~~**Model identity.**~~ **Done in #40.** An `image` (or `document`) output may
+  carry a strict, size-limited `provenance` object (model, weights hash, sampler,
+  scheduler, steps, seed, cfg, service, request id and an `extra` map). The host
+  stores it next to `generated`, the layers panel shows it read-only under
+  **Generation** with a **Copy** button, and the project is saved as format 8
+  only when some layer has one. See
+  [PLUGINS.md](PLUGINS.md#provenance) and
+  [FORMAT.md](FORMAT.md#model-provenance-version-8). The Comfy Cloud example
+  reports the checkpoint, sampler, seed and job id its workflow used.
+- ~~**Secrets must never reach provenance.**~~ **Done in #40.** Credential-like
+  keys, the plugin's declared secret names and any text containing one of its
+  secret values are removed before the record is checked or stored.
 - **Export.** Flattened PNG/JPEG exports carry no mark that the content is
   generated. See C2PA above.
 
-**Recommendation.** Add `provenance` and show it. Do not bump the version
-without a field to write.
+**Recommendation.** Done: `provenance` is added and shown, and the version is
+bumped only when a layer has a field to write. C2PA export stays a separate
+research spike (see section 5); the record is Xuan's own metadata, is not a
+C2PA manifest and is not written to exports.
 
 ## 7. Distribution
 
