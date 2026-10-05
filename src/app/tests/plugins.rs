@@ -2390,6 +2390,8 @@ done
         let config = tempfile::tempdir().unwrap();
         let (context, mut app) = app();
         app.config_path = Some(config.path().join("config.toml"));
+        // Whatever the release default is.
+        app.config.block_undeclared_network = Some(false);
         install_network_mock(&mut app, dir.path());
         std::fs::copy(
             dir.path().join("plugin.sh"),

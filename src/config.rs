@@ -527,7 +527,10 @@ mod tests {
             old.block_undeclared_network(),
             BLOCK_UNDECLARED_NETWORK_DEFAULT
         );
-        assert!(!Config::default().block_undeclared_network());
+        assert_eq!(
+            Config::default().block_undeclared_network(),
+            BLOCK_UNDECLARED_NETWORK_DEFAULT
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
