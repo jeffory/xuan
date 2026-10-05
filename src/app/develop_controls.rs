@@ -58,6 +58,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
             d.picker = false;
             d.film_base_picker = false;
             d.selected_overlay = None;
+            d.draw_overlay = false;
         }
         widgets::PopUp::from_id_salt("raw_presets")
             .selected_text(tr("Presets"))
@@ -89,6 +90,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
                     if ui.button(name).clicked() {
                         d.settings = preset;
                         d.selected_overlay = None;
+                        d.draw_overlay = false;
                         ui.close();
                     }
                 }
@@ -822,6 +824,7 @@ fn load_preset(d: &mut Develop) {
         Ok(settings) => {
             d.settings = settings;
             d.selected_overlay = None;
+            d.draw_overlay = false;
         }
         Err(error) => d.error = Some(format!("{}: {error}", tr("Could not load RAW settings"))),
     }

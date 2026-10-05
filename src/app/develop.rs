@@ -359,6 +359,7 @@ impl Develop {
                 self.redo.push(previous);
             }
             self.selected_overlay = None;
+            self.draw_overlay = false;
             self.changed();
         }
     }
@@ -1627,6 +1628,18 @@ mod tests {
             );
             assert!(d.undo.is_empty());
         }
+    }
+
+    #[test]
+    fn undo_clears_overlay_selection_and_draw_mode() {
+        let ctx = egui::Context::default();
+        let mut d = ready(&ctx);
+        d.undo.push(DevelopSettings::default());
+        d.selected_overlay = Some(0);
+        d.draw_overlay = true;
+        d.undo(false);
+        assert!(d.selected_overlay.is_none());
+        assert!(!d.draw_overlay);
     }
 
     #[test]
