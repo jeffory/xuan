@@ -182,6 +182,36 @@ fn grants_cover_the_reviewed_folder_command_and_permissions() {
 }
 
 #[test]
+fn plugin_data_without_a_config_folder_is_private_and_unpredictable() {
+    let (_context, mut editor) = app();
+    let first = editor.plugins.data_dir("mock").unwrap();
+    assert!(first.is_dir());
+    assert_eq!(editor.plugins.data_dir("mock").unwrap(), first);
+    assert!(!first.starts_with(std::env::temp_dir().join("xuan-plugin-data")));
+    // Another session gets another folder.
+    let (_context, mut other) = app();
+    assert_ne!(other.plugins.data_dir("mock").unwrap(), first);
+    assert_ne!(editor.plugins.data_dir("other").unwrap(), first);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&first), 0o700);
+        // So are the folders the host exchanges files with plugins in.
+        let job = xuan::plugins::private_dir("xuan-job-").unwrap();
+        assert_eq!(mode(job.path()), 0o700);
+    }
+    // With a configuration folder it persists next to the configuration.
+    let config = tempfile::tempdir().unwrap();
+    editor.plugins.config_dir = Some(config.path().to_path_buf());
+    assert_eq!(
+        editor.plugins.data_dir("mock").unwrap(),
+        config.path().join("plugin-data/mock")
+    );
+    assert!(config.path().join("plugin-data/mock").is_dir());
+}
+
+#[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::consume_exact;
     use egui::{Key, Modifiers};

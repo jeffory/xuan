@@ -54,8 +54,10 @@ pub(super) struct PluginState {
     pending: HashMap<(String, Id), Pending>,
     pub secrets: Secrets,
     pub secrets_path: Option<PathBuf>,
-    config_dir: Option<PathBuf>,
+    pub(super) config_dir: Option<PathBuf>,
     scratch: HashMap<String, tempfile::TempDir>,
+    /// Private data folders for plugins when there is no configuration folder.
+    data_fallback: HashMap<String, tempfile::TempDir>,
     pub jobs: Vec<PluginJob>,
     /// Finished jobs whose results wait, in order, for the editor to be free.
     pub completed: std::collections::VecDeque<(PluginJob, Value)>,
@@ -154,12 +156,28 @@ impl PluginState {
 
     fn scratch_dir(&mut self, plugin: &str) -> Result<PathBuf> {
         if !self.scratch.contains_key(plugin) {
-            self.scratch.insert(
-                plugin.into(),
-                tempfile::Builder::new().prefix("xuan-plugin-").tempdir()?,
-            );
+            self.scratch
+                .insert(plugin.into(), plugins::private_dir("xuan-plugin-")?);
         }
         Ok(self.scratch[plugin].path().to_path_buf())
+    }
+
+    /// The plugin's persistent data folder, created if needed. Without a
+    /// configuration folder it is a private temporary folder (owner-only on
+    /// Unix) that lasts for this session, never a predictable shared path.
+    pub(super) fn data_dir(&mut self, plugin: &str) -> Result<PathBuf> {
+        if let Some(config_dir) = &self.config_dir {
+            let dir = plugins::data_dir(config_dir, plugin);
+            std::fs::create_dir_all(&dir)
+                .with_context(|| format!("Cannot create {}", dir.display()))?;
+            return Ok(dir);
+        }
+        if !self.data_fallback.contains_key(plugin) {
+            let dir = plugins::private_dir("xuan-plugin-data-")
+                .context("Cannot create a data folder for the plugin")?;
+            self.data_fallback.insert(plugin.into(), dir);
+        }
+        Ok(self.data_fallback[plugin].path().to_path_buf())
     }
 
     /// Replace the loaded manifests, keeping processes of unchanged plugins.
@@ -424,13 +442,7 @@ impl EditorApp {
                 "{} needs its permissions accepted first",
                 manifest.plugin.name
             );
-            let data_dir = self
-                .plugins
-                .config_dir
-                .as_ref()
-                .map(|dir| plugins::data_dir(dir, plugin))
-                .unwrap_or_else(|| std::env::temp_dir().join("xuan-plugin-data").join(plugin));
-            let _ = std::fs::create_dir_all(&data_dir);
+            let data_dir = self.plugins.data_dir(plugin)?;
             let env = vec![
                 ("XUAN_PLUGIN_ID".to_owned(), plugin.to_owned()),
                 ("XUAN_DATA_DIR".to_owned(), data_dir.display().to_string()),
@@ -1101,7 +1113,7 @@ impl EditorApp {
         let chosen = edit.into;
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
-            let work_dir = tempfile::Builder::new().prefix("xuan-job-").tempdir()?;
+            let work_dir = plugins::private_dir("xuan-job-")?;
             let (params, prepared, regions, inputs) =
                 self.action_params(job, work_dir.path(), false)?;
             let process = self.plugin_process(&plugin)?;
@@ -1680,7 +1692,7 @@ impl EditorApp {
                 tr("Accept the plugin's permissions, then open the file again")
             );
         }
-        let work_dir = tempfile::Builder::new().prefix("xuan-import-").tempdir()?;
+        let work_dir = plugins::private_dir("xuan-import-")?;
         let process = self.plugin_process(plugin)?;
         let id = process.request(
             "format/import",
@@ -1770,7 +1782,7 @@ impl EditorApp {
                 tr("Accept the plugin's permissions in Plugins → Manage Plugins… first")
             );
         }
-        let work_dir = tempfile::Builder::new().prefix("xuan-export-").tempdir()?;
+        let work_dir = plugins::private_dir("xuan-export-")?;
         let export = edits::export_composite(&document, None, work_dir.path(), "image.png")?;
         let process = self.plugin_process(plugin)?;
         let id = process.request(

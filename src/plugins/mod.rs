@@ -44,6 +44,20 @@ pub fn data_dir(config_dir: &Path, plugin: &str) -> PathBuf {
     config_dir.join("plugin-data").join(plugin)
 }
 
+/// A new temporary folder only the user can open (0700 on Unix), for files
+/// the host and a plugin exchange. Other local users cannot read the pixels
+/// in it or plant files there.
+pub fn private_dir(prefix: &str) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir()
+}
+
 /// Load every `*/plugin.toml` under the directories. Folders that share an
 /// identifier are all reported as errors and none of them is loaded, so one
 /// folder can never take over another's grant, settings or secrets.
