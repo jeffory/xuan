@@ -8,6 +8,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::layout::{GridSettings, SnapSettings};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
     #[default]
@@ -81,6 +83,18 @@ pub struct Config {
     pub pixel_grid: bool,
     /// Zoom, in percent, from which the pixel grid is drawn.
     pub pixel_grid_percent: u32,
+    /// View → Rulers.
+    pub rulers: bool,
+    /// View → Show → Grid: the layout grid, separate from the pixel grid.
+    pub show_grid: bool,
+    /// View → Show → Guides.
+    pub show_guides: bool,
+    /// View → Lock Guides.
+    pub lock_guides: bool,
+    /// View → Snap and View → Snap To.
+    pub snap: SnapSettings,
+    /// The layout grid for projects without one of their own (View → Grid Settings…).
+    pub grid: GridSettings,
 }
 
 impl Default for Config {
@@ -90,6 +104,13 @@ impl Default for Config {
             title_bar: TitleBar::default(),
             pixel_grid: true,
             pixel_grid_percent: DEFAULT_PIXEL_GRID_PERCENT,
+            // Upstream's defaults: rulers and grid hidden, guides shown and unlocked.
+            rulers: false,
+            show_grid: false,
+            show_guides: true,
+            lock_guides: false,
+            snap: SnapSettings::default(),
+            grid: GridSettings::default(),
         }
     }
 }
@@ -139,6 +160,15 @@ impl Config {
             "pixel_grid_percent".into(),
             toml::Value::Integer(self.pixel_grid_percent().into()),
         );
+        table.insert("rulers".into(), toml::Value::Boolean(self.rulers));
+        table.insert("show_grid".into(), toml::Value::Boolean(self.show_grid));
+        table.insert("show_guides".into(), toml::Value::Boolean(self.show_guides));
+        table.insert("lock_guides".into(), toml::Value::Boolean(self.lock_guides));
+        table.insert("snap".into(), toml::Value::try_from(self.snap)?);
+        table.insert(
+            "grid".into(),
+            toml::Value::try_from(self.grid.normalized())?,
+        );
         let parent = path.parent().context("Configuration path has no parent")?;
         fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -177,6 +207,7 @@ mod tests {
             title_bar: TitleBar::MacOs,
             pixel_grid: false,
             pixel_grid_percent: 1200,
+            ..Config::default()
         };
         chinese.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), chinese);
@@ -304,5 +335,66 @@ mod tests {
             );
         }
         assert!(config_path(None, None).is_err());
+    }
+
+    #[test]
+    fn view_aids_default_like_upstream_and_older_files_still_load() {
+        let defaults = Config::default();
+        assert!(!defaults.rulers && !defaults.show_grid && !defaults.lock_guides);
+        assert!(defaults.show_guides);
+        assert_eq!(defaults.snap, SnapSettings::default());
+        assert!(defaults.snap.enabled && defaults.snap.guides && !defaults.snap.grid);
+        assert!(defaults.snap.layers && defaults.snap.bounds);
+        assert_eq!(defaults.grid, GridSettings::default());
+
+        // A file written before rulers, guides and the layout grid existed.
+        let old: Config =
+            toml::from_str("language = 'zh-CN'\ntitle_bar = 'system'\npixel_grid = false\n")
+                .unwrap();
+        assert_eq!(
+            old,
+            Config {
+                language: Language::SimplifiedChinese,
+                title_bar: TitleBar::System,
+                pixel_grid: false,
+                ..Config::default()
+            }
+        );
+        // Partial tables keep the other defaults.
+        let partial: Config =
+            toml::from_str("[snap]\ngrid = true\n[grid]\nspacing = 100\n").unwrap();
+        assert!(partial.snap.grid && partial.snap.enabled && partial.snap.layers);
+        assert_eq!(partial.grid.spacing, 100);
+        assert_eq!(partial.grid.subdivisions, 8);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let custom = Config {
+            rulers: true,
+            show_grid: true,
+            show_guides: false,
+            lock_guides: true,
+            snap: SnapSettings {
+                enabled: false,
+                guides: false,
+                grid: true,
+                layers: false,
+                bounds: false,
+            },
+            grid: GridSettings {
+                spacing: 32,
+                subdivisions: 2,
+                color: crate::layout::GridColor::Cyan,
+                style: crate::layout::GridStyle::Dots,
+                opacity: 80,
+                ..GridSettings::default()
+            },
+            ..Config::default()
+        };
+        custom.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), custom);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("rulers = true") && text.contains("[snap]"));
+        assert!(text.contains("[grid]") && text.contains("style = \"dots\""));
     }
 }

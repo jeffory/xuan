@@ -366,6 +366,12 @@ pub struct Document {
     pub resolution: f32,
     pub layers: Vec<Layer>,
     pub active: Option<Uuid>,
+    /// Alignment guides (format version 5). Missing in older projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<crate::layout::Guide>,
+    /// This project's layout grid; `None` uses the app's default grid (format version 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<crate::layout::GridSettings>,
     #[serde(skip)]
     pub selected: HashSet<Uuid>,
     #[serde(skip)]
@@ -384,6 +390,8 @@ impl Document {
             active: Some(layer.id),
             selected: HashSet::from([layer.id]),
             layers: vec![layer],
+            guides: Vec::new(),
+            grid: None,
             selection: None,
         })
     }
@@ -537,6 +545,10 @@ impl Document {
             "Invalid resolution"
         );
         ensure!(self.layers.len() <= MAX_LAYERS, "Too many layers");
+        crate::layout::validate_guides(&self.guides)?;
+        if let Some(grid) = &self.grid {
+            grid.validate()?;
+        }
         let ids: HashSet<_> = self.layers.iter().map(|layer| layer.id).collect();
         ensure!(
             ids.len() == self.layers.len(),

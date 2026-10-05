@@ -329,6 +329,9 @@ pub fn canvas_size(
             placement.y += dy;
         }
     }
+    for guide in &mut document.guides {
+        guide.offset(dx, dy);
+    }
     document.width = width;
     document.height = height;
     document.selection = None;
@@ -349,6 +352,9 @@ pub fn crop(document: &mut Document, start: Point, end: Point) -> Result<()> {
             placement.y -= top;
         }
     }
+    for guide in &mut document.guides {
+        guide.offset(-left, -top);
+    }
     document.width = width;
     document.height = height;
     document.selection = None;
@@ -365,6 +371,13 @@ pub fn image_size(document: &mut Document, width: u32, height: u32) -> Result<()
         if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
             scale(placement);
         }
+    }
+    let (sx, sy) = (
+        width as f32 / document.width as f32,
+        height as f32 / document.height as f32,
+    );
+    for guide in &mut document.guides {
+        guide.scale(sx, sy);
     }
     document.width = width;
     document.height = height;
@@ -390,6 +403,14 @@ pub fn flip_canvas(document: &mut Document, horizontal: bool) {
         if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
             flip(placement);
         }
+    }
+    let extent = if horizontal {
+        document.width
+    } else {
+        document.height
+    } as f32;
+    for guide in &mut document.guides {
+        guide.mirror(horizontal, extent);
     }
     if let Some(selection) = &document.selection {
         document.selection = Some(Arc::new(if horizontal {
@@ -623,5 +644,28 @@ mod tests {
         assert_eq!(doc.layers.len(), 4);
         assert_ne!(doc.active, Some(parent));
         assert_eq!(doc.descendants(doc.active.unwrap()).len(), 2);
+    }
+
+    #[test]
+    fn guides_stay_on_their_content_through_canvas_operations() {
+        use crate::layout::{Guide, GuideAxis};
+        let positions = |document: &Document| -> Vec<f32> {
+            document.guides.iter().map(|g| g.position).collect()
+        };
+        let mut document = Document::new(100, 50).unwrap();
+        document.guides = vec![
+            Guide::new(GuideAxis::Vertical, 30.0),
+            Guide::new(GuideAxis::Horizontal, 10.0),
+        ];
+        crop(&mut document, Point::new(10.0, 5.0), Point::new(90.0, 45.0)).unwrap();
+        assert_eq!(positions(&document), [20.0, 5.0]);
+        canvas_size(&mut document, 100, 60, [0.5, 0.5]).unwrap();
+        assert_eq!(positions(&document), [30.0, 15.0]);
+        image_size(&mut document, 200, 30).unwrap();
+        assert_eq!(positions(&document), [60.0, 7.5]);
+        flip_canvas(&mut document, true);
+        assert_eq!(positions(&document), [140.0, 7.5]);
+        flip_canvas(&mut document, false);
+        assert_eq!(positions(&document), [140.0, 22.5]);
     }
 }

@@ -12,7 +12,7 @@ Saving validates the document, writes a sibling temporary archive, flushes it, a
 
 Limits: 30,000 pixels per canvas/image dimension, 100 megapixels per canvas, 100 megapixels of layer assets plus 100 megapixels of masks, 10,000 layers, 64 nested group levels, 4 MiB manifest JSON, and 512 MiB encoded asset files.
 
-The importer accepts Compositor package versions 1–7, including Swift's alternating-key enum dictionaries, individual color channels, mask placement/link flags, grain parameters, and live shape styles. Import is one-way: Save creates a `.xuan` file and leaves the `.comp` package untouched.
+The importer accepts Compositor package versions 1–7 (version 8 adds guides; importing them is tracked in issue #1), including Swift's alternating-key enum dictionaries, individual color channels, mask placement/link flags, grain parameters, and live shape styles. Import is one-way: Save creates a `.xuan` file and leaves the `.comp` package untouched.
 
 ## Embedded RAW (version 2)
 
@@ -36,3 +36,27 @@ siblings. The `filter` field stores Gaussian Blur, Motion Blur, Add Noise, or Le
 Correction settings. Parameters, hierarchy, and cycles are validated on load.
 Source pixels are retained; intermediate effect rasters are not saved. Legacy
 single image masks are promoted to child layers when opened in the editor.
+
+## Guides and layout grid (version 5)
+
+Documents with guides or a layout grid of their own are written as version 5. Other
+documents keep the lowest version their content needs (1–4) and are written exactly as
+before, without the new keys. The reader accepts versions 1–5; older projects load with
+no guides and the app's default grid.
+
+The `document` object gains two optional keys:
+
+- `guides`: up to 1,000 objects `{"id": UUID, "axis": "horizontal" | "vertical",
+  "position": number}`. A horizontal guide sits at a document Y, a vertical one at an X,
+  in document pixels; positions may be fractional or outside the canvas but must be finite
+  and within ±1,000,000. IDs are unique. Guides are listed in creation order.
+- `grid`: the project's layout grid, `{"spacing": 2–4096, "subdivisions": 1–64 and no more
+  than spacing, "color": "light_gray" | "light_blue" | "light_red" | "green" |
+  "medium_blue" | "yellow" | "magenta" | "cyan" | "black" | "custom", "custom_color":
+  [r, g, b], "style": "lines" | "dashed_lines" | "dots", "opacity": 1–100}`. Missing
+  fields take the defaults (64, 8, light gray, [179, 179, 179], lines, 45). When the key
+  is absent the app's default grid (View → Grid Settings…) is used.
+
+Invalid guides or grid settings fail validation on load and save. Rulers, grid and guide
+visibility, Lock Guides and the Snap To settings are app preferences, not project data.
+Guides follow Crop, Canvas Size, Image Size and Flip Canvas.

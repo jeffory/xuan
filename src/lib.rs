@@ -11,6 +11,7 @@ pub mod gpu;
 pub mod history;
 pub mod i18n;
 pub mod io;
+pub mod layout;
 pub mod operations;
 pub mod paint;
 pub mod raw;
