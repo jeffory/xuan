@@ -1,0 +1,27 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "_meta": { "title": "Xuan Source" },
+    "inputs": { "image": "source.png" }
+  },
+  "2": {
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": { "title": "Xuan Prompt" },
+    "inputs": { "value": "" }
+  },
+  "3": {
+    "class_type": "IdeogramV3",
+    "_meta": { "title": "Ideogram Precise Edit (replace with your exported node)" },
+    "inputs": {
+      "image": ["1", 0],
+      "prompt": ["2", 0],
+      "rendering_speed": "{{quality}}",
+      "seed": "{{seed}}"
+    }
+  },
+  "4": {
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" },
+    "inputs": { "images": ["3", 0], "filename_prefix": "xuan_precise_edit" }
+  }
+}

@@ -1,0 +1,17 @@
+[plugin]
+id = "histogram"
+name = "Histogram"
+version = "0.1.0"
+description = "Example plugin written in Python: a sidebar pane with the document's RGB histogram that follows your edits."
+command = ["python3", "main.py"]
+
+[[settings]]
+id = "log_scale"
+type = "bool"
+label = "Logarithmic scale"
+default = false
+
+[[panes]]
+id = "histogram"
+title = "Histogram"
+refresh = "document"

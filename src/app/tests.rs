@@ -9,6 +9,9 @@ mod stroke_smoothing;
 #[path = "tests/plugins.rs"]
 mod plugins;
 
+#[path = "tests/plugin_examples.rs"]
+mod plugin_examples;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

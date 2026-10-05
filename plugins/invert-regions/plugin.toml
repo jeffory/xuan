@@ -1,0 +1,33 @@
+[plugin]
+id = "invert-regions"
+name = "Invert Regions"
+version = "0.1.0"
+description = "Example plugin written in Rust: inverts the colours inside the boxes you draw, and shows a pane with the document's average colour."
+# Build with `cargo build --release` in this folder first.
+command = ["target/release/invert-regions"]
+
+[[actions]]
+id = "invert"
+label = "Invert Regions…"
+menu = "Filter"
+shortcut = "Ctrl+Shift+I"
+description = "Draw boxes over the parts to invert. With no boxes, the whole layer is inverted."
+source = { from = "layer", crop_to_regions = true, padding = 0.1 }
+result = { into = "layer", mask_to_regions = true }
+
+[[actions.inputs]]
+id = "regions"
+type = "regions"
+label = "Boxes"
+fields = [{ id = "strength", type = "number", label = "Strength", default = 1.0, min = 0.0, max = 1.0 }]
+
+[[actions.inputs]]
+id = "keep_alpha"
+type = "bool"
+label = "Keep transparency"
+default = true
+
+[[panes]]
+id = "average"
+title = "Average colour"
+refresh = "document"
