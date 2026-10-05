@@ -306,6 +306,7 @@ impl EditorApp {
 
     /// Start the plugin process if needed. Fails when it is not granted.
     fn plugin_process(&mut self, plugin: &str) -> Result<&mut Process> {
+        self.reap_plugin(plugin);
         if !self.plugins.processes.contains_key(plugin) {
             let manifest = self
                 .plugins
@@ -379,22 +380,7 @@ impl EditorApp {
             incoming.extend(process.poll().into_iter().map(|m| (id.clone(), m)));
         }
         for (plugin, message) in incoming {
-            match message {
-                Incoming::Message(Message::Request(request)) => {
-                    let result = self.service_request(&plugin, &request);
-                    if let Some(process) = self.plugins.processes.get_mut(&plugin) {
-                        let _ = process.respond(request.id, result);
-                    }
-                }
-                Incoming::Message(Message::Notification(notification)) => {
-                    self.handle_notification(&plugin, notification);
-                }
-                Incoming::Message(Message::Response(response)) => {
-                    self.handle_response(&plugin, response);
-                }
-                Incoming::Invalid(_) => {}
-                Incoming::Closed => self.plugin_closed(&plugin),
-            }
+            self.dispatch_plugin_message(&plugin, message);
         }
         self.refresh_panes_for_changes();
         if !self.plugins.jobs.is_empty()
@@ -406,6 +392,43 @@ impl EditorApp {
         {
             self.context
                 .request_repaint_after(Duration::from_millis(150));
+        }
+    }
+
+    fn dispatch_plugin_message(&mut self, plugin: &str, message: Incoming) {
+        match message {
+            Incoming::Message(Message::Request(request)) => {
+                let result = self.service_request(plugin, &request);
+                if let Some(process) = self.plugins.processes.get_mut(plugin) {
+                    let _ = process.respond(request.id, result);
+                }
+            }
+            Incoming::Message(Message::Notification(notification)) => {
+                self.handle_notification(plugin, notification);
+            }
+            Incoming::Message(Message::Response(response)) => {
+                self.handle_response(plugin, response);
+            }
+            Incoming::Invalid(_) => {}
+            Incoming::Closed => self.plugin_closed(plugin),
+        }
+    }
+
+    /// Clean up after a plugin whose process has died: handle what it sent
+    /// last, fail its jobs and renders, and forget the process so the next
+    /// use starts a new one.
+    fn reap_plugin(&mut self, plugin: &str) {
+        let Some(process) = self.plugins.processes.get_mut(plugin) else {
+            return;
+        };
+        if process.alive() {
+            return;
+        }
+        for message in process.poll() {
+            self.dispatch_plugin_message(plugin, message);
+        }
+        if self.plugins.processes.contains_key(plugin) {
+            self.plugin_closed(plugin);
         }
     }
 
@@ -1474,7 +1497,9 @@ impl EditorApp {
             "format/import",
             json!({"format": format, "path": path, "work_dir": work_dir.path()}),
         )?;
-        let (result, others) = process.wait_for(&id, FORMAT_TIMEOUT)?;
+        let (result, others) = process
+            .wait_for(&id, FORMAT_TIMEOUT)
+            .inspect_err(|_| self.reap_plugin(plugin))?;
         self.plugins
             .backlog
             .extend(others.into_iter().map(|m| (plugin.to_owned(), m)));
@@ -1568,7 +1593,9 @@ impl EditorApp {
                 "document": edits::describe(&document),
             }),
         )?;
-        let (_, others) = process.wait_for(&id, FORMAT_TIMEOUT)?;
+        let (_, others) = process
+            .wait_for(&id, FORMAT_TIMEOUT)
+            .inspect_err(|_| self.reap_plugin(plugin))?;
         self.plugins
             .backlog
             .extend(others.into_iter().map(|m| (plugin.to_owned(), m)));

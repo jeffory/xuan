@@ -367,6 +367,66 @@ fn ungranted_plugins_ask_for_permission_before_running() {
     assert!(app.plugin_menu_items().is_empty());
 }
 
+/// Answers `initialize` and ignores everything else, except `format/import`,
+/// where it crashes without answering.
+const CRASHING_IMPORT: &str = r#"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\),"method".*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol":1}}\n' "$id" ;;
+    *'"method":"format/import"'*) exit 3 ;;
+  esac
+done
+"#;
+
+#[cfg(unix)]
+#[test]
+fn a_plugin_that_crashes_during_a_blocking_call_is_cleaned_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    std::fs::write(dir.path().join("plugin.sh"), CRASHING_IMPORT).unwrap();
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+
+    // A job and a pane render wait for answers that never come.
+    app.start_plugin_action("mock", "echo");
+    app.add_region(Point::new(1.0, 1.0), Point::new(8.0, 8.0));
+    app.run_plugin_action();
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.plugins.jobs.len(), 1);
+    let key = "plugin:mock/info";
+    app.render_pane(key, "open", None);
+    assert!(app.plugins.panes[key].pending);
+
+    // The plugin dies while Xuan blocks on format/import.
+    let file = dir.path().join("picture.foo");
+    std::fs::write(&file, b"").unwrap();
+    app.open_path(&file, false);
+    assert!(
+        app.error.as_deref().is_some_and(|e| e.contains("exited")),
+        "{:?}",
+        app.error
+    );
+    assert!(!app.plugins.running("mock"));
+    assert!(app.plugins.jobs.is_empty());
+    assert!(!app.plugins.panes[key].pending);
+    assert!(app.plugins.panes[key].error.is_some());
+    app.error = None;
+    frame(&context, &mut app);
+
+    // The document is not wedged: a new action starts a new process.
+    app.start_plugin_action("mock", "echo");
+    app.add_region(Point::new(1.0, 1.0), Point::new(8.0, 8.0));
+    app.run_plugin_action();
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.plugins.jobs.len(), 1);
+    assert!(app.plugins.running("mock"));
+}
+
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::{builtin_for, consume_exact};

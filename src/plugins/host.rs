@@ -36,6 +36,9 @@ pub struct Process {
     child: Child,
     stdin: Option<ChildStdin>,
     incoming: Receiver<Incoming>,
+    /// Messages a blocking [`Process::wait_for`] received but could not return,
+    /// including [`Incoming::Closed`], handed out by the next [`Process::poll`].
+    held: Vec<Incoming>,
     next_id: i64,
     log: Arc<Mutex<VecDeque<String>>>,
     closed: Arc<AtomicBool>,
@@ -138,6 +141,7 @@ impl Process {
             child,
             stdin,
             incoming,
+            held: Vec::new(),
             next_id: 1,
             log,
             closed,
@@ -184,7 +188,7 @@ impl Process {
 
     /// Everything received since the last poll.
     pub fn poll(&mut self) -> Vec<Incoming> {
-        let mut messages = Vec::new();
+        let mut messages = std::mem::take(&mut self.held);
         while let Ok(incoming) = self.incoming.try_recv() {
             messages.push(incoming);
         }
@@ -193,6 +197,10 @@ impl Process {
 
     /// Block until the plugin answers the request `id`, servicing nothing else.
     /// Other messages that arrive meanwhile are returned too, in order.
+    ///
+    /// When the wait fails, those messages, and [`Incoming::Closed`] if the
+    /// plugin exited, are kept for the next [`Process::poll`], so the host still
+    /// notices the exit and cleans up after the plugin.
     pub fn wait_for(
         &mut self,
         id: &Id,
@@ -200,22 +208,28 @@ impl Process {
     ) -> Result<(Value, Vec<Incoming>)> {
         let deadline = std::time::Instant::now() + timeout;
         let mut others = Vec::new();
-        loop {
+        let error = loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             match self.incoming.recv_timeout(remaining) {
                 Ok(Incoming::Message(Message::Response(response))) if &response.id == id => {
-                    return match (response.result, response.error) {
-                        (Some(value), _) => Ok((value, others)),
-                        (None, Some(error)) => Err(error.into()),
-                        (None, None) => Ok((Value::Null, others)),
-                    };
+                    match (response.result, response.error) {
+                        (Some(value), _) => return Ok((value, others)),
+                        (None, Some(error)) => break anyhow::Error::from(error),
+                        (None, None) => return Ok((Value::Null, others)),
+                    }
                 }
-                Ok(Incoming::Closed) => bail!("the plugin exited"),
+                Ok(Incoming::Closed) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    others.push(Incoming::Closed);
+                    break anyhow::anyhow!("the plugin exited");
+                }
                 Ok(other) => others.push(other),
-                Err(mpsc::RecvTimeoutError::Timeout) => bail!("the plugin did not answer in time"),
-                Err(mpsc::RecvTimeoutError::Disconnected) => bail!("the plugin exited"),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    break anyhow::anyhow!("the plugin did not answer in time");
+                }
             }
-        }
+        };
+        self.held.extend(others);
+        Err(error)
     }
 
     /// Recent stderr output and host notes, oldest first.
@@ -363,6 +377,38 @@ done
         }
         assert!(!process.alive());
         assert!(process.request("ping", Value::Null).is_err());
+    }
+
+    #[test]
+    fn an_exit_during_a_blocking_call_is_reported_by_the_next_poll() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("plugin.sh"),
+            "read -r line\nprintf '{\"jsonrpc\":\"2.0\",\"method\":\"host/log\",\"params\":{}}\\n'\nexit 3\n",
+        )
+        .unwrap();
+        let manifest = Manifest::parse(
+            "[plugin]\nid = \"crash\"\nname = \"Crash\"\nversion = \"1\"\ncommand = [\"sh\", \"plugin.sh\"]\n",
+            dir.path(),
+        )
+        .unwrap();
+        let mut process = Process::spawn(&manifest, &[]).unwrap();
+        let id = process.request("format/import", json!({})).unwrap();
+        let error = process
+            .wait_for(&id, std::time::Duration::from_secs(10))
+            .unwrap_err();
+        assert!(error.to_string().contains("exited"), "{error}");
+        let held = process.poll();
+        assert!(
+            matches!(
+                held.first(),
+                Some(Incoming::Message(Message::Notification(_)))
+            ),
+            "{held:?}"
+        );
+        assert!(matches!(held.last(), Some(Incoming::Closed)), "{held:?}");
+        assert!(process.poll().is_empty());
+        assert!(!process.alive());
     }
 
     #[test]
