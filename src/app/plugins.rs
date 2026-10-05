@@ -158,8 +158,18 @@ pub(super) struct PaneState {
     pub queued: Option<plugins::ui::Event>,
     /// A render was asked for while one was pending; render again when it ends.
     pub dirty: bool,
-    pub images: HashMap<String, (Option<std::time::SystemTime>, egui::TextureHandle)>,
+    /// Pane images by source, including the ones that failed to load, so a
+    /// broken image is not read again every frame.
+    pub images: HashMap<String, PaneImage>,
     pub drafts: HashMap<String, String>,
+}
+
+/// A loaded pane image, or a failure to load it.
+pub(super) struct PaneImage {
+    /// Modification time and size of the file it was read from; a change
+    /// loads it again. `None` for data URLs and missing files.
+    pub stamp: Option<(Option<std::time::SystemTime>, u64)>,
+    pub texture: Option<egui::TextureHandle>,
 }
 
 impl PluginState {

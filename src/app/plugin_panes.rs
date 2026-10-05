@@ -1,25 +1,36 @@
 //! Drawing a plugin pane from the widget tree the plugin returned.
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, ensure};
 
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
     i18n::tr,
-    plugins::ui::{Event, Node},
+    plugins::{
+        edits::Access,
+        ui::{Event, Node},
+    },
 };
 
 use super::{
     EditorApp,
-    plugins::{PaneState, PendingStart},
+    plugins::{PaneImage, PaneState, PendingStart},
     theme, widgets,
 };
 
-const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+/// Longest side of a pane image.
+const MAX_IMAGE_SIDE: u32 = 8192;
+/// Images kept per pane before the cache starts over.
+const MAX_CACHED_IMAGES: usize = 64;
 
 /// What the drawing pass needs besides the tree.
 struct Pane<'a> {
     state: &'a mut PaneState,
     plugin_dir: &'a Path,
+    /// The folders image files may come from.
+    access: &'a Access,
     ctx: &'a egui::Context,
     event: Option<Event>,
     salt: &'a str,
@@ -42,6 +53,8 @@ impl EditorApp {
             .manifest(&plugin)
             .map(|m| m.dir.clone())
             .unwrap_or_default();
+        // Without the file system permission, the plugin's own folders only.
+        let access = self.plugins.access(&plugin);
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
@@ -97,6 +110,7 @@ impl EditorApp {
                     let mut pane = Pane {
                         state,
                         plugin_dir: &plugin_dir,
+                        access: &access,
                         ctx: &ctx,
                         event: None,
                         salt: key,
@@ -446,55 +460,158 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
 }
 
 /// Load or reuse the texture for an image source: a PNG path (relative to
-/// the plugin folder) or a `data:image/png;base64,` URL.
+/// the plugin folder) or a `data:image/png;base64,` URL. Failures are cached
+/// like textures, and a file is read again only when it changes.
 fn image_texture(pane: &mut Pane, src: &str) -> Option<egui::TextureHandle> {
-    let (bytes, stamp) = if let Some(data) = src.strip_prefix("data:") {
-        if let Some((_, cached)) = pane.state.images.get(src) {
-            return Some(cached.clone());
-        }
-        let encoded = data.split_once(";base64,")?.1;
-        (xuan::plugins::ui::decode_base64(encoded)?, None)
-    } else {
+    let file = (!src.starts_with("data:")).then(|| {
         let path = Path::new(src);
-        let path = if path.is_absolute() {
+        if path.is_absolute() {
             path.to_path_buf()
         } else {
             pane.plugin_dir.join(path)
-        };
-        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if let Some((cached_stamp, cached)) = pane.state.images.get(src)
-            && *cached_stamp == modified
-            && modified.is_some()
-        {
-            return Some(cached.clone());
         }
-        let metadata = std::fs::metadata(&path).ok()?;
-        if metadata.len() as usize > MAX_IMAGE_BYTES {
-            return None;
-        }
-        (std::fs::read(&path).ok()?, modified)
+    });
+    // Looking at the file never opens it, so a FIFO cannot block here.
+    let stamp = file.as_ref().and_then(|path| {
+        std::fs::metadata(path)
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .map(|m| (m.modified().ok(), m.len()))
+    });
+    if let Some(cached) = pane.state.images.get(src)
+        && cached.stamp == stamp
+    {
+        return cached.texture.clone();
+    }
+    let image = match &file {
+        Some(path) => read_pane_image(path, pane.access),
+        None => data_url_image(src),
     };
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return None;
-    }
-    let image = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    if image.width() > 8192 || image.height() > 8192 {
-        return None;
-    }
-    let color = egui::ColorImage::from_rgba_unmultiplied(
-        [image.width() as usize, image.height() as usize],
-        image.as_raw(),
-    );
-    let texture = pane.ctx.load_texture(
-        format!("plugin-pane-{}", pane.state.images.len()),
-        color,
-        egui::TextureOptions::LINEAR,
-    );
-    if pane.state.images.len() > 64 {
+    let texture = image.ok().map(|image| {
+        pane.ctx.load_texture(
+            format!("plugin-pane-{}-{}", pane.salt, pane.state.images.len()),
+            image,
+            egui::TextureOptions::LINEAR,
+        )
+    });
+    if pane.state.images.len() >= MAX_CACHED_IMAGES {
         pane.state.images.clear();
     }
-    pane.state
-        .images
-        .insert(src.to_owned(), (stamp, texture.clone()));
-    Some(texture)
+    pane.state.images.insert(
+        src.to_owned(),
+        PaneImage {
+            stamp,
+            texture: texture.clone(),
+        },
+    );
+    texture
+}
+
+/// Read a pane image file: a regular file inside the plugin's folders.
+fn read_pane_image(path: &Path, access: &Access) -> Result<egui::ColorImage> {
+    let resolved: PathBuf = access.readable(path)?;
+    let metadata = std::fs::metadata(&resolved)?;
+    ensure!(metadata.is_file(), "not a regular file");
+    ensure!(metadata.len() <= MAX_IMAGE_BYTES, "image file too large");
+    decode_pane_image(std::fs::read(&resolved)?)
+}
+
+fn data_url_image(src: &str) -> Result<egui::ColorImage> {
+    let encoded = src
+        .strip_prefix("data:")
+        .and_then(|data| data.split_once(";base64,"))
+        .context("not a base64 data URL")?
+        .1;
+    ensure!(
+        encoded.len() as u64 <= MAX_IMAGE_BYTES * 4 / 3 + 4,
+        "image too large"
+    );
+    decode_pane_image(xuan::plugins::ui::decode_base64(encoded).context("invalid base64")?)
+}
+
+/// Decode with the size limits applied before any pixels are allocated.
+fn decode_pane_image(bytes: Vec<u8>) -> Result<egui::ColorImage> {
+    ensure!(bytes.len() as u64 <= MAX_IMAGE_BYTES, "image too large");
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(u64::from(MAX_IMAGE_SIDE) * u64::from(MAX_IMAGE_SIDE) * 8);
+    reader.limits(limits);
+    let image = reader.decode()?.to_rgba8();
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [image.width() as usize, image.height() as usize],
+        image.as_raw(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xuan::plugins::manifest::FilesystemAccess;
+
+    fn pane_image(dir: &Path, name: &str, size: u32) -> PathBuf {
+        let path = dir.join(name);
+        image::RgbaImage::from_pixel(size, size, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        path
+    }
+
+    #[test]
+    fn pane_images_are_confined_limited_and_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let access = Access::new([dir.path().to_path_buf()], FilesystemAccess::None);
+        pane_image(dir.path(), "ok.png", 4);
+        let foreign = pane_image(outside.path(), "foreign.png", 4);
+        assert!(read_pane_image(&dir.path().join("ok.png"), &access).is_ok());
+        assert!(read_pane_image(&foreign, &access).is_err());
+        assert!(read_pane_image(dir.path(), &access).is_err());
+        // Too large an image is refused from its header.
+        let big = image::RgbaImage::new(MAX_IMAGE_SIDE + 1, 1);
+        let mut bytes = Vec::new();
+        big.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        assert!(decode_pane_image(bytes).is_err());
+        assert!(data_url_image("data:image/png;base64,***").is_err());
+        #[cfg(unix)]
+        {
+            let fifo = dir.path().join("fifo.png");
+            if std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .is_ok_and(|s| s.success())
+            {
+                assert!(read_pane_image(&fifo, &access).is_err());
+            }
+        }
+
+        let ctx = egui::Context::default();
+        let mut state = PaneState::default();
+        let mut pane = Pane {
+            state: &mut state,
+            plugin_dir: dir.path(),
+            access: &access,
+            ctx: &ctx,
+            event: None,
+            salt: "test",
+        };
+        assert!(image_texture(&mut pane, "ok.png").is_some());
+        assert!(image_texture(&mut pane, &foreign.display().to_string()).is_none());
+        // A broken file is remembered as broken until it changes.
+        std::fs::write(dir.path().join("broken.png"), b"not a png").unwrap();
+        assert!(image_texture(&mut pane, "broken.png").is_none());
+        assert!(pane.state.images["broken.png"].texture.is_none());
+        assert!(pane.state.images["broken.png"].stamp.is_some());
+        assert!(image_texture(&mut pane, "missing.png").is_none());
+        assert!(pane.state.images.contains_key("missing.png"));
+        pane_image(dir.path(), "broken.png", 6);
+        assert!(image_texture(&mut pane, "broken.png").is_some());
+        assert!(image_texture(&mut pane, "data:image/png;base64,***").is_none());
+        assert!(pane.state.images.contains_key("data:image/png;base64,***"));
+    }
 }
