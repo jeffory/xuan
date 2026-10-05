@@ -19,50 +19,19 @@ use xuan::{
         self, LoadError, Manifest, edits,
         host::{Incoming, Process},
         jobs::{self, Prepared, Region},
-        manifest::{Action, ActionKind, DocumentAccess, InputKind, Menu, ResultInto, Shortcut},
+        manifest::{Action, ActionKind, DocumentAccess, InputKind, Menu, ResultInto},
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
         ui::Node,
     },
 };
 
-use super::{Dialog, EditorApp, Session, Tool, shortcuts};
+use super::{
+    Dialog, EditorApp, Session, Tool,
+    commands::{self, HostRun},
+};
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
-/// Host commands any plugin may run through `host/run`: they only move the view.
-pub(super) const HOST_VIEW_COMMANDS: &[&str] = &["fit", "actual", "zoom_in", "zoom_out"];
-/// Host commands a plugin with `document = "edit"` may also run: each is one
-/// undoable edit of the open document. Nothing that touches files, the
-/// clipboard, settings or other plugins is ever allowed.
-pub(super) const HOST_EDIT_COMMANDS: &[&str] = &[
-    "undo",
-    "redo",
-    "new_layer",
-    "duplicate",
-    "delete_layer",
-    "group",
-    "ungroup",
-    "move_out",
-    "merge",
-    "flatten",
-    "mask",
-    "new_mask_layer",
-    "delete_mask",
-    "disable_mask",
-    "link_mask",
-    "clip",
-    "select_all",
-    "deselect",
-    "invert_selection",
-    "fill_fg",
-    "fill_bg",
-    "clear",
-    "invert",
-    "flip_h",
-    "flip_v",
-    "flip_canvas_h",
-    "flip_canvas_v",
-];
 /// Shortest time between two links a plugin opens.
 const LINK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -97,7 +66,8 @@ pub(super) struct PluginState {
     pub permission_request: Option<(String, PendingStart)>,
     pub manager_selected: Option<String>,
     revisions: HashMap<Uuid, u64>,
-    pub shortcuts: Vec<(Shortcut, String, String)>,
+    /// Problems found while loading the plugins, before shortcut collisions are added.
+    load_errors: Vec<LoadError>,
     /// When a plugin last opened a link.
     last_link: Option<std::time::Instant>,
 }
@@ -197,10 +167,16 @@ impl PluginState {
         self.processes
             .retain(|id, _| manifests.iter().any(|m| &m.plugin.id == id));
         self.panes.clear();
-        let mut errors = errors;
-        self.shortcuts = plugin_shortcuts(&manifests, &mut errors);
         self.manifests = manifests;
+        self.load_errors = errors.clone();
         self.errors = errors;
+    }
+
+    /// Reports manifest shortcuts that could not be used beside the load errors. The editor
+    /// works these out with its key bindings; see `commands::Keymap::build`.
+    pub fn set_shortcut_errors(&mut self, errors: Vec<LoadError>) {
+        self.errors = self.load_errors.clone();
+        self.errors.extend(errors);
     }
 
     pub fn stop_all(&mut self) {
@@ -269,6 +245,7 @@ impl EditorApp {
             );
         }
         self.plugins.install(manifests, errors);
+        self.rebuild_keymap();
         if self.add_plugin_panes() {
             self.save_config();
         }
@@ -305,7 +282,7 @@ impl EditorApp {
         manifest.pane(pane).map(|pane| pane.title.clone())
     }
 
-    fn plugin_enabled(&self, plugin: &str) -> bool {
+    pub(super) fn plugin_enabled(&self, plugin: &str) -> bool {
         self.config.plugins.get(plugin).is_none_or(|c| c.enabled)
     }
 
@@ -711,12 +688,12 @@ impl EditorApp {
                             "A plugin can only run its own actions",
                         ));
                     }
-                    None if HOST_VIEW_COMMANDS.contains(&action.as_str())
-                        || (edit && HOST_EDIT_COMMANDS.contains(&action.as_str())) =>
+                    None if commands::host_run(&action) == HostRun::View
+                        || (edit && commands::host_run(&action) == HostRun::Edit) =>
                     {
                         self.command(&action)
                     }
-                    None if HOST_EDIT_COMMANDS.contains(&action.as_str()) => {
+                    None if commands::host_run(&action) == HostRun::Edit => {
                         return Err(RpcError::new(
                             protocol::INVALID_REQUEST,
                             "The manifest does not declare document = \"edit\"",
@@ -915,12 +892,8 @@ impl EditorApp {
             }
             for action in &manifest.actions {
                 let shortcut = self
-                    .plugins
-                    .shortcuts
-                    .iter()
-                    .find(|(_, p, a)| *p == manifest.plugin.id && *a == action.id)
-                    .map(|(s, ..)| s.to_string())
-                    .unwrap_or_default();
+                    .keymap
+                    .shortcut(&format!("{}/{}", manifest.plugin.id, action.id));
                 items.entry(action.menu).or_default().push((
                     action.label.clone(),
                     manifest.plugin.id.clone(),
@@ -1817,22 +1790,6 @@ impl EditorApp {
             .extend(others.into_iter().map(|m| (plugin.to_owned(), m)));
         Ok(())
     }
-
-    /// A plugin shortcut pressed this frame, if any.
-    pub(super) fn plugin_shortcut(&self, ctx: &egui::Context) -> Option<(String, String)> {
-        for (shortcut, plugin, action) in &self.plugins.shortcuts {
-            if !self.plugin_enabled(plugin) {
-                continue;
-            }
-            let Some((mods, key)) = shortcuts::plugin_chord(shortcut) else {
-                continue;
-            };
-            if ctx.input_mut(|i| shortcuts::consume_exact(i, mods, key)) {
-                return Some((plugin.clone(), action.clone()));
-            }
-        }
-        None
-    }
 }
 
 /// The grant that allows this manifest to run as it is.
@@ -1842,49 +1799,6 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
         command: manifest.plugin.command.clone(),
         permissions: manifest.permissions.clone(),
     }
-}
-
-/// The usable action shortcuts of the plugins. Shortcuts that name an unknown
-/// key or a chord Xuan or an earlier plugin already uses are left out and
-/// reported with the plugins' load errors.
-fn plugin_shortcuts(
-    manifests: &[Manifest],
-    errors: &mut Vec<LoadError>,
-) -> Vec<(Shortcut, String, String)> {
-    let mut taken: Vec<((egui::Modifiers, egui::Key), String)> = Vec::new();
-    let mut shortcuts = Vec::new();
-    for manifest in manifests {
-        for action in &manifest.actions {
-            let Some(Ok(shortcut)) = action.shortcut.as_deref().map(Shortcut::parse) else {
-                continue;
-            };
-            // Like the manifest errors beside it, this is plugin-author facing.
-            let mut report = |problem: String| {
-                errors.push(LoadError {
-                    dir: manifest.dir.clone(),
-                    error: format!(
-                        "action `{}`: shortcut {shortcut} {problem}; it is ignored",
-                        action.id
-                    ),
-                })
-            };
-            let Some(chord) = shortcuts::plugin_chord(&shortcut) else {
-                report("names a key Xuan does not know".into());
-                continue;
-            };
-            if let Some(command) = shortcuts::builtin_for(chord.0, chord.1) {
-                report(format!("is already used by Xuan ({command})"));
-                continue;
-            }
-            if let Some((_, owner)) = taken.iter().find(|(c, _)| *c == chord) {
-                report(format!("is already used by {owner}"));
-                continue;
-            }
-            taken.push((chord, format!("{}/{}", manifest.plugin.id, action.id)));
-            shortcuts.push((shortcut, manifest.plugin.id.clone(), action.id.clone()));
-        }
-    }
-    shortcuts
 }
 
 /// Regions stored on a generated layer: document coordinates plus fields.

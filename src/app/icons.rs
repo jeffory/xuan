@@ -3,7 +3,8 @@ use xuan::i18n::tr;
 
 use super::{Tool, theme};
 
-pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
+/// A tool rail button. Its tooltip names the tool and its current `shortcut`, if any.
+pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, shortcut: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::click());
     let painter = ui.painter();
     if selected || response.hovered() {
@@ -24,7 +25,11 @@ pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
     }
     let icon_padding = if tool == Tool::Gradient { 9.0 } else { 7.0 };
     draw(ui, tool, rect.shrink(icon_padding), theme::TEXT);
-    response.on_hover_text(format!("{} ({})", tool.label(), tool.shortcut()))
+    if shortcut.is_empty() {
+        response.on_hover_text(tool.label())
+    } else {
+        response.on_hover_text(format!("{} ({shortcut})", tool.label()))
+    }
 }
 
 pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {

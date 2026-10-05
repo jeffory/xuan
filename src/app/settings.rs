@@ -4,6 +4,22 @@ use xuan::{
     i18n::{self, tr},
 };
 
+/// The pages of the Settings window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SettingsPage {
+    #[default]
+    General,
+    Appearance,
+    Keyboard,
+}
+
+const PAGE_ID: &str = "settings_page";
+
+/// Shows `page` the next time Settings draws.
+pub(super) fn show_settings_page(ctx: &egui::Context, page: SettingsPage) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(PAGE_ID), page));
+}
+
 impl EditorApp {
     pub(super) fn load_config(&mut self) {
         match Config::path() {
@@ -21,6 +37,10 @@ impl EditorApp {
             }
         }
         i18n::set_language(self.config.language);
+        for note in super::commands::override_problems(&self.config.keybindings) {
+            eprintln!("Xuan: {note}");
+        }
+        self.rebuild_keymap();
     }
 
     /// View → Pixel Grid: apply immediately and remember the choice.
@@ -64,40 +84,64 @@ impl EditorApp {
         let mut config = self.config.clone();
         // A numeric field is being dragged or typed into: apply, but do not write yet.
         let mut editing = false;
-        let page_id = egui::Id::new("settings_page");
-        let mut appearance = ctx.data(|d| d.get_temp::<bool>(page_id).unwrap_or(false));
+        let page_id = egui::Id::new(PAGE_ID);
+        let mut page = ctx.data(|d| d.get_temp::<SettingsPage>(page_id).unwrap_or_default());
+        let height = if page == SettingsPage::Keyboard {
+            420.0
+        } else {
+            240.0
+        };
         widgets::Window::new(tr("Settings"))
             .id("app_settings")
-            .default_width(580.0)
+            .default_width(680.0)
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
-                    ui.set_height(240.0);
+                    ui.set_height(height);
                     ui.vertical(|ui| {
                         ui.set_width(125.0);
-                        ui.set_min_height(240.0);
-                        if ui
-                            .selectable_label(!appearance, tr("General"))
-                            .on_hover_text(tr("General preferences"))
-                            .clicked()
-                        {
-                            appearance = false;
-                        }
-                        if ui
-                            .selectable_label(appearance, tr("Appearance"))
-                            .on_hover_text(tr("Window appearance"))
-                            .clicked()
-                        {
-                            appearance = true;
+                        ui.set_min_height(height);
+                        for (option, label, hint) in [
+                            (
+                                SettingsPage::General,
+                                tr("General"),
+                                tr("General preferences"),
+                            ),
+                            (
+                                SettingsPage::Appearance,
+                                tr("Appearance"),
+                                tr("Window appearance"),
+                            ),
+                            (
+                                SettingsPage::Keyboard,
+                                tr("Keyboard Shortcuts"),
+                                tr("Change the keys that run commands"),
+                            ),
+                        ] {
+                            if ui
+                                .selectable_label(page == option, label)
+                                .on_hover_text(hint)
+                                .clicked()
+                            {
+                                page = option;
+                                self.key_editor.capture = None;
+                            }
                         }
                     });
                     ui.separator();
                     ui.vertical(|ui| {
-                        ui.set_min_width(365.0);
-                        if appearance {
-                            editing = self.appearance_settings(ui, &mut config);
-                        } else {
-                            general_settings(ui, &mut config);
+                        ui.set_min_width(465.0);
+                        match page {
+                            SettingsPage::General => general_settings(ui, &mut config),
+                            SettingsPage::Appearance => {
+                                editing = self.appearance_settings(ui, &mut config);
+                            }
+                            SettingsPage::Keyboard => super::keybindings::page(
+                                ui,
+                                &self.keymap,
+                                &mut self.key_editor,
+                                &mut config.keybindings,
+                            ),
                         }
                     });
                 });
@@ -110,10 +154,14 @@ impl EditorApp {
                     });
                 });
             });
-        ctx.data_mut(|d| d.insert_temp(page_id, appearance));
+        ctx.data_mut(|d| d.insert_temp(page_id, page));
         if config != self.config {
             i18n::set_language(config.language);
+            let keys_changed = config.keybindings != self.config.keybindings;
             self.config = config;
+            if keys_changed {
+                self.rebuild_keymap();
+            }
             self.config_dirty = true;
             ctx.request_repaint();
         }
@@ -124,6 +172,9 @@ impl EditorApp {
         }
         if closing {
             self.dialog = None;
+            self.key_editor.capture = None;
+            self.key_editor.conflict = None;
+            self.key_editor.message = None;
         }
     }
 

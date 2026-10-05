@@ -425,7 +425,10 @@ impl EditorApp {
                                 if t == Tool::Region && self.plugins.action.is_none() {
                                     continue;
                                 }
-                                if icons::tool_button(ui, t, self.tool == t).clicked() {
+                                let shortcut = super::commands::tool_command(t)
+                                    .map(|id| self.keymap.shortcut(id))
+                                    .unwrap_or_default();
+                                if icons::tool_button(ui, t, self.tool == t, &shortcut).clicked() {
                                     tool = Some(t);
                                 }
                             }

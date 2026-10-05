@@ -100,6 +100,10 @@ pub struct Config {
     pub panes: crate::panes::Layout,
     /// Per-plugin state keyed by plugin identifier.
     pub plugins: BTreeMap<String, PluginConfig>,
+    /// Key bindings the user changed, by command id: `merge = "Ctrl+E"`, `""` for none, or a
+    /// list of shortcuts. Commands not listed keep their defaults, including new defaults of
+    /// later releases. The editor interprets the values and ignores ones it does not know.
+    pub keybindings: toml::Table,
 }
 
 impl Default for Config {
@@ -118,6 +122,7 @@ impl Default for Config {
             grid: GridSettings::default(),
             panes: crate::panes::Layout::default(),
             plugins: BTreeMap::new(),
+            keybindings: toml::Table::new(),
         }
     }
 }
@@ -278,6 +283,14 @@ impl Config {
         );
         table.insert("panes".into(), toml::Value::try_from(&self.panes)?);
         table.insert("plugins".into(), toml::Value::try_from(&self.plugins)?);
+        if self.keybindings.is_empty() {
+            table.remove("keybindings");
+        } else {
+            table.insert(
+                "keybindings".into(),
+                toml::Value::Table(self.keybindings.clone()),
+            );
+        }
         let parent = path.parent().context("Configuration path has no parent")?;
         fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -544,5 +557,42 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("rulers = true") && text.contains("[snap]"));
         assert!(text.contains("[grid]") && text.contains("style = \"dots\""));
+    }
+
+    #[test]
+    fn key_bindings_keep_only_overrides_and_older_files_still_load() {
+        // A file from before customisable key bindings.
+        let old: Config = toml::from_str("language = 'zh-CN'\npixel_grid = false\n").unwrap();
+        assert!(old.keybindings.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("keybindings"));
+
+        let mut custom = Config::default();
+        custom
+            .keybindings
+            .insert("merge".into(), toml::Value::String("Ctrl+Shift+M".into()));
+        custom.keybindings.insert(
+            "invert_selection".into(),
+            toml::Value::String(String::new()),
+        );
+        custom.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[keybindings]") && text.contains("merge = \"Ctrl+Shift+M\""));
+        assert!(text.contains("invert_selection = \"\""));
+        assert_eq!(Config::load(&path).unwrap(), custom);
+
+        // Unknown commands and odd values load as they are; the editor ignores them.
+        fs::write(
+            &path,
+            "[keybindings]\nfuture_command = 'Ctrl+K'\nmerge = 42\n",
+        )
+        .unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.keybindings.len(), 2);
+        // Clearing every override removes the table again.
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("keybindings"));
     }
 }

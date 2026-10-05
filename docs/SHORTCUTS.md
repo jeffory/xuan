@@ -1,43 +1,116 @@
 # Keyboard and pointer controls
 
+These are the default shortcuts. Each one can be changed, removed or added to in **Edit → Settings… → Keyboard Shortcuts**; the menus and **Help → Keyboard Shortcuts** (F1) always show the ones in effect.
+
+<!-- BEGIN GENERATED from the command registry (src/app/commands.rs); refresh with XUAN_UPDATE_DOCS=1 cargo test documented_shortcuts -->
+| Category | Command | Shortcut |
+| --- | --- | --- |
+| File | New Canvas… | Ctrl+N |
+| File | Open… | Ctrl+O |
+| File | Import Image as Layer… | Ctrl+Shift+O |
+| File | Save | Ctrl+S |
+| File | Save As… | Ctrl+Shift+S |
+| File | Export Image… | Ctrl+Alt+Shift+S |
+| File | Close Project | Ctrl+W |
+| File | Quit | Ctrl+Q |
+| Edit | Settings… | Ctrl+, |
+| Edit | Undo | Ctrl+Z |
+| Edit | Redo | Ctrl+Shift+Z / Ctrl+Y |
+| Edit | Cut | Ctrl+X |
+| Edit | Copy | Ctrl+C |
+| Edit | Copy Merged | Ctrl+Shift+C |
+| Edit | Paste | Ctrl+V |
+| Edit | Fill Foreground | Alt+Backspace |
+| Edit | Fill Background | Ctrl+Backspace |
+| Edit | Clear Pixels | Delete / Backspace |
+| Edit | Content-Aware Fill | Shift+F5 |
+| Edit | Free Transform | Ctrl+T |
+| Image | Levels | Ctrl+L |
+| Image | Hue/Saturation | Ctrl+U |
+| Image | Curves | Ctrl+M |
+| Image | Invert | Ctrl+I |
+| Layer | New Layer | Ctrl+Shift+N |
+| Layer | Duplicate Layers | Ctrl+J |
+| Layer | Group Layers | Ctrl+G |
+| Layer | Ungroup Layers | Ctrl+Shift+G |
+| Layer | Merge Down / Selected | Ctrl+E |
+| Layer | Create / Release Clipping Mask | Ctrl+Alt+G |
+| Select | Select All | Ctrl+A |
+| Select | Deselect | Ctrl+D |
+| Select | Inverse Selection | Ctrl+Shift+I |
+| View | Fit Canvas | Ctrl+0 |
+| View | Actual Pixels | Ctrl+1 |
+| View | Zoom In | Ctrl+Plus / Ctrl+= |
+| View | Zoom Out | Ctrl+Minus |
+| View | Show Transform Controls | Ctrl+H |
+| View | Show Grid | Ctrl+' |
+| View | Show Guides | Ctrl+; |
+| View | Rulers | Ctrl+R |
+| View | Snap | Ctrl+Shift+; / Ctrl+Shift+: |
+| View | Lock Guides | Ctrl+Alt+; |
+| Tools | Move / Transform | V |
+| Tools | Marquee | M |
+| Tools | Switch Rectangle / Ellipse Marquee | Shift+M |
+| Tools | Lasso | L |
+| Tools | Switch Freehand / Polygonal Lasso | Shift+L |
+| Tools | Magic Wand | W |
+| Tools | Crop | C |
+| Tools | Brush | B |
+| Tools | Switch between Brush and Pencil | Shift+B |
+| Tools | Eraser | E |
+| Tools | Spot Healing | J |
+| Tools | Clone Stamp | S |
+| Tools | Blur / Smudge | R |
+| Tools | Gradient | G |
+| Tools | Shape | U |
+| Tools | Switch Rectangle / Ellipse Shape | Shift+U |
+| Tools | Text | T |
+| Tools | Eyedropper | I |
+| Tools | Hand | H |
+| Tools | Zoom | Z |
+| Tools | Swap Colors | X |
+| Tools | Reset Colors | D |
+| Tools | Decrease Brush Size | [ |
+| Tools | Increase Brush Size | ] |
+| Tools | Decrease Brush Hardness | Shift+[ |
+| Tools | Increase Brush Hardness | Shift+] |
+| Help | Keyboard Shortcuts | F1 |
+<!-- END GENERATED -->
+
+With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. B selects whichever of Brush and Pencil you used last.
+
+## Other keys and pointer controls
+
+These keys belong to the editor and cannot be assigned to commands.
+
 | Action | Shortcut |
 | --- | --- |
-| New / Open / Save | Ctrl+N / Ctrl+O / Ctrl+S |
-| Import as layer / Save As | Ctrl+Shift+O / Ctrl+Shift+S |
-| Export | Ctrl+Alt+Shift+S |
-| Close project | Ctrl+W |
-| Quit | Ctrl+Q |
-| Undo / Redo | Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) |
-| Duplicate / Merge / Group | Ctrl+J / Ctrl+E / Ctrl+G |
-| Ungroup / Clipping mask | Ctrl+Shift+G / Ctrl+Alt+G |
-| New layer | Ctrl+Shift+N |
-| Select all / Deselect / Invert selection | Ctrl+A / Ctrl+D / Ctrl+Shift+I |
-| Cut / Copy / Paste / Copy Merged | Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+Shift+C |
-| Foreground / Background fill | Alt+Backspace / Ctrl+Backspace |
-| Content-aware fill | Shift+F5 |
-| Levels / Hue-Saturation / Curves | Ctrl+L / Ctrl+U / Ctrl+M |
-| Invert pixels or mask | Ctrl+I |
-| Fit / Actual pixels | Ctrl+0 / Ctrl+1 |
-| Zoom in / out | Ctrl+Plus / Ctrl+Minus, or mouse wheel |
-| Show transform / Hide controls | Ctrl+T / Ctrl+H |
-| Rulers / Grid / Guides | Ctrl+R / Ctrl+' / Ctrl+; |
-| Snap / Lock guides | Ctrl+Shift+; / Ctrl+Alt+; |
-| Move / Marquee / Lasso / Wand / Crop | V / M / L / W / C |
-| Brush / Eraser / Heal / Clone / Blur | B / E / J / S / R |
-| Switch between Brush and Pencil | Shift+B (B selects whichever you used last) |
-| Gradient / Shape / Eyedropper / Hand / Zoom | G / U / I / H / Z |
-| Text / Apply text / Cancel text | T / Ctrl+Enter / Escape |
-| Brush size / Hardness | [ and ] / Shift+[ and Shift+] |
+| Apply text / Cancel text | Ctrl+Enter / Escape |
 | Opacity | Number keys 1–9, 0 for 100% |
-| Swap / Reset colors | X / D |
 | Nudge / Larger nudge | Arrow keys / Shift+arrow keys |
+| Zoom | mouse wheel |
 | Pan | Space-drag or middle-button drag |
 | Pan horizontally | Horizontal mouse wheel or Shift+wheel over the canvas |
 | Adjust slider or number | Wheel up / down over the control (increase / decrease) |
 | Apply crop or polygon / Cancel | Enter / Escape |
-| Shortcut reference | F1 |
 
-Shortcuts match their modifiers exactly: Ctrl+Shift+I inverts the selection and never also runs Ctrl+I. Plugins can give their actions a shortcut, shown next to the action in its menu. A plugin shortcut always includes Ctrl or Alt (or is one of F1–F24) and never replaces a shortcut in the table above; a clashing one is ignored and reported in **Plugins → Manage Plugins…**. The panes in the right sidebar are shown or hidden from the **Window** menu.
+## Changing shortcuts
+
+In **Edit → Settings… → Keyboard Shortcuts**, search for a command by name, alias or key. Click one of its shortcuts and press the new keys; Escape cancels and Backspace removes that shortcut. **+** adds another shortcut, **Reset** restores a command's defaults and **Reset All** restores every default. When the keys are already in use, Xuan names the command that has them and offers **Reassign** (move them to this command) or **Cancel**. Commands that only apply in RAW Develop may share keys with editor commands. Single letters and digits are kept for tools: other commands need Ctrl or Alt.
+
+Only the shortcuts you change are saved, in the `[keybindings]` table of the configuration file, so new defaults in later versions still reach the rest:
+
+```toml
+[keybindings]
+merge = "Ctrl+Shift+M"          # a different shortcut
+invert_selection = ""           # no shortcut
+redo = ["Ctrl+Shift+Z", "Ctrl+Y"]
+"comfy/upscale" = "Ctrl+Alt+U"  # a plugin action
+```
+
+Unknown commands and values that are not shortcuts are ignored, with a note on standard error.
+
+Shortcuts match their modifiers exactly: Ctrl+Shift+I inverts the selection and never also runs Ctrl+I. Plugins can give their actions a shortcut, shown next to the action in its menu. A plugin shortcut always includes Ctrl or Alt (or is one of F1–F24) and never replaces a shortcut in use, including one you assigned; a clashing one is ignored and reported in **Plugins → Manage Plugins…**. Plugin actions are listed under Plugins in Settings, where their shortcuts can be changed like any other. The panes in the right sidebar are shown or hidden from the **Window** menu.
 
 Copy an image in another app, or copy one or more image files in a file manager, then use Ctrl+V (or Edit → Paste) to add them as layers. External images are centered on the canvas; a new document is created if none is open. Local file URLs and absolute file paths can also be pasted. Multiple files are imported together in one undo step, without changing the source files. When a text field has focus, Ctrl+V pastes text into that field.
 

@@ -15,6 +15,9 @@ use egui_kittest::{
 #[path = "ui_shortcuts.rs"]
 mod shortcuts;
 
+#[path = "ui_keybindings.rs"]
+mod keybindings;
+
 /// An `EditorApp` running inside a kittest harness at the usual 1280x860 window size.
 pub(super) struct UiTest {
     harness: Harness<'static, Option<EditorApp>>,
@@ -113,6 +116,15 @@ impl UiTest {
             .get_by_label(label)
             .accesskit_node()
             .is_disabled()
+    }
+
+    /// Clicks the only text field on screen and types `text` into it.
+    #[track_caller]
+    pub(super) fn type_in_text_field(&mut self, text: &str) {
+        self.harness.get_by_role(Role::TextInput).click();
+        self.harness.step();
+        self.harness.get_by_role(Role::TextInput).type_text(text);
+        self.settle();
     }
 
     /// Opens a menu bar menu such as "File" by clicking it.

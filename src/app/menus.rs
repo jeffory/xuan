@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use egui::{Button, RichText};
 use xuan::i18n::tr;
 use xuan::{
@@ -6,7 +8,7 @@ use xuan::{
     plugins::manifest::Menu,
 };
 
-use super::{EditorApp, theme, widgets};
+use super::{EditorApp, commands, theme, widgets};
 
 fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
     let background = ui.painter().add(egui::Shape::Noop);
@@ -59,20 +61,45 @@ fn plugin_items(
     }
 }
 
+/// What the menus need from the command registry this frame: whether each command can run
+/// and its shortcut hint.
+pub(super) struct MenuItems(HashMap<&'static str, (bool, String)>);
+
+impl MenuItems {
+    pub(super) fn get(&self, command: &str) -> (bool, &str) {
+        self.0
+            .get(command)
+            .map_or((false, ""), |(enabled, shortcut)| (*enabled, shortcut))
+    }
+}
+
+/// A menu item for a registry command, with the registry's label.
 fn item(
     ui: &mut egui::Ui,
-    label: &str,
-    shortcut: &str,
+    items: &MenuItems,
     command: &'static str,
     action: &mut Option<&'static str>,
 ) {
+    let label = commands::find(command).map_or(command, |c| tr(c.label));
+    labelled(ui, items, label, command, action);
+}
+
+/// A menu item for a registry command, with a label of its own.
+fn labelled(
+    ui: &mut egui::Ui,
+    items: &MenuItems,
+    label: &str,
+    command: &'static str,
+    action: &mut Option<&'static str>,
+) {
+    let (enabled, shortcut) = items.get(command);
     // Without a shortcut the accessible label is just the name, with no trailing space.
     let button = if shortcut.is_empty() {
         Button::new(label)
     } else {
         Button::new(label).shortcut_text(shortcut)
     };
-    if ui.add(button).clicked() {
+    if ui.add_enabled(enabled, button).clicked() {
         *action = Some(command);
         ui.close();
     }
@@ -81,13 +108,18 @@ fn item(
 /// A menu toggle with a shortcut hint, run as a command so the key chord does the same thing.
 fn check_item(
     ui: &mut egui::Ui,
+    items: &MenuItems,
     checked: bool,
-    label: &str,
-    shortcut: &str,
+    label: Option<&str>,
     command: &'static str,
     action: &mut Option<&'static str>,
 ) {
-    if widgets::menu_check(ui, checked, label, shortcut).clicked() {
+    let label = label.unwrap_or_else(|| commands::find(command).map_or(command, |c| tr(c.label)));
+    let (enabled, shortcut) = items.get(command);
+    let response = ui.add_enabled_ui(enabled, |ui| {
+        widgets::menu_check(ui, checked, label, shortcut)
+    });
+    if response.inner.clicked() {
         *action = Some(command);
         ui.close();
     }
@@ -157,7 +189,22 @@ pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
 }
 
 impl EditorApp {
+    pub(super) fn menu_items(&self) -> MenuItems {
+        MenuItems(
+            commands::COMMANDS
+                .iter()
+                .map(|c| {
+                    (
+                        c.id,
+                        (self.command_enabled(c.id), self.keymap.shortcut(c.id)),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     pub(super) fn menus(&mut self, ctx: &egui::Context) {
+        let items = self.menu_items();
         let mut action = None;
         let mut adjustment = None;
         let mut filter = None;
@@ -188,56 +235,32 @@ impl EditorApp {
                         // Leave a small gap between the expanded highlights.
                         ui.spacing_mut().item_spacing.x += 2.0;
                         menu_bar_button(ui, tr("File"), |ui| {
-                            item(ui, tr("New Canvas…"), "Ctrl+N", "new", &mut action);
-                            item(ui, tr("Open…"), "Ctrl+O", "open", &mut action);
-                            item(
-                                ui,
-                                tr("Open Image from Clipboard"),
-                                "",
-                                "open_clipboard",
-                                &mut action,
-                            );
-                            item(
-                                ui,
-                                tr("Open Compositor Package…"),
-                                "",
-                                "open_comp",
-                                &mut action,
-                            );
+                            item(ui, &items, "new", &mut action);
+                            item(ui, &items, "open", &mut action);
+                            item(ui, &items, "open_clipboard", &mut action);
+                            item(ui, &items, "open_comp", &mut action);
                             ui.add_enabled_ui(!developing, |ui| {
-                                item(
-                                    ui,
-                                    tr("Import Image as Layer…"),
-                                    "Ctrl+Shift+O",
-                                    "import",
-                                    &mut action,
-                                );
+                                item(ui, &items, "import", &mut action);
                             });
                             ui.separator();
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, tr("Save"), "Ctrl+S", "save", &mut action);
-                                item(ui, tr("Save As…"), "Ctrl+Shift+S", "save_as", &mut action);
-                                item(
-                                    ui,
-                                    tr("Export Image…"),
-                                    "Ctrl+Alt+Shift+S",
-                                    "export",
-                                    &mut action,
-                                );
+                                item(ui, &items, "save", &mut action);
+                                item(ui, &items, "save_as", &mut action);
+                                item(ui, &items, "export", &mut action);
                                 ui.separator();
-                                item(ui, tr("Close Project"), "Ctrl+W", "close", &mut action);
+                                item(ui, &items, "close", &mut action);
                             });
                             if developing {
-                                item(ui, tr("Close RAW Develop"), "Ctrl+W", "close", &mut action);
+                                labelled(ui, &items, tr("Close RAW Develop"), "close", &mut action);
                             }
                             ui.add_enabled_ui(has_doc, |ui| {
                                 plugin_items(ui, plugin_menu.get(&Menu::File), &mut plugin_action);
                             });
                             ui.separator();
-                            item(ui, tr("Quit"), "Ctrl+Q", "quit", &mut action);
+                            item(ui, &items, "quit", &mut action);
                         });
                         menu_bar_button(ui, tr("Edit"), |ui| {
-                            item(ui, tr("Settings…"), "Ctrl+,", "settings", &mut action);
+                            item(ui, &items, "settings", &mut action);
                             plugin_items(ui, plugin_menu.get(&Menu::Edit), &mut plugin_action);
                             ui.separator();
                             let (undo, redo) = if let Some(d) = &self.develop {
@@ -254,62 +277,38 @@ impl EditorApp {
                                 )
                             };
                             ui.add_enabled_ui(undo.is_some(), |ui| {
-                                item(
+                                labelled(
                                     ui,
+                                    &items,
                                     &format!("{} {}", tr("Undo"), tr(undo.unwrap_or(""))),
-                                    "Ctrl+Z",
                                     "undo",
                                     &mut action,
                                 )
                             });
                             ui.add_enabled_ui(redo.is_some(), |ui| {
-                                item(
+                                labelled(
                                     ui,
+                                    &items,
                                     &format!("{} {}", tr("Redo"), tr(redo.unwrap_or(""))),
-                                    "Ctrl+Shift+Z",
                                     "redo",
                                     &mut action,
                                 )
                             });
                             ui.separator();
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, tr("Cut"), "Ctrl+X", "cut", &mut action);
-                                item(ui, tr("Copy"), "Ctrl+C", "copy", &mut action);
-                                item(
-                                    ui,
-                                    tr("Copy Merged"),
-                                    "Ctrl+Shift+C",
-                                    "copy_merged",
-                                    &mut action,
-                                );
+                                item(ui, &items, "cut", &mut action);
+                                item(ui, &items, "copy", &mut action);
+                                item(ui, &items, "copy_merged", &mut action);
                             });
                             ui.add_enabled_ui(!developing, |ui| {
-                                item(ui, tr("Paste"), "Ctrl+V", "paste", &mut action);
+                                item(ui, &items, "paste", &mut action);
                             });
                             ui.add_enabled_ui(has_doc, |ui| {
                                 ui.separator();
-                                item(
-                                    ui,
-                                    tr("Fill Foreground"),
-                                    "Alt+Backspace",
-                                    "fill_fg",
-                                    &mut action,
-                                );
-                                item(
-                                    ui,
-                                    tr("Fill Background"),
-                                    "Ctrl+Backspace",
-                                    "fill_bg",
-                                    &mut action,
-                                );
-                                item(ui, tr("Clear Pixels"), "Delete", "clear", &mut action);
-                                item(
-                                    ui,
-                                    tr("Content-Aware Fill"),
-                                    "Shift+F5",
-                                    "content_fill",
-                                    &mut action,
-                                );
+                                item(ui, &items, "fill_fg", &mut action);
+                                item(ui, &items, "fill_bg", &mut action);
+                                item(ui, &items, "clear", &mut action);
+                                item(ui, &items, "content_fill", &mut action);
                             });
                         });
                         menu_bar_button(ui, tr("Image"), |ui| {
@@ -317,59 +316,29 @@ impl EditorApp {
                                 ui.menu_button(tr("Adjustments"), |ui| {
                                     adjustment = adjustment_menu(ui);
                                     ui.separator();
-                                    item(ui, tr("Invert"), "Ctrl+I", "invert", &mut action);
+                                    item(ui, &items, "invert", &mut action);
                                 });
                                 ui.separator();
-                                item(ui, tr("Image Size…"), "", "image_size", &mut action);
-                                item(ui, tr("Canvas Size…"), "", "canvas_size", &mut action);
+                                item(ui, &items, "image_size", &mut action);
+                                item(ui, &items, "canvas_size", &mut action);
                                 ui.separator();
-                                item(
-                                    ui,
-                                    tr("Flip Canvas Horizontal"),
-                                    "",
-                                    "flip_canvas_h",
-                                    &mut action,
-                                );
-                                item(
-                                    ui,
-                                    tr("Flip Canvas Vertical"),
-                                    "",
-                                    "flip_canvas_v",
-                                    &mut action,
-                                );
+                                item(ui, &items, "flip_canvas_h", &mut action);
+                                item(ui, &items, "flip_canvas_v", &mut action);
                                 plugin_items(ui, plugin_menu.get(&Menu::Image), &mut plugin_action);
                             });
                         });
                         menu_bar_button(ui, tr("Layer"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(
-                                    ui,
-                                    tr("New Layer"),
-                                    "Ctrl+Shift+N",
-                                    "new_layer",
-                                    &mut action,
-                                );
-                                item(
-                                    ui,
-                                    tr("Duplicate Layers"),
-                                    "Ctrl+J",
-                                    "duplicate",
-                                    &mut action,
-                                );
-                                item(ui, tr("Delete Layers"), "", "delete_layer", &mut action);
+                                item(ui, &items, "new_layer", &mut action);
+                                item(ui, &items, "duplicate", &mut action);
+                                item(ui, &items, "delete_layer", &mut action);
                                 ui.add_enabled_ui(
                                     self.session()
                                         .and_then(|s| s.document.active())
                                         .is_some_and(|l| l.raw.is_some() && !l.locked),
                                     |ui| {
-                                        item(ui, tr("Develop RAW…"), "", "develop", &mut action);
-                                        item(
-                                            ui,
-                                            tr("Rasterize RAW Layer"),
-                                            "",
-                                            "rasterize_raw",
-                                            &mut action,
-                                        );
+                                        item(ui, &items, "develop", &mut action);
+                                        item(ui, &items, "rasterize_raw", &mut action);
                                     },
                                 );
                                 ui.add_enabled_ui(
@@ -377,32 +346,14 @@ impl EditorApp {
                                         .and_then(|s| s.document.active())
                                         .is_some_and(super::layer_effects_dialog::can_take_effects),
                                     |ui| {
-                                        item(
-                                            ui,
-                                            tr("Layer Effects…"),
-                                            "",
-                                            "layer_effects",
-                                            &mut action,
-                                        );
+                                        item(ui, &items, "layer_effects", &mut action);
                                     },
                                 );
                                 ui.separator();
-                                item(ui, tr("Group Layers"), "Ctrl+G", "group", &mut action);
-                                item(
-                                    ui,
-                                    tr("Ungroup Layers"),
-                                    "Ctrl+Shift+G",
-                                    "ungroup",
-                                    &mut action,
-                                );
-                                item(
-                                    ui,
-                                    tr("Merge Down / Selected"),
-                                    "Ctrl+E",
-                                    "merge",
-                                    &mut action,
-                                );
-                                item(ui, tr("Flatten Image"), "", "flatten", &mut action);
+                                item(ui, &items, "group", &mut action);
+                                item(ui, &items, "ungroup", &mut action);
+                                item(ui, &items, "merge", &mut action);
+                                item(ui, &items, "flatten", &mut action);
                                 ui.separator();
                                 ui.menu_button(tr("New Adjustment Layer"), |ui| {
                                     adjustment = adjustment_menu(ui);
@@ -413,72 +364,48 @@ impl EditorApp {
                                     filter_layer = true;
                                 });
                                 ui.menu_button(tr("Layer Mask"), |ui| {
-                                    item(
+                                    item(ui, &items, "new_mask_layer", &mut action);
+                                    item(ui, &items, "mask", &mut action);
+                                    labelled(
                                         ui,
-                                        tr("New Mask Layer"),
-                                        "",
-                                        "new_mask_layer",
-                                        &mut action,
-                                    );
-                                    item(
-                                        ui,
-                                        tr("Add Mask from Selection"),
-                                        "",
-                                        "mask",
-                                        &mut action,
-                                    );
-                                    item(
-                                        ui,
+                                        &items,
                                         tr("Enable / Disable"),
-                                        "",
                                         "disable_mask",
                                         &mut action,
                                     );
-                                    item(ui, tr("Link / Unlink"), "", "link_mask", &mut action);
-                                    item(ui, tr("Delete Mask"), "", "delete_mask", &mut action);
-                                });
-                                item(
-                                    ui,
-                                    tr("Create / Release Clipping Mask"),
-                                    "Ctrl+Alt+G",
-                                    "clip",
-                                    &mut action,
-                                );
-                                ui.separator();
-                                item(ui, tr("Flip Horizontal"), "", "flip_h", &mut action);
-                                item(ui, tr("Flip Vertical"), "", "flip_v", &mut action);
-                                ui.separator();
-                                ui.add_enabled_ui(can_rerun, |ui| {
-                                    item(
+                                    labelled(
                                         ui,
-                                        tr("Re-run Plugin Action…"),
-                                        "",
-                                        "rerun_plugin",
+                                        &items,
+                                        tr("Link / Unlink"),
+                                        "link_mask",
                                         &mut action,
                                     );
+                                    item(ui, &items, "delete_mask", &mut action);
+                                });
+                                item(ui, &items, "clip", &mut action);
+                                ui.separator();
+                                item(ui, &items, "flip_h", &mut action);
+                                item(ui, &items, "flip_v", &mut action);
+                                ui.separator();
+                                ui.add_enabled_ui(can_rerun, |ui| {
+                                    item(ui, &items, "rerun_plugin", &mut action);
                                 });
                                 plugin_items(ui, plugin_menu.get(&Menu::Layer), &mut plugin_action);
                             });
                         });
                         menu_bar_button(ui, tr("Select"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, tr("All"), "Ctrl+A", "select_all", &mut action);
-                                item(ui, tr("Deselect"), "Ctrl+D", "deselect", &mut action);
-                                item(
+                                labelled(ui, &items, tr("All"), "select_all", &mut action);
+                                item(ui, &items, "deselect", &mut action);
+                                labelled(
                                     ui,
+                                    &items,
                                     tr("Inverse"),
-                                    "Ctrl+Shift+I",
                                     "invert_selection",
                                     &mut action,
                                 );
-                                item(
-                                    ui,
-                                    tr("Load Layer / Mask"),
-                                    "",
-                                    "load_selection",
-                                    &mut action,
-                                );
-                                item(ui, tr("Feather 3 px"), "", "feather", &mut action);
+                                item(ui, &items, "load_selection", &mut action);
+                                item(ui, &items, "feather", &mut action);
                                 plugin_items(
                                     ui,
                                     plugin_menu.get(&Menu::Select),
@@ -488,13 +415,7 @@ impl EditorApp {
                         });
                         menu_bar_button(ui, tr("Filter"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
-                                item(
-                                    ui,
-                                    tr("Remove Background (edge colors)"),
-                                    "",
-                                    "remove_background",
-                                    &mut action,
-                                );
+                                item(ui, &items, "remove_background", &mut action);
                                 ui.separator();
                                 for f in [
                                     Filter::GaussianBlur { radius: 4.0 },
@@ -525,59 +446,64 @@ impl EditorApp {
                         });
                         menu_bar_button(ui, tr("View"), |ui| {
                             ui.add_enabled_ui(can_view, |ui| {
-                                item(ui, tr("Fit Canvas"), "Ctrl+0", "fit", &mut action);
-                                item(ui, tr("Actual Pixels"), "Ctrl+1", "actual", &mut action);
-                                item(ui, tr("Zoom In"), "Ctrl++", "zoom_in", &mut action);
-                                item(ui, tr("Zoom Out"), "Ctrl+−", "zoom_out", &mut action);
+                                item(ui, &items, "fit", &mut action);
+                                item(ui, &items, "actual", &mut action);
+                                item(ui, &items, "zoom_in", &mut action);
+                                item(ui, &items, "zoom_out", &mut action);
                             });
                             ui.separator();
-                            let mut pixel_grid = self.config.pixel_grid;
-                            if widgets::checkbox(ui, &mut pixel_grid, tr("Pixel Grid")).clicked() {
-                                self.set_pixel_grid(pixel_grid);
-                            }
-                            ui.add_enabled_ui(!developing, |ui| {
-                                widgets::checkbox(
-                                    ui,
-                                    &mut self.show_controls,
-                                    tr("Show Transform Controls"),
-                                );
-                            });
+                            check_item(
+                                ui,
+                                &items,
+                                self.config.pixel_grid,
+                                None,
+                                "toggle_pixel_grid",
+                                &mut action,
+                            );
+                            check_item(
+                                ui,
+                                &items,
+                                self.show_controls,
+                                None,
+                                "toggle_controls",
+                                &mut action,
+                            );
                             // Rulers, grid, guides and snapping, as upstream's View menu.
                             ui.separator();
                             ui.add_enabled_ui(has_doc, |ui| {
                                 ui.menu_button(tr("Show"), |ui| {
                                     check_item(
                                         ui,
+                                        &items,
                                         self.config.show_grid,
-                                        tr("Grid"),
-                                        "Ctrl+'",
+                                        Some(tr("Grid")),
                                         "toggle_grid",
                                         &mut action,
                                     );
                                     check_item(
                                         ui,
+                                        &items,
                                         self.config.show_guides,
-                                        tr("Guides"),
-                                        "Ctrl+;",
+                                        Some(tr("Guides")),
                                         "toggle_guides",
                                         &mut action,
                                     );
                                 });
-                                item(ui, tr("Grid Settings…"), "", "grid_settings", &mut action);
+                                item(ui, &items, "grid_settings", &mut action);
                                 check_item(
                                     ui,
+                                    &items,
                                     self.config.rulers,
-                                    tr("Rulers"),
-                                    "Ctrl+R",
+                                    None,
                                     "toggle_rulers",
                                     &mut action,
                                 );
                                 ui.separator();
                                 check_item(
                                     ui,
+                                    &items,
                                     self.config.snap.enabled,
-                                    tr("Snap"),
-                                    "Ctrl+Shift+;",
+                                    None,
                                     "toggle_snap",
                                     &mut action,
                                 );
@@ -603,9 +529,9 @@ impl EditorApp {
                                 ui.separator();
                                 check_item(
                                     ui,
+                                    &items,
                                     self.config.lock_guides,
-                                    tr("Lock Guides"),
-                                    "Ctrl+Alt+;",
+                                    None,
                                     "lock_guides",
                                     &mut action,
                                 );
@@ -613,12 +539,12 @@ impl EditorApp {
                                     .session()
                                     .is_some_and(|s| !s.document.guides.is_empty());
                                 ui.add_enabled_ui(has_guides, |ui| {
-                                    item(ui, tr("Clear Guides"), "", "clear_guides", &mut action);
+                                    item(ui, &items, "clear_guides", &mut action);
                                 });
                             });
                         });
                         menu_bar_button(ui, tr("Plugins"), |ui| {
-                            item(ui, tr("Manage Plugins…"), "", "plugins", &mut action);
+                            item(ui, &items, "plugins", &mut action);
                             ui.add_enabled_ui(!developing, |ui| {
                                 plugin_items(
                                     ui,
@@ -637,18 +563,12 @@ impl EditorApp {
                                     }
                                 }
                                 ui.separator();
-                                item(
-                                    ui,
-                                    tr("Reset Panel Layout"),
-                                    "",
-                                    "reset_panels",
-                                    &mut action,
-                                );
+                                item(ui, &items, "reset_panels", &mut action);
                             });
                         });
                         menu_bar_button(ui, tr("Help"), |ui| {
-                            item(ui, tr("Keyboard Shortcuts"), "F1", "shortcuts", &mut action);
-                            item(ui, tr("About Xuan"), "", "about", &mut action);
+                            item(ui, &items, "shortcuts", &mut action);
+                            item(ui, &items, "about", &mut action);
                         });
                     });
                     self.trailing_window_controls(ui);
@@ -662,7 +582,7 @@ impl EditorApp {
             self.start_plugin_action(&plugin, &action);
         }
         if let Some(action) = action {
-            self.command(action);
+            self.run_command(action);
         }
         if let Some(adjustment) = adjustment {
             self.start_adjustment(adjustment, adjustment_layer);
@@ -702,7 +622,10 @@ impl EditorApp {
                     ui.horizontal(|ui| {
                         if ui
                             .add(widgets::Button::new("+").min_size(egui::vec2(28.0, 28.0)))
-                            .on_hover_text(tr("New canvas (Ctrl+N)"))
+                            .on_hover_text(match self.keymap.shortcut("new") {
+                                shortcut if shortcut.is_empty() => tr("New canvas").to_owned(),
+                                shortcut => format!("{} ({shortcut})", tr("New canvas")),
+                            })
                             .clicked()
                         {
                             action = Some("new");

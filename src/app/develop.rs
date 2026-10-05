@@ -268,6 +268,16 @@ impl Develop {
         self.last_brush_point = None;
     }
 
+    /// Rotates as one undo step, for a key binding: the toolbar's undo tracking only
+    /// sees changes made while it is drawn.
+    pub fn rotate_with_undo(&mut self, clockwise: bool) {
+        let previous = self.settings.clone();
+        self.rotate(clockwise);
+        self.pending_undo.get_or_insert(previous);
+        self.changed();
+        self.finish_undo();
+    }
+
     fn update_preview_resolution(&mut self, ctx: &egui::Context) {
         let (Some(full), Some(proxy)) = (&self.full, &self.proxy) else {
             return;

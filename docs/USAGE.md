@@ -303,9 +303,20 @@ RAW Develop canvas, where one image pixel is one RAW output pixel, for pixel pee
 
 Turn it on or off with **View → Pixel Grid** (on by default). Set the zoom level in
 **Settings → Appearance → Show pixel grid above** (200% to 6400%, default 500%).
-Both settings are saved. There is no keyboard shortcut. A canvas whose preview is
+Both settings are saved. **View → Pixel Grid** has no default shortcut, but you can
+assign one under **Keyboard Shortcuts**. A canvas whose preview is
 limited by the graphics card's texture size cannot show one texel per pixel, so
 the grid is hidden there.
+
+The **Keyboard Shortcuts** category lists every command, tool and plugin action by
+menu, with the keys that run it. Search by name or key, click a shortcut and press
+new keys (Escape cancels, Backspace removes it), add a second shortcut with **+**, and
+restore defaults per command with **Reset** or all at once with **Reset All**. Keys
+that another command already uses prompt to **Reassign** or **Cancel**. Single letters
+are kept for tools, and Enter, Escape, Space, Tab, the arrows and the number keys
+belong to the editor. Menus, tool tips and **Help → Keyboard Shortcuts** (F1, which
+also has a **Customize…** button) show the keys in effect. See
+[keyboard shortcuts](SHORTCUTS.md) for the defaults.
 
 Quit with **File → Quit** (Ctrl+Q). It asks about unsaved changes and open Develop
 sessions, like closing the window.
@@ -340,6 +351,10 @@ color = "light_gray" # Or light_blue, light_red, green, medium_blue, yellow, mag
 custom_color = [179, 179, 179]
 style = "lines" # Or "dashed_lines" or "dots".
 opacity = 45
+
+[keybindings] # Only the shortcuts you changed (Settings → Keyboard Shortcuts).
+merge = "Ctrl+Shift+M"
+invert_selection = "" # No shortcut.
 ```
 
 Missing options keep their defaults, so files from older releases still load.

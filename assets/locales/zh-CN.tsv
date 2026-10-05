@@ -668,3 +668,42 @@ Add Effect	添加效果
 Not on this layer	此图层上没有
 Effects stay editable; the pixels are not changed	效果可随时编辑，不会改变像素
 Select a pixel or text layer to add effects	请选择像素或文字图层以添加效果
+Free Transform	自由变换
+Re-run Plugin Action…	重新运行插件操作…
+Inverse Selection	反选
+Show Grid	显示网格
+Show Guides	显示参考线
+Reset Panel Layout	重置面板布局
+Manage Plugins…	管理插件…
+Window	窗口
+Tools	工具
+Plugins	插件
+Switch Rectangle / Ellipse Marquee	切换矩形 / 椭圆选框
+Switch Freehand / Polygonal Lasso	切换自由 / 多边形套索
+Switch Rectangle / Ellipse Shape	切换矩形 / 椭圆形状
+Swap Colors	交换颜色
+Reset Colors	复位颜色
+Decrease Brush Size	减小画笔大小
+Increase Brush Size	增大画笔大小
+Decrease Brush Hardness	降低画笔硬度
+Increase Brush Hardness	提高画笔硬度
+Rotate Left	向左旋转
+Rotate Right	向右旋转
+Show Edited	显示编辑后
+Show Original	显示原图
+Split View	分割视图
+Side by Side View	并排视图
+Show Clipping	显示溢出
+Search commands or keys	搜索命令或按键
+Reset All	全部重置
+Reassign	重新分配
+{key} is already used by “{command}”.	{key} 已被“{command}”使用。
+{key} is reserved for the editor and cannot be assigned.	{key} 由编辑器保留，无法分配。
+Single letters and digits are kept for tools. Add Ctrl or Alt.	单个字母和数字保留给工具，请加上 Ctrl 或 Alt。
+Click a shortcut and press keys. Escape cancels; Backspace removes it.	点击快捷键后按下新按键。Esc 取消，Backspace 移除。
+Press keys…	请按键…
+Add shortcut	添加快捷键
+Restore the default shortcut	恢复默认快捷键
+Change the keys that run commands	更改运行命令的按键
+Other	其他
+Customize…	自定义…

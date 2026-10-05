@@ -18,10 +18,10 @@ fn bundled_plugins_load_with_their_shortcuts() {
     app.install_plugins(manifests.to_vec(), vec![]);
     assert!(app.plugins.errors.is_empty(), "{:?}", app.plugins.errors);
     assert!(
-        app.plugins
-            .shortcuts
+        app.keymap
+            .entries()
             .iter()
-            .any(|(_, plugin, _)| plugin == "invert-regions")
+            .any(|entry| entry.id.starts_with("invert-regions/") && !entry.keys.is_empty())
     );
 }
 

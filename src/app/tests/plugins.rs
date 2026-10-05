@@ -183,8 +183,14 @@ fn grants_cover_the_reviewed_folder_command_and_permissions() {
 
 #[test]
 fn shortcuts_match_their_modifiers_exactly() {
-    use super::shortcuts::{builtin_for, consume_exact};
+    use super::shortcuts::consume_exact;
     use egui::{Key, Modifiers};
+    let keymap = super::commands::Keymap::default();
+    let builtin_for = |mods: Modifiers, key: Key| {
+        keymap
+            .lookup(mods, key, false)
+            .map(|entry| entry.id.as_str())
+    };
     let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
     let press = |modifiers: Modifiers, key: Key| {
         let mut input = egui::InputState::default();
@@ -208,7 +214,10 @@ fn shortcuts_match_their_modifiers_exactly() {
     assert_eq!(builtin_for(ctrl_shift, Key::I), Some("invert_selection"));
     assert_eq!(builtin_for(Modifiers::CTRL, Key::I), Some("invert"));
     assert_eq!(builtin_for(Modifiers::CTRL, Key::E), Some("merge"));
-    assert_eq!(builtin_for(Modifiers::CTRL, Key::H), Some("hide_controls"));
+    assert_eq!(
+        builtin_for(Modifiers::CTRL, Key::H),
+        Some("toggle_controls")
+    );
     assert_eq!(builtin_for(Modifiers::NONE, Key::F1), Some("shortcuts"));
     assert_eq!(builtin_for(Modifiers::CTRL, Key::R), Some("toggle_rulers"));
     assert_eq!(
@@ -1007,7 +1016,7 @@ done
         let colliding = MANIFEST.replace("Ctrl+Shift+E", "Ctrl+Shift+I");
         std::fs::write(dir.path().join("plugin.toml"), colliding).unwrap();
         app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
-        assert!(app.plugins.shortcuts.is_empty());
+        assert!(app.keymap.keys("mock/echo").is_empty());
         assert_eq!(app.plugins.errors.len(), 1);
         let error = &app.plugins.errors[0].error;
         assert!(
@@ -1041,7 +1050,13 @@ done
             other.path(),
         );
         app.install_plugins(vec![first.unwrap(), second.unwrap()], vec![]);
-        assert_eq!(app.plugins.shortcuts.len(), 1);
+        let bound = app.keymap.entries().iter();
+        assert_eq!(
+            bound
+                .filter(|e| e.id.ends_with("/echo") && !e.keys.is_empty())
+                .count(),
+            1
+        );
         assert!(app.plugins.errors[0].error.contains("mock/echo"));
     }
 }

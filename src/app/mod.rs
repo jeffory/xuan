@@ -2,6 +2,7 @@ use xuan::i18n::tr;
 mod canvas;
 mod chrome;
 mod clipboard;
+mod commands;
 mod develop;
 mod develop_controls;
 mod develop_preview;
@@ -15,6 +16,7 @@ mod grid_settings;
 mod guides;
 mod icons;
 mod jobs;
+mod keybindings;
 mod layer_effects_dialog;
 mod layers;
 mod layout_grid;
@@ -125,28 +127,6 @@ impl Tool {
             Self::Hand => tr("Hand"),
             Self::Zoom => tr("Zoom"),
             Self::Region => tr("Region"),
-        }
-    }
-    fn shortcut(self) -> &'static str {
-        match self {
-            Self::Move => "V",
-            Self::Marquee => "M",
-            Self::Lasso => "L",
-            Self::Wand => "W",
-            Self::Crop => "C",
-            Self::Brush => "B",
-            Self::Pencil => "Shift+B",
-            Self::Erase => "E",
-            Self::Heal => "J",
-            Self::Clone => "S",
-            Self::Blur => "R",
-            Self::Gradient => "G",
-            Self::Shape => "U",
-            Self::Text => "T",
-            Self::Dropper => "I",
-            Self::Hand => "H",
-            Self::Zoom => "Z",
-            Self::Region => "",
         }
     }
     fn is_brush(self) -> bool {
@@ -422,6 +402,10 @@ pub struct EditorApp {
     config_path: Option<PathBuf>,
     /// Settings changed in memory (a field mid-drag) but not yet written.
     config_dirty: bool,
+    /// The command registry with the user's key bindings applied.
+    keymap: commands::Keymap,
+    /// Settings → Keyboard Shortcuts: search, key capture and a conflict waiting for an answer.
+    key_editor: keybindings::KeyEditor,
     pane_drag: Option<panes::PaneDrag>,
     plugins: plugins::PluginState,
     tablet: Option<tablet::TabletInput>,
@@ -593,6 +577,8 @@ impl EditorApp {
             config: Default::default(),
             config_path: None,
             config_dirty: false,
+            keymap: Default::default(),
+            key_editor: Default::default(),
             pane_drag: None,
             plugins: Default::default(),
             tablet: None,
@@ -1631,7 +1617,12 @@ impl EditorApp {
             && self.close_tab.is_none()
             && !self.close_app
             && !ctx.wants_keyboard_input()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Q))
+            && ctx.input_mut(|i| {
+                self.keymap
+                    .keys("quit")
+                    .iter()
+                    .any(|c| shortcuts::consume_exact(i, c.mods, c.key))
+            })
         {
             // Like the close button, Ctrl+Q works during a job; quitting cancels it.
             self.request_quit();

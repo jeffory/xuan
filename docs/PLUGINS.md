@@ -139,9 +139,11 @@ An action's `shortcut` names `Ctrl`, `Shift` and `Alt` modifiers and one key,
 such as `Ctrl+Alt+E`. Letters, digits and other keys need Ctrl or Alt; only the
 function keys `F1`–`F24` may be used alone or with Shift. Chords match their
 modifiers exactly, so `Ctrl+Shift+E` and `Ctrl+E` are different shortcuts. A
-shortcut Xuan already uses (see [SHORTCUTS.md](SHORTCUTS.md)), or that an
-earlier plugin claimed, is ignored and reported in **Plugins → Manage
-Plugins…**; the action stays available from its menu.
+shortcut Xuan already uses (see [SHORTCUTS.md](SHORTCUTS.md)), including one
+the user assigned, or that an earlier plugin claimed, is ignored and reported in
+**Plugins → Manage Plugins…**; the action stays available from its menu. Users
+can change or remove an action's shortcut in **Settings → Keyboard Shortcuts**,
+where it is stored as `"<plugin>/<action>"`.
 
 ### Action inputs
 

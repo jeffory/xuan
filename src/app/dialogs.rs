@@ -9,9 +9,77 @@ use xuan::{
     io, operations, render,
 };
 
-use super::{Dialog, EditorApp, theme};
+use super::{Dialog, EditorApp, commands::Category, theme};
 
 impl EditorApp {
+    /// Help → Keyboard Shortcuts: the bindings in effect, from the command registry, and the
+    /// keys and gestures the editor handles itself.
+    fn shortcuts_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let mut customize = false;
+        widgets::Window::new(tr("Keyboard shortcuts"))
+            .default_width(690.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(520.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("shortcut_grid")
+                            .spacing(vec2(35.0, 8.0))
+                            .show(ui, |ui| {
+                                for category in Category::ALL {
+                                    let mut rows = self
+                                        .keymap
+                                        .entries()
+                                        .iter()
+                                        .filter(|e| e.category() == category && !e.keys.is_empty())
+                                        .peekable();
+                                    if rows.peek().is_none() {
+                                        continue;
+                                    }
+                                    ui.label(
+                                        RichText::new(tr(category.name())).color(theme::MUTED),
+                                    );
+                                    ui.end_row();
+                                    for entry in rows {
+                                        let keys: Vec<String> =
+                                            entry.keys.iter().map(|k| k.label()).collect();
+                                        ui.label(RichText::new(keys.join(" / ")).strong());
+                                        ui.label(entry.label());
+                                        ui.end_row();
+                                    }
+                                }
+                                ui.label(RichText::new(tr("Other")).color(theme::MUTED));
+                                ui.end_row();
+                                for (key, label) in [
+                                    (tr("Drag from a ruler"), tr("New guide")),
+                                    ("1–0", tr("Brush or layer opacity")),
+                                    ("Alt-click", tr("Set clone source")),
+                                    ("Space-drag", tr("Pan canvas")),
+                                    (
+                                        tr("Horizontal wheel / Shift+wheel"),
+                                        tr("Pan canvas horizontally"),
+                                    ),
+                                    (tr("Wheel over a slider or number"), tr("Adjust value")),
+                                    ("Enter / Escape", tr("Apply crop / Cancel gesture")),
+                                ] {
+                                    ui.label(RichText::new(key).strong());
+                                    ui.label(label);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                ui.add_space(8.0);
+                customize = widgets::button(ui, tr("Customize…")).clicked();
+            });
+        if customize {
+            super::settings::show_settings_page(ctx, super::settings::SettingsPage::Keyboard);
+            self.dialog = Some(Dialog::Settings);
+        } else if !open {
+            self.dialog = None;
+        }
+    }
+
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.job {
             widgets::Window::new(&job.name).show(ctx, |ui| {
@@ -40,67 +108,7 @@ impl EditorApp {
                 Dialog::PluginProposal => self.plugin_proposal_dialog(ctx),
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),
-                Dialog::Shortcuts => {
-                    let mut open = true;
-                    widgets::Window::new(tr("Keyboard shortcuts"))
-                        .default_width(690.0)
-                        .open(&mut open)
-                        .show(ctx, |ui| {
-                            egui::Grid::new("shortcut_grid")
-                                .spacing(vec2(35.0, 10.0))
-                                .show(ui, |ui| {
-                                    for (key, label) in [
-                                        ("Ctrl+N / O / S", tr("New / Open / Save")),
-                                        ("Ctrl+Shift+O", tr("Import image as layer")),
-                                        ("Ctrl+Alt+Shift+S", tr("Export image")),
-                                        ("Ctrl+W / Ctrl+Q", tr("Close / Quit")),
-                                        ("Ctrl+Z / Ctrl+Shift+Z", tr("Undo / Redo")),
-                                        (
-                                            "Ctrl+J / Ctrl+E / Ctrl+G",
-                                            tr("Duplicate / Merge / Group"),
-                                        ),
-                                        ("Ctrl+A / Ctrl+D", tr("Select all / Deselect")),
-                                        ("Ctrl+C / Ctrl+V", tr("Copy / Paste image")),
-                                        ("Ctrl+0 / Ctrl+1", tr("Fit / Actual pixels")),
-                                        ("Ctrl+R / Ctrl+' / Ctrl+;", tr("Rulers / Grid / Guides")),
-                                        ("Ctrl+Shift+; / Ctrl+Alt+;", tr("Snap / Lock guides")),
-                                        (tr("Drag from a ruler"), tr("New guide")),
-                                        (
-                                            "V / M / L / W / C",
-                                            tr("Move / Marquee / Lasso / Wand / Crop"),
-                                        ),
-                                        (
-                                            "B / E / J / S / R",
-                                            tr("Brush / Eraser / Heal / Clone / Blur"),
-                                        ),
-                                        ("Shift+B", tr("Switch between Brush and Pencil")),
-                                        (
-                                            "G / U / I / H / Z",
-                                            tr("Gradient / Shape / Eyedropper / Hand / Zoom"),
-                                        ),
-                                        ("[ / ] · Shift+[ / ]", tr("Brush size / Hardness")),
-                                        ("T", tr("Text")),
-                                        ("1–0", tr("Brush or layer opacity")),
-                                        ("Alt-click", tr("Set clone source")),
-                                        ("X / D", tr("Swap / Reset colors")),
-                                        ("Space-drag", tr("Pan canvas")),
-                                        (
-                                            tr("Horizontal wheel / Shift+wheel"),
-                                            tr("Pan canvas horizontally"),
-                                        ),
-                                        (tr("Wheel over a slider or number"), tr("Adjust value")),
-                                        ("Enter / Escape", tr("Apply crop / Cancel gesture")),
-                                    ] {
-                                        ui.label(RichText::new(key).strong());
-                                        ui.label(label);
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                    if !open {
-                        self.dialog = None;
-                    }
-                }
+                Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {
                     let mut open = true;
                     widgets::Window::new(tr("About Xuan"))

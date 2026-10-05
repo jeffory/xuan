@@ -24,6 +24,9 @@ mod plugin_examples;
 #[path = "tests/ui.rs"]
 mod ui;
 
+#[path = "tests/keymap.rs"]
+mod keymap;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -4652,7 +4655,7 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
 /// Open Settings on the Appearance page and return the threshold field's position.
 fn settings_threshold_field(context: &egui::Context, app: &mut EditorApp) -> Pos2 {
     app.dialog = Some(Dialog::Settings);
-    context.data_mut(|d| d.insert_temp(egui::Id::new("settings_page"), true));
+    settings::show_settings_page(context, settings::SettingsPage::Appearance);
     frame(context, app);
     layer_label(context, app, "500%") + Vec2::new(8.0, 6.0)
 }
