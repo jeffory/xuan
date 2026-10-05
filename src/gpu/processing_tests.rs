@@ -290,6 +290,14 @@ fn processing_raw_matches_cpu_at_both_depths() {
             ..Default::default()
         },
     ];
+    let negative = NegativeSettings {
+        enabled: true,
+        film_base: [0.9, 0.5, 0.2],
+        density_range: [1.7, 2.1, 2.4],
+        black_point: -0.07,
+        gamma: 1.8,
+        balance: [0.3, -0.2, 0.1],
+    };
     let cancel = AtomicBool::new(false);
     for s in [
         DevelopSettings {
@@ -316,14 +324,14 @@ fn processing_raw_matches_cpu_at_both_depths() {
             ..settings.clone()
         },
         DevelopSettings {
-            negative: NegativeSettings {
-                enabled: true,
-                film_base: [0.9, 0.5, 0.2],
-                density_range: [1.7, 2.1, 2.4],
-                black_point: -0.07,
-                gamma: 1.8,
-                balance: [0.3, -0.2, 0.1],
-            },
+            negative: negative.clone(),
+            ..settings.clone()
+        },
+        // Crop, quarter turn and inversion together, from one set of uniforms.
+        DevelopSettings {
+            negative,
+            quarter_turns: 3,
+            crop: [0.13, 0.02, 0.71, 0.97],
             ..settings.clone()
         },
         DevelopSettings {
@@ -1127,6 +1135,12 @@ fn processing_resident_raw_previews_match_output_and_keep_old_frames_immutable()
             crop: [0.031, 0.017, 0.969, 0.94],
             clarity: 12.0,
             texture: 8.0,
+            // The preview shares the full-resolution uniforms, inversion included.
+            negative: crate::raw::NegativeSettings {
+                enabled: i == 1,
+                film_base: [0.9, 0.8, 0.7],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let preview = scope(Some(gpu.clone()), || {

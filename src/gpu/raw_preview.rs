@@ -10,7 +10,7 @@ use anyhow::{Result, ensure};
 use super::{
     Analysis, Processor,
     processor::attempt,
-    raw::{RawBuffers, SHADER, settings},
+    raw::{Encoding, RawBuffers, RawUniforms, SHADER},
 };
 use crate::raw::{DecodedRaw, DevelopSettings};
 
@@ -106,10 +106,7 @@ impl Processor {
         entry: &mut Entry,
         cancel: &AtomicBool,
     ) -> Result<RawPreview> {
-        let size = [raw.camera.width(), raw.camera.height()];
-        let crop = s.crop_pixels(size);
-        let [left, top, right, bottom] = crop;
-        let target = s.output_size_for_crop(crop);
+        let target = s.output_size([raw.camera.width(), raw.camera.height()]);
         ensure!(
             target[0].max(target[1]) <= self.device.limits().max_texture_dimension_2d,
             "RAW preview exceeds GPU texture limits"
@@ -120,21 +117,23 @@ impl Processor {
         let wb = crate::raw::white_balance(raw, s);
         let (mut encoder, current) = self.raw_passes(raw, s, wb, &mut entry.work, cancel)?;
         let output = buffer(self, &mut entry.output, bytes)?;
-        let mut config = settings(raw, s, wb, 8);
-        config[13] = [left as f32, top as f32, target[0] as f32, target[1] as f32];
-        config[14] = [8.0, (stride / 4) as f32, 1.0, 0.0];
-        config[15] = [
-            (right - left) as f32,
-            (bottom - top) as f32,
-            s.quarter_turns as f32,
-            0.0,
-        ];
+        let config = RawUniforms::new(
+            raw,
+            s,
+            wb,
+            Encoding {
+                depth: 8,
+                row_pixels: stride / 4,
+                premultiply: true,
+            },
+        );
+        debug_assert_eq!(config.output_size(), target);
         self.dispatch(
             &mut encoder,
             "raw_encode",
             SHADER,
             [&entry.work.pixels[current], &entry.work.source, output],
-            &config,
+            config.rows(),
             target,
         )?;
         let texture = self.preview_texture(&mut encoder, output, 0, target, stride);
