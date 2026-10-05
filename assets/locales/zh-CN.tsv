@@ -546,7 +546,7 @@ Add Mask from Selection	从选区添加蒙版
 Toggle Mask	切换蒙版
 Reorder Layer	重排图层
 Remove Background	移除背景
-Remove Background (edge colors)	移除背景（边缘颜色）
+Remove Flat Background (edge colors)	移除纯色背景（边缘颜色）
 Nudge	微移
 Untitled	未命名
 Images and Xuan projects	图像和 Xuan 项目
@@ -891,3 +891,6 @@ Shift-click adds a colour, Alt-click takes one away.	按住 Shift 点按添加�
 Click the image to pick the colour to select.	点按图像以拾取要选择的颜色。
 How far a colour may be from the picked ones and still be selected	颜色与所拾取颜色相差多少仍会被选中
 Select everything except those colours, such as all but a green screen	选择这些颜色以外的全部内容，例如绿幕以外的部分
+Remove Flat Background	移除纯色背景
+Select Subject	选择主体
+Subject	主体

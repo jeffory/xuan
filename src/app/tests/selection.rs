@@ -102,3 +102,63 @@ fn layer_pixels_and_mask_black_areas_load_as_selections() {
         .mask = None;
     assert!(!enabled(&app, "select_mask_black"));
 }
+
+/// A 96x72 document: an orange disc on a mottled green background.
+pub(super) fn subject_document(app: &mut EditorApp) {
+    app.dimensions = [96, 72];
+    app.new_document();
+    let pixels = RgbaImage::from_fn(96, 72, |x, y| {
+        let n = ((x * 7 + y * 13) % 5) as u8 * 6;
+        image::Rgba(if in_subject(x, y) {
+            [230, 140 + n, 40, 255]
+        } else {
+            [60 + n, 120, 60 + n, 255]
+        })
+    });
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers[0].pixels = Some(Arc::new(pixels));
+}
+
+pub(super) fn in_subject(x: u32, y: u32) -> bool {
+    (x as f32 + 0.5 - 48.0).powi(2) + (y as f32 + 0.5 - 36.0).powi(2) <= 20.0f32.powi(2)
+}
+
+/// Pixels whose selection (≥ 128) disagrees with the disc.
+pub(super) fn wrong_pixels(mask: &[u8]) -> usize {
+    (0..96 * 72)
+        .filter(|&i| (mask[i] >= 128) != in_subject(i as u32 % 96, i as u32 / 96))
+        .count()
+}
+
+#[test]
+fn select_subject_and_remove_background_use_the_graph_cut() {
+    let (_, mut app) = app();
+    subject_document(&mut app);
+    app.command("select_subject");
+    assert!(app.job.is_some());
+    wait_for_job(&mut app);
+    assert_eq!(app.status, tr("Select Subject"));
+    let wrong = wrong_pixels(&selected(&app));
+    assert!(wrong < 30, "{wrong} pixels wrong");
+    app.command("deselect");
+    app.command("remove_background");
+    wait_for_job(&mut app);
+    assert_eq!(app.error, None);
+    let session = app.session().unwrap();
+    // The mask becomes a mask layer attached to the image.
+    let image = session.document.layers[0].id;
+    let child = session
+        .document
+        .layers
+        .iter()
+        .find(|l| l.parent == Some(image));
+    let mask = &child.unwrap().mask.as_ref().unwrap().pixels;
+    assert!(wrong_pixels(mask.as_raw()) < 30);
+    assert_eq!(session.history.undo_name(), Some(tr("Remove Background")));
+    // The flat-colour matte is still offered.
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("remove_flat_background");
+    wait_for_job(&mut app);
+    assert_eq!(app.session().unwrap().document.layers.len(), 2);
+}

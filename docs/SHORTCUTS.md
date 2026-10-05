@@ -38,6 +38,7 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Select | Select All | Ctrl+A |
 | Select | Deselect | Ctrl+D |
 | Select | Inverse Selection | Ctrl+Shift+I |
+| Select | Select Subject | Ctrl+Alt+A |
 | View | Fit Canvas | Ctrl+0 |
 | View | Actual Pixels | Ctrl+1 |
 | View | Zoom In | Ctrl+Plus / Ctrl+= |

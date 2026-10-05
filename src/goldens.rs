@@ -83,6 +83,7 @@ const SCENES: &[&str] = &[
     "layer_effects",
     "layer_effects_combined",
     "text_and_shapes",
+    "remove_background",
     "raw_default",
     "raw_negative",
     "raw_quarter_turn",
@@ -145,6 +146,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("layer_effects", layer_effects()),
         composite("layer_effects_combined", layer_effects_combined()),
         composite("text_and_shapes", text_and_shapes()),
+        composite("remove_background", remove_background()),
     ];
     if let Some(raw) = raw_fixture() {
         let raw = Arc::new(raw);
@@ -295,6 +297,38 @@ fn blend_strips(modes: &[BlendMode], top: f32, height: u32) -> Document {
 
 /// A checkerboard with a radial layer mask over the gradient, and a second
 /// layer whose horizontal-ramp mask is placed independently of its pixels.
+/// Filter → Remove Background's graph cut on a two-colour subject over a mottled,
+/// graded background, shown over a checkerboard: the mask, its soft guided-filter edge
+/// and how it combines with the layer all show.
+fn remove_background() -> Document {
+    let mottle = |x: u32, y: u32| ((x / 5 * 7 + y / 5 * 13) % 4 * 9) as u8;
+    let photo = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let (dx, dy) = (x as i32 - 128, y as i32 - 136);
+        if dx * dx * 4 + dy * dy * 3 <= 90 * 90 * 3 {
+            if y < 120 {
+                Rgba([210, 70 + mottle(x, y), 40, 255])
+            } else {
+                Rgba([40, 60, 170 + mottle(x, y), 255])
+            }
+        } else {
+            let level = (90 + x * 80 / SIZE) as u8;
+            Rgba([level + mottle(x, y), level + 30, level, 255])
+        }
+    });
+    let mut document = document(vec![
+        Layer::image(
+            "Checker",
+            checker(16, [250, 250, 250, 255], [200, 200, 200, 255]),
+        ),
+        Layer::image("Photo", photo),
+    ]);
+    let photo = document.layers[1].id;
+    document.select(photo, false);
+    crate::retouch::remove_background(&mut document, &|_| {}, &AtomicBool::new(false)).unwrap();
+    document.promote_image_masks();
+    document
+}
+
 fn layer_mask() -> Document {
     let radial = GrayImage::from_fn(128, 128, |x, y| {
         let (dx, dy) = (x as i32 - 64, y as i32 - 64);

@@ -87,6 +87,9 @@ impl EditorApp {
                     ui.spinner();
                     ui.label(tr("Working…"));
                 });
+                if let Some(progress) = job.progress() {
+                    ui.add(egui::ProgressBar::new(progress).show_percentage());
+                }
                 if widgets::button(ui, tr("Cancel")).clicked() {
                     job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }

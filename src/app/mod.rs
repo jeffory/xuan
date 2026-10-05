@@ -1246,10 +1246,27 @@ impl EditorApp {
                 self.start_job(tr("Content-Aware Fill"), xuan::retouch::content_aware_fill)
             }
             "remove_background" => {
+                self.start_progress_job(tr("Remove Background"), xuan::retouch::remove_background)
+            }
+            "remove_flat_background" => {
                 let tolerance = self.tolerance;
-                self.start_job(tr("Remove Background"), move |document, cancel| {
-                    xuan::retouch::remove_background(document, tolerance, cancel)
+                self.start_job(tr("Remove Flat Background"), move |document, cancel| {
+                    xuan::retouch::remove_flat_background(document, tolerance, cancel)
                 });
+            }
+            "select_subject" => {
+                self.start_progress_job(tr("Select Subject"), |doc, progress, cancel| {
+                    let image = render::render(doc);
+                    let result = xuan::segment::segment(
+                        &image,
+                        &xuan::segment::Seeds::subject(),
+                        progress,
+                        cancel,
+                    )
+                    .ok_or_else(|| anyhow::anyhow!(tr("Cancelled")))?;
+                    doc.selection = Some(Arc::new(result.mask));
+                    Ok(())
+                })
             }
             "new" => self.dialog = Some(Dialog::New),
             "open" => self.open_dialog(false),

@@ -22,6 +22,7 @@ pub mod provenance;
 pub mod raw;
 pub mod render;
 pub mod retouch;
+pub mod segment;
 pub mod selection;
 pub mod selection_ops;
 pub mod text;

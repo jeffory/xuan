@@ -665,6 +665,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .when(image_layer)
         .aliases(&["alpha", "opacity", "transparency"]),
     cmd("select_mask_black", "Select Mask's Black Areas", C::Select).when(masked_layer),
+    cmd("select_subject", "Select Subject", C::Select)
+        .keys(&[ctrl_alt(Key::A)])
+        .aliases(&["foreground", "cutout", "grabcut"]),
     cmd("color_range", "Color Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
     cmd("expand_selection", "Expand Selection…", C::Select)
         .when(has_selection)
@@ -674,12 +677,16 @@ pub(super) const COMMANDS: &[Command] = &[
         .aliases(&["shrink", "erode"]),
     cmd("feather", "Feather 3 px", C::Select),
     // Filter
+    cmd("remove_background", "Remove Background", C::Filter)
+        .when(image_layer)
+        .aliases(&["cutout", "transparent", "subject", "grabcut"]),
     cmd(
-        "remove_background",
-        "Remove Background (edge colors)",
+        "remove_flat_background",
+        "Remove Flat Background (edge colors)",
         C::Filter,
     )
-    .aliases(&["cutout", "transparent"]),
+    .when(image_layer)
+    .aliases(&["cutout", "transparent", "white background"]),
     // View
     cmd("fit", "Fit Canvas", C::View)
         .keys(&[ctrl(Key::Num0)])

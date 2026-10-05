@@ -420,6 +420,7 @@ impl EditorApp {
                                     "select_mask_black",
                                     &mut action,
                                 );
+                                labelled(ui, &items, tr("Subject"), "select_subject", &mut action);
                                 item(ui, &items, "color_range", &mut action);
                                 item(ui, &items, "load_selection", &mut action);
                                 ui.separator();
@@ -448,6 +449,7 @@ impl EditorApp {
                         menu_bar_button(ui, tr("Filter"), |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
                                 item(ui, &items, "remove_background", &mut action);
+                                item(ui, &items, "remove_flat_background", &mut action);
                                 ui.separator();
                                 for f in [
                                     Filter::GaussianBlur { radius: 4.0 },
