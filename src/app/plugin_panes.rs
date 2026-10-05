@@ -59,11 +59,7 @@ impl EditorApp {
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 if !self.plugin_granted(&plugin) {
-                    let name = self
-                        .plugins
-                        .manifest(&plugin)
-                        .map(|m| m.plugin.name.clone())
-                        .unwrap_or_default();
+                    let name = self.plugins.source(&plugin);
                     ui.add(
                         egui::Label::new(
                             RichText::new(format!(

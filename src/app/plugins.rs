@@ -132,6 +132,8 @@ enum FormatKind {
 pub(super) struct Proposal {
     pub document: Uuid,
     pub name: String,
+    /// The plugin it comes from, as [`PluginState::source`] shows it.
+    pub source: String,
     pub layers: Vec<Uuid>,
     pub comparing: bool,
     pub message: Option<String>,
@@ -181,6 +183,21 @@ impl PluginState {
     #[cfg(test)]
     pub fn starting(&self, plugin: &str) -> bool {
         self.starting.contains_key(plugin)
+    }
+
+    /// How the user is told which plugin something comes from: its name,
+    /// which any plugin may choose, plus its unique id, for example
+    /// "Mock (plugin mock)". A plugin cannot pass as Xuan or another plugin.
+    pub fn source(&self, plugin: &str) -> String {
+        let name = self
+            .manifest(plugin)
+            .map_or(plugin, |m| m.plugin.name.as_str());
+        format!("{} ({} {plugin})", one_line(name, 80), tr("plugin"))
+    }
+
+    /// A status bar message from a plugin, marked with where it comes from.
+    pub fn status_from(&self, plugin: &str, message: &str) -> String {
+        format!("{}: {}", self.source(plugin), one_line(message, 200))
     }
 
     pub fn running(&self, plugin: &str) -> bool {
@@ -348,10 +365,7 @@ impl EditorApp {
         gone.sort();
         gone.dedup();
         for plugin in &gone {
-            let name = self
-                .plugins
-                .manifest(plugin)
-                .map_or(plugin.clone(), |m| m.plugin.name.clone());
+            let name = self.plugins.source(plugin);
             self.end_plugin(
                 plugin,
                 &format!("{name} {}", tr("was removed or changed by Reload")),
@@ -533,12 +547,12 @@ impl EditorApp {
             ensure!(
                 self.plugin_enabled(plugin),
                 "{} is disabled",
-                manifest.plugin.name
+                self.plugins.source(plugin)
             );
             ensure!(
                 self.plugin_granted(plugin),
                 "{} needs its permissions accepted first",
-                manifest.plugin.name
+                self.plugins.source(plugin)
             );
             let data_dir = self.plugins.data_dir(plugin)?;
             let env = vec![
@@ -641,10 +655,7 @@ impl EditorApp {
             self.plugin_failed_to_start(plugin, tr("it exited"));
             return;
         }
-        let name = self
-            .plugins
-            .manifest(plugin)
-            .map_or(plugin.to_owned(), |m| m.plugin.name.clone());
+        let name = self.plugins.source(plugin);
         self.plugins.processes.remove(plugin);
         let failed: Vec<_> = self
             .plugins
@@ -673,10 +684,7 @@ impl EditorApp {
     /// `initialize`: stop it and fail everything that waited for it, with the
     /// end of its log so the user can see why.
     fn plugin_failed_to_start(&mut self, plugin: &str, error: &str) {
-        let name = self
-            .plugins
-            .manifest(plugin)
-            .map_or(plugin.to_owned(), |m| m.plugin.name.clone());
+        let name = self.plugins.source(plugin);
         let log = self.plugins.log(plugin);
         let tail = log[log.len().saturating_sub(5)..].join("\n");
         let message = format!("{name} {}: {error}\n{tail}", tr("did not start"))
@@ -944,7 +952,7 @@ impl EditorApp {
             }
             "host/status" => {
                 if let Some(message) = params.get("message").and_then(Value::as_str) {
-                    self.status = message.chars().take(200).collect();
+                    self.status = self.plugins.status_from(plugin, message);
                 }
             }
             "pane/update" => {
@@ -1064,11 +1072,8 @@ impl EditorApp {
         }
     }
 
-    fn describe_rpc_error(&self, plugin: &str, error: &RpcError) -> String {
-        let name = self
-            .plugins
-            .manifest(plugin)
-            .map_or(plugin.to_owned(), |m| m.plugin.name.clone());
+    pub(super) fn describe_rpc_error(&self, plugin: &str, error: &RpcError) -> String {
+        let name = self.plugins.source(plugin);
         match error.code {
             protocol::CANCELLED => tr("Cancelled").into(),
             protocol::NEEDS_SETUP => format!(
@@ -1095,21 +1100,33 @@ impl EditorApp {
     // --- Actions ---------------------------------------------------------
 
     /// Menu entries grouped by the menu they asked for.
-    pub(super) fn plugin_menu_items(&self) -> HashMap<Menu, Vec<(String, String, String, String)>> {
+    /// Each item is (label, plugin, action, shortcut, source). The label is
+    /// the registry's, which names the plugin, so plugin items stand out.
+    pub(super) fn plugin_menu_items(
+        &self,
+    ) -> HashMap<Menu, Vec<(String, String, String, String, String)>> {
         let mut items: HashMap<Menu, Vec<_>> = HashMap::new();
         for manifest in &self.plugins.manifests {
             if !self.plugin_enabled(&manifest.plugin.id) {
                 continue;
             }
+            let source = format!(
+                "{}\n{}",
+                self.plugins.source(&manifest.plugin.id),
+                manifest.dir.display()
+            );
             for action in &manifest.actions {
-                let shortcut = self
-                    .keymap
-                    .shortcut(&format!("{}/{}", manifest.plugin.id, action.id));
+                let id = format!("{}/{}", manifest.plugin.id, action.id);
+                let label = self.keymap.get(&id).map_or_else(
+                    || super::commands::plugin_action_label(&action.label, &manifest.plugin.name),
+                    |entry| entry.label().to_owned(),
+                );
                 items.entry(action.menu).or_default().push((
-                    action.label.clone(),
+                    label,
                     manifest.plugin.id.clone(),
                     action.id.clone(),
-                    shortcut,
+                    self.keymap.shortcut(&id),
+                    source.clone(),
                 ));
             }
         }
@@ -1588,7 +1605,7 @@ impl EditorApp {
         }
         let has_changes = !layers.is_empty() || replace.is_some() || !edit_batches.is_empty();
         if let Some(message) = &message {
-            self.status = message.clone();
+            self.status = self.plugins.status_from(&job.plugin, message);
         }
         if !has_changes {
             return Ok(());
@@ -1633,6 +1650,7 @@ impl EditorApp {
         self.plugins.proposal = Some(Proposal {
             document: job.document,
             name: job.label.clone(),
+            source: self.plugins.source(&job.plugin),
             layers: ids,
             comparing: false,
             message,
@@ -2158,6 +2176,14 @@ impl EditorApp {
         }
         Ok(document)
     }
+}
+
+/// `text` on one line, without control characters, cut to `max` characters.
+fn one_line(text: &str, max: usize) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(max)
+        .collect()
 }
 
 /// The grant that allows this manifest to run as it is.

@@ -487,6 +487,70 @@ fn rerun_inputs_from_a_project_are_checked_against_the_action() {
 }
 
 #[test]
+fn plugin_messages_and_dialogs_name_the_plugin_and_its_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    // A plugin that calls itself Xuan.
+    std::fs::write(
+        dir.path().join("plugin.toml"),
+        MANIFEST.replace("name = \"Mock\"", "name = \"Xuan\""),
+    )
+    .unwrap();
+    app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+    app.handle_notification(
+        "mock",
+        xuan::plugins::protocol::Notification {
+            jsonrpc: "2.0".into(),
+            method: "host/status".into(),
+            params: serde_json::json!({"message": "Saved\nproject.xuan"}),
+        },
+    );
+    assert_eq!(app.status, "Xuan (plugin mock): Saved project.xuan");
+    // The registry, and so the menus and shortcut list, mark plugin actions.
+    let entry = app.keymap.get("mock/echo").unwrap();
+    assert_eq!(entry.label(), "Echo Source… · Xuan");
+    let items = app.plugin_menu_items();
+    let item = &items[&xuan::plugins::manifest::Menu::Filter][0];
+    assert_eq!(item.0, "Echo Source… · Xuan");
+    assert!(item.4.contains("(plugin mock)") && item.4.contains(&dir.path().display().to_string()));
+    // Errors and the permission dialog say which plugin, by id and folder.
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.start_plugin_action("mock", "echo");
+    assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+    frame(&context, &mut app);
+    let texts: Vec<String> = frame(&context, &mut app)
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|t| t.contains("Run Xuan (plugin mock)?")),
+        "{texts:?}"
+    );
+    let folder = std::fs::canonicalize(dir.path())
+        .unwrap()
+        .display()
+        .to_string();
+    assert!(texts.iter().any(|t| t.contains(&folder)), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "Xuan (plugin mock) needs your permission to run."),
+        "{texts:?}"
+    );
+    app.dialog = None;
+    let error = xuan::plugins::protocol::RpcError::new(-32000, "Out of credits");
+    assert_eq!(
+        app.describe_rpc_error("mock", &error),
+        "Xuan (plugin mock): Out of credits"
+    );
+}
+
+#[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::consume_exact;
     use egui::{Key, Modifiers};
@@ -637,7 +701,8 @@ mod unix {
             app.dialog == Some(Dialog::PluginProposal)
         });
         assert!(app.error.is_none(), "{:?}", app.error);
-        assert_eq!(app.status, "prompt=hello");
+        // Text from the plugin is marked as the plugin's.
+        assert_eq!(app.status, "Mock (plugin mock): prompt=hello");
         let document = &app.session().unwrap().document;
         assert_eq!(document.layers.len(), 2);
         let layer = document.layers.iter().find(|l| l.name == "Echoed").unwrap();
@@ -1238,7 +1303,8 @@ done
         // The menu item shows the chord, and the chord opens the action dialog
         // instead of running Merge (Ctrl+E).
         ui.open_menu("Filter");
-        assert!(ui.has("Echo Source… Ctrl+Shift+E"));
+        // Plugin items name their plugin, so they never pass for Xuan's own.
+        assert!(ui.has("Echo Source… · Mock Ctrl+Shift+E"));
         ui.key(egui::Key::Escape);
         let steps = ui.app().session().unwrap().history.names().count();
         ui.press(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::E);

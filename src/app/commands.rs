@@ -931,6 +931,12 @@ pub(super) fn reserved(chord: Chord) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
+/// How a plugin action is labelled in menus and the shortcut list: its label
+/// followed by the plugin's name, so it never passes for a built-in command.
+pub(super) fn plugin_action_label(label: &str, plugin_name: &str) -> String {
+    format!("{label} · {plugin_name}")
+}
+
 /// An entry of the registry: a built-in command or a plugin action.
 pub(super) enum Kind {
     Builtin(&'static Command),
@@ -1053,7 +1059,7 @@ impl Keymap {
                     kind: Kind::Plugin {
                         plugin: manifest.plugin.id.clone(),
                         action: action.id.clone(),
-                        label: action.label.clone(),
+                        label: plugin_action_label(&action.label, &manifest.plugin.name),
                     },
                     defaults: Vec::new(),
                 });

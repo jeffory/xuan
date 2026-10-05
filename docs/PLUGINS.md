@@ -286,7 +286,9 @@ frame.
 - `{"op": "select", "layer"}`
 
 Notifications from the plugin: `host/log` `{level, message}` and `host/status`
-`{message}`. Notifications from the host: `document/changed` `{id, revision}`
+`{message}`. The status bar shows a plugin's message, like the `text` output of
+a job, on one line after the plugin's name and id, as in `Mock (plugin mock):
+message`, so it cannot pass for Xuan's own. Notifications from the host: `document/changed` `{id, revision}`
 (sent to plugins with open panes or `refresh = "document"`), `settings/changed`
 `{settings, secrets}`.
 
@@ -368,6 +370,11 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
   must not expect sub-frame latency.
 - Jobs run in the background and the editor remains usable. Only one job per
   document is in flight; a job is cancelled if its document tab closes.
+- Wherever a plugin's own words appear, Xuan says which plugin they come
+  from: menu items and the shortcut list show `Action label · Plugin name`
+  (hover a menu item for the plugin's id and folder), and permission
+  prompts, errors and proposals name the plugin with its id, for example
+  `Mock (plugin mock)`.
 - Pixels never leave the user's machine unless the plugin sends them somewhere;
   the permissions dialog says which hosts a plugin declared.
 - `host/run` may call the view commands `fit`, `actual`, `zoom_in` and

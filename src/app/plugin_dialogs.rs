@@ -336,10 +336,12 @@ impl EditorApp {
         let mut decision = None;
         let grant = super::plugins::grant_for(&manifest);
         let previous = self.stored_grant(&plugin).filter(|g| **g != grant).cloned();
+        // The title names the plugin's id too: its name is its own choice.
+        let source = self.plugins.source(&plugin);
         let title = if manifest.permissions.is_empty() {
-            format!("{} {}?", tr("Run"), manifest.plugin.name)
+            format!("{} {source}?", tr("Run"))
         } else {
-            format!("{} {}?", tr("Allow"), manifest.plugin.name)
+            format!("{} {source}?", tr("Allow"))
         };
         widgets::Window::new(title)
             .id(("plugin_permissions", &plugin))
@@ -348,8 +350,7 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.add(
                     egui::Label::new(format!(
-                        "{} {} {}",
-                        manifest.plugin.name,
+                        "{source} {} {}",
                         manifest.plugin.version,
                         tr("asks for the following. Xuan reads and writes files for it only in its own folders unless it may use the file system, but the plugin runs with your rights and could reach anything you can; only run plugins you trust."),
                     ))
@@ -733,12 +734,14 @@ impl EditorApp {
     }
 
     pub(super) fn plugin_proposal_dialog(&mut self, ctx: &egui::Context) {
-        let Some((name, message, comparing)) = self
-            .plugins
-            .proposal
-            .as_ref()
-            .map(|p| (p.name.clone(), p.message.clone(), p.comparing))
-        else {
+        let Some((name, source, message, comparing)) = self.plugins.proposal.as_ref().map(|p| {
+            (
+                p.name.clone(),
+                p.source.clone(),
+                p.message.clone(),
+                p.comparing,
+            )
+        }) else {
             self.dialog = None;
             return;
         };
@@ -754,7 +757,9 @@ impl EditorApp {
             .frame(theme::frame().inner_margin(egui::Margin::symmetric(14, 10)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(&name).strong());
+                    ui.label(RichText::new(&name).strong())
+                        .on_hover_text(&source);
+                    ui.label(RichText::new(&source).small().color(theme::MUTED));
                     if let Some(message) = &message {
                         ui.label(RichText::new(message).color(theme::MUTED));
                     }
