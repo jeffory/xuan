@@ -76,7 +76,9 @@ impl UiTest {
         self.harness.query_by_label(label).is_some()
     }
 
-    /// Like `has`, for labels that several widgets share.
+    /// Like `has`, for labels that several widgets share. Only the plugin tests,
+    /// which need a POSIX shell, use it.
+    #[cfg(unix)]
     pub(super) fn has_role(&self, role: Role, label: &str) -> bool {
         self.harness.query_by_role_and_label(role, label).is_some()
     }
