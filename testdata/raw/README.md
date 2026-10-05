@@ -18,8 +18,9 @@ Every file comes from the [raw.pixls.us](https://raw.pixls.us/) sample archive a
 | RAF | Fujifilm X20 | `Fujifilm/X20/DSCF7451.RAF` | 18.6 MB | Fujifilm X-Trans (6x6) |
 | ARW | Sony ILCE-7S | `Sony/ILCE-7S/DSC04126.ARW` | 5.9 MB | Sony Bayer; shot in APS-C crop mode, so it decodes to 2768x1848 rather than the full-frame 4240x2832 |
 | CR2 | Canon EOS 5D Mark II (sRAW2) | `Canon/EOS 5D Mark II/10.canon.sraw2.cr2` | 10.9 MB | Unsupported layout, must be rejected |
+| NEF | Nikon D1H | `Nikon/D1H/DSC_3671.NEF` | 3.9 MB | Camera missing from rawler's database, must be rejected with a "not supported yet" error naming it |
 
-All files are served from `https://raw.pixls.us/data/<Make>/<Model>/<file>`. The sRAW file is the negative test: Canon sRAW/mRAW is intentionally unsupported, and the test only asserts that decoding fails.
+All files are served from `https://raw.pixls.us/data/<Make>/<Model>/<file>`. The sRAW and D1H files are negative tests: Canon sRAW/mRAW is intentionally unsupported, and the test only asserts that decoding fails; the D1H test checks that the error names the unsupported camera.
 
 ## Adding or changing a fixture
 

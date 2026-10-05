@@ -856,6 +856,88 @@ fn hoisted_source_map_is_bit_identical_to_per_point_source_point() {
     assert_eq!(checked, 10 * 5 * 3 * 121);
 }
 
+#[test]
+fn as_shot_white_balance_uses_camera_coefficients_relative_to_green() {
+    let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let gains = as_shot_white_balance([4.0, 2.0, 3.0, f32::NAN], &identity).unwrap();
+    assert_eq!(gains, [2.0, 1.0, 1.5]);
+}
+
+#[test]
+fn as_shot_white_balance_falls_back_to_daylight_without_camera_coefficients() {
+    // A camera whose response to D65 white is (0.5, 1, 0.25) needs gains (2, 1, 4).
+    let xyz_to_rgb = pseudo_inverse(SRGB_TO_XYZ_D65);
+    let scale = [0.5, 1.0, 0.25];
+    let xyz_to_camera: [[f32; 3]; 3] = std::array::from_fn(|i| xyz_to_rgb[i].map(|v| v * scale[i]));
+    // CHDK CRW files report NaN; other files may report zeros or negatives.
+    for coeffs in [
+        [f32::NAN; 4],
+        [0.0; 4],
+        [2.0, 0.0, 1.0, 0.0],
+        [-1.0, 1.0, 1.0, 1.0],
+        [f32::INFINITY, 1.0, 1.0, 1.0],
+    ] {
+        let gains = as_shot_white_balance(coeffs, &xyz_to_camera).unwrap();
+        for (gain, expected) in gains.iter().zip([2.0, 1.0, 4.0]) {
+            assert!((gain - expected).abs() < 1e-3, "{coeffs:?}: {gains:?}");
+        }
+    }
+}
+
+#[test]
+fn as_shot_white_balance_rejects_an_unusable_daylight_estimate() {
+    // No coefficients and a matrix that gives no positive response to white.
+    for matrix in [
+        [[0.0; 3]; 3],
+        [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]],
+    ] {
+        let error = as_shot_white_balance([f32::NAN; 4], &matrix).unwrap_err();
+        assert_eq!(error.to_string(), "Invalid camera white balance");
+    }
+}
+
+#[test]
+fn camera_label_does_not_repeat_the_make() {
+    assert_eq!(
+        camera_label("NIKON CORPORATION", "NIKON D1H").as_deref(),
+        Some("NIKON D1H")
+    );
+    assert_eq!(
+        camera_label("Canon", "EOS 40D").as_deref(),
+        Some("Canon EOS 40D")
+    );
+    assert_eq!(
+        camera_label(" Canon ", "Canon EOS 50D").as_deref(),
+        Some("Canon EOS 50D")
+    );
+    assert_eq!(camera_label("SONY", "").as_deref(), Some("SONY"));
+    assert_eq!(camera_label("", "ILCE-7S").as_deref(), Some("ILCE-7S"));
+    assert_eq!(camera_label(" ", ""), None);
+}
+
+#[test]
+fn unknown_camera_error_names_the_camera() {
+    let source = RawSource::new_from_slice(&[0u8; 16]);
+    let error = decoder_error(
+        &source,
+        rawler::RawlerError::Unsupported {
+            what: "Unknown camera".into(),
+            make: "NIKON CORPORATION".into(),
+            model: "NIKON D1H".into(),
+            mode: "12bit".into(),
+        },
+    );
+    assert_eq!(
+        error.to_string(),
+        "RAW files from the NIKON D1H are not supported yet"
+    );
+    // The decoder's own detail stays available in the error chain.
+    assert!(format!("{error:#}").contains("12bit"));
+    // Without a recognisable camera the generic message remains.
+    let error = decoder_error(&source, rawler::RawlerError::DecoderFailed("bad".into()));
+    assert_eq!(error.to_string(), "Unsupported or damaged RAW file");
+}
+
 // --- Real camera files -----------------------------------------------------
 //
 // These decode genuine files fetched by scripts/fetch-raw-fixtures.sh from the
@@ -939,6 +1021,11 @@ fn check_real_raw(id: &str) {
     let raw = decode(&bytes).unwrap_or_else(|e| panic!("{id} failed to decode: {e:#}"));
 
     assert_eq!(raw.metadata.camera, fixture.camera);
+    // Decoder-failure messages name the camera the same way.
+    assert_eq!(
+        camera_name(&RawSource::new_from_slice(&bytes)).as_deref(),
+        Some(fixture.camera)
+    );
     assert_eq!(
         (raw.metadata.width, raw.metadata.height),
         (fixture.width, fixture.height),
@@ -1048,10 +1135,51 @@ fn real_canon_sraw_is_rejected() {
         return;
     };
     assert!(fixture.reject);
-    // Only the failure matters: the message differs between the header pre-scan
-    // rejection and a decoder panic that is converted to an import error.
+    // Rawler's own debug assertions are off in test builds (see Cargo.toml), so
+    // this is the same sensor-layout error that release builds report, rather
+    // than a debug-only panic in rawler's header decode.
     let error = decode(&bytes).expect_err("sRAW must not be accepted");
-    assert!(!format!("{error:#}").is_empty());
+    assert!(
+        error
+            .to_string()
+            .contains("Canon sRAW/mRAW is not supported"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn real_unknown_camera_is_rejected_by_name() {
+    let Some((fixture, bytes)) = fixture_bytes("nikon-d1h-unknown-reject") else {
+        return;
+    };
+    assert!(fixture.reject);
+    // The Nikon D1H is missing from rawler's camera database (#29). If an
+    // upgrade adds it, turn this fixture into an "ok" one.
+    let error = decode(&bytes).expect_err("the D1H is not supported by rawler");
+    assert_eq!(
+        error.to_string(),
+        "RAW files from the NIKON D1H are not supported yet"
+    );
+}
+
+/// Local-only files that must fail with an error saying what is unsupported
+/// (the camera, or e.g. Canon sRAW) rather than the generic "damaged" message,
+/// such as samples whose licence keeps them out of the fixtures:
+/// `XUAN_TEST_RAW_UNSUPPORTED=a.NEF,b.CR2 cargo test --lib unsupported -- --ignored`
+#[test]
+#[ignore = "Set XUAN_TEST_RAW_UNSUPPORTED to comma-separated local camera files"]
+fn sample_raw_unsupported_is_explained() {
+    let paths = std::env::var("XUAN_TEST_RAW_UNSUPPORTED").expect("Set XUAN_TEST_RAW_UNSUPPORTED");
+    for path in paths.split(',').filter(|p| !p.is_empty()) {
+        let bytes = std::fs::read(path).unwrap();
+        let error = decode(&bytes).expect_err(path);
+        let message = error.to_string();
+        println!("{path}: {error:#}");
+        assert!(
+            message.contains("not supported") || message.contains("not be supported"),
+            "{path}: {message}"
+        );
+    }
 }
 
 #[test]

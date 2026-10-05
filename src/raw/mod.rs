@@ -156,13 +156,66 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedRaw> {
     );
     // The external decoder has panic paths for unsupported encodings. Convert these
     // into import errors so a failed camera file cannot unwind through the editor.
-    std::panic::catch_unwind(|| decode_inner(bytes))
-        .map_err(|_| anyhow::anyhow!("The RAW decoder could not process this camera file"))?
+    std::panic::catch_unwind(|| decode_inner(bytes)).map_err(|_| {
+        match camera_name(&RawSource::new_from_slice(bytes)) {
+            Some(camera) => anyhow::anyhow!(
+                "The RAW decoder could not process this {camera} file; this camera or its RAW mode is not supported yet"
+            ),
+            None => anyhow::anyhow!("The RAW decoder could not process this camera file"),
+        }
+    })?
+}
+
+/// Turn a decoder error into an import error that names the camera when the
+/// file identifies it, so "not supported yet" is distinguishable from damage.
+fn decoder_error(source: &RawSource, error: rawler::RawlerError) -> anyhow::Error {
+    let message = match &error {
+        rawler::RawlerError::Unsupported {
+            what, make, model, ..
+        } if what == "Unknown camera" => camera_label(make, model)
+            .map(|camera| format!("RAW files from the {camera} are not supported yet")),
+        _ => camera_name(source).map(|camera| {
+            format!(
+                "The RAW decoder could not read this {camera} file; this camera or its RAW mode may not be supported yet, or the file is damaged"
+            )
+        }),
+    };
+    anyhow::Error::new(error)
+        .context(message.unwrap_or_else(|| "Unsupported or damaged RAW file".into()))
+}
+
+/// The camera named by the file's metadata, if the decoder can read that much.
+fn camera_name(source: &RawSource) -> Option<String> {
+    // Only used to word an error; a decoder panic here must not escape either.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let decoder = rawler::get_decoder(source).ok()?;
+        let metadata = decoder
+            .raw_metadata(source, &RawDecodeParams::default())
+            .ok()?;
+        camera_label(&metadata.make, &metadata.model)
+    }))
+    .ok()
+    .flatten()
+}
+
+/// "Make Model", without repeating a make that the model already starts with
+/// (EXIF has e.g. make "NIKON CORPORATION" and model "NIKON D1H").
+fn camera_label(make: &str, model: &str) -> Option<String> {
+    let (make, model) = (make.trim(), model.trim());
+    let brand = make.split_whitespace().next().unwrap_or_default();
+    let label = if model.is_empty() {
+        make.to_string()
+    } else if brand.is_empty() || model.to_lowercase().starts_with(&brand.to_lowercase()) {
+        model.to_string()
+    } else {
+        format!("{make} {model}")
+    };
+    (!label.is_empty()).then_some(label)
 }
 
 fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
     let source = RawSource::new_from_slice(bytes);
-    let header = rawler::decode_dummy(&source).context("Unsupported or damaged RAW file")?;
+    let header = rawler::decode_dummy(&source).map_err(|e| decoder_error(&source, e))?;
     validate_size(header.width.try_into()?, header.height.try_into()?)?;
     validate_sensor(&header)?;
     let decoder = rawler::get_decoder(&source)?;
@@ -189,11 +242,7 @@ fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
         camera_to_rgb.iter().flatten().all(|v| v.is_finite()),
         "Invalid camera color calibration"
     );
-    let as_shot = std::array::from_fn(|i| raw.wb_coeffs[i] / raw.wb_coeffs[1]);
-    ensure!(
-        as_shot.iter().all(|v| v.is_finite() && *v > 0.0),
-        "Invalid camera white balance"
-    );
+    let as_shot = as_shot_white_balance(raw.wb_coeffs, &xyz_to_camera)?;
     let camera = develop_camera(&raw)?;
     let mut oriented = DynamicImage::ImageRgb32F(camera);
     oriented.apply_orientation(
@@ -225,6 +274,25 @@ fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
         xyz_to_camera,
         metadata,
     })
+}
+
+/// The camera's as-shot white balance as multipliers relative to green.
+///
+/// Some files carry no usable coefficients (CHDK RAW dumps from Canon PowerShots
+/// have none, so the decoder reports NaN). Those fall back to a daylight (D65)
+/// balance estimated from the color matrix, as dcraw does, rather than refusing
+/// the file; the estimate is validated in the same way.
+fn as_shot_white_balance(wb_coeffs: [f32; 4], xyz_to_camera: &[[f32; 3]; 3]) -> Result<[f32; 3]> {
+    let usable = |gains: &[f32; 3]| gains.iter().all(|v| v.is_finite() && *v > 0.0);
+    let camera = std::array::from_fn(|i| wb_coeffs[i] / wb_coeffs[1]);
+    if usable(&camera) {
+        return Ok(camera);
+    }
+    // The camera's response to D65 white: row sums of xyz_to_camera * sRGB->XYZ.
+    let white = multiply(xyz_to_camera, &SRGB_TO_XYZ_D65).map(|row| row.iter().sum::<f32>());
+    let daylight = std::array::from_fn(|i| white[1] / white[i]);
+    ensure!(usable(&daylight), "Invalid camera white balance");
+    Ok(daylight)
 }
 
 fn validate_sensor(raw: &rawler::RawImage) -> Result<()> {

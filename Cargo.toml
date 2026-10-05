@@ -61,6 +61,12 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
+# Test the decoder as it ships. Rawler's debug assertions fire on paths that
+# release builds handle cleanly (its header-only decode of Canon sRAW trips
+# one), so debug and test builds would otherwise report different errors.
+[profile.dev.package.rawler]
+debug-assertions = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
