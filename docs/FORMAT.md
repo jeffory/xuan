@@ -43,21 +43,22 @@ The file is read in memory: the header, color mode data (skipped), image resourc
 | Photoshop feature | In Xuan |
 | --- | --- |
 | Pixel layers: position, opacity, visibility, names | Editable |
-| Fill opacity | Multiplied into the layer opacity (kept at layer opacity when the layer has effects, as upstream does) |
+| Fill opacity | Multiplied into the layer opacity; on a layer whose effects draw, the layer keeps its layer opacity (as upstream) and this is reported |
 | Groups (folders) and their opacity | Editable folders. Folders always pass through; another folder blend mode is reported |
 | Layer masks: bounds, default color, disabled, linked | Editable masks on the layer's grid (a black-default mask covers only its stored area) |
 | Masks rendered from vector data, vector masks on pixel layers | Left out |
 | Clipping | Editable clipping to the nearest unclipped layer below in the same folder; clipping onto a folder or a left-out layer is released |
-| Blend modes Normal, Darken, Multiply, Color Burn, Lighten, Screen, Color Dodge, Overlay, Difference, Hue, Saturation, Color, Luminosity | Editable |
-| Dissolve, Linear Burn, Darker Color, Linear Dodge (Add), Lighter Color, Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide, unknown keys | Drawn as Normal. One table (`BLEND_MODES` in `src/io/psd.rs`) maps keys to modes |
-| Levels, Curves, Exposure, Invert adjustment layers | Editable adjustment layers (no blend mode) |
-| Other adjustment layers (Hue/Saturation, Brightness/Contrast, Color Balance, Black & White, …) | Left out, with the layer |
+| All 27 Photoshop blend modes (Normal through Luminosity, including Dissolve, Darker/Lighter Color, Linear Burn/Dodge, the Light modes, Hard Mix, Exclusion, Subtract, Divide) | Editable. One table (`BLEND_MODES` in `src/io/psd.rs`) maps keys to modes |
+| Unknown blend keys | Drawn as Normal and reported |
+| Levels, Curves, Exposure, Invert, Black & White (weights and an RGB tint as hue and saturation) and Color Balance adjustment layers | Editable adjustment layers (no blend mode; a non-Normal one is reported) |
+| Other adjustment layers (Hue/Saturation, Brightness/Contrast, Vibrance, Photo Filter, Channel Mixer, …) | Left out, with the layer |
 | Solid-filled rectangle, rounded rectangle (equal radii) and ellipse shapes without a stroke (`vogk` + `SoCo`/`vscg`) | Editable live shapes |
 | Other shapes and vector content | Photoshop's pixels; solid shapes saved without pixels are drawn from their path; others are left out |
 | Horizontal type (`TySh`) without rotation, skew or warp, 1–1,024 px | Editable text (content, font, size, color, bold, italic, underline, strikethrough), keeping Photoshop's pixels until edited. Alignment, tracking, leading, paragraph boxes and further style runs are not represented |
 | Vertical, warped, rotated or unreadable type | Photoshop's pixels |
 | Smart objects, fill layers (solid, gradient, pattern) | Photoshop's pixels (a solid fill saved without pixels covers the canvas) |
-| Layer effects | Left out |
+| Layer effects (`lfx2`): stroke (solid), drop shadow, inner shadow, outer glow, inner glow (solid color), color overlay, with the effects scale and global light angle | Editable layer effects, switched-off ones included. Effect blend modes other than Photoshop's defaults, spread/choke, noise, centered strokes, glows from the center and sizes beyond Xuan's ranges are approximated and reported. Effects on folders or layers without pixels are left out |
+| Bevel and emboss, satin, gradient and pattern overlays, gradient or pattern strokes and glows, several effects of one kind, legacy `lrFX`-only effects | Left out and reported |
 | Files without layers | The merged image, as one layer named Background |
 
 Before anything is applied, the app shows what will change (the same `ImportReport` as `.comp` imports, counted per kind); Cancel leaves everything as it was. Files Xuan represents completely open without asking. Imported as a layer, a file's layers arrive in a folder named after it, centered on the canvas.

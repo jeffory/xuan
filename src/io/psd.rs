@@ -40,6 +40,7 @@ use crate::{
         validate_size,
     },
     i18n::tr,
+    layer_effects::LayerEffects,
     paint::ShapeKind,
     text::{MAX_TEXT_BYTES, TextStyle},
 };
@@ -354,10 +355,19 @@ fn header(reader: &mut Reader<'_>) -> Result<Header> {
     })
 }
 
-/// The horizontal resolution from resource 1005 (ResolutionInfo), or 72 ppi. Malformed
-/// resources end the walk; they never fail the import.
-fn resolution(mut resources: Reader<'_>) -> f32 {
+/// What the importer uses from the image resources.
+struct Resources {
+    /// From resource 1005 (ResolutionInfo), or 72 ppi.
+    resolution: f32,
+    /// Resource 1037: the global light angle effects can follow, or Photoshop's default 120°.
+    global_angle: f64,
+}
+
+/// Read the image resources the importer uses. Malformed resources end the walk; they never
+/// fail the import.
+fn resources(mut resources: Reader<'_>) -> Resources {
     let mut resolution = 72.0;
+    let mut global_angle = 120.0;
     let mut walk = || -> Result<()> {
         while resources.remaining() >= 12 {
             if resources.bytes(4)? != b"8BIM" {
@@ -378,11 +388,17 @@ fn resolution(mut resources: Reader<'_>) -> f32 {
                     resolution = ppi.min(9600.0) as f32;
                 }
             }
+            if id == 1037 && length >= 4 {
+                global_angle = f64::from(data.i32()?).rem_euclid(360.0);
+            }
         }
         Ok(())
     };
     let _ = walk();
-    resolution
+    Resources {
+        resolution,
+        global_angle,
+    }
 }
 
 /// Layer, mask and canvas bounds in document pixels; `right` and `bottom` are exclusive.
@@ -1506,18 +1522,173 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
     Some(style)
 }
 
-/// Whether a layer's effects are switched on (`lfx2`: a version, then a versioned descriptor).
-fn has_effects(record: &Record<'_>) -> bool {
-    if let Some(data) = record.get(b"lfx2") {
-        let mut reader = Reader::new(data);
-        let enabled = reader
-            .u32()
-            .ok()
-            .and_then(|_| descriptor::versioned(&mut reader).ok())
-            .and_then(|d| d.bool("masterFXSwitch"));
-        return enabled != Some(false);
+/// A layer's effects as Xuan draws them, and what of Photoshop's could not come along.
+#[derive(Default)]
+struct ImportedEffects {
+    effects: LayerEffects,
+    /// Switched-on effects Xuan has no equivalent for: bevel and emboss, satin, gradient and
+    /// pattern overlays, gradient or pattern strokes, gradient glows, several effects of one
+    /// kind, colors outside RGB, or effects only in the legacy `lrFX`/`lmfx` blocks.
+    left_out: bool,
+    /// Settings Xuan approximates: effect blend modes other than Photoshop's defaults, spread
+    /// or choke, noise, centered strokes, glows from the center, sizes beyond Xuan's ranges.
+    approximated: bool,
+}
+
+/// Effects that live in `lfx2` and that Xuan does not draw.
+const UNSUPPORTED_EFFECTS: [&[u8]; 4] = [b"ebbl", b"ChFX", b"GrFl", b"patternFill"];
+
+/// Read a layer's effects (`lfx2`: a version, then a versioned descriptor of one object per
+/// effect), or `None` without effects or with all of them switched off.
+fn read_effects(record: &Record<'_>, global_angle: f64) -> Option<ImportedEffects> {
+    use crate::layer_effects::{GlowEffect, OverlayEffect, ShadowEffect, StrokeEffect};
+    use descriptor::Value;
+    let left_out = ImportedEffects {
+        left_out: true,
+        ..ImportedEffects::default()
+    };
+    let Some(data) = record.get(b"lfx2") else {
+        return record.has(&[b"lrFX", b"lmfx"]).then_some(left_out);
+    };
+    let mut reader = Reader::new(data);
+    let Some(effects) = reader
+        .u32()
+        .ok()
+        .and_then(|_| descriptor::versioned(&mut reader).ok())
+    else {
+        return Some(left_out);
+    };
+    if effects.bool("masterFXSwitch") == Some(false) {
+        return None;
     }
-    record.has(&[b"lrFX", b"lmfx"])
+    let scale = effects
+        .double("Scl ")
+        .map_or(1.0, |percent| percent / 100.0)
+        .clamp(0.01, 10.0);
+    let mut out = ImportedEffects::default();
+    for (key, value) in &effects.items {
+        let Value::Descriptor(effect) = value else {
+            // Photoshop CC's `…Multi` lists hold several effects of one kind.
+            if key.ends_with(b"Multi")
+                && let Value::List(list) = value
+                && list
+                    .iter()
+                    .filter(|v| matches!(v, Value::Descriptor(d) if d.bool("enab") != Some(false)))
+                    .count()
+                    > 1
+            {
+                out.left_out = true;
+            }
+            continue;
+        };
+        let enabled = effect.bool("enab").unwrap_or(true);
+        let opacity = (effect.double("Opct").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0) as f32;
+        let color = effect
+            .object("Clr ")
+            .and_then(rgb)
+            .map(|[r, g, b, _]| [r, g, b]);
+        let mode = effect.enumeration("Md  ");
+        let mut approximated = false;
+        let mut length = |key: &str, max: f64| {
+            let value = effect.double(key).unwrap_or(0.0).max(0.0) * scale;
+            approximated |= value > max;
+            value.min(max) as f32
+        };
+        let size = length("Sz  ", 500.0);
+        let blur = length("blur", 500.0);
+        let distance = length("Dstn", 5000.0);
+        let unmodeled = ["Ckmt", "Nose"]
+            .iter()
+            .any(|key| effect.double(key).is_some_and(|v| v != 0.0));
+        let default_mode = match key.as_slice() {
+            b"DrSh" | b"IrSh" => b"Mltp".as_slice(),
+            b"OrGl" | b"IrGl" => b"Scrn",
+            _ => b"Nrml",
+        };
+        approximated |= mode.is_some_and(|m| m != default_mode);
+        let Some(color) = color.filter(|_| {
+            !(key == b"FrFX" && effect.enumeration("PntT").is_some_and(|p| p != b"SClr"))
+        }) else {
+            let known = [
+                b"FrFX".as_slice(),
+                b"DrSh",
+                b"IrSh",
+                b"OrGl",
+                b"IrGl",
+                b"SoFi",
+            ];
+            out.left_out |= enabled
+                && (known.contains(&key.as_slice())
+                    || UNSUPPORTED_EFFECTS.contains(&key.as_slice()));
+            continue;
+        };
+        match key.as_slice() {
+            b"FrFX" => {
+                let style = effect.enumeration("Styl");
+                approximated |= style == Some(b"CtrF");
+                out.effects.stroke = Some(StrokeEffect {
+                    enabled,
+                    size,
+                    color,
+                    opacity,
+                    inside: style == Some(b"InsF"),
+                });
+            }
+            b"DrSh" | b"IrSh" => {
+                approximated |= unmodeled;
+                let angle = if effect.bool("uglg") == Some(true) {
+                    global_angle
+                } else {
+                    effect.double("lagl").unwrap_or(global_angle)
+                };
+                let shadow = Some(ShadowEffect {
+                    enabled,
+                    angle: angle.rem_euclid(360.0) as f32,
+                    distance,
+                    blur,
+                    color,
+                    opacity,
+                });
+                if key == b"DrSh" {
+                    out.effects.drop_shadow = shadow;
+                } else {
+                    out.effects.inner_shadow = shadow;
+                }
+            }
+            b"OrGl" | b"IrGl" => {
+                approximated |= unmodeled;
+                let glow = Some(GlowEffect {
+                    enabled,
+                    size: blur,
+                    color,
+                    opacity,
+                });
+                if key == b"OrGl" {
+                    out.effects.outer_glow = glow;
+                } else {
+                    approximated |= effect.enumeration("glwS") == Some(b"SrcC");
+                    out.effects.inner_glow = glow;
+                }
+            }
+            b"SoFi" => {
+                out.effects.color_overlay = Some(OverlayEffect {
+                    enabled,
+                    color,
+                    opacity,
+                })
+            }
+            _ => {
+                out.left_out |= enabled && UNSUPPORTED_EFFECTS.contains(&key.as_slice());
+                continue;
+            }
+        }
+        out.approximated |= enabled && approximated;
+    }
+    if out.effects.validate().is_err() {
+        out.effects = LayerEffects::default();
+        out.left_out = true;
+    }
+    Some(out)
 }
 
 /// What one layer record became, for resolving clipping afterwards.
@@ -1538,7 +1709,7 @@ pub fn read(bytes: &[u8], budget: PixelBudget) -> Result<(Document, ImportReport
     let header = header(&mut reader)?;
     let psb = header.psb;
     reader.section(false)?; // color mode data: empty for RGB
-    let resolution = resolution(reader.section(false)?);
+    let resources = resources(reader.section(false)?);
     let mut layers_and_masks = reader.section(psb)?;
     let records = if layers_and_masks.remaining() >= if psb { 8 } else { 4 } {
         let mut info = layers_and_masks.section(psb)?;
@@ -1552,7 +1723,7 @@ pub fn read(bytes: &[u8], budget: PixelBudget) -> Result<(Document, ImportReport
     };
     let mut report = ImportReport::new(ImportSource::Photoshop);
     let mut document = Document::new(header.width, header.height)?;
-    document.resolution = resolution;
+    document.resolution = resources.resolution;
     document.layers.clear();
     if records.is_empty() {
         ensure!(
@@ -1562,7 +1733,14 @@ pub fn read(bytes: &[u8], budget: PixelBudget) -> Result<(Document, ImportReport
         let image = merged_image(&mut reader, &header)?;
         document.layers.push(Layer::image(tr("Background"), image));
     } else {
-        build(&mut document, &records, psb, budget, &mut report)?;
+        build(
+            &mut document,
+            &records,
+            psb,
+            budget,
+            resources.global_angle,
+            &mut report,
+        )?;
     }
     document.active = document
         .layers
@@ -1580,6 +1758,7 @@ fn build(
     records: &[Record<'_>],
     psb: bool,
     budget: PixelBudget,
+    global_angle: f64,
     report: &mut ImportReport,
 ) -> Result<()> {
     let canvas = Rect {
@@ -1615,13 +1794,24 @@ fn build(
         layer.visible = !record.hidden;
         layer.group = group;
         let opacity = f32::from(record.opacity) / 255.0;
-        let effects = !group && has_effects(record);
-        if effects {
-            report.add(Dropped::PhotoshopEffects);
-        }
-        // Fill opacity dims the layer's own pixels but not its effects. Without the effects,
-        // upstream keeps a layer that relied on them visible at its layer opacity.
-        layer.opacity = if group || (effects && record.fill != 255) {
+        let effects = if group {
+            // Xuan's folders take no effects.
+            if record.has(&[b"lfx2", b"lrFX", b"lmfx"]) {
+                report.add(Dropped::LayerEffect);
+            }
+            None
+        } else {
+            read_effects(record, global_angle)
+        };
+        // Fill opacity dims the layer's own pixels but not its effects, which Xuan cannot
+        // separate: layers with effects that draw keep their layer opacity, as upstream does.
+        let drawn = effects
+            .as_ref()
+            .is_some_and(|e| e.left_out || !e.effects.visible().is_empty());
+        layer.opacity = if group || (drawn && record.fill != 255) {
+            if !group {
+                report.add(Dropped::FillOpacity);
+            }
             opacity
         } else {
             opacity * f32::from(record.fill) / 255.0
@@ -1682,6 +1872,22 @@ fn build(
         }
         if cropped {
             report.add(Dropped::CroppedToCanvas);
+        }
+        if let Some(imported) = effects {
+            if imported.left_out {
+                report.add(Dropped::PhotoshopEffects);
+            }
+            if imported.approximated {
+                report.add(Dropped::PhotoshopEffectSettings);
+            }
+            if !imported.effects.is_empty() {
+                // As upstream, only layers with pixels of their own take effects.
+                if layer.pixels.is_some() && !layer.is_effect() {
+                    layer.effects = Some(imported.effects);
+                } else {
+                    report.add(Dropped::LayerEffect);
+                }
+            }
         }
         built.push(Built {
             id,

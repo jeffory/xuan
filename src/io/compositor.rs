@@ -70,8 +70,14 @@ pub enum Dropped {
     PhotoshopAdjustment(&'static str),
     /// A Photoshop folder whose blend mode is not pass-through; Xuan folders pass through.
     FolderBlendMode(&'static str),
-    /// A Photoshop layer with layer effects, which were left out.
+    /// A Photoshop layer with effects Xuan does not have (bevel, satin, gradient or pattern
+    /// overlay, non-solid strokes or glows, several of one kind), which were left out.
     PhotoshopEffects,
+    /// A Photoshop layer whose effect settings Xuan approximates (effect blend modes, spread,
+    /// noise, centered strokes, glows from the center).
+    PhotoshopEffectSettings,
+    /// A Photoshop layer with effects and a fill opacity, drawn at its layer opacity.
+    FillOpacity,
     /// Photoshop type that Xuan cannot edit (vertical, warped, rotated or unreadable),
     /// imported as its pixels.
     PhotoshopTextAsPixels,
@@ -121,7 +127,17 @@ impl Dropped {
                     tr("passes through")
                 )
             }
-            Self::PhotoshopEffects => tr("Layers with layer effects (effects left out)").into(),
+            Self::PhotoshopEffects => tr(
+                "Bevel, satin, gradient or pattern effects and other effects Xuan doesn't have (left out)",
+            )
+            .into(),
+            Self::PhotoshopEffectSettings => tr(
+                "Effect blend modes, spread, noise or centered strokes (drawn approximately)",
+            )
+            .into(),
+            Self::FillOpacity => {
+                tr("Fill opacity on layers with effects (drawn at full fill)").into()
+            }
             Self::PhotoshopTextAsPixels => {
                 tr("Vertical, warped or transformed text (imported as pixels)").into()
             }

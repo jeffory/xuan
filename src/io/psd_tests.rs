@@ -114,6 +114,7 @@ struct PsdSpec {
     depth: u16,
     mode: u16,
     resolution: Option<u32>,
+    global_angle: Option<i32>,
     layers: Vec<LayerSpec>,
     merged_compression: u16,
     merged: Option<Vec<Vec<u8>>>,
@@ -129,6 +130,7 @@ impl PsdSpec {
             depth: 8,
             mode: 3,
             resolution: None,
+            global_angle: None,
             layers: Vec::new(),
             merged_compression: 0,
             merged: None,
@@ -311,6 +313,13 @@ fn write(spec: &PsdSpec) -> (Vec<u8>, usize) {
             resources.extend((ppi << 16).to_be_bytes());
             resources.extend([0, 1, 0, 1]);
         }
+    }
+    if let Some(angle) = spec.global_angle {
+        resources.extend(b"8BIM");
+        resources.extend(1037_u16.to_be_bytes());
+        resources.extend([0, 0]);
+        resources.extend(4_u32.to_be_bytes());
+        resources.extend(angle.to_be_bytes());
     }
     out.extend((resources.len() as u32).to_be_bytes());
     out.extend(resources);
@@ -1506,34 +1515,249 @@ fn simple_horizontal_text_stays_editable() {
     assert_eq!(report.count(Dropped::TextLayout), 1);
 }
 
-#[test]
-fn effects_are_reported_unless_switched_off() {
-    let effects = |on: bool| {
-        block(
-            Some(0),
-            "null",
-            vec![("masterFXSwitch", D::Bool(on)), ("Scl ", D::Unit(100.0))],
-        )
-    };
-    let mut no_fill = LayerSpec::solid("No fill", (0, 0), (1, 1), [9; 4])
-        .with(b"lfx2", effects(true))
-        .with(b"iOpa", vec![0]);
-    no_fill.opacity = 255;
-    let spec = PsdSpec::layers(
-        1,
-        1,
+fn rgb_color(r: f64, g: f64, b: f64) -> D {
+    D::Obj(
+        "RGBC",
         vec![
-            no_fill,
-            LayerSpec::solid("Off", (0, 0), (1, 1), [9; 4]).with(b"lfx2", effects(false)),
-            LayerSpec::solid("Legacy", (0, 0), (1, 1), [9; 4]).with(b"lrFX", vec![0; 4]),
-            LayerSpec::solid("Fill only", (0, 0), (1, 1), [9; 4]).with(b"iOpa", vec![0]),
+            ("Rd  ", D::Doub(r)),
+            ("Grn ", D::Doub(g)),
+            ("Bl  ", D::Doub(b)),
+        ],
+    )
+}
+
+fn effects_block(scale: f64, items: Vec<(&'static str, D)>) -> Vec<u8> {
+    let mut all = vec![("Scl ", D::Unit(scale)), ("masterFXSwitch", D::Bool(true))];
+    all.extend(items);
+    block(Some(0), "null", all)
+}
+
+fn mode(name: &'static str) -> D {
+    D::Enum("BlnM", name)
+}
+
+#[test]
+fn layer_effects_map_onto_xuans_or_are_reported() {
+    let effects = effects_block(
+        200.0,
+        vec![
+            (
+                "DrSh",
+                D::Obj(
+                    "DrSh",
+                    vec![
+                        ("enab", D::Bool(true)),
+                        ("Md  ", mode("Mltp")),
+                        ("Clr ", rgb_color(10.0, 20.0, 30.0)),
+                        ("Opct", D::Unit(75.0)),
+                        ("uglg", D::Bool(true)),
+                        ("lagl", D::Unit(30.0)),
+                        ("Dstn", D::Unit(10.0)),
+                        ("Ckmt", D::Unit(0.0)),
+                        ("blur", D::Unit(5.0)),
+                    ],
+                ),
+            ),
+            (
+                "IrSh",
+                D::Obj(
+                    "IrSh",
+                    vec![
+                        ("enab", D::Bool(false)),
+                        ("Md  ", mode("Mltp")),
+                        ("Clr ", rgb_color(0.0, 0.0, 0.0)),
+                        ("uglg", D::Bool(false)),
+                        ("lagl", D::Unit(-45.0)),
+                        ("Dstn", D::Unit(3.0)),
+                        ("blur", D::Unit(4.0)),
+                    ],
+                ),
+            ),
+            (
+                "FrFX",
+                D::Obj(
+                    "FrFX",
+                    vec![
+                        ("enab", D::Bool(true)),
+                        ("Styl", D::Enum("FStl", "InsF")),
+                        ("PntT", D::Enum("FrFl", "SClr")),
+                        ("Md  ", mode("Nrml")),
+                        ("Opct", D::Unit(100.0)),
+                        ("Sz  ", D::Unit(3.0)),
+                        ("Clr ", rgb_color(255.0, 0.0, 0.0)),
+                    ],
+                ),
+            ),
+            (
+                "SoFi",
+                D::Obj(
+                    "SoFi",
+                    vec![
+                        ("enab", D::Bool(true)),
+                        ("Md  ", mode("Nrml")),
+                        ("Clr ", rgb_color(0.0, 255.0, 0.0)),
+                        ("Opct", D::Unit(50.0)),
+                    ],
+                ),
+            ),
+            (
+                "OrGl",
+                D::Obj(
+                    "OrGl",
+                    vec![
+                        ("enab", D::Bool(true)),
+                        ("Md  ", mode("Scrn")),
+                        ("Clr ", rgb_color(255.0, 255.0, 190.0)),
+                        ("Opct", D::Unit(75.0)),
+                        ("blur", D::Unit(8.0)),
+                    ],
+                ),
+            ),
         ],
     );
+    // Approximated: a centered stroke, a glow from the center and an unusual shadow mode.
+    let approximate = effects_block(
+        100.0,
+        vec![
+            (
+                "FrFX",
+                D::Obj(
+                    "FrFX",
+                    vec![
+                        ("Styl", D::Enum("FStl", "CtrF")),
+                        ("Sz  ", D::Unit(2.0)),
+                        ("Clr ", rgb_color(0.0, 0.0, 0.0)),
+                    ],
+                ),
+            ),
+            (
+                "IrGl",
+                D::Obj(
+                    "IrGl",
+                    vec![
+                        ("glwS", D::Enum("IGSr", "SrcC")),
+                        ("Clr ", rgb_color(255.0, 255.0, 255.0)),
+                        ("blur", D::Unit(600.0)),
+                    ],
+                ),
+            ),
+        ],
+    );
+    // Left out: bevel, and a gradient stroke.
+    let unsupported = effects_block(
+        100.0,
+        vec![
+            ("ebbl", D::Obj("ebbl", vec![("enab", D::Bool(true))])),
+            (
+                "FrFX",
+                D::Obj(
+                    "FrFX",
+                    vec![
+                        ("PntT", D::Enum("FrFl", "GrFl")),
+                        ("Clr ", rgb_color(0.0, 0.0, 0.0)),
+                    ],
+                ),
+            ),
+            ("ChFX", D::Obj("ChFX", vec![("enab", D::Bool(false))])),
+        ],
+    );
+    let off = block(
+        Some(0),
+        "null",
+        vec![
+            ("masterFXSwitch", D::Bool(false)),
+            ("ebbl", D::Obj("ebbl", vec![])),
+        ],
+    );
+    let mut folder = LayerSpec::folder("Folder", b"pass").with(b"lfx2", effects.clone());
+    folder.opacity = 255;
+    let mut spec = PsdSpec::layers(
+        2,
+        2,
+        vec![
+            LayerSpec::solid("Mapped", (0, 0), (2, 2), [9; 4]).with(b"lfx2", effects.clone()),
+            LayerSpec::solid("Approximate", (0, 0), (2, 2), [9; 4]).with(b"lfx2", approximate),
+            LayerSpec::solid("Unsupported", (0, 0), (2, 2), [9; 4]).with(b"lfx2", unsupported),
+            LayerSpec::solid("Off", (0, 0), (2, 2), [9; 4])
+                .with(b"lfx2", off)
+                .with(b"iOpa", vec![0]),
+            LayerSpec::solid("Legacy", (0, 0), (2, 2), [9; 4]).with(b"lrFX", vec![0; 4]),
+            LayerSpec::solid("Effects only", (0, 0), (2, 2), [9; 4])
+                .with(b"lfx2", effects.clone())
+                .with(b"iOpa", vec![0]),
+            LayerSpec::blank("Empty").with(b"lfx2", effects.clone()),
+            LayerSpec::solid("Disabled", (0, 0), (2, 2), [9; 4])
+                .with(
+                    b"lfx2",
+                    effects_block(
+                        100.0,
+                        vec![(
+                            "SoFi",
+                            D::Obj(
+                                "SoFi",
+                                vec![("enab", D::Bool(false)), ("Clr ", rgb_color(1.0, 2.0, 3.0))],
+                            ),
+                        )],
+                    ),
+                )
+                .with(b"iOpa", vec![0]),
+            LayerSpec::divider(),
+            folder,
+            LayerSpec::solid("Broken", (0, 0), (2, 2), [9; 4]).with(b"lfx2", vec![0, 0, 0]),
+        ],
+    );
+    spec.global_angle = Some(60);
     let (document, report) = open(&spec);
-    assert_eq!(report.count(Dropped::PhotoshopEffects), 2);
-    // Without its effects, a layer that relied on them keeps its layer opacity (upstream).
-    assert_eq!(document.layers[0].opacity, 1.0);
-    assert_eq!(document.layers[3].opacity, 0.0);
+    let find = |name| document.layers.iter().find(|l| l.name == name).unwrap();
+
+    let mapped = find("Mapped").effects.as_ref().unwrap();
+    let shadow = mapped.drop_shadow.unwrap();
+    // The global light, sizes at the 200% effects scale.
+    assert_eq!(shadow.angle, 60.0);
+    assert_eq!((shadow.distance, shadow.blur), (20.0, 10.0));
+    assert_eq!((shadow.color, shadow.opacity), ([10, 20, 30], 0.75));
+    let inner = mapped.inner_shadow.unwrap();
+    assert!(!inner.enabled && inner.angle == 315.0);
+    let stroke = mapped.stroke.unwrap();
+    assert!(stroke.inside && stroke.size == 6.0 && stroke.color == [255, 0, 0]);
+    let overlay = mapped.color_overlay.unwrap();
+    assert_eq!((overlay.color, overlay.opacity), ([0, 255, 0], 0.5));
+    assert_eq!(mapped.outer_glow.unwrap().size, 16.0);
+    assert!(mapped.inner_glow.is_none());
+
+    let approximate = find("Approximate").effects.as_ref().unwrap();
+    assert!(!approximate.stroke.unwrap().inside);
+    assert_eq!(approximate.inner_glow.unwrap().size, 500.0);
+    assert!(find("Unsupported").effects.is_none());
+    assert!(find("Off").effects.is_none());
+    // Switched off, the fill opacity applies as usual.
+    assert_eq!(find("Off").opacity, 0.0);
+    assert!(find("Legacy").effects.is_none());
+    // Fill opacity cannot be separated from the effects: the layer keeps its layer opacity.
+    assert_eq!(find("Effects only").opacity, 1.0);
+    assert!(find("Effects only").effects.is_some());
+    assert!(find("Empty").effects.is_none() && find("Folder").effects.is_none());
+    // Effects that are all switched off are kept, and the fill opacity applies.
+    let disabled = find("Disabled");
+    assert!(
+        !disabled
+            .effects
+            .as_ref()
+            .unwrap()
+            .color_overlay
+            .unwrap()
+            .enabled
+    );
+    assert_eq!(disabled.opacity, 0.0);
+
+    assert_eq!(report.count(Dropped::PhotoshopEffectSettings), 1);
+    // Unsupported, legacy and unreadable.
+    assert_eq!(report.count(Dropped::PhotoshopEffects), 3);
+    assert_eq!(report.count(Dropped::FillOpacity), 1);
+    // On a layer without pixels and on a folder.
+    assert_eq!(report.count(Dropped::LayerEffect), 2);
+    // Imported effects render.
+    render::render(&document);
 }
 
 #[test]
