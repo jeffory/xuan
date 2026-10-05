@@ -28,8 +28,11 @@ fn scenes_match_cpu_goldens() {
                 width,
                 height,
             } => {
-                let prepared = crate::render::prepare_attachments(document);
-                gpu.compose(prepared.as_ref(), *width, *height).unwrap()
+                // Layer effects are drawn on this GPU too.
+                super::scope(Some(gpu.clone()), || {
+                    let prepared = crate::render::prepare_attachments(document);
+                    gpu.compose(prepared.as_ref(), *width, *height).unwrap()
+                })
             }
             Content::Develop { raw, settings } => {
                 let [width, height] =

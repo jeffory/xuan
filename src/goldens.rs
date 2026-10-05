@@ -80,6 +80,8 @@ const SCENES: &[&str] = &[
     "clipping_mask",
     "adjustment_layers",
     "black_white_color_balance",
+    "layer_effects",
+    "layer_effects_combined",
     "text_and_shapes",
     "raw_default",
     "raw_negative",
@@ -140,6 +142,8 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("clipping_mask", clipping_mask()),
         composite("adjustment_layers", adjustment_layers()),
         composite("black_white_color_balance", black_white_color_balance()),
+        composite("layer_effects", layer_effects()),
+        composite("layer_effects_combined", layer_effects_combined()),
         composite("text_and_shapes", text_and_shapes()),
     ];
     if let Some(raw) = raw_fixture() {
@@ -456,6 +460,132 @@ fn black_white_color_balance() -> Document {
         tinted,
         preserving,
         shifting,
+    ])
+}
+
+/// A rounded rectangle of `color` at (`x`, `y`), `width` by `height`.
+fn rounded(x: f32, y: f32, width: f32, height: f32, color: [u8; 4]) -> Layer {
+    paint::shape(
+        Point::new(x, y),
+        Point::new(x + width, y + height),
+        ShapeKind::RoundedRectangle,
+        color,
+        12.0,
+    )
+    .unwrap()
+}
+
+/// Each effect on its own, in upstream's order from left to right and top to bottom: an outside
+/// stroke, a drop shadow, a color overlay, an inner shadow, an outer glow and an inner glow,
+/// each over the gradient.
+fn layer_effects() -> Document {
+    use crate::layer_effects::{
+        GlowEffect, LayerEffects, OverlayEffect, ShadowEffect, StrokeEffect,
+    };
+    let effects = [
+        LayerEffects {
+            stroke: Some(StrokeEffect {
+                size: 5.0,
+                color: [250, 240, 40],
+                ..StrokeEffect::default()
+            }),
+            ..LayerEffects::default()
+        },
+        LayerEffects {
+            drop_shadow: Some(ShadowEffect {
+                angle: 120.0,
+                distance: 10.0,
+                blur: 8.0,
+                opacity: 0.8,
+                ..ShadowEffect::DROP
+            }),
+            ..LayerEffects::default()
+        },
+        LayerEffects {
+            color_overlay: Some(OverlayEffect {
+                color: [40, 200, 120],
+                opacity: 0.6,
+                ..OverlayEffect::default()
+            }),
+            ..LayerEffects::default()
+        },
+        LayerEffects {
+            inner_shadow: Some(ShadowEffect {
+                angle: 45.0,
+                distance: 8.0,
+                blur: 6.0,
+                opacity: 0.9,
+                ..ShadowEffect::INNER
+            }),
+            ..LayerEffects::default()
+        },
+        LayerEffects {
+            outer_glow: Some(GlowEffect {
+                size: 10.0,
+                color: [255, 230, 120],
+                ..GlowEffect::OUTER
+            }),
+            ..LayerEffects::default()
+        },
+        LayerEffects {
+            inner_glow: Some(GlowEffect {
+                size: 14.0,
+                color: [255, 255, 200],
+                opacity: 1.0,
+                ..GlowEffect::INNER
+            }),
+            ..LayerEffects::default()
+        },
+    ];
+    let mut layers = vec![Layer::image("Gradient", gradient())];
+    for (index, effects) in effects.into_iter().enumerate() {
+        let (column, row) = (index % 3, index / 3);
+        let mut layer = rounded(
+            14.0 + column as f32 * 82.0,
+            30.0 + row as f32 * 110.0,
+            58.0,
+            72.0,
+            [60, 90, 200, 255],
+        );
+        layer.effects = Some(effects);
+        layers.push(layer);
+    }
+    document(layers)
+}
+
+/// Every effect on one rotated, partly transparent layer with a mask, at 80% opacity in a folder
+/// at 75%, with a layer clipped to it in Multiply.
+fn layer_effects_combined() -> Document {
+    use crate::layer_effects::{EffectKind, LayerEffects};
+    let mut effects = LayerEffects::default();
+    for kind in EffectKind::ALL {
+        effects.add(kind, [230, 60, 40]);
+    }
+    effects.color_overlay.as_mut().unwrap().opacity = 0.35;
+    effects.stroke.as_mut().unwrap().size = 6.0;
+    let mut folder = Layer::blank("Folder", SIZE, SIZE);
+    folder.group = true;
+    folder.opacity = 0.75;
+    let mut layer = rounded(64.0, 70.0, 128.0, 100.0, [40, 120, 220, 220]);
+    layer.transform.rotation = 15.0;
+    layer.opacity = 0.8;
+    layer.parent = Some(folder.id);
+    layer.mask = Some(Mask {
+        pixels: Arc::new(GrayImage::from_fn(64, 1, |x, _| {
+            Luma([if x < 48 { 255 } else { 255 - (x - 48) * 15 } as u8])
+        })),
+        ..Mask::white()
+    });
+    layer.effects = Some(effects);
+    let mut clipped = Layer::image("Stripes", checker(16, [255, 200, 0, 255], [0, 0, 0, 0]));
+    clipped.parent = Some(folder.id);
+    clipped.clip_to = Some(layer.id);
+    clipped.blend = BlendMode::Multiply;
+    document(vec![
+        Layer::image("Gradient", gradient()),
+        folder,
+        layer,
+        clipped,
     ])
 }
 

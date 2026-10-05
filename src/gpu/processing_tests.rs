@@ -300,6 +300,45 @@ fn processing_blend_modes_match_cpu() {
     }
 }
 
+/// Every layer effect, alone and together, on a soft-edged shape: the GPU passes match
+/// `layer_effects::render_cpu` within two levels.
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_layer_effects_match_cpu() {
+    use crate::layer_effects::{EffectKind, LayerEffects, pad, render_cpu};
+    let gpu = processor();
+    let source = RgbaImage::from_fn(120, 90, |x, y| {
+        let (dx, dy) = (x as f32 - 60.0, y as f32 - 45.0);
+        let edge = (40.0 - (dx * dx / 1.6 + dy * dy).sqrt()).clamp(0.0, 1.0);
+        Rgba([(x * 2) as u8, (y * 2) as u8, 180, (edge * 255.0) as u8])
+    });
+    let mut every = LayerEffects::default();
+    for kind in EffectKind::ALL {
+        every.add(kind, [230, 60, 40]);
+    }
+    every.stroke.as_mut().unwrap().inside = true;
+    let mut cases: Vec<LayerEffects> = EffectKind::ALL
+        .iter()
+        .map(|kind| {
+            let mut effects = LayerEffects::default();
+            effects.add(*kind, [20, 200, 90]);
+            effects
+        })
+        .collect();
+    cases.push(every);
+    let mut sharp = LayerEffects::default();
+    sharp.add(EffectKind::DropShadow, [0; 3]);
+    sharp.drop_shadow.as_mut().unwrap().blur = 0.0;
+    sharp.drop_shadow.as_mut().unwrap().angle = 33.0;
+    cases.push(sharp);
+    for effects in cases {
+        let padded = pad(&source, crate::layer_effects::margin(&effects));
+        let expected = render_cpu(&padded, &effects);
+        let actual = gpu.layer_effects(&padded, &effects).unwrap();
+        compare(&actual, &expected, 2);
+    }
+}
+
 #[test]
 #[ignore = "requires native compute adapter"]
 fn processing_raw_matches_cpu_at_both_depths() {

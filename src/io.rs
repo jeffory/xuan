@@ -154,11 +154,11 @@ const LATEST_VERSION: u32 = 6;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
-    if document
-        .layers
-        .iter()
-        .any(|l| !l.blend.is_legacy() || l.adjustment.as_ref().is_some_and(|a| !a.is_legacy()))
-    {
+    if document.layers.iter().any(|l| {
+        !l.blend.is_legacy()
+            || l.adjustment.as_ref().is_some_and(|a| !a.is_legacy())
+            || l.effects.is_some()
+    }) {
         6
     } else if !document.guides.is_empty() || document.grid.is_some() {
         5
@@ -524,6 +524,21 @@ mod tests {
             assert_eq!(manifest_json(&path)["version"], 6);
             assert_eq!(load(&path).unwrap().layers[1].adjustment, Some(adjustment));
         }
+        // And layer effects.
+        let mut effects = crate::layer_effects::LayerEffects::default();
+        for kind in crate::layer_effects::EffectKind::ALL {
+            effects.add(kind, [10, 20, 30]);
+        }
+        effects.set_enabled(crate::layer_effects::EffectKind::InnerGlow, false);
+        let mut with_effects = doc.clone();
+        with_effects.layers[0].effects = Some(effects.clone());
+        let effects_path = directory.path().join("effects.xuan");
+        save(&with_effects, &effects_path).unwrap();
+        assert_eq!(manifest_json(&effects_path)["version"], 6);
+        assert_eq!(
+            load(&effects_path).unwrap().layers[0].effects,
+            Some(effects)
+        );
         // Out of range settings are refused on load.
         let mut manifest = manifest_json(&path);
         manifest["document"]["layers"][1]["adjustment"]["ColorBalance"]["shadows"][0] =

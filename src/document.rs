@@ -335,6 +335,9 @@ pub struct Layer {
     pub text: Option<crate::text::TextStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<crate::raw::RawAsset>,
+    /// Stroke, shadows, overlay and glows drawn around the layer's pixels (format 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<crate::layer_effects::LayerEffects>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -367,6 +370,7 @@ impl Layer {
             shape: None,
             text: None,
             raw: None,
+            effects: None,
             pixels: None,
         }
     }
@@ -639,6 +643,14 @@ impl Document {
             }
             if let Some(adjustment) = &layer.adjustment {
                 crate::effects::validate_adjustment(adjustment)?;
+            }
+            if let Some(effects) = &layer.effects {
+                effects.validate()?;
+                // As upstream, only layers with pixels of their own take effects.
+                ensure!(
+                    !layer.group && !layer.is_effect(),
+                    "Layer effects need a pixel layer"
+                );
             }
             if let Some(filter) = &layer.filter {
                 filter.validate()?;

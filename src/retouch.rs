@@ -199,6 +199,7 @@ fn raster_layer(document: &Document) -> Result<RgbaImage> {
         opacity: 1.0,
         blend: BlendMode::Normal,
         visible: true,
+        effects: None,
         ..layer.clone()
     }];
     Ok(render::render(&isolated))

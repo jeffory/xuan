@@ -3,8 +3,10 @@
 mod analysis;
 mod coverage;
 mod filter_layers;
+mod layer_effects;
 pub use analysis::{Analysis, analyze};
 pub(crate) use coverage::{CoverageMode, bake_alpha, bake_mask, coverage_image};
+pub(crate) use layer_effects::layer_effects;
 mod motion_blur;
 mod paint;
 mod processor;
