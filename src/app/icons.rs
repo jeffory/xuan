@@ -44,6 +44,17 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
         Tool::Dropper => egui::include_image!("../../assets/svg/color-picker.svg"),
         Tool::Hand => egui::include_image!("../../assets/svg/hand.svg"),
         Tool::Zoom => egui::include_image!("../../assets/svg/zoom.svg"),
+        Tool::Region => {
+            let painter = ui.painter();
+            let inner = rect.shrink(rect.width() * 0.1);
+            painter.rect_stroke(inner, 1.0, Stroke::new(1.35_f32, color), StrokeKind::Inside);
+            painter.rect_filled(
+                Rect::from_min_size(inner.min, inner.size() * vec2(0.45, 0.35)),
+                0.0,
+                color,
+            );
+            return;
+        }
         Tool::Gradient => {
             let painter = ui.painter();
             for i in 0..16 {

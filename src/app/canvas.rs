@@ -418,6 +418,59 @@ impl EditorApp {
                         painter.circle_filled(map(gesture.start), 3.0, Color32::WHITE);
                         painter.circle_filled(map(gesture.last), 3.0, Color32::WHITE);
                     }
+                    if self.tool == Tool::Region {
+                        painter.rect_stroke(
+                            rect,
+                            0.0,
+                            Stroke::new(1.5_f32, theme::ACCENT),
+                            StrokeKind::Inside,
+                        );
+                    }
+                }
+                if let Some(edit) = &self.plugins.action {
+                    for (index, region) in edit.regions.iter().enumerate() {
+                        let rect = Rect::from_two_pos(
+                            map(Point::new(region.x, region.y)),
+                            map(Point::new(
+                                region.x + region.width,
+                                region.y + region.height,
+                            )),
+                        );
+                        let selected = edit.selected == Some(index);
+                        painter.rect_filled(
+                            rect,
+                            0.0,
+                            theme::ACCENT.gamma_multiply(if selected { 0.2 } else { 0.08 }),
+                        );
+                        painter.rect_stroke(
+                            rect,
+                            0.0,
+                            Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, theme::ACCENT),
+                            StrokeKind::Inside,
+                        );
+                        let badge = Rect::from_min_size(rect.min, vec2(22.0, 16.0));
+                        painter.rect_filled(badge, 0.0, theme::ACCENT);
+                        painter.text(
+                            badge.center(),
+                            egui::Align2::CENTER_CENTER,
+                            format!("{:02}", index + 1),
+                            egui::FontId::monospace(10.0),
+                            Color32::WHITE,
+                        );
+                        if let Some(text) = region
+                            .fields
+                            .values()
+                            .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
+                        {
+                            painter.text(
+                                rect.min + vec2(4.0, 20.0),
+                                egui::Align2::LEFT_TOP,
+                                text.chars().take(28).collect::<String>(),
+                                egui::FontId::proportional(11.0),
+                                Color32::WHITE,
+                            );
+                        }
+                    }
                 }
                 if !self.polygon.is_empty() {
                     let mut points: Vec<_> = self.polygon.iter().copied().map(map).collect();
@@ -827,6 +880,7 @@ impl EditorApp {
     fn canvas_click(&mut self, point: Point, modifiers: egui::Modifiers) {
         match self.tool {
             Tool::Text => self.text_click(point),
+            Tool::Region => self.select_region_at(point),
             Tool::Move => {
                 if self.auto_select || modifiers.ctrl {
                     self.select_canvas_layer(point, modifiers.shift, false);
@@ -982,6 +1036,32 @@ impl EditorApp {
             return;
         }
         if tool == Tool::Text {
+            return;
+        }
+        if tool == Tool::Region {
+            // Regions belong to the open plugin action, not to the document.
+            if self.plugins.action.is_none() {
+                return;
+            }
+            let session = &self.sessions[self.current];
+            self.gesture = Some(Gesture {
+                tool,
+                brush: brush.clone(),
+                brushes: vec![brush],
+                stroke: paint::Stroke::default(),
+                smoothing: None,
+                start: point,
+                last: point,
+                screen_start: screen,
+                pan_start: session.pan,
+                points: Vec::new(),
+                original: session.document.clone(),
+                kind: TransformDrag::Move,
+                panning: false,
+                clone_offset: Point::default(),
+                source: None,
+                reference: None,
+            });
             return;
         }
         if tool == Tool::Clone && modifiers.alt {
@@ -1366,6 +1446,10 @@ impl EditorApp {
         };
         let tool = gesture.tool;
         if gesture.panning {
+            return;
+        }
+        if tool == Tool::Region {
+            self.add_region(gesture.start, gesture.last);
             return;
         }
         if tool == Tool::Heal {

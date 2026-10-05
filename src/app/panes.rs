@@ -34,7 +34,7 @@ impl EditorApp {
     pub(super) fn pane_title(&self, id: &str) -> Option<String> {
         match id {
             panes::LAYERS => Some(tr("Layers").into()),
-            _ => None,
+            _ => self.plugin_pane_title(id),
         }
     }
 
@@ -273,6 +273,8 @@ impl EditorApp {
     fn pane_body(&mut self, ui: &mut egui::Ui, id: &str, enabled: bool) {
         if id == panes::LAYERS {
             self.layers_pane(ui, enabled);
+        } else {
+            self.plugin_pane(ui, id);
         }
     }
 }

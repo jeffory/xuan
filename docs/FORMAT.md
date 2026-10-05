@@ -36,3 +36,15 @@ siblings. The `filter` field stores Gaussian Blur, Motion Blur, Add Noise, or Le
 Correction settings. Parameters, hierarchy, and cycles are validated on load.
 Source pixels are retained; intermediate effect rasters are not saved. Legacy
 single image masks are promoted to child layers when opened in the editor.
+
+## Plugin provenance (version 5)
+
+Documents with a layer produced by a plugin use version 5. The reader still
+accepts versions 1–4. Such a layer carries a `generated` object: the plugin
+`id` and `version`, the `action`, the `inputs` the user chose (regions in
+document coordinates with their fields), the `source` layer id, a `source_hash`
+of the pixels that were sent (`fnv1a:` prefix), and an RFC 3339 `created`
+timestamp. **Layer → Re-run Plugin Action…** uses it to repeat the action with
+the same inputs. Nothing else about the layer changes: its pixels and mask are
+stored like any image layer, so a reader without the plugin shows the result
+unchanged. See [PLUGINS.md](PLUGINS.md).

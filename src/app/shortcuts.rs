@@ -90,6 +90,12 @@ impl EditorApp {
                 return;
             }
         }
+        if self.develop.is_none()
+            && let Some((plugin, action)) = self.plugin_shortcut(ctx)
+        {
+            self.start_plugin_action(&plugin, &action);
+            return;
+        }
         if let Some(develop) = &mut self.develop {
             if pressed(Key::Escape) {
                 develop.tool = super::develop::CanvasTool::None;

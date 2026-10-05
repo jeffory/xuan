@@ -17,6 +17,9 @@ mod levels_controls;
 mod menus;
 mod panels;
 mod panes;
+mod plugin_dialogs;
+mod plugin_panes;
+mod plugins;
 mod settings;
 mod shortcuts;
 mod stroke_smoothing;
@@ -66,10 +69,12 @@ pub enum Tool {
     Dropper,
     Hand,
     Zoom,
+    /// Marks regions for a plugin action; shown only while one is open.
+    Region,
 }
 
 impl Tool {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 17] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
@@ -86,6 +91,7 @@ impl Tool {
         Self::Dropper,
         Self::Hand,
         Self::Zoom,
+        Self::Region,
     ];
 
     fn label(self) -> &'static str {
@@ -106,6 +112,7 @@ impl Tool {
             Self::Dropper => tr("Eyedropper"),
             Self::Hand => tr("Hand"),
             Self::Zoom => tr("Zoom"),
+            Self::Region => tr("Region"),
         }
     }
     fn shortcut(self) -> &'static str {
@@ -126,6 +133,7 @@ impl Tool {
             Self::Dropper => "I",
             Self::Hand => "H",
             Self::Zoom => "Z",
+            Self::Region => "",
         }
     }
     fn is_brush(self) -> bool {
@@ -168,6 +176,9 @@ impl Tool {
             }
             Self::Hand => tr("Drag to pan · Scroll to zoom · Ctrl+0 fits canvas"),
             Self::Zoom => tr("Click to zoom in · Alt-click to zoom out · Ctrl+1 actual pixels"),
+            Self::Region => {
+                tr("Drag to mark a region for the plugin · Click a region to edit its details")
+            }
         }
     }
 }
@@ -291,7 +302,7 @@ impl Session {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dialog {
     New,
     CanvasSize,
@@ -303,6 +314,9 @@ enum Dialog {
     About,
     Settings,
     DropChoice,
+    PluginPermissions,
+    Plugins,
+    PluginProposal,
 }
 
 struct EffectEdit {
@@ -375,6 +389,7 @@ pub struct EditorApp {
     config: xuan::config::Config,
     config_path: Option<PathBuf>,
     pane_drag: Option<panes::PaneDrag>,
+    plugins: plugins::PluginState,
     tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
@@ -474,6 +489,7 @@ impl EditorApp {
             Self::with_context(&cc.egui_ctx, vec![], demo, screenshot)
         });
         app.load_config();
+        app.load_plugins();
         app.button_layout = chrome::ButtonLayout::from_desktop();
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
@@ -522,6 +538,7 @@ impl EditorApp {
             config: Default::default(),
             config_path: None,
             pane_drag: None,
+            plugins: Default::default(),
             tablet: None,
             context: ctx.clone(),
             window_title: String::new(),
@@ -717,6 +734,12 @@ impl EditorApp {
             self.queue_raw(path, as_layer);
             return;
         }
+        if !builtin_extension(path)
+            && let Some((plugin, format)) = self.plugin_import_format(path)
+        {
+            self.open_with_plugin(&plugin, &format, path, as_layer);
+            return;
+        }
         let project = path.is_dir() || path.extension().is_some_and(|e| e == "xuan");
         let result = if project {
             io::load(path)
@@ -808,16 +831,85 @@ impl EditorApp {
         self.mask_target = false;
     }
 
+    /// Open a file through the plugin that declared its format.
+    fn open_with_plugin(&mut self, plugin: &str, format: &str, path: &Path, as_layer: bool) {
+        match self.import_with_plugin(plugin, format, path) {
+            Ok(document) => {
+                let title = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if as_layer && !self.sessions.is_empty() {
+                    let image = xuan::render::render(&document);
+                    self.edit(tr("Import Image"), |doc| {
+                        let mut layer = Layer::image(title, image);
+                        layer.transform.x = (doc.width as f32 - layer.transform.width) * 0.5;
+                        layer.transform.y = (doc.height as f32 - layer.transform.height) * 0.5;
+                        doc.insert(layer);
+                        Ok(())
+                    });
+                    return;
+                }
+                self.sessions.push(Session::new(document, title, None));
+                self.current = self.sessions.len() - 1;
+                self.session_mut().unwrap().history.mark_modified();
+                self.mask_target = false;
+                self.dialog = None;
+            }
+            Err(error) => {
+                self.error = Some(format!(
+                    "{} {}\n\n{error:#}",
+                    tr("Could not open"),
+                    path.display()
+                ))
+            }
+        }
+    }
+
+    /// Repeat the plugin action that generated the active layer.
+    fn rerun_plugin_action(&mut self) {
+        let Some(generated) = self
+            .session()
+            .and_then(|s| s.document.active())
+            .and_then(|layer| layer.generated.clone())
+        else {
+            return;
+        };
+        if self.plugins.manifest(&generated.plugin).is_none() {
+            self.error = Some(format!(
+                "{} {}",
+                tr("This layer was generated by a plugin that is not installed:"),
+                generated.plugin
+            ));
+            return;
+        }
+        if let Some(source) = generated.source
+            && let Some(session) = self.session_mut()
+            && session.document.layers.iter().any(|l| l.id == source)
+        {
+            session.document.select(source, false);
+        }
+        self.start_plugin_action_with(
+            &generated.plugin,
+            &generated.action,
+            Some(&generated.inputs),
+        );
+    }
+
     fn open_dialog(&mut self, as_layer: bool) {
         let extensions = [
             "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif",
             "hif",
         ];
         // Portal file filters may be case-sensitive; cameras commonly use uppercase.
+        let plugin_extensions = self.plugin_import_extensions();
         let extensions: Vec<_> = extensions
             .iter()
-            .chain(xuan::raw::EXTENSIONS)
-            .flat_map(|extension| [extension.to_string(), extension.to_ascii_uppercase()])
+            .map(|e| e.to_string())
+            .chain(xuan::raw::EXTENSIONS.iter().map(|e| e.to_string()))
+            .chain(plugin_extensions)
+            .flat_map(|extension| [extension.clone(), extension.to_ascii_uppercase()])
             .collect();
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter(tr("Images and Xuan projects"), &extensions)
@@ -1015,7 +1107,7 @@ impl EditorApp {
         if let Some(develop) = &mut self.develop {
             match command {
                 "new" | "open" | "open_clipboard" | "open_comp" => self.suspend_develop(),
-                "about" | "shortcuts" | "settings" | "reset_panels" => {}
+                "about" | "shortcuts" | "settings" | "reset_panels" | "plugins" => {}
                 "close" => {
                     self.request_develop_close(develop::DevelopClose::Tab);
                     return;
@@ -1040,6 +1132,8 @@ impl EditorApp {
                 self.config.panes.reset();
                 self.save_config();
             }
+            "plugins" => self.dialog = Some(Dialog::Plugins),
+            "rerun_plugin" => self.rerun_plugin_action(),
             "develop" => {
                 if let Some(id) = self.session().and_then(|s| s.document.active) {
                     self.start_develop_layer(id);
@@ -1427,6 +1521,7 @@ impl eframe::App for EditorApp {
     fn on_exit(&mut self) {
         // Stop the tablet queue before eframe destroys its Wayland window/display.
         self.tablet = None;
+        self.plugins.stop_all();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -1488,6 +1583,7 @@ impl EditorApp {
         );
         self.sync_decorations(ctx);
         self.window_resize(ctx);
+        self.poll_plugins();
         self.menus(ctx);
         self.tabs(ctx);
         if self.develop.is_some() {
@@ -1498,12 +1594,15 @@ impl EditorApp {
             self.tool_rail(ctx);
             self.sidebar(ctx);
             self.canvas(ctx);
+            self.plugin_action_dialog(ctx);
+            self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
         if self.gesture.is_none()
             && self.effect.is_none()
             && self.text_edit.is_none()
             && self.job.is_none()
+            && self.dialog != Some(Dialog::PluginProposal)
             && !ctx.input(|i| i.pointer.any_down())
             && let Some(session) = self.session_mut()
         {
@@ -1562,4 +1661,27 @@ impl EditorApp {
             ctx.request_repaint();
         }
     }
+}
+
+/// Files Xuan opens itself, which a plugin format cannot override.
+fn builtin_extension(path: &Path) -> bool {
+    path.is_dir()
+        || xuan::raw::is_raw(path)
+        || path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "xuan"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "tif"
+                    | "tiff"
+                    | "webp"
+                    | "bmp"
+                    | "gif"
+                    | "heic"
+                    | "heif"
+                    | "hif"
+            )
+        })
 }

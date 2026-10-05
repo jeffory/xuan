@@ -182,6 +182,28 @@ a prompt; in a mixed drop they open after you answer, even if you cancel. Drops
 that arrive while a dialog, background job, error, save prompt, or Develop is
 open are queued and handled once it closes.
 
+## Plugins
+
+Plugins add menu actions, sidebar panes and file formats. Install one by
+placing its folder in the plugins directory shown under **Plugins → Manage
+Plugins…** (`~/.config/xuan/plugins/` on Linux, `%APPDATA%\xuan\plugins\` on
+Windows), then press **Reload**. Plugins that declare permissions, such as
+network access or an API key, ask for them before they first run. Their
+settings are edited in the same window.
+
+A plugin action opens a dialog built from the inputs it declared. Actions that
+work on marked parts of the image switch to the **Region** tool: drag boxes
+over the canvas, or add the current selection as a region, and fill in each
+box's details. The result arrives as a proposal above the canvas with
+**Compare**, **Accept** and **Discard**; accepting is one undo step. Generated
+layers remember what produced them, so **Layer → Re-run Plugin Action…** can
+repeat the action with changes.
+
+The repository ships examples under `plugins/`: a histogram pane (Python), a
+region inverter (Rust) and a Comfy Cloud client that edits or generates images
+with ComfyUI workflows. See [plugins](PLUGINS.md) for the manifest, the
+protocol and the SDKs.
+
 ## Current limits
 
 The photo editor uses an 8-bit sRGB raster pipeline. RAW Develop uses floating-point camera data and offers direct 16-bit TIFF output with an sRGB profile; its photo-layer render uses the existing 8-bit pipeline. Imported raster ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; Xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.

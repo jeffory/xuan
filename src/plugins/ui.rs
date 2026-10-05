@@ -229,10 +229,46 @@ impl Node {
     }
 }
 
+/// Decode standard or URL-safe base64, ignoring whitespace and padding.
+pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(text.len() * 3 / 4);
+    let mut buffer = 0u32;
+    let mut bits = 0;
+    for byte in text.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' | b'\n' | b'\r' | b' ' | b'\t' => continue,
+            _ => return None,
+        };
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((buffer >> bits) as u8);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    Some(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn base64_decodes_standard_and_url_safe_text() {
+        assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(decode_base64("aGVsbG8").unwrap(), b"hello");
+        assert_eq!(decode_base64("aGVs\nbG8gd29ybGQ=").unwrap(), b"hello world");
+        assert_eq!(decode_base64("-_8=").unwrap(), [0xfb, 0xff]);
+        assert!(decode_base64("a*b").is_none());
+        assert_eq!(decode_base64("").unwrap(), Vec::<u8>::new());
+    }
 
     #[test]
     fn trees_parse_with_defaults_and_limits() {

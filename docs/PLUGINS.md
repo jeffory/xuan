@@ -10,13 +10,26 @@ directly; it asks the host for pixels and returns results.
 
 Any language works. The repository ships a Rust SDK crate (`sdk/xuan-plugin`), a
 Python module with no dependencies (`sdk/python/xuan_plugin.py`), and example
-plugins under `plugins/`.
+plugins under `plugins/`:
+
+| Folder | Language | Shows |
+| --- | --- | --- |
+| `plugins/histogram` | Python | A pane that follows the document, settings, data-URL images |
+| `plugins/invert-regions` | Rust | A region action with per-region fields, a pane that reads the composite |
+| `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; three actions |
+
+Both SDKs read requests on the main thread and run handlers on worker threads,
+so a handler may call the editor (`host.document()`, `host.export_layer()`, …)
+while a job runs. In Python, decorate functions on a `Plugin`; in Rust, chain
+closures on `Plugin::new()` and call `run()`. `cargo build --release` in
+`plugins/invert-regions` builds the Rust example; the Python examples run as
+they are with `python3` on `PATH`.
 
 ## Installing
 
 A plugin is a folder holding a `plugin.toml` manifest and its program. Xuan loads
 every folder in the user plugins directory at start-up and from
-**Edit → Plugins…**:
+**Plugins → Manage Plugins…**:
 
 | Platform | Directory |
 | --- | --- |
@@ -107,7 +120,7 @@ export = true
 
 ### Settings
 
-Settings are drawn in **Edit → Settings… → Plugins** from the schema; a plugin
+Settings are drawn in **Plugins → Manage Plugins…** from the schema; a plugin
 never implements that dialog. Types: `text`, `multiline`, `integer`, `number`,
 `bool`, `enum`, `color`, `path` and `secret`. Values live in `config.toml` under
 `[plugins.<id>.settings]`; secrets are stored in `secrets.toml` next to it, which
@@ -140,7 +153,7 @@ and every result is placed back where it came from.
 
 `result.into` chooses where image outputs go: `layer` (a new layer above the
 source, the default), `replace` (the source layer's pixels), `document` (a new
-tab), or `ask`. With `mask_to_regions`, a new layer gets a mask built from the
+tab), or `ask` (the dialog offers **New layer** / **New document**). With `mask_to_regions`, a new layer gets a mask built from the
 regions with a soft edge, so only the parts the user asked to change show
 through and the rest can be painted back.
 
@@ -155,7 +168,7 @@ generated layer records which plugin, action, inputs and source produced it, so
 
 Messages are JSON-RPC 2.0 objects, one per line, UTF-8, over the plugin's stdin
 (host → plugin) and stdout (plugin → host). Stderr is captured into the plugin
-log shown in **Edit → Plugins…**. Both sides may send requests; both must answer
+log shown in **Plugins → Manage Plugins…**. Both sides may send requests; both must answer
 requests promptly even while a job runs, so plugins should handle `action/run`
 on a worker thread or an async task. Images are exchanged as PNG files in
 directories the host owns; messages carry paths, never pixels.
