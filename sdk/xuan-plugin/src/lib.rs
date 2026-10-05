@@ -430,7 +430,12 @@ impl Output {
     pub fn fit_source(self) -> Self {
         match self {
             Self::Image {
-                path, name, x, y, mask, ..
+                path,
+                name,
+                x,
+                y,
+                mask,
+                ..
             } => Self::Image {
                 path,
                 name,
@@ -959,7 +964,10 @@ mod tests {
             .with_mask("/tmp/m.png")
             .fit_source();
         let value = serde_json::to_value(&fitted).unwrap();
-        assert_eq!((value["fit"].as_str(), value["mask"].as_str()), (Some("source"), Some("/tmp/m.png")));
+        assert_eq!(
+            (value["fit"].as_str(), value["mask"].as_str()),
+            (Some("source"), Some("/tmp/m.png"))
+        );
         let sized = Output::image("/tmp/out.png", None, 0.0, 0.0).with_size(Some(40.0), None);
         let value = serde_json::to_value(&sized).unwrap();
         assert_eq!(value["width"], 40.0);
