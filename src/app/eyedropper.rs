@@ -189,6 +189,17 @@ impl EditorApp {
         Some(average(&samples).map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
     }
 
+    /// Free cached renders that cannot be used soon: all of them unless the
+    /// Eyedropper is active, and always those of background tabs.
+    pub(super) fn release_sample_caches(&mut self) {
+        let active = self.tool == super::Tool::Dropper;
+        for (index, session) in self.sessions.iter_mut().enumerate() {
+            if !active || index != self.current {
+                session.sample_cache = None;
+            }
+        }
+    }
+
     /// Pointer pressed: remember the brush colour and sample.
     pub(super) fn dropper_press(&mut self, point: Point) {
         self.dropper = Some(DropperGesture {

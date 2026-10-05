@@ -151,6 +151,7 @@ impl EditorApp {
                     self.welcome(ui, viewport);
                     return;
                 }
+                self.release_sample_caches();
                 let mask_target = self.transforming_mask();
                 let session = &mut self.sessions[self.current];
                 if session.fit {

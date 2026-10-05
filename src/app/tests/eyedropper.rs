@@ -159,6 +159,16 @@ fn filter_layer_is_rendered_once_across_many_samples() {
     app.command("undo");
     app.sample_color(Point::new(1.5, 1.5));
     assert_eq!(app.session().unwrap().sample_renders, 3);
+
+    // Leaving the tool frees the render; coming back renders once more.
+    assert!(app.session().unwrap().sample_cache.is_some());
+    app.set_tool(Tool::Brush);
+    assert!(app.session().unwrap().sample_cache.is_none());
+    app.set_tool(Tool::Dropper);
+    for x in 0..5 {
+        app.sample_color(Point::new(x as f32 + 0.5, 1.5));
+    }
+    assert_eq!(app.session().unwrap().sample_renders, 4);
 }
 
 #[test]

@@ -898,6 +898,7 @@ impl EditorApp {
     fn set_tool(&mut self, tool: Tool) {
         self.cancel_gesture();
         self.tool = tool;
+        self.release_sample_caches();
         if matches!(tool, Tool::Brush | Tool::Pencil) {
             self.brush_variant = tool;
         }
