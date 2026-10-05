@@ -6,4 +6,25 @@
     <icon name="me.silverl.xuan"/>
     <sub-class-of type="application/zip"/>
   </mime-type>
+  <!-- Also defined by shared-mime-info; repeated so Xuan's import works where it is missing. -->
+  <mime-type type="image/vnd.adobe.photoshop">
+    <comment>Photoshop image</comment>
+    <alias type="image/psd"/>
+    <alias type="image/x-psd"/>
+    <alias type="image/photoshop"/>
+    <alias type="image/x-photoshop"/>
+    <alias type="application/photoshop"/>
+    <alias type="application/x-photoshop"/>
+    <glob pattern="*.psd"/>
+    <magic priority="50">
+      <match type="string" value="8BPS\x00\x01" offset="0"/>
+    </magic>
+  </mime-type>
+  <mime-type type="image/x-photoshop-large">
+    <comment>Photoshop large document</comment>
+    <glob pattern="*.psb"/>
+    <magic priority="50">
+      <match type="string" value="8BPS\x00\x02" offset="0"/>
+    </magic>
+  </mime-type>
 </mime-info>

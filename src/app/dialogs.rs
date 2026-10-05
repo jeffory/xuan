@@ -130,6 +130,7 @@ impl EditorApp {
             }
         }
         self.close_dialog(ctx);
+        self.photoshop_dialog(ctx);
         if let Some(notice) = self.notice.clone() {
             let mut dismiss = false;
             widgets::Window::new(tr("Imported with changes"))

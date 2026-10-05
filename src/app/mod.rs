@@ -25,6 +25,7 @@ mod menus;
 mod navigator;
 mod panels;
 mod panes;
+mod photoshop;
 mod pixel_grid;
 mod plugin_dialogs;
 mod plugin_panes;
@@ -477,6 +478,8 @@ pub struct EditorApp {
     error: Option<String>,
     /// A non-fatal message about a finished operation, such as what an import left out.
     notice: Option<String>,
+    /// Photoshop files read and waiting for their conversion report to be accepted.
+    photoshop_imports: photoshop::PendingImports,
     status: String,
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
@@ -644,6 +647,7 @@ impl EditorApp {
             layer_effects: None,
             error: None,
             notice: None,
+            photoshop_imports: Default::default(),
             status: String::new(),
             rename: None,
             close_tab: None,
@@ -786,6 +790,10 @@ impl EditorApp {
     fn open_path(&mut self, path: &Path, as_layer: bool) {
         if xuan::raw::is_raw(path) {
             self.queue_raw(path, as_layer);
+            return;
+        }
+        if io::is_photoshop(path) {
+            self.open_photoshop(path, as_layer);
             return;
         }
         if !builtin_extension(path)
@@ -962,7 +970,7 @@ impl EditorApp {
     fn open_dialog(&mut self, as_layer: bool) {
         let extensions = [
             "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif",
-            "hif",
+            "hif", "psd", "psb",
         ];
         // Portal file filters may be case-sensitive; cameras commonly use uppercase.
         let plugin_extensions = self.plugin_import_extensions();
@@ -1729,6 +1737,7 @@ impl EditorApp {
 fn builtin_extension(path: &Path) -> bool {
     path.is_dir()
         || xuan::raw::is_raw(path)
+        || io::is_photoshop(path)
         || path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
             matches!(
                 e.to_ascii_lowercase().as_str(),

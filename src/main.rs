@@ -10,7 +10,7 @@ use clap::Parser;
 #[command(
     version,
     about,
-    after_help = "Projects use .xuan; original .comp directory packages can also be opened."
+    after_help = "Projects use .xuan; original .comp directory packages and Photoshop .psd/.psb files can also be opened."
 )]
 struct Args {
     /// Images or projects to open

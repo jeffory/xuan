@@ -97,6 +97,122 @@ fn compositor_import_opens_and_reports_what_it_left_out() {
     assert!(app.notice.is_some());
 }
 
+/// A 4×2 RGB Photoshop file (color `mode`) with one opaque layer, "Art", using `blend`.
+fn photoshop_file(mode: u16, blend: &[u8; 4]) -> Vec<u8> {
+    let mut out = b"8BPS\0\x01\0\0\0\0\0\0\0\x03".to_vec();
+    out.extend(2_u32.to_be_bytes());
+    out.extend(4_u32.to_be_bytes());
+    out.extend(8_u16.to_be_bytes());
+    out.extend(mode.to_be_bytes());
+    out.extend([0; 8]); // no color mode data or image resources
+    let mut info = 1_i16.to_be_bytes().to_vec();
+    for v in [0_i32, 0, 2, 4] {
+        info.extend(v.to_be_bytes());
+    }
+    info.extend(3_u16.to_be_bytes());
+    for id in 0..3_i16 {
+        info.extend(id.to_be_bytes());
+        info.extend(10_u32.to_be_bytes());
+    }
+    info.extend(b"8BIM");
+    info.extend(blend);
+    info.extend([255, 0, 0, 0]);
+    let extra = [0, 0, 0, 0, 0, 0, 0, 0, 3, b'A', b'r', b't'];
+    info.extend((extra.len() as u32).to_be_bytes());
+    info.extend(extra);
+    for channel in 0..3 {
+        info.extend([0, 0]);
+        info.extend([channel * 100; 8]);
+    }
+    let mut section = (info.len() as u32).to_be_bytes().to_vec();
+    section.extend(info);
+    section.extend([0; 4]);
+    out.extend((section.len() as u32).to_be_bytes());
+    out.extend(section);
+    out.extend([0, 0]);
+    out.extend([255; 24]);
+    out
+}
+
+#[test]
+fn photoshop_import_shows_its_report_before_applying() {
+    let (context, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Poster.psd");
+    std::fs::write(&path, photoshop_file(3, b"zzzz")).unwrap();
+
+    // Nothing is applied while the report is up, and keys and drops wait for it.
+    app.open_path(&path, false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.sessions.is_empty());
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(lines.iter().any(|l| l.contains("“Unknown”")), "{lines:?}");
+    assert!(app.drops_blocked());
+    keyboard_frame(&context, &mut app, Vec::new(), egui::Modifiers::NONE);
+    assert!(app.pending_photoshop_lines().is_some());
+    // Escape cancels; Enter imports.
+    let escape = text_key(egui::Key::Escape, egui::Modifiers::NONE);
+    keyboard_frame(&context, &mut app, vec![escape], egui::Modifiers::NONE);
+    assert!(app.sessions.is_empty() && !app.drops_blocked());
+
+    app.open_path(&path, false);
+    let enter = text_key(egui::Key::Enter, egui::Modifiers::NONE);
+    keyboard_frame(&context, &mut app, vec![enter], egui::Modifiers::NONE);
+    assert_eq!(app.sessions.len(), 1);
+    let session = app.session().unwrap();
+    assert_eq!(session.title, "Poster");
+    assert!(session.path.is_none(), "saving must not overwrite the PSD");
+    assert_eq!((session.document.width, session.document.height), (4, 2));
+    assert_eq!(session.document.layers[0].name, "Art");
+    assert_eq!(app.status, "Imported with changes");
+
+    // A file Xuan represents completely opens without asking.
+    std::fs::write(&path, photoshop_file(3, b"mul ")).unwrap();
+    app.open_path(&path, false);
+    assert!(app.pending_photoshop_lines().is_none());
+    assert_eq!(app.sessions.len(), 2);
+
+    // Unsupported color modes are refused with a clear message.
+    std::fs::write(&path, photoshop_file(4, b"norm")).unwrap();
+    app.open_path(&path, false);
+    let error = app.error.take().unwrap();
+    assert!(
+        error.contains("CMYK") && error.contains("8-bit RGB"),
+        "{error}"
+    );
+    assert_eq!(app.sessions.len(), 2);
+}
+
+#[test]
+fn photoshop_files_import_as_a_centered_folder_and_drop_like_images() {
+    let (_, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Art.PSB");
+    // A version 1 file named .psb still opens: the header decides.
+    std::fs::write(&path, photoshop_file(3, b"norm")).unwrap();
+    app.dimensions = [10, 6];
+    app.new_document();
+    app.open_path(&path, true);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), 1);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 3);
+    let folder = document.active().unwrap();
+    assert!(folder.group && folder.name == "Art");
+    let art = &document.layers[1];
+    assert_eq!(art.parent, Some(folder.id));
+    assert_eq!((art.transform.x, art.transform.y), (3.0, 2.0));
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+
+    // Dropped onto an open document, a PSD is offered as a layer like any image.
+    app.queue_drop(vec![path.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    app.drop_choose_for_test(Some(true));
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+}
+
 #[test]
 fn text_tool_creates_edits_and_undoes_one_transaction() {
     let (context, mut app) = app();
