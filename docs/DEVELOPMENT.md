@@ -136,6 +136,33 @@ cargo test --locked --package egui-winit --lib clipboard_paste
 
 The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
 
+## Writing UI tests
+
+UI interaction tests run the real `EditorApp` under [`egui_kittest`](https://crates.io/crates/egui_kittest) with simulated pointer, keyboard and file-drop input. They need no GPU and no window, and the whole set runs in about a second:
+
+```sh
+cargo test --locked --bins app::tests::ui
+```
+
+The harness is `UiTest` in `src/app/tests/ui.rs`; flows live next to it, and the generated shortcut check is in `src/app/tests/ui_shortcuts.rs`.
+
+```rust
+let mut ui = UiTest::with_document();   // or UiTest::new() for an empty editor
+ui.open_menu("File");
+ui.click("Close Project Ctrl+W");      // find by accessibility label, then a real click
+assert!(ui.app().close_tab.is_some());
+ui.key(egui::Key::Escape);              // ui.press(Modifiers::CTRL, Key::W) for chords
+ui.drop_files(&[&path]);                // injects `dropped_files`
+```
+
+- Widgets are found by their AccessKit label. Menu items are labelled `"<name> <shortcut>"`, for example `"Save Ctrl+S"`. A widget drawn by hand needs `response.widget_info(...)` before a test can find or click it; `ui.enabled(label)` reports its disabled state.
+- Assert on app state (`ui.app()`), not on pixels. Do not start a flow with `app.command(...)` or by setting fields, except to build the starting point (a dirty document, a Develop session).
+- `UiTest` steps three frames after each action so floating windows can measure themselves. `click_and_stop` leaves the output of the handling frame in place for checking viewport commands such as `Close`.
+- Commands that open native file dialogs (Open, Save, Export) must not run in tests. Set `app.command_trace = Some(Vec::new())` to make `command()` only record names; the shortcut test does this.
+- `docs/SHORTCUTS.md` is parsed by the shortcut test. Adding, removing or rewording a documented shortcut requires updating `expected()` or `PROSE` in `ui_shortcuts.rs`.
+- Snapshot images are not used: kittest snapshots need a wgpu renderer.
+- `egui_kittest` turns on egui's `accesskit` feature, which is why the vendored `egui-winit` reads `accesskit_update` by field access (see `vendor/egui-winit/PATCH.md`).
+
 ## Tablet input checks
 
 Tablet regression checks run with `cargo test --locked tablet`. They cover native
