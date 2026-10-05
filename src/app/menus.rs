@@ -341,14 +341,7 @@ impl EditorApp {
                                         item(ui, &items, "rasterize_raw", &mut action);
                                     },
                                 );
-                                ui.add_enabled_ui(
-                                    self.session()
-                                        .and_then(|s| s.document.active())
-                                        .is_some_and(super::layer_effects_dialog::can_take_effects),
-                                    |ui| {
-                                        item(ui, &items, "layer_effects", &mut action);
-                                    },
-                                );
+                                item(ui, &items, "layer_effects", &mut action);
                                 ui.separator();
                                 item(ui, &items, "group", &mut action);
                                 item(ui, &items, "ungroup", &mut action);
