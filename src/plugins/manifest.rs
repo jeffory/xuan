@@ -9,6 +9,12 @@ use serde_json::Value;
 pub const PROTOCOL: u32 = 1;
 pub const MANIFEST_FILE: &str = "plugin.toml";
 const MAX_ID: usize = 64;
+/// Longest text input value, in bytes, taken from stored or plugin inputs.
+pub const MAX_INPUT_TEXT: usize = 64 * 1024;
+/// Most regions one action takes, whatever its `max` says.
+pub const MAX_REGIONS: usize = 256;
+/// Largest region coordinate or size, in document pixels.
+const MAX_REGION_COORDINATE: f64 = 1_000_000.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -135,6 +141,79 @@ impl Input {
             InputKind::Color => Value::String("#ffffff".into()),
             InputKind::Regions => Value::Array(Vec::new()),
         }
+    }
+
+    /// `value` made valid for this input: the right type, within `min` and
+    /// `max`, one of the `values`, cut to a sane length, or else the initial
+    /// value. Inputs stored in a project or sent by a plugin pass through
+    /// this before they reach the dialog.
+    pub fn coerce(&self, value: &Value) -> Value {
+        let number = value.as_f64().filter(|v| v.is_finite());
+        let coerced = match self.kind {
+            InputKind::Text | InputKind::Multiline | InputKind::Path => value
+                .as_str()
+                .map(|text| Value::String(clip(text, MAX_INPUT_TEXT).to_owned())),
+            // Secrets are never action inputs.
+            InputKind::Secret => None,
+            InputKind::Integer | InputKind::Seed => number.map(|v| {
+                let v = self.clamp(v.round()).clamp(-9.0e15, 9.0e15);
+                Value::from(v as i64)
+            }),
+            InputKind::Number => number.map(|v| Value::from(self.clamp(v))),
+            InputKind::Bool => value.as_bool().map(Value::Bool),
+            InputKind::Enum => value
+                .as_str()
+                .filter(|id| self.values.iter().any(|choice| choice.id == *id))
+                .map(|id| Value::String(id.to_owned())),
+            InputKind::Color => value
+                .as_str()
+                .filter(|text| super::ui::Node::color(text).is_some())
+                .map(|text| Value::String(text.to_owned())),
+            InputKind::Regions => value.as_array().map(|items| {
+                let limit = self
+                    .max
+                    .map_or(MAX_REGIONS, |max| (max.max(0.0) as usize).min(MAX_REGIONS));
+                Value::Array(
+                    items
+                        .iter()
+                        .filter_map(|item| self.coerce_region(item))
+                        .take(limit)
+                        .collect(),
+                )
+            }),
+        };
+        coerced.unwrap_or_else(|| self.initial())
+    }
+
+    fn clamp(&self, value: f64) -> f64 {
+        let value = self.min.map_or(value, |min| value.max(min));
+        self.max.map_or(value, |max| value.min(max))
+    }
+
+    /// A region with finite, bounded coordinates and only declared fields.
+    fn coerce_region(&self, item: &Value) -> Option<Value> {
+        let number = |key: &str| {
+            item.get(key)?
+                .as_f64()
+                .filter(|v| v.is_finite() && v.abs() <= MAX_REGION_COORDINATE)
+        };
+        let (x, y) = (number("x")?, number("y")?);
+        let (width, height) = (number("width")?, number("height")?);
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        let stored = item.get("fields");
+        let fields: serde_json::Map<String, Value> = (self.fields.iter())
+            .map(|field| {
+                let value = stored
+                    .and_then(|fields| fields.get(&field.id))
+                    .map_or_else(|| field.initial(), |value| field.coerce(value));
+                (field.id.clone(), value)
+            })
+            .collect();
+        Some(serde_json::json!({
+            "x": x, "y": y, "width": width, "height": height, "fields": fields,
+        }))
     }
 
     fn validate(&self, nested: bool) -> Result<()> {
@@ -438,6 +517,15 @@ impl std::fmt::Display for Shortcut {
         }
         f.write_str(&self.key)
     }
+}
+
+/// `text` cut to at most `max` bytes on a character boundary.
+fn clip(text: &str, max: usize) -> &str {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 pub fn validate_id(id: &str) -> Result<()> {
@@ -758,6 +846,65 @@ import = true
                 .unwrap_err()
                 .to_string()
                 .contains("protocol 2")
+        );
+    }
+
+    #[test]
+    fn stored_inputs_are_coerced_to_their_spec() {
+        use serde_json::json;
+        let input = |text: &str| toml::from_str::<Input>(text).unwrap();
+        let integer = input("id = 'a'\ntype = 'integer'\nmin = 1\nmax = 10\ndefault = 5");
+        assert_eq!(integer.coerce(&json!(3)), json!(3));
+        assert_eq!(integer.coerce(&json!(1e300)), json!(10));
+        assert_eq!(integer.coerce(&json!(-4.6)), json!(1));
+        assert_eq!(integer.coerce(&json!("7")), json!(5));
+        assert_eq!(integer.coerce(&json!(null)), json!(5));
+        let seed = input("id = 'a'\ntype = 'seed'");
+        assert_eq!(seed.coerce(&json!(1e300)), json!(9_000_000_000_000_000_i64));
+        let number = input("id = 'a'\ntype = 'number'\nmax = 1.5");
+        assert_eq!(number.coerce(&json!(2)), json!(1.5));
+        assert_eq!(number.coerce(&json!(0.25)), json!(0.25));
+        let text = input("id = 'a'\ntype = 'text'\ndefault = 'hi'");
+        assert_eq!(text.coerce(&json!(42)), json!("hi"));
+        let long = "é".repeat(MAX_INPUT_TEXT);
+        assert!(text.coerce(&json!(long)).as_str().unwrap().len() <= MAX_INPUT_TEXT);
+        let choice = input("id = 'a'\ntype = 'enum'\nvalues = ['x', 'y']");
+        assert_eq!(choice.coerce(&json!("y")), json!("y"));
+        assert_eq!(choice.coerce(&json!("z")), json!("x"));
+        let flag = input("id = 'a'\ntype = 'bool'");
+        assert_eq!(flag.coerce(&json!(1)), json!(false));
+        let color = input("id = 'a'\ntype = 'color'");
+        assert_eq!(color.coerce(&json!("#123456")), json!("#123456"));
+        assert_eq!(color.coerce(&json!("red")), json!("#ffffff"));
+        let secret = input("id = 'a'\ntype = 'secret'");
+        assert_eq!(secret.coerce(&json!("sk")), json!(""));
+
+        let regions = input(
+            "id = 'r'\ntype = 'regions'\nmax = 2\nfields = [{ id = 'n', type = 'integer', max = 3 }]",
+        );
+        let value = regions.coerce(&json!([
+            {"x": 1, "y": 2, "width": 3, "height": 4, "fields": {"n": 9, "extra": "x"}},
+            {"x": "nan", "y": 2, "width": 3, "height": 4},
+            {"x": 1, "y": 2, "width": -3, "height": 4},
+            {"x": 1e12, "y": 2, "width": 3, "height": 4},
+            {"x": 5, "y": 6, "width": 7, "height": 8},
+            {"x": 9, "y": 9, "width": 9, "height": 9},
+        ]));
+        assert_eq!(
+            value,
+            json!([
+                {"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0, "fields": {"n": 3}},
+                {"x": 5.0, "y": 6.0, "width": 7.0, "height": 8.0, "fields": {"n": 0}},
+            ])
+        );
+        assert_eq!(regions.coerce(&json!("x")), json!([]));
+        let unbounded = input("id = 'r'\ntype = 'regions'");
+        let many: Vec<_> = (0..1000)
+            .map(|_| json!({"x": 0, "y": 0, "width": 1, "height": 1}))
+            .collect();
+        assert_eq!(
+            unbounded.coerce(&json!(many)).as_array().unwrap().len(),
+            MAX_REGIONS
         );
     }
 

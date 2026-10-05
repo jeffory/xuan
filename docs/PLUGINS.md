@@ -184,7 +184,12 @@ Results never land silently. An edit arrives as a **proposal**: the layer is
 added, a bar above the canvas offers **Compare**, **Accept** and **Discard**,
 and only accepting commits a single undo step named after the action. Every
 generated layer records which plugin, action, inputs and source produced it, so
-**Layer → Re-run Plugin Action…** can repeat it with changes. See
+**Layer → Re-run Plugin Action…** can repeat it with changes. Inputs taken from a
+project file or from `host/run` are checked against the action's inputs first:
+a value of the wrong type or not among an `enum`'s values falls back to the
+default, numbers are clamped to `min` and `max`, texts are cut to 64 KiB, and
+regions keep only finite coordinates, declared fields, and at most `max` (and
+never more than 256) regions. See
 [FORMAT.md](FORMAT.md) for the stored metadata.
 
 ## Protocol

@@ -438,6 +438,55 @@ fn pane_updates_only_reach_declared_panes() {
 }
 
 #[test]
+fn rerun_inputs_from_a_project_are_checked_against_the_action() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    let fixture = dir.path().join("fixture.png");
+    RgbaImage::new(2, 2).save(&fixture).unwrap();
+    std::fs::write(
+        dir.path().join("plugin.toml"),
+        MANIFEST.replace("type = \"regions\"\n", "type = \"regions\"\nmax = 2\n"),
+    )
+    .unwrap();
+    app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+    app.grant_plugin("mock", true);
+    app.dimensions = [64, 64];
+    app.new_document();
+    app.command("fill_fg");
+    // A hostile project stores wrong types, broken numbers and too many regions.
+    let region = |x: serde_json::Value| json!({"x": x, "y": 1, "width": 5, "height": 5, "fields": {"desc": 7, "evil": "x"}});
+    let stored = json!({
+        "prompt": {"not": "text"},
+        "regions": [region(json!(1)), region(json!("NaN")), region(json!(2)), region(json!(3))],
+        "unknown": "x",
+    });
+    app.start_plugin_action_with("mock", "echo", Some(&stored));
+    let edit = app.plugins.action.as_ref().unwrap();
+    assert_eq!(edit.values["prompt"], "hello");
+    assert!(!edit.values.contains_key("unknown"));
+    assert_eq!(edit.regions.len(), 2);
+    assert_eq!(edit.regions[1].x, 2.0);
+    assert_eq!(edit.regions[0].fields["desc"], "");
+    assert!(!edit.regions[0].fields.contains_key("evil"));
+    // The region limit holds for drawn regions and the selection too.
+    app.add_region(Point::new(10.0, 10.0), Point::new(20.0, 20.0));
+    app.command("select_all");
+    app.add_selection_region();
+    assert_eq!(app.plugins.action.as_ref().unwrap().regions.len(), 2);
+    assert_eq!(app.status, "No more regions can be added");
+    app.plugins
+        .action
+        .as_mut()
+        .unwrap()
+        .regions
+        .push(xuan::plugins::jobs::Region::rect(0.0, 0.0, 4.0, 4.0));
+    app.run_plugin_action();
+    assert!(app.error.take().is_some_and(|e| e.contains("at most")));
+    assert!(app.plugins.jobs.is_empty());
+}
+
+#[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::consume_exact;
     use egui::{Key, Modifiers};

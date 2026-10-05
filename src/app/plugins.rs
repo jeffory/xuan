@@ -1168,10 +1168,12 @@ impl EditorApp {
         let mut values = Map::new();
         let mut regions = Vec::new();
         for input in &spec.inputs {
-            let mut value = input.initial();
-            if let Some(previous) = inputs.and_then(|i| i.get(&input.id)) {
-                value = previous.clone();
-            }
+            // Inputs from a project file or a plugin are checked against
+            // the action's spec before the dialog shows them.
+            let value = match inputs.and_then(|i| i.get(&input.id)) {
+                Some(previous) => input.coerce(previous),
+                None => input.initial(),
+            };
             if input.kind == InputKind::Regions {
                 regions = regions_from_value(&value);
                 continue;
@@ -1305,6 +1307,16 @@ impl EditorApp {
                 "{} {}",
                 tr("Draw at least this many regions:"),
                 min as u32
+            ));
+            return;
+        }
+        if let Some(input) = spec.regions_input()
+            && edit.regions.len() > region_limit(input)
+        {
+            self.error = Some(format!(
+                "{} {}",
+                tr("Draw at most this many regions:"),
+                region_limit(input)
             ));
             return;
         }
@@ -1702,9 +1714,7 @@ impl EditorApp {
         if width < 2.0 || height < 2.0 {
             return;
         }
-        if let Some(max) = input.max
-            && edit.regions.len() as f64 >= max
-        {
+        if edit.regions.len() >= region_limit(input) {
             self.status = tr("No more regions can be added").into();
             return;
         }
@@ -1727,15 +1737,21 @@ impl EditorApp {
         let Some(edit) = &mut self.plugins.action else {
             return;
         };
-        let fields = self
+        let Some(input) = self
             .plugins
             .manifests
             .iter()
             .find(|m| m.plugin.id == edit.plugin)
             .and_then(|m| m.action(&edit.action))
             .and_then(Action::regions_input)
-            .map(|input| input.fields.clone())
-            .unwrap_or_default();
+        else {
+            return;
+        };
+        if edit.regions.len() >= region_limit(input) {
+            self.status = tr("No more regions can be added").into();
+            return;
+        }
+        let fields = input.fields.clone();
         for field in &fields {
             region.fields.insert(field.id.clone(), field.initial());
         }
@@ -2151,6 +2167,13 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
         command: manifest.plugin.command.clone(),
         permissions: manifest.permissions.clone(),
     }
+}
+
+/// The most regions an action's regions input takes.
+fn region_limit(input: &plugins::manifest::Input) -> usize {
+    input.max.map_or(plugins::manifest::MAX_REGIONS, |max| {
+        (max.max(0.0) as usize).min(plugins::manifest::MAX_REGIONS)
+    })
 }
 
 /// Regions stored on a generated layer: document coordinates plus fields.
