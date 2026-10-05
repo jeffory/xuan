@@ -112,6 +112,16 @@ pub(super) struct PluginJob {
     pub cancelled: bool,
 }
 
+/// A plugin action in a menu.
+pub(super) struct PluginMenuItem {
+    pub label: String,
+    pub plugin: String,
+    pub action: String,
+    pub shortcut: String,
+    /// The plugin's name, id and folder, shown on hover.
+    pub source: String,
+}
+
 /// A file a plugin imports or exports while the editor stays usable.
 pub(super) struct FormatJob {
     pub id: Uuid,
@@ -1100,11 +1110,9 @@ impl EditorApp {
     // --- Actions ---------------------------------------------------------
 
     /// Menu entries grouped by the menu they asked for.
-    /// Each item is (label, plugin, action, shortcut, source). The label is
-    /// the registry's, which names the plugin, so plugin items stand out.
-    pub(super) fn plugin_menu_items(
-        &self,
-    ) -> HashMap<Menu, Vec<(String, String, String, String, String)>> {
+    /// Menu items of plugin actions. The label is the registry's, which
+    /// names the plugin, so plugin items stand out.
+    pub(super) fn plugin_menu_items(&self) -> HashMap<Menu, Vec<PluginMenuItem>> {
         let mut items: HashMap<Menu, Vec<_>> = HashMap::new();
         for manifest in &self.plugins.manifests {
             if !self.plugin_enabled(&manifest.plugin.id) {
@@ -1121,13 +1129,13 @@ impl EditorApp {
                     || super::commands::plugin_action_label(&action.label, &manifest.plugin.name),
                     |entry| entry.label().to_owned(),
                 );
-                items.entry(action.menu).or_default().push((
+                items.entry(action.menu).or_default().push(PluginMenuItem {
                     label,
-                    manifest.plugin.id.clone(),
-                    action.id.clone(),
-                    self.keymap.shortcut(&id),
-                    source.clone(),
-                ));
+                    plugin: manifest.plugin.id.clone(),
+                    action: action.id.clone(),
+                    shortcut: self.keymap.shortcut(&id),
+                    source: source.clone(),
+                });
             }
         }
         items

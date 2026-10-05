@@ -46,19 +46,19 @@ fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egu
 /// Entries plugins added to a menu.
 fn plugin_items(
     ui: &mut egui::Ui,
-    items: Option<&Vec<(String, String, String, String, String)>>,
+    items: Option<&Vec<super::plugins::PluginMenuItem>>,
     action: &mut Option<(String, String)>,
 ) {
     let Some(items) = items.filter(|items| !items.is_empty()) else {
         return;
     };
     ui.separator();
-    for (label, plugin, id, shortcut, source) in items {
+    for item in items {
         let response = ui
-            .add(Button::new(label).shortcut_text(shortcut))
-            .on_hover_text(source);
+            .add(Button::new(&item.label).shortcut_text(&item.shortcut))
+            .on_hover_text(&item.source);
         if response.clicked() {
-            *action = Some((plugin.clone(), id.clone()));
+            *action = Some((item.plugin.clone(), item.action.clone()));
             ui.close();
         }
     }

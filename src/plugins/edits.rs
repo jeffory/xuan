@@ -815,8 +815,8 @@ mod tests {
         // Batches of one result share the layer and edit counts.
         let mut reader = Reader::new(Access::anywhere(), 2);
         let mut copy = Document::new(8, 8).unwrap();
-        apply(&mut copy, &[add.clone()], &mut reader).unwrap();
-        apply(&mut copy, &[add.clone()], &mut reader).unwrap();
+        apply(&mut copy, std::slice::from_ref(&add), &mut reader).unwrap();
+        apply(&mut copy, std::slice::from_ref(&add), &mut reader).unwrap();
         assert!(apply(&mut copy, &[add], &mut reader).is_err());
         let select = Edit::Select {
             layer: document.layers[0].id,

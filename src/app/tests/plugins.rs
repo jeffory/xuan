@@ -511,8 +511,9 @@ fn plugin_messages_and_dialogs_name_the_plugin_and_its_id() {
     assert_eq!(entry.label(), "Echo Source… · Xuan");
     let items = app.plugin_menu_items();
     let item = &items[&xuan::plugins::manifest::Menu::Filter][0];
-    assert_eq!(item.0, "Echo Source… · Xuan");
-    assert!(item.4.contains("(plugin mock)") && item.4.contains(&dir.path().display().to_string()));
+    assert_eq!(item.label, "Echo Source… · Xuan");
+    assert!(item.source.contains("(plugin mock)"));
+    assert!(item.source.contains(&dir.path().display().to_string()));
     // Errors and the permission dialog say which plugin, by id and folder.
     app.dimensions = [8, 8];
     app.new_document();
@@ -1486,7 +1487,10 @@ done
             "{error}"
         );
         let items = app.plugin_menu_items();
-        assert_eq!(items[&xuan::plugins::manifest::Menu::Filter][0].3, "");
+        assert_eq!(
+            items[&xuan::plugins::manifest::Menu::Filter][0].shortcut,
+            ""
+        );
 
         // The built-in keeps working and the plugin does not start.
         app.command("select_all");
