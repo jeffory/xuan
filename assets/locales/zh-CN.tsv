@@ -756,3 +756,35 @@ Command Palette…	命令面板…
 Type a command…	输入命令…
 No matching commands	没有匹配的命令
 Recent	最近使用
+The pixels of the layer	图层的像素
+The whole image, flattened	合并后的整张图像
+The flattened image inside the selection	选区内合并后的图像
+cropped around the regions	裁剪到区域周围
+longest side at most	长边最多
+Positions and sizes of the regions:	区域的位置和大小：
+with the shape of the selection	带有选区的形状
+Region	区域
+Options:	选项：
+The document's size and the names and positions of its layers	文档的尺寸及其图层的名称和位置
+The mask of the layer	图层的蒙版
+The shape of the selection	选区的形状
+Cancelled; nothing was sent	已取消；未发送任何内容
+Send to	发送到
+says it connects to:	声明会连接到：
+To run	运行
+Xuan sends it:	Xuan 将发送给它：
+It asks Xuan for this outside an action you started:	它在你启动的操作之外向 Xuan 请求以下内容：
+While the action runs, the plugin may also ask for other layers or the whole image. Xuan cannot check where the plugin sends what it receives.	操作运行期间，插件还可能请求其他图层或整张图像。Xuan 无法检查插件会把收到的内容发送到哪里。
+Your answer holds until the plugin stops. Xuan cannot check where the plugin sends what it receives.	你的选择在插件停止前有效。Xuan 无法检查插件会把收到的内容发送到哪里。
+Don't ask again for this plugin	不再为此插件询问
+Send	发送
+uses the network, and plugins that use the network are disabled	使用网络，而使用网络的插件已被禁用
+uses the network, and plugins that use the network are disabled.	使用网络，而使用网络的插件已被禁用。
+Off: plugins that use the network are disabled	已关闭：使用网络的插件已被禁用
+runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it. The plugin can still read your files and contact any server, whatever it declares. Only run plugins you trust.	会以你的权限作为程序运行。下列权限只约束 Xuan 自己发送给插件以及替它执行的操作。无论插件声明了什么，它仍然可以读取你的文件并连接任何服务器。请只运行你信任的插件。
+Says it connects to:	声明会连接到：
+Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.	不强制执行：它可以连接任何服务器。Xuan 在向它发送你的图像、区域或文字前会先询问。
+Gets document data without asking	无需询问即可获取文档数据
+Ask Again	重新询问
+Disable plugins that use the network	禁用使用网络的插件
+Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect.	声明了网络主机的插件不会启动，其操作也不可用。未声明网络主机的插件仍可能连接网络。
