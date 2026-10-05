@@ -928,7 +928,7 @@ impl EditorApp {
         });
         egui::SidePanel::right("develop_controls")
             .default_width(400.0)
-            .min_width(400.0)
+            .width_range(400.0..=480.0)
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(12))
             .show(ctx, |ui| {
                 ui.add_enabled_ui(interactive, |ui| {
