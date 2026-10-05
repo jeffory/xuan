@@ -107,8 +107,9 @@ impl Processor {
         cancel: &AtomicBool,
     ) -> Result<RawPreview> {
         let size = [raw.camera.width(), raw.camera.height()];
-        let [left, top, right, bottom] = s.crop_pixels(size);
-        let target = s.output_size(size);
+        let crop = s.crop_pixels(size);
+        let [left, top, right, bottom] = crop;
+        let target = s.output_size_for_crop(crop);
         ensure!(
             target[0].max(target[1]) <= self.device.limits().max_texture_dimension_2d,
             "RAW preview exceeds GPU texture limits"

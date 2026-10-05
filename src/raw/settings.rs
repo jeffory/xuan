@@ -171,7 +171,11 @@ impl DevelopSettings {
     }
 
     pub fn output_size(&self, source: [u32; 2]) -> [u32; 2] {
-        let [left, top, right, bottom] = self.crop_pixels(source);
+        self.output_size_for_crop(self.crop_pixels(source))
+    }
+
+    /// Output size for crop bounds already computed by `crop_pixels`.
+    pub fn output_size_for_crop(&self, [left, top, right, bottom]: [u32; 4]) -> [u32; 2] {
         if self.quarter_turns.is_multiple_of(2) {
             [right - left, bottom - top]
         } else {

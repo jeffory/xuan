@@ -55,8 +55,9 @@ impl Processor {
         let source = &work.source;
         let buffers = &work.pixels;
         let mut config = settings(raw, s, wb, depth);
-        let [left, top, right, bottom] = s.crop_pixels(size);
-        let target = s.output_size(size);
+        let crop = s.crop_pixels(size);
+        let [left, top, right, bottom] = crop;
+        let target = s.output_size_for_crop(crop);
         config[13] = [left as f32, top as f32, target[0] as f32, target[1] as f32];
         config[15] = [
             (right - left) as f32,

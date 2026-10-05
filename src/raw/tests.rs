@@ -770,3 +770,34 @@ fn sample_negative_raw_develop_roundtrip() {
     assert_eq!(saved.bytes, asset.bytes);
     assert_eq!(render(&proxy, &saved.settings, &cancel).unwrap(), pixels);
 }
+
+#[test]
+fn output_size_from_precomputed_crop_matches_output_size() {
+    let crops = [
+        [0.0, 0.0, 1.0, 1.0],
+        [0.1, 0.2, 0.9, 0.7],
+        [0.333, 0.171, 0.777, 0.999],
+        [0.25, 0.25, 0.5, 0.5],
+        [0.0, 0.5, 0.01, 1.0],
+    ];
+    for crop in crops {
+        for quarter_turns in 0..4 {
+            for size in [[64, 48], [89, 67], [1, 1], [6000, 4000]] {
+                let s = DevelopSettings {
+                    crop,
+                    quarter_turns,
+                    ..Default::default()
+                };
+                // Pre-change implementation, recomputing the crop bounds.
+                let [l, t, r, b] = s.crop_pixels(size);
+                let old = if quarter_turns % 2 == 0 {
+                    [r - l, b - t]
+                } else {
+                    [b - t, r - l]
+                };
+                assert_eq!(s.output_size(size), old);
+                assert_eq!(s.output_size_for_crop(s.crop_pixels(size)), old);
+            }
+        }
+    }
+}

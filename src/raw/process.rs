@@ -391,8 +391,9 @@ where
         }
     }
     cancelled(cancel)?;
-    let [left, top, right, bottom] = s.crop_pixels([width, height]);
-    let [out_width, out_height] = s.output_size([width, height]);
+    let crop = s.crop_pixels([width, height]);
+    let [left, top, right, bottom] = crop;
+    let [out_width, out_height] = s.output_size_for_crop(crop);
     let mut output = ImageBuffer::<Rgba<T>, Vec<T>>::new(out_width, out_height);
     let out_width = output.width() as usize;
     output
