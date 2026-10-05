@@ -414,6 +414,30 @@ fn host_side_file_access_stays_in_the_plugins_folders() {
 }
 
 #[test]
+fn pane_updates_only_reach_declared_panes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    let update = |app: &mut EditorApp, pane: &str| {
+        app.handle_notification(
+            "mock",
+            xuan::plugins::protocol::Notification {
+                jsonrpc: "2.0".into(),
+                method: "pane/update".into(),
+                params: serde_json::json!({"pane": pane, "tree": {"type": "label", "text": "hi"}}),
+            },
+        )
+    };
+    for index in 0..100 {
+        update(&mut app, &format!("made-up-{index}"));
+    }
+    assert!(app.plugins.panes.is_empty());
+    update(&mut app, "info");
+    assert!(app.plugins.panes["plugin:mock/info"].tree.is_some());
+    assert_eq!(app.plugins.panes.len(), 1);
+}
+
+#[test]
 fn shortcuts_match_their_modifiers_exactly() {
     use super::shortcuts::consume_exact;
     use egui::{Key, Modifiers};

@@ -912,7 +912,7 @@ impl EditorApp {
         }
     }
 
-    fn handle_notification(&mut self, plugin: &str, notification: Notification) {
+    pub(super) fn handle_notification(&mut self, plugin: &str, notification: Notification) {
         let params = &notification.params;
         match notification.method.as_str() {
             "job/progress" => {
@@ -948,7 +948,14 @@ impl EditorApp {
                 }
             }
             "pane/update" => {
-                if let Some(pane) = params.get("pane").and_then(Value::as_str) {
+                // Only panes the manifest declares, so a plugin cannot grow
+                // the pane table without bound.
+                if let Some(pane) = params.get("pane").and_then(Value::as_str)
+                    && self
+                        .plugins
+                        .manifest(plugin)
+                        .is_some_and(|m| m.pane(pane).is_some())
+                {
                     let key = pane_key(plugin, pane);
                     let state = self.plugins.panes.entry(key).or_default();
                     match Node::parse(params.get("tree").cloned().unwrap_or(Value::Null)) {

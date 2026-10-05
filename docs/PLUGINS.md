@@ -324,6 +324,14 @@ Every interactive widget has an `id`. When the user changes one, the host sends
 the tree with the answer. Trees are cached per pane; images are reloaded when
 the file changes.
 
+Trees are limited: 16 levels deep and 2,000 nodes, where every list item,
+select option and swatch counts as a node; texts are cut to 4 KiB, ids,
+colors and suffixes to 256 bytes, links to 2 KiB, and sizes to 4,096 points.
+Image files must be PNGs inside the plugin's folders (see [Files](#files)), at
+most 32 MiB and 8,192 pixels per side; an image that fails to load is not
+retried until its file changes. `pane/update` is ignored for panes the
+manifest does not declare.
+
 ### File formats
 
 | Request (host → plugin) | Params | Result |

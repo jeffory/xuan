@@ -6,7 +6,16 @@ use serde_json::Value;
 /// Nesting deeper than this is cut off to keep a broken plugin from
 /// exhausting the layout.
 pub const MAX_DEPTH: usize = 16;
+/// Nodes in one tree, counting list items, select options and swatches.
 pub const MAX_NODES: usize = 2000;
+/// Longest text, in bytes, of a label, button, value and the like.
+pub const MAX_TEXT: usize = 4096;
+/// Longest widget or item id, option id, color or suffix, in bytes.
+pub const MAX_ID: usize = 256;
+/// Longest link, in bytes.
+pub const MAX_URL: usize = 2048;
+/// Largest size, in points, of an image, text box, space or gap.
+pub const MAX_SIZE: f32 = 4096.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -185,7 +194,8 @@ impl Node {
         }
     }
 
-    /// Parse a tree, cutting off excessive nesting or node counts.
+    /// Parse a tree, cutting off excessive nesting, node counts, text
+    /// lengths and sizes.
     pub fn parse(value: Value) -> anyhow::Result<Self> {
         let mut node: Self = serde_json::from_value(value)?;
         let mut budget = MAX_NODES;
@@ -195,13 +205,124 @@ impl Node {
 
     fn limit(&mut self, depth: usize, budget: &mut usize) {
         *budget = budget.saturating_sub(1);
-        if let Self::Column { children, .. } | Self::Row { children, .. } = self {
-            if depth >= MAX_DEPTH || *budget == 0 {
-                children.clear();
+        match self {
+            Self::Column { children, gap } | Self::Row { children, gap } => {
+                size(gap);
+                if depth >= MAX_DEPTH || *budget == 0 {
+                    children.clear();
+                }
+                children.truncate(*budget);
+                for child in children.iter_mut() {
+                    child.limit(depth + 1, budget);
+                }
             }
-            children.truncate(*budget);
-            for child in children.iter_mut() {
-                child.limit(depth + 1, budget);
+            Self::Heading { text } | Self::Label { text, .. } => clip(text, MAX_TEXT),
+            Self::Separator => {}
+            Self::Space { size } => *size = clamp(*size),
+            Self::Button { id, label, .. } | Self::Checkbox { id, label, .. } => {
+                clip(id, MAX_ID);
+                clip(label, MAX_TEXT);
+            }
+            Self::Text {
+                id,
+                value,
+                placeholder,
+                width,
+                ..
+            } => {
+                clip(id, MAX_ID);
+                clip(value, MAX_TEXT);
+                clip(placeholder, MAX_TEXT);
+                size(width);
+            }
+            Self::Number {
+                id,
+                value,
+                min,
+                max,
+                step,
+                suffix,
+                ..
+            } => {
+                clip(id, MAX_ID);
+                clip(suffix, MAX_ID);
+                *value = finite(*value);
+                for bound in [min, max, step] {
+                    *bound = bound.filter(|v| v.is_finite());
+                }
+            }
+            Self::Slider {
+                id,
+                value,
+                min,
+                max,
+                label,
+                suffix,
+                ..
+            } => {
+                clip(id, MAX_ID);
+                clip(label, MAX_TEXT);
+                clip(suffix, MAX_ID);
+                *value = finite(*value);
+                *min = finite(*min);
+                *max = finite(*max);
+            }
+            Self::Select { id, value, options } => {
+                clip(id, MAX_ID);
+                clip(value, MAX_ID);
+                options.truncate(*budget);
+                *budget -= options.len();
+                for option in options {
+                    clip(&mut option.id, MAX_ID);
+                    clip(&mut option.label, MAX_TEXT);
+                }
+            }
+            Self::Color { id, value } => {
+                clip(id, MAX_ID);
+                clip(value, MAX_ID);
+            }
+            Self::Image { width, height, .. } => {
+                size(width);
+                size(height);
+            }
+            Self::Progress { value, label } => {
+                *value = value.filter(|v| v.is_finite());
+                clip(label, MAX_TEXT);
+            }
+            Self::List {
+                id,
+                items,
+                selected,
+            } => {
+                clip(id, MAX_ID);
+                if let Some(selected) = selected {
+                    clip(selected, MAX_ID);
+                }
+                items.truncate(*budget);
+                *budget -= items.len();
+                for item in items {
+                    clip(&mut item.id, MAX_ID);
+                    clip(&mut item.label, MAX_TEXT);
+                    clip(&mut item.detail, MAX_TEXT);
+                }
+            }
+            Self::Swatches {
+                id,
+                colors,
+                selected,
+            } => {
+                for text in id.iter_mut().chain(selected.iter_mut()) {
+                    clip(text, MAX_ID);
+                }
+                colors.truncate(*budget);
+                *budget -= colors.len();
+                for color in colors {
+                    clip(color, MAX_ID);
+                }
+            }
+            Self::Link { label, url } => {
+                clip(label, MAX_TEXT);
+                clip(url, MAX_URL);
             }
         }
     }
@@ -227,6 +348,33 @@ impl Node {
             )
         }
     }
+}
+
+/// Cut `text` to at most `max` bytes on a character boundary.
+fn clip(text: &mut String, max: usize) {
+    if text.len() > max {
+        let mut end = max;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+}
+
+fn finite(value: f64) -> f64 {
+    if value.is_finite() { value } else { 0.0 }
+}
+
+fn clamp(size: f32) -> f32 {
+    if size.is_finite() {
+        size.clamp(0.0, MAX_SIZE)
+    } else {
+        0.0
+    }
+}
+
+fn size(size: &mut Option<f32>) {
+    *size = size.filter(|s| s.is_finite()).map(clamp);
 }
 
 /// Decode standard or URL-safe base64, ignoring whitespace and padding.
@@ -319,6 +467,51 @@ mod tests {
             panic!()
         };
         assert!(children.len() < MAX_NODES);
+    }
+
+    #[test]
+    fn collections_count_against_the_node_budget_and_text_is_capped() {
+        let items: Vec<_> = (0..5000)
+            .map(|i| json!({"id": i.to_string(), "label": "x"}))
+            .collect();
+        let options: Vec<_> = (0..5000).map(|i| json!({"id": i.to_string()})).collect();
+        let colors: Vec<_> = (0..5000).map(|_| json!("#ffffff")).collect();
+        let tree = Node::parse(json!({"type": "column", "children": [
+            {"type": "list", "id": "l", "items": items},
+            {"type": "select", "id": "s", "options": options},
+            {"type": "swatches", "colors": colors},
+            {"type": "label", "text": "é".repeat(MAX_TEXT)},
+            {"type": "button", "id": "b".repeat(5000), "label": "go"},
+            {"type": "image", "src": "a.png", "width": 1e9, "height": -5},
+            {"type": "space", "size": 1e30},
+            {"type": "link", "label": "l", "url": format!("https://x.example/{}", "a".repeat(9000))},
+        ]}))
+        .unwrap();
+        let Node::Column { children, .. } = &tree else {
+            panic!()
+        };
+        let mut counted = children.len() + 1;
+        for child in children {
+            counted += match child {
+                Node::List { items, .. } => items.len(),
+                Node::Select { options, .. } => options.len(),
+                Node::Swatches { colors, .. } => colors.len(),
+                _ => 0,
+            };
+        }
+        // Siblings already kept may each overshoot by their own node.
+        assert!(counted <= MAX_NODES + children.len(), "{counted}");
+        assert!(matches!(&children[0], Node::List { items, .. } if !items.is_empty()));
+        assert!(
+            matches!(&children[3], Node::Label { text, .. } if text.len() <= MAX_TEXT && text.len() > MAX_TEXT - 2)
+        );
+        assert!(matches!(&children[4], Node::Button { id, .. } if id.len() == MAX_ID));
+        assert!(matches!(
+            &children[5],
+            Node::Image { width: Some(w), height: Some(h), .. } if *w == MAX_SIZE && *h == 0.0
+        ));
+        assert!(matches!(&children[6], Node::Space { size } if *size == MAX_SIZE));
+        assert!(matches!(&children[7], Node::Link { url, .. } if url.len() == MAX_URL));
     }
 
     #[test]
