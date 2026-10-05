@@ -135,7 +135,14 @@ Settings are drawn in **Plugins → Manage Plugins…** from the schema; a plugi
 never implements that dialog. Types: `text`, `multiline`, `integer`, `number`,
 `bool`, `enum`, `color`, `path` and `secret`. Values live in `config.toml` under
 `[plugins.<id>.settings]`; secrets are stored in `secrets.toml` next to it, which
-Xuan creates with owner-only permissions on Unix. A plugin receives its settings
+Xuan creates with owner-only permissions on Unix. Secrets are kept in plain
+text there rather than in the operating system's keyring: the keyring crates
+need a desktop secret service on Linux, which headless sessions and CI lack,
+so a plain-file fallback would be needed anyway. A `secrets.toml` that cannot
+be read is reported by line number only, without its contents, and is never
+overwritten; fix or remove it and press **Reload**. Secrets reach a plugin over
+its stdin, never through its environment or command line. The SDKs keep
+secret values out of debug output. A plugin receives its settings
 with `initialize` and again through `settings/changed`; secrets are included
 only when the manifest lists them under `permissions.secrets`.
 
