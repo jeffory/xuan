@@ -294,6 +294,30 @@ fn plugin_panes_render_events_and_document_changes() {
         !app.plugins.panes[key].pending && app.plugins.panes[key].tree.is_some()
     });
     run_until(&context, &mut app, |app| text(app) == "clicked");
+    // A document refresh asked for while a render is pending is not dropped:
+    // the pane renders again once the pending render ends.
+    app.render_pane(
+        key,
+        "event",
+        Some(xuan::plugins::ui::Event {
+            widget: "go".into(),
+            value: serde_json::Value::Bool(true),
+        }),
+    );
+    assert!(app.plugins.panes[key].pending);
+    app.render_pane(key, "document", None);
+    assert!(app.plugins.panes[key].dirty);
+    run_until(&context, &mut app, |app| text(app) == "changed");
+    assert!(!app.plugins.panes[key].dirty);
+    app.render_pane(
+        key,
+        "event",
+        Some(xuan::plugins::ui::Event {
+            widget: "go".into(),
+            value: serde_json::Value::Bool(true),
+        }),
+    );
+    run_until(&context, &mut app, |app| text(app) == "clicked");
     // An edit re-renders panes that asked to follow the document.
     app.command("fill_fg");
     run_until(&context, &mut app, |app| text(app) == "changed");

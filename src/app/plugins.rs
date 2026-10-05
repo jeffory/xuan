@@ -122,6 +122,8 @@ pub(super) struct PaneState {
     pub pending: bool,
     pub error: Option<String>,
     pub queued: Option<plugins::ui::Event>,
+    /// A render was asked for while one was pending; render again when it ends.
+    pub dirty: bool,
     pub images: HashMap<String, (Option<std::time::SystemTime>, egui::TextureHandle)>,
     pub drafts: HashMap<String, String>,
 }
@@ -289,6 +291,8 @@ impl EditorApp {
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
                 pane.pending = false;
+                pane.dirty = false;
+                pane.queued = None;
             }
         }
     }
@@ -310,6 +314,8 @@ impl EditorApp {
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
                 pane.pending = false;
+                pane.dirty = false;
+                pane.queued = None;
             }
         }
     }
@@ -505,6 +511,8 @@ impl EditorApp {
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
                 pane.pending = false;
+                pane.dirty = false;
+                pane.queued = None;
                 pane.error = Some(format!("{name} {}", tr("stopped unexpectedly")));
             }
         }
@@ -724,8 +732,12 @@ impl EditorApp {
                     },
                     Err(error) => state.error = Some(error.message),
                 }
+                // An event render describes the current document too.
+                let dirty = std::mem::take(&mut state.dirty);
                 if let Some(event) = state.queued.take() {
                     self.render_pane(&key, "event", Some(event));
+                } else if dirty {
+                    self.render_pane(&key, "document", None);
                 }
             }
             Pending::Estimate(plugin_id, action) => {
@@ -1434,8 +1446,9 @@ impl EditorApp {
         };
         let state = self.plugins.panes.entry(key.to_owned()).or_default();
         if state.pending {
-            if let Some(event) = event {
-                state.queued = Some(event);
+            match event {
+                Some(event) => state.queued = Some(event),
+                None => state.dirty = true,
             }
             return;
         }
