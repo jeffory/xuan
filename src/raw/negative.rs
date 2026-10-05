@@ -2,7 +2,10 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{DecodedRaw, DevelopSettings, process::sample_camera_patch, source_point};
+use super::{
+    DecodedRaw, DevelopSettings,
+    process::{SourceMap, sample_camera_patch},
+};
 use crate::document::Point;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -73,16 +76,16 @@ pub fn analyze_negative(raw: &DecodedRaw, settings: &DevelopSettings) -> Negativ
     let ny = ((bottom - top) * raw.camera.height() as f32)
         .ceil()
         .clamp(1.0, 256.0) as u32;
+    let map = SourceMap::new(
+        settings,
+        raw.camera.width() as f32 / raw.camera.height() as f32,
+    );
     for y in 0..ny {
         for x in 0..nx {
-            let point = source_point(
-                Point::new(
-                    left + (x as f32 + 0.5) / nx as f32 * (right - left),
-                    top + (y as f32 + 0.5) / ny as f32 * (bottom - top),
-                ),
-                settings,
-                raw.camera.width() as f32 / raw.camera.height() as f32,
-            );
+            let point = map.apply(Point::new(
+                left + (x as f32 + 0.5) / nx as f32 * (right - left),
+                top + (y as f32 + 0.5) / ny as f32 * (bottom - top),
+            ));
             if !(0.0..1.0).contains(&point.x) || !(0.0..1.0).contains(&point.y) {
                 continue;
             }

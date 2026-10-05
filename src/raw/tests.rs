@@ -801,3 +801,57 @@ fn output_size_from_precomputed_crop_matches_output_size() {
         }
     }
 }
+
+/// Verbatim copy of the pre-hoisting `source_point`, kept as the reference.
+fn reference_source_point(point: Point, s: &DevelopSettings, aspect: f32) -> Point {
+    let mut x = (point.x - 0.5) * 2.0;
+    let mut y = (point.y - 0.5) * 2.0 / aspect;
+    let (sin, cos) = s.rotation.to_radians().sin_cos();
+    (x, y) = (cos * x + sin * y, -sin * x + cos * y);
+    y *= aspect;
+    let perspective = (1.0 + s.perspective[0] * x * 0.004 + s.perspective[1] * y * 0.004).max(0.2);
+    x /= perspective;
+    y /= perspective;
+    let r2 = (x * x + y * y) * 0.5;
+    let scale = 1.0 + s.distortion * 0.003 * r2;
+    Point::new(0.5 + x * scale * 0.5, 0.5 + y * scale * 0.5)
+}
+
+#[test]
+fn hoisted_source_map_is_bit_identical_to_per_point_source_point() {
+    let rotations = [
+        0.0, 1e-6, -1e-6, 0.37, -12.5, 45.0, 90.0, 133.3, -179.9, 180.0,
+    ];
+    let aspects = [1.0, 64.0 / 48.0, 3.0 / 2.0, 0.5, 2.39];
+    let warps = [
+        ([0.0, 0.0], 0.0),
+        ([40.0, -25.0], 30.0),
+        ([-100.0, 100.0], -100.0),
+    ];
+    let mut checked = 0;
+    for rotation in rotations {
+        for aspect in aspects {
+            for (perspective, distortion) in warps {
+                let s = DevelopSettings {
+                    rotation,
+                    perspective,
+                    distortion,
+                    ..Default::default()
+                };
+                let map = process::SourceMap::new(&s, aspect);
+                for i in 0..=10 {
+                    for j in 0..=10 {
+                        let p = Point::new(-0.1 + i as f32 * 0.12, -0.1 + j as f32 * 0.12);
+                        let want = reference_source_point(p, &s, aspect);
+                        for got in [map.apply(p), source_point(p, &s, aspect)] {
+                            assert_eq!(got.x.to_bits(), want.x.to_bits());
+                            assert_eq!(got.y.to_bits(), want.y.to_bits());
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(checked, 10 * 5 * 3 * 121);
+}

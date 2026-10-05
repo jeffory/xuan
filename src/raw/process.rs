@@ -132,19 +132,50 @@ fn sample(image: &Rgb32FImage, x: f32, y: f32) -> [f32; 3] {
     })
 }
 
+/// Inverse lens/geometry mapping with the loop-invariant parts (rotation
+/// sin/cos, aspect, perspective and distortion coefficients) computed once.
+/// `source_point` is defined in terms of this, so batch callers cannot diverge.
+#[derive(Clone, Copy)]
+pub(crate) struct SourceMap {
+    sin: f32,
+    cos: f32,
+    aspect: f32,
+    perspective: [f32; 2],
+    distortion: f32,
+}
+
+impl SourceMap {
+    pub(crate) fn new(s: &DevelopSettings, aspect: f32) -> Self {
+        let (sin, cos) = s.rotation.to_radians().sin_cos();
+        Self {
+            sin,
+            cos,
+            aspect,
+            perspective: s.perspective,
+            distortion: s.distortion,
+        }
+    }
+
+    pub(crate) fn apply(&self, point: Point) -> Point {
+        let aspect = self.aspect;
+        let (sin, cos) = (self.sin, self.cos);
+        let mut x = (point.x - 0.5) * 2.0;
+        let mut y = (point.y - 0.5) * 2.0 / aspect;
+        (x, y) = (cos * x + sin * y, -sin * x + cos * y);
+        y *= aspect;
+        let perspective =
+            (1.0 + self.perspective[0] * x * 0.004 + self.perspective[1] * y * 0.004).max(0.2);
+        x /= perspective;
+        y /= perspective;
+        let r2 = (x * x + y * y) * 0.5;
+        let scale = 1.0 + self.distortion * 0.003 * r2;
+        Point::new(0.5 + x * scale * 0.5, 0.5 + y * scale * 0.5)
+    }
+}
+
 /// Inverse lens/geometry mapping, shared by rendering and the WB eyedropper.
 pub fn source_point(point: Point, s: &DevelopSettings, aspect: f32) -> Point {
-    let mut x = (point.x - 0.5) * 2.0;
-    let mut y = (point.y - 0.5) * 2.0 / aspect;
-    let (sin, cos) = s.rotation.to_radians().sin_cos();
-    (x, y) = (cos * x + sin * y, -sin * x + cos * y);
-    y *= aspect;
-    let perspective = (1.0 + s.perspective[0] * x * 0.004 + s.perspective[1] * y * 0.004).max(0.2);
-    x /= perspective;
-    y /= perspective;
-    let r2 = (x * x + y * y) * 0.5;
-    let scale = 1.0 + s.distortion * 0.003 * r2;
-    Point::new(0.5 + x * scale * 0.5, 0.5 + y * scale * 0.5)
+    SourceMap::new(s, aspect).apply(point)
 }
 
 fn overlay_weight(overlay: &Overlay, point: Point, aspect: f32) -> f32 {
