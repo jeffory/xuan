@@ -3,6 +3,7 @@ use xuan::i18n::tr;
 use xuan::{
     document::{Adjustment, Point},
     effects::Filter,
+    plugins::manifest::Menu,
 };
 
 use super::{EditorApp, theme, widgets};
@@ -38,6 +39,24 @@ fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egu
         background,
         egui::epaint::RectShape::filled(rect, visuals.corner_radius, visuals.weak_bg_fill),
     );
+}
+
+/// Entries plugins added to a menu.
+fn plugin_items(
+    ui: &mut egui::Ui,
+    items: Option<&Vec<(String, String, String, String)>>,
+    action: &mut Option<(String, String)>,
+) {
+    let Some(items) = items.filter(|items| !items.is_empty()) else {
+        return;
+    };
+    ui.separator();
+    for (label, plugin, id, shortcut) in items {
+        if ui.add(Button::new(label).shortcut_text(shortcut)).clicked() {
+            *action = Some((plugin.clone(), id.clone()));
+            ui.close();
+        }
+    }
 }
 
 fn item(
@@ -145,6 +164,14 @@ impl EditorApp {
         let developing = self.develop.is_some();
         let has_doc = self.session().is_some() && !developing;
         let can_view = self.develop.as_ref().is_none_or(|d| d.ready());
+        let pane_entries = self.pane_entries();
+        let mut pane_toggle = None;
+        let plugin_menu = self.plugin_menu_items();
+        let mut plugin_action: Option<(String, String)> = None;
+        let can_rerun = self
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|layer| layer.generated.is_some());
         let blocked = self.job.is_some()
             || self.dialog.is_some()
             || self.close_app
@@ -201,11 +228,15 @@ impl EditorApp {
                             if developing {
                                 item(ui, tr("Close RAW Develop"), "Ctrl+W", "close", &mut action);
                             }
+                            ui.add_enabled_ui(has_doc, |ui| {
+                                plugin_items(ui, plugin_menu.get(&Menu::File), &mut plugin_action);
+                            });
                             ui.separator();
                             item(ui, tr("Quit"), "Ctrl+Q", "quit", &mut action);
                         });
                         menu_bar_button(ui, tr("Edit"), |ui| {
                             item(ui, tr("Settings…"), "Ctrl+,", "settings", &mut action);
+                            plugin_items(ui, plugin_menu.get(&Menu::Edit), &mut plugin_action);
                             ui.separator();
                             let (undo, redo) = if let Some(d) = &self.develop {
                                 (
@@ -304,6 +335,7 @@ impl EditorApp {
                                     "flip_canvas_v",
                                     &mut action,
                                 );
+                                plugin_items(ui, plugin_menu.get(&Menu::Image), &mut plugin_action);
                             });
                         });
                         menu_bar_button(ui, tr("Layer"), |ui| {
@@ -399,6 +431,17 @@ impl EditorApp {
                                 ui.separator();
                                 item(ui, tr("Flip Horizontal"), "", "flip_h", &mut action);
                                 item(ui, tr("Flip Vertical"), "", "flip_v", &mut action);
+                                ui.separator();
+                                ui.add_enabled_ui(can_rerun, |ui| {
+                                    item(
+                                        ui,
+                                        tr("Re-run Plugin Action…"),
+                                        "",
+                                        "rerun_plugin",
+                                        &mut action,
+                                    );
+                                });
+                                plugin_items(ui, plugin_menu.get(&Menu::Layer), &mut plugin_action);
                             });
                         });
                         menu_bar_button(ui, tr("Select"), |ui| {
@@ -420,6 +463,11 @@ impl EditorApp {
                                     &mut action,
                                 );
                                 item(ui, tr("Feather 3 px"), "", "feather", &mut action);
+                                plugin_items(
+                                    ui,
+                                    plugin_menu.get(&Menu::Select),
+                                    &mut plugin_action,
+                                );
                             });
                         });
                         menu_bar_button(ui, tr("Filter"), |ui| {
@@ -452,6 +500,11 @@ impl EditorApp {
                                         ui.close();
                                     }
                                 }
+                                plugin_items(
+                                    ui,
+                                    plugin_menu.get(&Menu::Filter),
+                                    &mut plugin_action,
+                                );
                             });
                         });
                         menu_bar_button(ui, tr("View"), |ui| {
@@ -548,6 +601,35 @@ impl EditorApp {
                                 });
                             });
                         });
+                        menu_bar_button(ui, tr("Plugins"), |ui| {
+                            item(ui, tr("Manage Plugins…"), "", "plugins", &mut action);
+                            ui.add_enabled_ui(!developing, |ui| {
+                                plugin_items(
+                                    ui,
+                                    plugin_menu.get(&Menu::Plugins),
+                                    &mut plugin_action,
+                                );
+                            });
+                        });
+                        menu_bar_button(ui, tr("Window"), |ui| {
+                            ui.add_enabled_ui(!developing, |ui| {
+                                for (id, title, shown) in &pane_entries {
+                                    let mut shown = *shown;
+                                    if widgets::checkbox(ui, &mut shown, title).changed() {
+                                        pane_toggle = Some((id.clone(), !shown));
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                item(
+                                    ui,
+                                    tr("Reset Panel Layout"),
+                                    "",
+                                    "reset_panels",
+                                    &mut action,
+                                );
+                            });
+                        });
                         menu_bar_button(ui, tr("Help"), |ui| {
                             item(ui, tr("Keyboard Shortcuts"), "F1", "shortcuts", &mut action);
                             item(ui, tr("About Xuan"), "", "about", &mut action);
@@ -556,6 +638,13 @@ impl EditorApp {
                     self.trailing_window_controls(ui);
                 });
         });
+        if let Some((id, hidden)) = pane_toggle {
+            self.config.panes.set_hidden(&id, hidden);
+            self.save_config();
+        }
+        if let Some((plugin, action)) = plugin_action {
+            self.start_plugin_action(&plugin, &action);
+        }
         if let Some(action) = action {
             self.command(action);
         }

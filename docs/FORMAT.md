@@ -61,7 +61,7 @@ single image masks are promoted to child layers when opened in the editor.
 
 Documents with guides or a layout grid of their own are written as version 5. Other
 documents keep the lowest version their content needs (1–4) and are written exactly as
-before, without the new keys. The reader accepts versions 1–5; older projects load with
+before, without the new keys. The reader accepts versions 1–6; older projects load with
 no guides and the app's default grid.
 
 The `document` object gains two optional keys:
@@ -80,3 +80,16 @@ The `document` object gains two optional keys:
 Invalid guides or grid settings fail validation on load and save. Rulers, grid and guide
 visibility, Lock Guides and the Snap To settings are app preferences, not project data.
 Guides follow Crop, Canvas Size, Image Size and Flip Canvas.
+
+## Plugin provenance (version 6)
+
+Documents with a layer produced by a plugin use version 6, which may also
+carry the guides and layout grid of version 5. The reader accepts versions
+1–6. Such a layer carries a `generated` object: the plugin `id` and
+`version`, the `action`, the `inputs` the user chose (regions in
+document coordinates with their fields), the `source` layer id, a `source_hash`
+of the pixels that were sent (`fnv1a:` prefix), and an RFC 3339 `created`
+timestamp. **Layer → Re-run Plugin Action…** uses it to repeat the action with
+the same inputs. Nothing else about the layer changes: its pixels and mask are
+stored like any image layer, so a reader without the plugin shows the result
+unchanged. See [PLUGINS.md](PLUGINS.md).

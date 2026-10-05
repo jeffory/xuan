@@ -104,7 +104,9 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let manifest = Manifest {
             format: "me.silverl.xuan".into(),
-            version: if !document.guides.is_empty() || document.grid.is_some() {
+            version: if document.layers.iter().any(|l| l.generated.is_some()) {
+                6
+            } else if !document.guides.is_empty() || document.grid.is_some() {
                 5
             } else if document.layers.iter().any(|l| {
                 l.filter.is_some()
@@ -189,7 +191,7 @@ pub fn load(path: &Path) -> Result<Document> {
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
-        manifest.format == "me.silverl.xuan" && (1..=5).contains(&manifest.version),
+        manifest.format == "me.silverl.xuan" && (1..=6).contains(&manifest.version),
         "Unsupported xuan project version"
     );
     let mut used_pixels = 0;
@@ -545,7 +547,7 @@ mod tests {
         }
         // A future version is refused rather than half read.
         let mut future = document(serde_json::json!([]), Value::Null);
-        future["version"] = serde_json::json!(6);
+        future["version"] = serde_json::json!(7);
         write_manifest(&path, &future);
         assert!(load(&path).is_err());
     }

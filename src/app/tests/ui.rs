@@ -76,6 +76,13 @@ impl UiTest {
         self.harness.query_by_label(label).is_some()
     }
 
+    /// Like `has`, for labels that several widgets share. Only the plugin tests,
+    /// which need a POSIX shell, use it.
+    #[cfg(unix)]
+    pub(super) fn has_role(&self, role: Role, label: &str) -> bool {
+        self.harness.query_by_role_and_label(role, label).is_some()
+    }
+
     /// Clicks the widget with this exact accessibility label, then settles.
     #[track_caller]
     pub(super) fn click(&mut self, label: &str) {
@@ -619,5 +626,68 @@ mod rulers_and_guides {
         assert!(!ui.app().showing_grid());
         ui.press(Modifiers::CTRL, Key::Z);
         assert_eq!(ui.app().session().unwrap().document.grid, None);
+    }
+}
+
+mod window_menu {
+    use super::*;
+    use xuan::panes::{LAYERS, NAVIGATOR};
+
+    fn ids(ui: &UiTest) -> Vec<String> {
+        ui.app()
+            .config
+            .panes
+            .0
+            .iter()
+            .map(|pane| pane.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_navigator_is_a_pane_above_layers_by_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(directory.path());
+        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        // Its header is the sidebar's, and its body draws the thumbnail.
+        assert!(ui.has("Navigator"));
+        assert_eq!(ui.app().session().unwrap().navigator.renders, 1);
+        assert!(ui.app().navigator_view.is_some());
+
+        // Window lists both panes; unticking Navigator hides it and is remembered.
+        ui.open_menu("Window");
+        assert!(
+            !ui.harness
+                .get_by_role_and_label(Role::CheckBox, "Layers")
+                .accesskit_node()
+                .is_disabled()
+        );
+        ui.click_role(Role::CheckBox, "Navigator");
+        assert!(ui.app().config.panes.get(NAVIGATOR).unwrap().hidden);
+        assert!(!ui.has("Navigator"));
+        let saved = xuan::config::Config::load(&directory.path().join("config.toml")).unwrap();
+        assert!(saved.panes.get(NAVIGATOR).unwrap().hidden);
+
+        // Reset Panel Layout brings it back above Layers.
+        ui.app_mut().config.panes.move_pane(0, 2);
+        assert_eq!(ids(&ui), [LAYERS, NAVIGATOR]);
+        ui.open_menu("Window");
+        ui.click("Reset Panel Layout");
+        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        assert!(!ui.app().config.panes.get(NAVIGATOR).unwrap().hidden);
+        assert!(ui.has("Navigator"));
+    }
+
+    #[test]
+    fn a_collapsed_navigator_stops_drawing_and_asking_for_repaints() {
+        let mut ui = UiTest::with_document();
+        ui.app_mut().config.panes.toggle_collapsed(NAVIGATOR);
+        ui.settle();
+        ui.app_mut().navigator_view = None;
+        let renders = ui.app().session().unwrap().navigator.renders;
+        ui.press(egui::Modifiers::CTRL, egui::Key::Plus);
+        assert!(ui.app().navigator_view.is_none());
+        assert_eq!(ui.app().session().unwrap().navigator.renders, renders);
+        assert!(!ui.harness.ctx.has_requested_repaint());
     }
 }

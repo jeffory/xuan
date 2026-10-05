@@ -1,5 +1,6 @@
 //! User preferences, independent of projects and egui's window persistence.
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -74,7 +75,7 @@ impl TitleBar {
 pub const PIXEL_GRID_PERCENT_RANGE: std::ops::RangeInclusive<u32> = 200..=6400;
 pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub language: Language,
@@ -95,6 +96,10 @@ pub struct Config {
     pub snap: SnapSettings,
     /// The layout grid for projects without one of their own (View → Grid Settings…).
     pub grid: GridSettings,
+    /// Right sidebar arrangement; see [`crate::panes`].
+    pub panes: crate::panes::Layout,
+    /// Per-plugin state keyed by plugin identifier.
+    pub plugins: BTreeMap<String, PluginConfig>,
 }
 
 impl Default for Config {
@@ -111,6 +116,105 @@ impl Default for Config {
             lock_guides: false,
             snap: SnapSettings::default(),
             grid: GridSettings::default(),
+            panes: crate::panes::Layout::default(),
+            plugins: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginConfig {
+    pub enabled: bool,
+    /// What the user allowed to run. A plugin whose folder, command or
+    /// permissions no longer match runs only after the user reviews it again.
+    /// Configurations from before grants were recorded (`granted = true`)
+    /// have none, so those plugins are reviewed again too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant: Option<PluginGrant>,
+    /// Values for the settings the manifest declares, by setting identifier.
+    pub settings: toml::Table,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            grant: None,
+            settings: toml::Table::new(),
+        }
+    }
+}
+
+/// A plugin the user allowed to run, exactly as they reviewed it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PluginGrant {
+    /// The plugin folder, canonicalized.
+    pub dir: PathBuf,
+    pub command: Vec<String>,
+    pub permissions: crate::plugins::manifest::Permissions,
+}
+
+/// Plugin secrets such as API keys, kept out of `config.toml` in a file that
+/// only the owner can read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secrets(pub BTreeMap<String, BTreeMap<String, String>>);
+
+impl Secrets {
+    pub fn path() -> Result<PathBuf> {
+        Ok(Config::path()?.with_file_name("secrets.toml"))
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        match fs::read_to_string(path) {
+            Ok(text) => {
+                toml::from_str(&text).with_context(|| format!("Cannot parse {}", path.display()))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error).with_context(|| format!("Cannot read {}", path.display())),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let parent = path.parent().context("Secrets path has no parent")?;
+        fs::create_dir_all(parent)?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.as_file()
+                .set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        file.write_all(toml::to_string_pretty(&self.0)?.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(path)
+            .with_context(|| format!("Cannot save {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Forget every secret of a plugin.
+    pub fn clear(&mut self, plugin: &str) -> bool {
+        self.0.remove(plugin).is_some()
+    }
+
+    pub fn get(&self, plugin: &str, key: &str) -> Option<&str> {
+        self.0.get(plugin)?.get(key).map(String::as_str)
+    }
+
+    pub fn set(&mut self, plugin: &str, key: &str, value: &str) {
+        if value.is_empty() {
+            if let Some(map) = self.0.get_mut(plugin) {
+                map.remove(key);
+                if map.is_empty() {
+                    self.0.remove(plugin);
+                }
+            }
+        } else {
+            self.0
+                .entry(plugin.into())
+                .or_default()
+                .insert(key.into(), value.into());
         }
     }
 }
@@ -139,7 +243,10 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         match fs::read_to_string(path) {
             Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("Cannot parse {}", path.display()))
+                let mut config: Self = toml::from_str(&text)
+                    .with_context(|| format!("Cannot parse {}", path.display()))?;
+                config.panes.sanitize();
+                Ok(config)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error).with_context(|| format!("Cannot read {}", path.display())),
@@ -169,6 +276,8 @@ impl Config {
             "grid".into(),
             toml::Value::try_from(self.grid.normalized())?,
         );
+        table.insert("panes".into(), toml::Value::try_from(&self.panes)?);
+        table.insert("plugins".into(), toml::Value::try_from(&self.plugins)?);
         let parent = path.parent().context("Configuration path has no parent")?;
         fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -318,6 +427,45 @@ mod tests {
         assert_eq!(config.title_bar, TitleBar::System);
         assert!(!TitleBar::System.client_side());
         assert!(TitleBar::Compact.client_side() && TitleBar::MacOs.client_side());
+    }
+
+    #[test]
+    fn secrets_are_stored_separately_with_owner_only_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("xuan/secrets.toml");
+        assert_eq!(Secrets::load(&path).unwrap(), Secrets::default());
+        let mut secrets = Secrets::default();
+        secrets.set("comfy", "api_key", "sk-123");
+        secrets.save(&path).unwrap();
+        assert_eq!(
+            Secrets::load(&path).unwrap().get("comfy", "api_key"),
+            Some("sk-123")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        secrets.set("comfy", "api_key", "");
+        assert!(secrets.0.is_empty());
+        let mut config = Config::default();
+        config
+            .plugins
+            .entry("comfy".into())
+            .or_default()
+            .settings
+            .insert("max_side".into(), toml::Value::Integer(1024));
+        let config_path = dir.path().join("xuan/config.toml");
+        config.save(&config_path).unwrap();
+        assert_eq!(Config::load(&config_path).unwrap(), config);
+        assert!(
+            fs::read_to_string(&config_path)
+                .unwrap()
+                .contains("[plugins.comfy.settings]")
+        );
     }
 
     #[test]

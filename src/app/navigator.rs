@@ -6,9 +6,10 @@
 //! [`canvas::zoom_about`]. The thumbnail is a small cached texture rebuilt a
 //! moment after the document stops changing, never a per-frame render.
 //!
-//! The pane lives in the sidebar above Layers and has a collapsible header
-//! (egui remembers its state across runs). Develop mode shows its own
-//! workspace without the sidebar, so the pane is hidden there.
+//! It is a sidebar pane ([`xuan::panes::NAVIGATOR`]), above Layers by default;
+//! the sidebar draws its header and remembers whether it is collapsed, hidden
+//! or resized. Develop mode shows its own workspace without the sidebar, so
+//! the pane is hidden there.
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use image::RgbaImage;
 use uuid::Uuid;
@@ -20,8 +21,10 @@ use super::{EditorApp, canvas, theme};
 const THUMBNAIL_SIDE: u32 = 320;
 /// Seconds without a new revision before the thumbnail is rebuilt.
 const DEBOUNCE: f64 = 0.25;
-/// Tallest the thumbnail is drawn, in points.
-const MAX_HEIGHT: f32 = 170.0;
+/// Room the zoom controls below the thumbnail take, in points.
+const CONTROLS_HEIGHT: f32 = 40.0;
+/// Smallest height the thumbnail is drawn at when the pane is short.
+const MIN_THUMBNAIL_HEIGHT: f32 = 24.0;
 /// Zoom step of the zoom in/out buttons (matches View → Zoom In/Out).
 const ZOOM_STEP: f32 = 1.25;
 
@@ -161,29 +164,18 @@ impl ThumbnailCache {
 }
 
 impl EditorApp {
-    /// The Navigator pane, drawn at the top of the right sidebar.
-    pub(super) fn navigator_pane(&mut self, ui: &mut egui::Ui) {
-        if self.sessions.is_empty() {
-            return;
-        }
-        let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            ui.make_persistent_id("navigator_pane"),
-            true,
-        );
+    /// The body of the Navigator pane. Like the other panes it takes no input
+    /// while a dialog is open.
+    pub(super) fn navigator_pane(&mut self, ui: &mut egui::Ui, enabled: bool) {
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
-                state
-                    .show_header(ui, |ui| {
-                        ui.label(egui::RichText::new(tr("Navigator")).strong());
-                    })
-                    .body(|ui| {
-                        ui.add_space(6.0);
-                        self.navigator_body(ui);
-                    });
+                if self.sessions.is_empty() {
+                    ui.label(egui::RichText::new(tr("No document open")).color(theme::MUTED));
+                    return;
+                }
+                ui.add_enabled_ui(enabled, |ui| self.navigator_body(ui));
             });
-        ui.separator();
     }
 
     fn navigator_body(&mut self, ui: &mut egui::Ui) {
@@ -207,7 +199,8 @@ impl EditorApp {
         }
 
         let width = ui.available_width();
-        let size = fit_size(image, vec2(width, MAX_HEIGHT.min(width)));
+        let height = (ui.available_height() - CONTROLS_HEIGHT).max(MIN_THUMBNAIL_HEIGHT);
+        let size = fit_size(image, vec2(width, height));
         ui.vertical_centered(|ui| {
             let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
             ui.painter().rect_filled(rect, 0.0, theme::CANVAS);

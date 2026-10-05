@@ -422,6 +422,9 @@ impl EditorApp {
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 5.0;
                             for t in Tool::ALL {
+                                if t == Tool::Region && self.plugins.action.is_none() {
+                                    continue;
+                                }
                                 if icons::tool_button(ui, t, self.tool == t).clicked() {
                                     tool = Some(t);
                                 }

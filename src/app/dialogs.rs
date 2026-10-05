@@ -35,6 +35,9 @@ impl EditorApp {
                 Dialog::Text => self.text_dialog(ctx),
                 Dialog::Export => self.export_dialog(ctx),
                 Dialog::DropChoice => self.drop_dialog(ctx),
+                Dialog::PluginPermissions => self.plugin_permissions_dialog(ctx),
+                Dialog::Plugins => self.plugin_manager_dialog(ctx),
+                Dialog::PluginProposal => self.plugin_proposal_dialog(ctx),
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::Shortcuts => {
                     let mut open = true;
@@ -700,6 +703,19 @@ impl EditorApp {
             self.dialog = None;
             return;
         }
+        let plugin_formats = self.plugin_export_formats();
+        let formats: Vec<(String, String)> = ["png", "jpg", "tiff", "webp"]
+            .iter()
+            .map(|f| (f.to_string(), f.to_uppercase()))
+            .chain(
+                plugin_formats
+                    .iter()
+                    .filter(|(extension, ..)| {
+                        !["png", "jpg", "tiff", "webp"].contains(&extension.as_str())
+                    })
+                    .map(|(extension, label, ..)| (extension.clone(), label.clone())),
+            )
+            .collect();
         if self.export_changed {
             let doc = &self.session().unwrap().document;
             let factor = (700.0 / doc.width.max(doc.height) as f32).min(1.0);
@@ -755,12 +771,12 @@ impl EditorApp {
                     widgets::PopUp::from_id_salt("export_format")
                         .selected_text(self.export_format.to_uppercase())
                         .show_ui(ui, |ui| {
-                            for format in ["png", "jpg", "tiff", "webp"] {
+                            for (format, label) in &formats {
                                 self.export_changed |= widgets::menu_choice(
                                     ui,
                                     &mut self.export_format,
-                                    format.into(),
-                                    format.to_uppercase(),
+                                    format.clone(),
+                                    label,
                                 )
                                 .changed();
                             }
@@ -793,21 +809,31 @@ impl EditorApp {
                 });
             });
         if export {
-            let session = self.session().unwrap();
+            let title = self.session().unwrap().title.clone();
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter(
                     self.export_format.to_uppercase(),
                     &[self.export_format.as_str()],
                 )
-                .set_file_name(format!("{}.{}", session.title, self.export_format))
+                .set_file_name(format!("{title}.{}", self.export_format))
                 .save_file()
             {
-                match io::export(&session.document, &path, self.jpeg_quality) {
+                let result = match plugin_formats
+                    .iter()
+                    .find(|(extension, ..)| *extension == self.export_format)
+                {
+                    Some((_, _, plugin, format)) => {
+                        let (plugin, format) = (plugin.clone(), format.clone());
+                        self.export_with_plugin(&plugin, &format, &path)
+                    }
+                    None => io::export(&self.session().unwrap().document, &path, self.jpeg_quality),
+                };
+                match result {
                     Ok(()) => {
                         self.status = format!("{} {}", tr("Exported"), path.display());
                         self.dialog = None;
                     }
-                    Err(error) => self.error = Some(error.to_string()),
+                    Err(error) => self.error = Some(format!("{error:#}")),
                 }
             }
         }

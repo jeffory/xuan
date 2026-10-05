@@ -1,0 +1,140 @@
+[plugin]
+id = "comfy-cloud"
+name = "Comfy Cloud"
+version = "0.1.0"
+description = "Run ComfyUI workflows on Comfy Cloud (or a Comfy API deployment): edit the marked parts of an image, generate new images, or run any exported workflow."
+command = ["python3", "main.py"]
+
+[permissions]
+network = ["cloud.comfy.org", "*.run.comfy.app"]
+secrets = ["api_key"]
+
+[[settings]]
+id = "api_key"
+type = "secret"
+label = "API key"
+help = "Create one at platform.comfy.org. Sent as the Bearer token and as extra_data.api_key_comfy_org for partner nodes."
+
+[[settings]]
+id = "base_url"
+type = "text"
+label = "Server"
+default = "https://cloud.comfy.org"
+help = "Comfy Cloud, a deployment (https://<name>.run.comfy.app) or a local API proxy (http://127.0.0.1:8189)."
+
+[[settings]]
+id = "max_side"
+type = "integer"
+label = "Longest side sent"
+default = 2048
+min = 256
+max = 8192
+
+[[settings]]
+id = "timeout"
+type = "integer"
+label = "Wait up to (seconds)"
+default = 600
+min = 30
+max = 3600
+
+[[actions]]
+id = "precise-edit"
+label = "Precise Edit…"
+menu = "Filter"
+kind = "edit"
+description = "Draw boxes over the parts to change and describe each one. Runs workflows/precise-edit.json with the boxes as an Ideogram-style JSON prompt."
+source = { from = "layer", max_side = 2048, crop_to_regions = true, padding = 0.25 }
+result = { into = "layer", mask_to_regions = true }
+
+[[actions.inputs]]
+id = "regions"
+type = "regions"
+label = "Edits"
+min = 1
+fields = [
+  { id = "desc", type = "text", label = "Instruction", placeholder = "Add sunglasses" },
+  { id = "type", type = "enum", label = "Kind", values = [{ id = "obj", label = "Object" }, { id = "text", label = "Text" }], default = "obj" },
+]
+
+[[actions.inputs]]
+id = "background"
+type = "text"
+label = "Background"
+placeholder = "Leave empty to keep it"
+
+[[actions.inputs]]
+id = "quality"
+type = "enum"
+label = "Quality"
+values = ["low", "medium", "high"]
+default = "medium"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+
+[[actions]]
+id = "generate"
+label = "Generate Image…"
+menu = "Plugins"
+kind = "generate"
+description = "Runs workflows/text-to-image.json with your prompt."
+result = { into = "ask" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Prompt"
+
+[[actions.inputs]]
+id = "width"
+type = "integer"
+label = "Width"
+default = 1024
+min = 64
+max = 4096
+
+[[actions.inputs]]
+id = "height"
+type = "integer"
+label = "Height"
+default = 1024
+min = 64
+max = 4096
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+
+[[actions]]
+id = "run-workflow"
+label = "Run Comfy Workflow…"
+menu = "Plugins"
+kind = "edit"
+description = "Runs any API-format workflow from the workflows folder on the flattened document. See README.md for how to mark its inputs."
+source = { from = "composite", max_side = 4096 }
+result = { into = "layer", mask_to_regions = false }
+
+[[actions.inputs]]
+id = "workflow"
+type = "text"
+label = "Workflow file"
+default = "my-workflow.json"
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Prompt"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+
+[[panes]]
+id = "jobs"
+title = "Comfy jobs"
+refresh = "manual"

@@ -116,86 +116,65 @@ fn rows(document: &Document, collapsed: &std::collections::HashSet<Uuid>) -> Vec
 }
 
 impl EditorApp {
-    pub(super) fn layers_panel(&mut self, ctx: &egui::Context) {
+    /// The body of the Layers pane: blend controls, the row list and the footer.
+    pub(super) fn layers_pane(&mut self, ui: &mut egui::Ui, enabled: bool) {
+        let ctx = ui.ctx().clone();
         if let Some(rename) = &self.rename
             && self.session().is_none_or(|session| {
                 session.document.id != rename.project
                     || !session.document.layers.iter().any(|l| l.id == rename.layer)
             })
         {
-            self.finish_layer_rename(ctx, false);
+            self.finish_layer_rename(&ctx, false);
         }
         let mut actions = Actions::default();
-        egui::SidePanel::right("layers_panel")
-            .default_width(252.0)
-            .width_range(206.0..=352.0)
-            .resizable(true)
-            .frame(egui::Frame::new().fill(theme::PANEL))
-            .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
-                    self.navigator_pane(ui);
-                    self.layer_controls(ui, &mut actions);
-                    ui.separator();
-                    let height = (ui.available_height() - 40.0).max(40.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("layers_scroll")
-                        .max_height(height)
-                        .min_scrolled_height(height)
-                        .auto_shrink([false, false])
-                        .show_viewport(ui, |ui, viewport| {
-                            // Register the background before rows so their controls take priority.
-                            let background = ui.interact(
-                                viewport.translate(ui.max_rect().min.to_vec2()),
-                                ui.id().with("background"),
-                                Sense::click(),
+        ui.add_enabled_ui(enabled, |ui| {
+            self.layer_controls(ui, &mut actions);
+            ui.separator();
+            let height = (ui.available_height() - 40.0).max(40.0);
+            egui::ScrollArea::vertical()
+                .id_salt("layers_scroll")
+                .max_height(height)
+                .min_scrolled_height(height)
+                .auto_shrink([false, false])
+                .show_viewport(ui, |ui, viewport| {
+                    // Register the background before rows so their controls take priority.
+                    let background = ui.interact(
+                        viewport.translate(ui.max_rect().min.to_vec2()),
+                        ui.id().with("background"),
+                        Sense::click(),
+                    );
+                    actions.deselect = background.clicked();
+                    if let Some(session) = self.session() {
+                        // Adjacent rows share a single insertion boundary.
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for (layer, depth) in rows(&session.document, &session.collapsed) {
+                            self.layer_row(ui, &layer, depth, &mut actions);
+                        }
+                    } else {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.add_space((height * 0.5 - 48.0).max(10.0));
+                        ui.vertical_centered(|ui| {
+                            ui.label(RichText::new(tr("No layers yet")).color(theme::MUTED));
+                            ui.label(
+                                RichText::new(tr("Create a canvas or import an image."))
+                                    .size(11.0)
+                                    .color(theme::MUTED),
                             );
-                            actions.deselect = background.clicked();
-                            if let Some(session) = self.session() {
-                                // Adjacent rows share a single insertion boundary.
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                for (layer, depth) in rows(&session.document, &session.collapsed) {
-                                    self.layer_row(ui, &layer, depth, &mut actions);
-                                }
-                            } else {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.add_space((height * 0.5 - 48.0).max(10.0));
-                                ui.vertical_centered(|ui| {
-                                    ui.label(
-                                        RichText::new(tr("No layers yet")).color(theme::MUTED),
-                                    );
-                                    ui.label(
-                                        RichText::new(tr("Create a canvas or import an image."))
-                                            .size(11.0)
-                                            .color(theme::MUTED),
-                                    );
-                                });
-                            }
-                            // Paint last so the next row cannot cover half of the line.
-                            if let Some(indicator) = actions.drop_indicator.take() {
-                                ui.painter().add(indicator);
-                            }
                         });
-                    ui.separator();
-                    self.layer_footer(ui, &mut actions);
+                    }
+                    // Paint last so the next row cannot cover half of the line.
+                    if let Some(indicator) = actions.drop_indicator.take() {
+                        ui.painter().add(indicator);
+                    }
                 });
-            });
-        self.apply_layer_actions(ctx, actions);
+            ui.separator();
+            self.layer_footer(ui, &mut actions);
+        });
+        self.apply_layer_actions(&ctx, actions);
     }
 
     fn layer_controls(&self, ui: &mut egui::Ui, actions: &mut Actions) {
-        egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(12, 8))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tr("Layers")).strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let count = self.session().map_or(0, |s| s.document.layers.len());
-                        ui.label(RichText::new(count.to_string()).color(theme::MUTED).small());
-                    });
-                });
-            });
-        ui.separator();
         let active = self.session().and_then(|s| s.document.active());
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(12, 12))
