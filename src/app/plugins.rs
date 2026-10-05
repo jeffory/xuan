@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 use xuan::{
-    config::Secrets,
+    config::{PluginGrant, Secrets},
     document::{Document, Generated, Layer},
     i18n::tr,
     plugins::{
@@ -309,22 +309,39 @@ impl EditorApp {
         self.config.plugins.get(plugin).is_none_or(|c| c.enabled)
     }
 
-    /// Whether the plugin may run: enabled, and its permissions accepted.
+    /// Whether the plugin may run: enabled, and allowed by the user exactly as
+    /// it is now (same folder, command and permissions).
     pub(super) fn plugin_granted(&self, plugin: &str) -> bool {
         let Some(manifest) = self.plugins.manifest(plugin) else {
             return false;
         };
         self.plugin_enabled(plugin)
             && (manifest.permissions.is_empty()
-                || self.config.plugins.get(plugin).is_some_and(|c| c.granted))
+                || self.stored_grant(plugin) == Some(&grant_for(manifest)))
+    }
+
+    /// What the user last allowed for this plugin, which may no longer match it.
+    pub(super) fn stored_grant(&self, plugin: &str) -> Option<&PluginGrant> {
+        self.config.plugins.get(plugin)?.grant.as_ref()
     }
 
     pub(super) fn grant_plugin(&mut self, plugin: &str, granted: bool) {
-        self.config
-            .plugins
-            .entry(plugin.into())
-            .or_default()
-            .granted = granted;
+        let grant = if granted {
+            self.plugins.manifest(plugin).map(grant_for)
+        } else {
+            None
+        };
+        // Secrets were entered for the folder the user allowed before; never
+        // hand them to a plugin with the same id from another folder.
+        if let (Some(old), Some(new)) = (self.stored_grant(plugin), &grant)
+            && old.dir != new.dir
+            && self.plugins.secrets.clear(plugin)
+            && let Some(path) = self.plugins.secrets_path.clone()
+            && let Err(error) = self.plugins.secrets.save(&path)
+        {
+            self.error = Some(format!("{}\n\n{error:#}", tr("Could not save secrets")));
+        }
+        self.config.plugins.entry(plugin.into()).or_default().grant = grant;
         self.save_config();
         if !granted {
             self.stop_plugin(plugin);
@@ -1813,6 +1830,15 @@ impl EditorApp {
             }
         }
         None
+    }
+}
+
+/// The grant that allows this manifest to run as it is.
+pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
+    PluginGrant {
+        dir: std::fs::canonicalize(&manifest.dir).unwrap_or_else(|_| manifest.dir.clone()),
+        command: manifest.plugin.command.clone(),
+        permissions: manifest.permissions.clone(),
     }
 }
 

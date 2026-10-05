@@ -89,6 +89,7 @@ fn install_mock(app: &mut EditorApp, dir: &Path) {
     std::fs::write(dir.join("plugin.toml"), MANIFEST).unwrap();
     let manifest = Manifest::load(dir).unwrap();
     app.install_plugins(vec![manifest], vec![]);
+    app.grant_plugin("mock", true);
 }
 
 fn run_until(
@@ -822,6 +823,75 @@ fn host_run_only_allows_safe_commands_and_the_plugins_own_actions() {
         ("mock", "echo")
     );
     assert_eq!(edit.values["prompt"], "from host/run");
+}
+
+#[test]
+fn grants_cover_the_reviewed_folder_command_and_permissions() {
+    let dir = tempfile::tempdir().unwrap();
+    let shadow = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    let secrets = dir.path().join("secrets.toml");
+    app.plugins.secrets_path = Some(secrets.clone());
+    let with = |extra: &str, folder: &Path| {
+        Manifest::parse(
+            &MANIFEST.replace(
+                "[[actions]]",
+                &format!("{extra}\n\n[[settings]]\nid = \"key\"\ntype = \"secret\"\nlabel = \"Key\"\n\n[[actions]]"),
+            ),
+            folder,
+        )
+        .unwrap()
+    };
+    let reviewed = with("[permissions]\nsecrets = [\"key\"]", dir.path());
+    app.install_plugins(vec![reviewed.clone()], vec![]);
+    assert!(!app.plugin_granted("mock"));
+    app.grant_plugin("mock", true);
+    assert!(app.plugin_granted("mock"));
+    app.plugins.secrets.set("mock", "key", "sk-123");
+
+    // An update that asks for more needs another review.
+    let wider = with(
+        "[permissions]\nsecrets = [\"key\"]\nnetwork = [\"evil.example\"]",
+        dir.path(),
+    );
+    app.install_plugins(vec![wider.clone()], vec![]);
+    assert!(!app.plugin_granted("mock"));
+    app.start_plugin_action("mock", "echo");
+    assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+    app.dialog = None;
+    app.grant_plugin("mock", true);
+    assert!(app.plugin_granted("mock"));
+    assert_eq!(app.plugins.secrets.get("mock", "key"), Some("sk-123"));
+    // So does a changed command.
+    let mut command = wider.clone();
+    command.plugin.command = vec!["sh".into(), "other.sh".into()];
+    app.install_plugins(vec![command], vec![]);
+    assert!(!app.plugin_granted("mock"));
+
+    // The same id from another folder gets neither the grant nor the secrets.
+    let impostor = with(
+        "[permissions]\nsecrets = [\"key\"]\nnetwork = [\"evil.example\"]",
+        shadow.path(),
+    );
+    app.install_plugins(vec![impostor], vec![]);
+    assert!(!app.plugin_granted("mock"));
+    // Allowing it forgets the secrets entered for the other folder.
+    app.grant_plugin("mock", true);
+    assert_eq!(app.plugins.secrets.get("mock", "key"), None);
+    let (_, secret_values) = app.plugin_settings(app.plugins.manifest("mock").unwrap());
+    assert!(secret_values.as_object().unwrap().is_empty());
+    assert!(
+        !std::fs::read_to_string(&secrets)
+            .unwrap()
+            .contains("sk-123")
+    );
+
+    // Grants from before they were recorded must be reviewed again.
+    let old: xuan::config::Config =
+        toml::from_str("[plugins.mock]\nenabled = true\ngranted = true\n").unwrap();
+    app.config = old;
+    app.install_plugins(vec![reviewed], vec![]);
+    assert!(!app.plugin_granted("mock"));
 }
 
 #[test]

@@ -71,6 +71,7 @@ fn histogram_pane_renders_through_the_python_sdk() {
     }
     let (context, mut app) = app();
     app.install_plugins(vec![example("histogram")], vec![]);
+    app.grant_plugin("histogram", true);
     app.dimensions = [32, 24];
     app.new_document();
     app.command("fill_fg");
@@ -125,6 +126,7 @@ fn histogram_pane_renders_through_the_python_sdk() {
 fn invert_regions_action_runs_through_the_rust_sdk() {
     let (context, mut app) = app();
     app.install_plugins(vec![example("invert-regions")], vec![]);
+    app.grant_plugin("invert-regions", true);
     app.dimensions = [40, 30];
     app.new_document();
     app.brush.color = [200, 100, 50, 255];

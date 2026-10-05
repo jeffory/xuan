@@ -126,8 +126,12 @@ impl Default for Config {
 #[serde(default)]
 pub struct PluginConfig {
     pub enabled: bool,
-    /// The user accepted the permissions the manifest declared.
-    pub granted: bool,
+    /// What the user allowed to run. A plugin whose folder, command or
+    /// permissions no longer match runs only after the user reviews it again.
+    /// Configurations from before grants were recorded (`granted = true`)
+    /// have none, so those plugins are reviewed again too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant: Option<PluginGrant>,
     /// Values for the settings the manifest declares, by setting identifier.
     pub settings: toml::Table,
 }
@@ -136,10 +140,19 @@ impl Default for PluginConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            granted: false,
+            grant: None,
             settings: toml::Table::new(),
         }
     }
+}
+
+/// A plugin the user allowed to run, exactly as they reviewed it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PluginGrant {
+    /// The plugin folder, canonicalized.
+    pub dir: PathBuf,
+    pub command: Vec<String>,
+    pub permissions: crate::plugins::manifest::Permissions,
 }
 
 /// Plugin secrets such as API keys, kept out of `config.toml` in a file that
@@ -178,6 +191,11 @@ impl Secrets {
         file.persist(path)
             .with_context(|| format!("Cannot save {}", path.display()))?;
         Ok(())
+    }
+
+    /// Forget every secret of a plugin.
+    pub fn clear(&mut self, plugin: &str) -> bool {
+        self.0.remove(plugin).is_some()
     }
 
     pub fn get(&self, plugin: &str, key: &str) -> Option<&str> {

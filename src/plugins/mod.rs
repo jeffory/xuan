@@ -44,8 +44,9 @@ pub fn data_dir(config_dir: &Path, plugin: &str) -> PathBuf {
     config_dir.join("plugin-data").join(plugin)
 }
 
-/// Load every `*/plugin.toml` under the directories. The first folder with a
-/// given identifier wins; later duplicates are reported as errors.
+/// Load every `*/plugin.toml` under the directories. Folders that share an
+/// identifier are all reported as errors and none of them is loaded, so one
+/// folder can never take over another's grant, settings or secrets.
 pub fn discover(dirs: &[PathBuf]) -> (Vec<Manifest>, Vec<LoadError>) {
     let mut manifests: Vec<Manifest> = Vec::new();
     let mut errors = Vec::new();
@@ -60,22 +61,7 @@ pub fn discover(dirs: &[PathBuf]) -> (Vec<Manifest>, Vec<LoadError>) {
         folders.sort();
         for folder in folders {
             match Manifest::load(&folder) {
-                Ok(manifest) => {
-                    if let Some(existing) =
-                        manifests.iter().find(|m| m.plugin.id == manifest.plugin.id)
-                    {
-                        errors.push(LoadError {
-                            dir: folder,
-                            error: format!(
-                                "plugin `{}` is already loaded from {}",
-                                manifest.plugin.id,
-                                existing.dir.display()
-                            ),
-                        });
-                    } else {
-                        manifests.push(manifest);
-                    }
-                }
+                Ok(manifest) => manifests.push(manifest),
                 Err(error) => errors.push(LoadError {
                     dir: folder,
                     error: format!("{error:#}"),
@@ -83,6 +69,29 @@ pub fn discover(dirs: &[PathBuf]) -> (Vec<Manifest>, Vec<LoadError>) {
             }
         }
     }
+    let mut duplicates: Vec<String> = Vec::new();
+    for (index, manifest) in manifests.iter().enumerate() {
+        if manifests[..index]
+            .iter()
+            .any(|m| m.plugin.id == manifest.plugin.id)
+            && !duplicates.contains(&manifest.plugin.id)
+        {
+            duplicates.push(manifest.plugin.id.clone());
+        }
+    }
+    manifests.retain(|manifest| {
+        if !duplicates.contains(&manifest.plugin.id) {
+            return true;
+        }
+        errors.push(LoadError {
+            dir: manifest.dir.clone(),
+            error: format!(
+                "another folder also has a plugin with the id `{}`; neither is loaded",
+                manifest.plugin.id
+            ),
+        });
+        false
+    });
     manifests.sort_by(|a, b| {
         a.plugin
             .name
@@ -129,14 +138,22 @@ mod tests {
         let dirs = vec![extra.path().to_path_buf(), user.path().to_path_buf()];
         let (manifests, errors) = discover(&dirs);
         let ids: Vec<_> = manifests.iter().map(|m| m.plugin.id.as_str()).collect();
-        assert_eq!(ids, ["alpha", "beta", "gamma"]);
-        assert_eq!(errors.len(), 2, "{errors:?}");
+        // Two folders claim `beta`: neither is loaded.
+        assert_eq!(ids, ["alpha", "gamma"]);
+        assert_eq!(errors.len(), 3, "{errors:?}");
         assert!(errors.iter().any(|e| e.dir.ends_with("broken")));
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.dir.ends_with("dup") && e.error.contains("already loaded"))
-        );
+        for folder in ["b", "dup"] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.dir.ends_with(folder) && e.error.contains("neither is loaded")),
+                "{errors:?}"
+            );
+        }
+        // The same id in a XUAN_PLUGIN_PATH folder cannot shadow a user plugin.
+        write(extra.path(), "shadow", "alpha", "Alpha");
+        let (manifests, _) = discover(&dirs);
+        assert!(manifests.iter().all(|m| m.plugin.id != "alpha"));
         assert!(discover(&[PathBuf::from("/nonexistent/xuan")]).0.is_empty());
         assert_eq!(plugin_dirs(None, None), Vec::<PathBuf>::new());
         assert_eq!(

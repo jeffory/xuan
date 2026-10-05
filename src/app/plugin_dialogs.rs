@@ -334,7 +334,14 @@ impl EditorApp {
         };
         let mut open = true;
         let mut decision = None;
-        widgets::Window::new(format!("{} {}?", tr("Allow"), manifest.plugin.name))
+        let grant = super::plugins::grant_for(&manifest);
+        let previous = self.stored_grant(&plugin).filter(|g| **g != grant).cloned();
+        let title = if manifest.permissions.is_empty() {
+            format!("{} {}?", tr("Run"), manifest.plugin.name)
+        } else {
+            format!("{} {}?", tr("Allow"), manifest.plugin.name)
+        };
+        widgets::Window::new(title)
             .id(("plugin_permissions", &plugin))
             .default_width(420.0)
             .open(&mut open)
@@ -349,7 +356,40 @@ impl EditorApp {
                     .wrap(),
                 );
                 ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}\n{} {}",
+                        tr("Folder:"),
+                        grant.dir.display(),
+                        tr("Runs:"),
+                        grant.command.join(" ")
+                    ))
+                    .small()
+                    .color(theme::MUTED),
+                );
+                ui.add_space(8.0);
                 permissions_list(ui, &manifest);
+                if let Some(previous) = &previous {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(tr("Changed since you allowed it:")).strong());
+                    if previous.dir != grant.dir {
+                        ui.label(format!(
+                            "• {} {}",
+                            tr("It was in"),
+                            previous.dir.display()
+                        ));
+                    }
+                    if previous.command != grant.command {
+                        ui.label(format!(
+                            "• {} {}",
+                            tr("It ran"),
+                            previous.command.join(" ")
+                        ));
+                    }
+                    if previous.permissions != grant.permissions {
+                        ui.label(format!("• {}", tr("Its permissions changed")));
+                    }
+                }
                 ui.add_space(12.0);
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -489,11 +529,11 @@ impl EditorApp {
                         };
                         ui.label(RichText::new(status).small().color(theme::MUTED));
                         ui.add_space(8.0);
-                        if !manifest.permissions.is_empty() {
+                        {
                             ui.label(RichText::new(tr("Permissions")).strong());
                             permissions_list(ui, manifest);
                             ui.horizontal(|ui| {
-                                if config.granted {
+                                if self.plugin_granted(&id) {
                                     ui.label(RichText::new(tr("Allowed")).color(theme::MUTED));
                                     if widgets::button(ui, tr("Revoke")).clicked() {
                                         grant = Some((id.clone(), false));
