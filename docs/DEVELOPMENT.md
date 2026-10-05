@@ -158,6 +158,7 @@ ui.drop_files(&[&path]);                // injects `dropped_files`
 - Widgets are found by their AccessKit label. Menu items are labelled `"<name> <shortcut>"`, for example `"Save Ctrl+S"`. A widget drawn by hand needs `response.widget_info(...)` before a test can find or click it; `ui.enabled(label)` reports its disabled state.
 - Assert on app state (`ui.app()`), not on pixels. Do not start a flow with `app.command(...)` or by setting fields, except to build the starting point (a dirty document, a Develop session).
 - `UiTest` steps three frames after each action so floating windows can measure themselves. `click_and_stop` leaves the output of the handling frame in place for checking viewport commands such as `Close`.
+- `ui.drag(from, to)` presses, moves in steps and releases the primary button, for canvas and ruler drags. Flows that change a preference (View menu toggles, Grid Settings) write the configuration file; call `ui.isolate_config(dir)` with a temporary directory first, or set `app.config_path` in non-kittest tests.
 - Commands that open native file dialogs (Open, Save, Export) must not run in tests. Set `app.command_trace = Some(Vec::new())` to make `command()` only record names; the shortcut test does this.
 - `docs/SHORTCUTS.md` is parsed by the shortcut test. Adding, removing or rewording a documented shortcut requires updating `expected()` or `PROSE` in `ui_shortcuts.rs`.
 - Snapshot images are not used: kittest snapshots need a wgpu renderer.

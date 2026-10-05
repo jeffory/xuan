@@ -1180,10 +1180,10 @@ impl EditorApp {
             return;
         }
         let mask_target = self.transforming_mask();
-        // Ctrl drags without snapping.
+        // A marquee, shape or crop starts on a nearby Snap To target; Ctrl starts it freely.
         let snapping = self
             .snap_options()
-            .filter(|_| !modifiers.ctrl)
+            .filter(|_| !modifiers.ctrl && matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop))
             .map(|options| (options, self.displayed_guides()));
         let session = &mut self.sessions[self.current];
         if tool == Tool::Move && session.document.active.is_none() {
@@ -1249,11 +1249,9 @@ impl EditorApp {
         if tool == Tool::Clone {
             self.clone_offset = Some(offset);
         }
-        // A marquee, shape or crop starts on a nearby Snap To target.
         self.snap_lines.clear();
         let mut point = point;
-        if matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop)
-            && matches!(kind, TransformDrag::Move)
+        if matches!(kind, TransformDrag::Move)
             && let Some((options, guides)) = &snapping
         {
             let targets = super::snap::SnapTargets::new(

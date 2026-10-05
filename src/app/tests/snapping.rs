@@ -3,9 +3,11 @@ use super::*;
 use xuan::layout::{GridSettings, Guide, GuideAxis};
 
 /// A 64x48 document at 200% (so the 10 point snap reach is 5 pixels) with an opaque 20x16 "Box"
-/// layer at (5, 8), selected. The canvas centre is (32, 24).
-fn snapping_app() -> (egui::Context, EditorApp) {
+/// layer at (5, 8), selected. The canvas centre is (32, 24). Preferences go to a temporary file.
+fn snapping_app() -> (egui::Context, EditorApp, tempfile::TempDir) {
+    let directory = tempfile::tempdir().unwrap();
     let (context, mut app) = app();
+    app.config_path = Some(directory.path().join("config.toml"));
     app.dimensions = [64, 48];
     app.new_document();
     app.session_mut()
@@ -18,7 +20,7 @@ fn snapping_app() -> (egui::Context, EditorApp) {
     session.pan = Vec2::ZERO;
     session.fit = false;
     frame(&context, &mut app);
-    (context, app)
+    (context, app, directory)
 }
 
 fn opaque(name: &str, x: f32, y: f32, width: u32, height: u32) -> Layer {
@@ -55,7 +57,7 @@ fn drag_x(
 
 #[test]
 fn moving_a_layer_snaps_its_edges_to_a_guide_unless_ctrl_is_held() {
-    let (context, mut app) = snapping_app();
+    let (context, mut app, _directory) = snapping_app();
     add_guide(&mut app, GuideAxis::Vertical, 20.0);
     // Moved by 13.5 the left edge lands at 18.5, 1.5 from the guide.
     drag_x(
@@ -95,7 +97,7 @@ fn moving_a_layer_snaps_its_edges_to_a_guide_unless_ctrl_is_held() {
 
 #[test]
 fn moving_a_layer_snaps_to_the_canvas_and_other_layers() {
-    let (context, mut app) = snapping_app();
+    let (context, mut app, _directory) = snapping_app();
     let from = Point::new(10.0, 14.0);
     // The box's centre (15) moved by 16 lands at 31, a pixel from the canvas centre.
     drag_x(&context, &mut app, from, 16.0, egui::Modifiers::NONE);
@@ -130,7 +132,7 @@ fn moving_a_layer_snaps_to_the_canvas_and_other_layers() {
 
 #[test]
 fn resize_handles_snap_the_dragged_edge() {
-    let (context, mut app) = snapping_app();
+    let (context, mut app, _directory) = snapping_app();
     add_guide(&mut app, GuideAxis::Vertical, 30.0);
     app.lock_ratio = false;
     // The right-middle handle sits at (25, 16); dragged to 28.5 its edge is 1.5 from the guide.
@@ -150,7 +152,7 @@ fn resize_handles_snap_the_dragged_edge() {
 
 #[test]
 fn marquee_corners_and_selection_moves_snap() {
-    let (context, mut app) = snapping_app();
+    let (context, mut app, _directory) = snapping_app();
     app.config.snap.layers = false;
     add_guide(&mut app, GuideAxis::Vertical, 20.0);
     add_guide(&mut app, GuideAxis::Horizontal, 30.0);
@@ -198,7 +200,7 @@ fn marquee_corners_and_selection_moves_snap() {
 
 #[test]
 fn shapes_start_and_end_on_targets() {
-    let (context, mut app) = snapping_app();
+    let (context, mut app, _directory) = snapping_app();
     add_guide(&mut app, GuideAxis::Vertical, 40.0);
     add_guide(&mut app, GuideAxis::Horizontal, 20.0);
     app.set_tool(Tool::Shape);
@@ -219,7 +221,7 @@ fn shapes_start_and_end_on_targets() {
 
 #[test]
 fn guides_snap_while_dragged_and_follow_undo() {
-    let (_context, mut app) = snapping_app();
+    let (_context, mut app, _directory) = snapping_app();
     // A new guide 1.5 px from the box's left edge (5) lands on it.
     app.begin_guide_creation(GuideAxis::Vertical, 6.5, false);
     app.finish_guide_drag(false);
