@@ -5052,6 +5052,7 @@ dependencies = [
  "rawler",
  "rayon",
  "rfd",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "tempfile",

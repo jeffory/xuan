@@ -42,7 +42,11 @@ x11rb = { version = "0.13", features = ["xinput"] }
 
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "27.0.1", default-features = false, features = ["dx12"] }
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+# Killing a plugin's process group.
+rustix = { version = "1", features = ["process"] }
 
 [dev-dependencies]
 pollster = "0.4"

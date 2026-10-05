@@ -155,6 +155,8 @@ pub enum Incoming {
 
 pub struct Process {
     child: Child,
+    /// The plugin's whole process tree, so its subprocesses die with it.
+    tree: Option<tree::Tree>,
     stdin: Option<ChildStdin>,
     incoming: Receiver<(Incoming, usize)>,
     budget: Arc<Budget>,
@@ -194,6 +196,7 @@ impl Process {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
+        tree::prepare(&mut command);
         let mut child = command.spawn().with_context(|| {
             format!(
                 "Cannot start `{}` for plugin {}",
@@ -201,6 +204,7 @@ impl Process {
                 manifest.plugin.id
             )
         })?;
+        let tree = tree::Tree::attach(&child);
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().context("plugin stdout")?;
         let stderr = child.stderr.take().context("plugin stderr")?;
@@ -287,6 +291,7 @@ impl Process {
         }
         Ok(Self {
             child,
+            tree,
             stdin,
             incoming,
             budget,
@@ -405,16 +410,22 @@ impl Process {
         self.budget.used()
     }
 
-    /// Close stdin so a well-behaved plugin exits, then make sure it does.
+    /// Close stdin so a well-behaved plugin exits, then make sure it does,
+    /// together with every process it started.
     pub fn stop(&mut self) {
         self.budget.stop();
         self.stdin = None;
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         while std::time::Instant::now() < deadline {
             if !matches!(self.child.try_wait(), Ok(None)) {
-                return;
+                break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Subprocesses outlive a plugin that exits on its own, so the tree is
+        // killed either way.
+        if let Some(tree) = &self.tree {
+            tree.kill();
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -433,6 +444,122 @@ fn push_log(log: &Mutex<VecDeque<String>>, line: String) {
             log.pop_front();
         }
         log.push_back(line);
+    }
+}
+
+/// Grouping a plugin with its subprocesses.
+#[cfg(unix)]
+mod tree {
+    use std::process::{Child, Command};
+
+    /// The plugin's process group, which its subprocesses join unless they
+    /// leave it on purpose.
+    pub struct Tree(rustix::process::Pid);
+
+    /// Start the plugin as the leader of a new process group.
+    pub fn prepare(command: &mut Command) {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    impl Tree {
+        pub fn attach(child: &Child) -> Option<Self> {
+            Some(Self(rustix::process::Pid::from_child(child)))
+        }
+
+        /// Kill every process left in the group.
+        pub fn kill(&self) {
+            let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
+        }
+    }
+}
+
+/// Grouping a plugin with its subprocesses.
+#[cfg(windows)]
+mod tree {
+    use std::{
+        os::windows::io::AsRawHandle,
+        process::{Child, Command},
+    };
+
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, TerminateJobObject,
+        },
+    };
+
+    /// A Job Object holding the plugin. Processes it starts join the job too,
+    /// and closing the job kills them all. The plugin joins right after it is
+    /// spawned, so only something it starts in its first instant can escape.
+    pub struct Tree(HANDLE);
+
+    // SAFETY: a job handle may be used and closed from any thread.
+    unsafe impl Send for Tree {}
+
+    pub fn prepare(_command: &mut Command) {}
+
+    impl Tree {
+        pub fn attach(child: &Child) -> Option<Self> {
+            // SAFETY: plain Win32 calls on a job handle this function owns and
+            // on the child's process handle, which outlives the calls.
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                let tree = Self(job);
+                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let configured = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) != 0;
+                let assigned =
+                    configured && AssignProcessToJobObject(job, child.as_raw_handle()) != 0;
+                assigned.then_some(tree)
+            }
+        }
+
+        /// Kill every process in the job.
+        pub fn kill(&self) {
+            // SAFETY: the handle is a valid job until `drop`.
+            unsafe {
+                TerminateJobObject(self.0, 1);
+            }
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            // SAFETY: the handle is owned and closed once; closing it kills
+            // what is left in the job.
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
+/// Elsewhere only the plugin process itself is stopped.
+#[cfg(not(any(unix, windows)))]
+mod tree {
+    use std::process::{Child, Command};
+
+    pub struct Tree;
+
+    pub fn prepare(_command: &mut Command) {}
+
+    impl Tree {
+        pub fn attach(_child: &Child) -> Option<Self> {
+            None
+        }
+
+        pub fn kill(&self) {}
     }
 }
 
@@ -706,6 +833,64 @@ done
         }
         assert_eq!(messages, 48);
         assert_eq!(process.queued_bytes(), 0);
+    }
+
+    /// Whether a process is gone: it no longer exists or is a zombie nobody
+    /// has reaped yet (a container's init may not reap orphans).
+    #[cfg(target_os = "linux")]
+    fn gone(pid: &str) -> bool {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(_) => true,
+            Ok(stat) => stat
+                .rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with(['Z', 'X'])),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stopping_a_plugin_kills_its_subprocesses() {
+        let dir = tempfile::tempdir().unwrap();
+        // The first plugin exits when stdin closes but leaves a child behind;
+        // the second ignores the closed stdin altogether.
+        for (id, script) in [
+            ("leaves", "sleep 300 &\necho $! > child.pid\nread -r line\n"),
+            (
+                "stays",
+                "trap '' TERM HUP\nsleep 300 &\necho $! > child.pid\nwhile :; do sleep 1; done\n",
+            ),
+        ] {
+            let folder = dir.path().join(id);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("plugin.sh"), script).unwrap();
+            let manifest = Manifest::parse(
+                &format!(
+                    "[plugin]\nid = \"{id}\"\nname = \"N\"\nversion = \"1\"\ncommand = [\"sh\", \"plugin.sh\"]\n"
+                ),
+                &folder,
+            )
+            .unwrap();
+            let mut process = Process::spawn(&manifest, &[], None).unwrap();
+            let pid_file = folder.join("child.pid");
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let pid = loop {
+                if let Ok(text) = std::fs::read_to_string(&pid_file)
+                    && !text.trim().is_empty()
+                {
+                    break text.trim().to_owned();
+                }
+                assert!(std::time::Instant::now() < deadline, "{id}");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            assert!(!gone(&pid), "{id}");
+            process.stop();
+            assert!(!process.alive());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !gone(&pid) {
+                assert!(std::time::Instant::now() < deadline, "{id}: {pid} survived");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
     }
 
     #[test]
