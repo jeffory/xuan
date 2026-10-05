@@ -6,13 +6,30 @@ use xuan::{
 
 impl EditorApp {
     pub(super) fn load_config(&mut self) {
-        match Config::path().and_then(|path| Config::load(&path)) {
-            Ok(config) => self.config = config,
+        match Config::path() {
+            Ok(path) => {
+                match Config::load(&path) {
+                    Ok(config) => self.config = config,
+                    Err(error) => {
+                        self.error = Some(format!("{}\n\n{error:#}", tr("Could not load settings")))
+                    }
+                }
+                self.config_path = Some(path);
+            }
             Err(error) => {
                 self.error = Some(format!("{}\n\n{error:#}", tr("Could not load settings")))
             }
         }
         i18n::set_language(self.config.language);
+    }
+
+    /// Write the current preferences. Headless sessions have no path and keep them in memory.
+    pub(super) fn save_config(&mut self) {
+        if let Some(path) = &self.config_path
+            && let Err(error) = self.config.save(path)
+        {
+            self.error = Some(format!("{}\n\n{error:#}", tr("Could not save settings")));
+        }
     }
 
     pub(super) fn settings_dialog(&mut self, ctx: &egui::Context) {
@@ -67,16 +84,10 @@ impl EditorApp {
             });
         ctx.data_mut(|d| d.insert_temp(page_id, appearance));
         if config != self.config {
-            match Config::path().and_then(|path| config.save(&path)) {
-                Ok(()) => {
-                    i18n::set_language(config.language);
-                    self.config = config;
-                    ctx.request_repaint();
-                }
-                Err(error) => {
-                    self.error = Some(format!("{}\n\n{error:#}", tr("Could not save settings")))
-                }
-            }
+            i18n::set_language(config.language);
+            self.config = config;
+            self.save_config();
+            ctx.request_repaint();
         }
         if !open || done || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.dialog = None;

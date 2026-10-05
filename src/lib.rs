@@ -10,6 +10,8 @@ pub mod i18n;
 pub mod io;
 pub mod operations;
 pub mod paint;
+pub mod panes;
+pub mod plugins;
 pub mod raw;
 pub mod render;
 pub mod retouch;

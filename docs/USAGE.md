@@ -77,7 +77,9 @@ To compile the application or produce a release archive, see the [development gu
 
 ## Workspace
 
-Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool rail, document tabs, and a Layers panel. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
+Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
+
+The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default. The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
 ## Editing tools
 

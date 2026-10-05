@@ -124,6 +124,8 @@ impl EditorApp {
         let developing = self.develop.is_some();
         let has_doc = self.session().is_some() && !developing;
         let can_view = self.develop.as_ref().is_none_or(|d| d.ready());
+        let pane_entries = self.pane_entries();
+        let mut pane_toggle = None;
         let blocked = self.job.is_some()
             || self.dialog.is_some()
             || self.close_app
@@ -454,6 +456,25 @@ impl EditorApp {
                                 );
                             });
                         });
+                        menu_bar_button(ui, tr("Window"), |ui| {
+                            ui.add_enabled_ui(!developing, |ui| {
+                                for (id, title, shown) in &pane_entries {
+                                    let mut shown = *shown;
+                                    if widgets::checkbox(ui, &mut shown, title).changed() {
+                                        pane_toggle = Some((id.clone(), !shown));
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                item(
+                                    ui,
+                                    tr("Reset Panel Layout"),
+                                    "",
+                                    "reset_panels",
+                                    &mut action,
+                                );
+                            });
+                        });
                         menu_bar_button(ui, tr("Help"), |ui| {
                             item(ui, tr("Keyboard Shortcuts"), "F1", "shortcuts", &mut action);
                             item(ui, tr("About Xuan"), "", "about", &mut action);
@@ -462,6 +483,10 @@ impl EditorApp {
                     self.trailing_window_controls(ui);
                 });
         });
+        if let Some((id, hidden)) = pane_toggle {
+            self.config.panes.set_hidden(&id, hidden);
+            self.save_config();
+        }
         if let Some(action) = action {
             self.command(action);
         }

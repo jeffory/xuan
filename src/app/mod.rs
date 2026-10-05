@@ -16,6 +16,7 @@ mod layers;
 mod levels_controls;
 mod menus;
 mod panels;
+mod panes;
 mod settings;
 mod shortcuts;
 mod stroke_smoothing;
@@ -372,6 +373,8 @@ impl Gesture {
 
 pub struct EditorApp {
     config: xuan::config::Config,
+    config_path: Option<PathBuf>,
+    pane_drag: Option<panes::PaneDrag>,
     tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
@@ -517,6 +520,8 @@ impl EditorApp {
         egui_extras::install_image_loaders(ctx);
         let mut app = Self {
             config: Default::default(),
+            config_path: None,
+            pane_drag: None,
             tablet: None,
             context: ctx.clone(),
             window_title: String::new(),
@@ -1010,7 +1015,7 @@ impl EditorApp {
         if let Some(develop) = &mut self.develop {
             match command {
                 "new" | "open" | "open_clipboard" | "open_comp" => self.suspend_develop(),
-                "about" | "shortcuts" | "settings" => {}
+                "about" | "shortcuts" | "settings" | "reset_panels" => {}
                 "close" => {
                     self.request_develop_close(develop::DevelopClose::Tab);
                     return;
@@ -1031,6 +1036,10 @@ impl EditorApp {
             }
         }
         match command {
+            "reset_panels" => {
+                self.config.panes.reset();
+                self.save_config();
+            }
             "develop" => {
                 if let Some(id) = self.session().and_then(|s| s.document.active) {
                     self.start_develop_layer(id);
@@ -1487,7 +1496,7 @@ impl EditorApp {
             self.tool_options(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);
-            self.layers_panel(ctx);
+            self.sidebar(ctx);
             self.canvas(ctx);
         }
         self.dialogs(ctx);
