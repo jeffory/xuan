@@ -1047,10 +1047,16 @@ mod tests {
         assert_eq!(value["provenance"], record);
         assert_eq!(value["mask"], "/tmp/m.png");
         let document = Output::document("/tmp/d.png", None).with_provenance(record.clone());
-        assert_eq!(serde_json::to_value(&document).unwrap()["provenance"], record);
+        assert_eq!(
+            serde_json::to_value(&document).unwrap()["provenance"],
+            record
+        );
         // Other outputs ignore it.
         let text = Output::text("hi").with_provenance(record);
-        assert!(serde_json::to_value(&text).unwrap().get("provenance").is_none());
+        assert!(serde_json::to_value(&text)
+            .unwrap()
+            .get("provenance")
+            .is_none());
         let back: Output = serde_json::from_value(serde_json::to_value(&image).unwrap()).unwrap();
         assert_eq!(back, image);
     }
