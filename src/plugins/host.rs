@@ -154,7 +154,8 @@ pub enum Incoming {
 }
 
 pub struct Process {
-    child: Child,
+    /// Taken by [`Process::stop`], which hands it to a reaper.
+    child: Option<Child>,
     /// The plugin's whole process tree, so its subprocesses die with it.
     tree: Option<tree::Tree>,
     stdin: Option<ChildStdin>,
@@ -295,7 +296,7 @@ impl Process {
                 .context("plugin log thread")?;
         }
         Ok(Self {
-            child,
+            child: Some(child),
             tree,
             stdin,
             incoming,
@@ -335,7 +336,7 @@ impl Process {
     pub fn alive(&mut self) -> bool {
         !self.closed.load(Ordering::Relaxed)
             && self.stdin.is_some()
-            && matches!(self.child.try_wait(), Ok(None))
+            && (self.child.as_mut()).is_some_and(|child| matches!(child.try_wait(), Ok(None)))
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Result<Id> {
@@ -451,26 +452,56 @@ impl Process {
         self.budget.used()
     }
 
-    /// Close stdin so a well-behaved plugin exits, then make sure it does,
-    /// together with every process it started.
+    /// Close stdin so a well-behaved plugin exits, and make sure it does,
+    /// together with every process it started, without waiting: a
+    /// background thread gives it [`STOP_GRACE`] and then kills it.
     pub fn stop(&mut self) {
+        self.close();
+        if let Some(child) = self.child.take() {
+            let tree = self.tree.take();
+            let deadline = std::time::Instant::now() + STOP_GRACE;
+            std::thread::spawn(move || reap(child, tree, deadline));
+        }
+    }
+
+    /// Stop several plugins and wait until they are gone, for at most
+    /// `grace` in all before they are killed. For quitting, when a
+    /// background thread would not outlive the editor.
+    pub fn stop_all(processes: impl IntoIterator<Item = Process>, grace: Duration) {
+        let mut processes: Vec<Process> = processes.into_iter().collect();
+        for process in &mut processes {
+            process.close();
+        }
+        let deadline = std::time::Instant::now() + grace;
+        for process in &mut processes {
+            if let Some(child) = process.child.take() {
+                reap(child, process.tree.take(), deadline);
+            }
+        }
+    }
+
+    fn close(&mut self) {
         self.budget.stop();
         self.stdin = None;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        while std::time::Instant::now() < deadline {
-            if !matches!(self.child.try_wait(), Ok(None)) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        // Subprocesses outlive a plugin that exits on its own, so the tree is
-        // killed either way.
-        if let Some(tree) = &self.tree {
-            tree.kill();
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.outbox.clear();
     }
+}
+
+/// How long a stopped plugin may take to exit on its own.
+pub const STOP_GRACE: Duration = Duration::from_secs(1);
+
+/// Wait until `deadline` for the plugin to exit, then kill whatever is left
+/// of it. Subprocesses outlive a plugin that exits on its own, so the tree
+/// is killed either way.
+fn reap(mut child: Child, tree: Option<tree::Tree>, deadline: std::time::Instant) {
+    while std::time::Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if let Some(tree) = &tree {
+        tree.kill();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 impl Drop for Process {
@@ -924,7 +955,10 @@ done
                 std::thread::sleep(std::time::Duration::from_millis(10));
             };
             assert!(!gone(&pid), "{id}");
+            // Stopping does not wait for the plugin.
+            let started = std::time::Instant::now();
             process.stop();
+            assert!(started.elapsed() < std::time::Duration::from_millis(100));
             assert!(!process.alive());
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !gone(&pid) {
@@ -932,6 +966,28 @@ done
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
+    }
+
+    #[test]
+    fn stopping_every_plugin_on_quit_waits_only_briefly() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("plugin.sh"),
+            "trap '' TERM HUP\nwhile :; do sleep 1; done\n",
+        )
+        .unwrap();
+        let manifest = Manifest::parse(
+            "[plugin]\nid = \"stays\"\nname = \"S\"\nversion = \"1\"\ncommand = [\"sh\", \"plugin.sh\"]\n",
+            dir.path(),
+        )
+        .unwrap();
+        let processes: Vec<Process> = (0..3)
+            .map(|_| Process::spawn(&manifest, &[], None).unwrap())
+            .collect();
+        let started = std::time::Instant::now();
+        Process::stop_all(processes, Duration::from_millis(200));
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
     }
 
     #[test]

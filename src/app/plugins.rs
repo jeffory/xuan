@@ -277,12 +277,14 @@ impl PluginState {
         self.errors.extend(errors);
     }
 
+    /// Stop every plugin when the editor quits, giving them a moment to exit.
     pub fn stop_all(&mut self) {
         self.starting.clear();
-        for (_, mut process) in self.processes.drain() {
+        let processes = self.processes.drain().map(|(_, mut process)| {
             let _ = process.request("shutdown", Value::Null);
-            process.stop();
-        }
+            process
+        });
+        Process::stop_all(processes, Duration::from_millis(300));
     }
 }
 
