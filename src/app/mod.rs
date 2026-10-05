@@ -463,6 +463,9 @@ pub struct EditorApp {
     drop_prompt: Option<drops::DropPrompt>,
     pending_drops: std::collections::VecDeque<Vec<PathBuf>>,
     allow_close: bool,
+    /// When set, `command` only records its name here (UI tests avoid native dialogs this way).
+    #[cfg(test)]
+    command_trace: Option<Vec<String>>,
     /// Whether the native window was created transparent (needed for rounded corners).
     transparent_window: bool,
     /// The decorations last requested from the window system.
@@ -619,6 +622,8 @@ impl EditorApp {
             drop_prompt: None,
             pending_drops: Default::default(),
             allow_close: false,
+            #[cfg(test)]
+            command_trace: None,
             transparent_window: true,
             decorated: false,
             button_layout: Default::default(),
@@ -1046,6 +1051,11 @@ impl EditorApp {
     }
 
     fn command(&mut self, command: &str) {
+        #[cfg(test)]
+        if let Some(trace) = &mut self.command_trace {
+            trace.push(command.to_owned());
+            return;
+        }
         if command == "quit" {
             // Ctrl+Q and the close button reach this while a job runs.
             self.request_quit();

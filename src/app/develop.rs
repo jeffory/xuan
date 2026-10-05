@@ -1470,7 +1470,7 @@ fn draw_canvas(
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::app) mod tests {
     use super::*;
 
     fn fixture() -> (RawAsset, Arc<DecodedRaw>) {
@@ -1494,7 +1494,7 @@ mod tests {
         (asset, raw)
     }
 
-    fn ready(ctx: &egui::Context) -> Develop {
+    pub(in crate::app) fn ready(ctx: &egui::Context) -> Develop {
         ready_with_resolution(ctx, [64, 48], 64)
     }
 

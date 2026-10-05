@@ -29,6 +29,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "accesskit_consumer"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd06f5fea9819250fffd4debf926709f3593ac22f8c1541a2573e5ee0ca01cd"
+dependencies = [
+ "accesskit",
+ "hashbrown 0.15.5",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1079,6 +1089,16 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "winit",
+]
+
+[[package]]
+name = "egui_kittest"
+version = "0.33.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43afb5f968dfa9e6c8f5e609ab9039e11a2c4af79a326f4cb1b99cf6875cb6a0"
+dependencies = [
+ "egui",
+ "kittest",
 ]
 
 [[package]]
@@ -2169,6 +2189,17 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
+name = "kittest"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01fd6dd2cce251a360101038acb9334e3a50cd38cd02fefddbf28aa975f043c8"
+dependencies = [
+ "accesskit",
+ "accesskit_consumer",
+ "parking_lot",
+]
 
 [[package]]
 name = "kurbo"
@@ -5011,6 +5042,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "egui_kittest",
  "heic-rs",
  "image",
  "png 0.18.1",
