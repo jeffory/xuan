@@ -27,7 +27,8 @@ and **#7** (MCP server and client).
    The placed size is done in #35, the `mask` output in #37 and canvas
    extension in #36.
 4. **Give models a home:** a per-plugin `models_dir` with a manifest-declared,
-   hash-checked download, shown to the user with its size before it starts.
+   hash-checked download, shown to the user with its size before it starts
+   (done in #38).
 5. **Defer C2PA, plugin signing and the OS keyring.** Record the provenance we
    already store, add the model and sampler to it (done in #40), and revisit
    when there is a plugin registry.
@@ -161,13 +162,17 @@ local job with no network.
 
 **Missing.**
 
-- **Model download and caching.** Plugins download models themselves, with no
-  shared location, size confirmation or hash check. A model is often 50 MB to
-  several GB. Add a per-plugin `models_dir` (next to `data_dir`) and an optional
-  `[[models]]` manifest table with `id`, `url`, `sha256`, `size`. The host shows
-  the size and host, downloads once with a progress bar, verifies the hash, and
-  gives the path to the plugin. This also makes "offline after first run"
-  checkable.
+- ~~**Model download and caching.**~~ **Done in #38.** A plugin declares its
+  model files in `[[models]]` (`id`, https `url`, `sha256`, `size`, optional
+  `file`, `license`, `source`) and lists them in the actions that need them.
+  Xuan asks before downloading, showing each model's host, size, licence and
+  source, downloads in the background with progress and cancel, checks the
+  size and SHA-256 while streaming, and renames the file into the plugin's
+  `models_dir` (inside `data_dir`, so it survives updates). Paths reach the
+  plugin in `initialize` and `models/changed`, only while the file still
+  matches what was verified. Manage Plugins has a Models section to download,
+  verify and delete them, and offline mode stops downloads, so "offline after
+  first run" is checkable. See "Models" in [PLUGINS.md](PLUGINS.md#models).
 - **Python environments.** Each ML plugin needs its own virtualenv, created by
   the user or an install script. The manifest `command` can point into it. A
   documented convention is enough; do not manage environments in the host.
@@ -223,7 +228,9 @@ local job with no network.
   separate ticket.
 - **Local-model plugins are not sandboxed** either; a model file can be hostile.
   Prefer formats that do not execute code (ONNX, safetensors) over pickles, and
-  say so in plugin guidance.
+  say so in plugin guidance (PLUGINS.md does, under "Models"). Xuan downloads
+  declared models only after asking, checks them against the pinned SHA-256,
+  and never unpacks or runs them.
 
 ### Spike: enforcing network access in the OS (#39)
 
@@ -325,18 +332,19 @@ a cosmetic change and not worth breaking existing installs.
 - **Version comparison.** An update replaces whatever version is installed;
   `version` is shown in the review but not compared, so a downgrade is not
   flagged.
-- **Dependencies** (Python, venv, models) stay the plugin's problem: the
-  `setup` convention is documented, not automated.
+- **Dependencies** (Python, venv) stay the plugin's problem: the `setup`
+  convention is documented, not automated. Model files are declared in
+  `[[models]]` and downloaded by Xuan (#38).
 - **Signing and a registry**: defer (see section 5).
 
 ## Goals
 
 | Goal | Already works | Missing | Recommendation |
 | --- | --- | --- | --- |
-| **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin; model download story. | Ship a local-ComfyUI variant of the Comfy example; add `models_dir`. |
+| **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin. Model downloads are done (#38). | Ship a local-ComfyUI variant of the Comfy example, declaring its checkpoints in `[[models]]`. |
 | **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42), used by the Comfy Cloud **Inpaint Selection** action; `source.extend` with a new-area mask and an `extend_canvas` edit (#36), shown by `extend-edges`. | A generative outpainting backend. | Host work done; wire an outpainting workflow into a backend of `extend-edges` or the Comfy example. |
 | **Background removal / segmentation** | `selection/export`, `set_selection` and `set_mask` edits, `replace` results, a `mask` output that becomes a selection (#37) and the `select-bright` prototype. | A shipped model and licence decision (#5). | The host `mask` output is done; do the model and Select Subject UI in #5, implemented as a first-party ONNX plugin. |
-| **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Result placed-size control; model download; large-image speed. | Add `width`/`height` to image outputs; later an ONNX Real-ESRGAN backend. |
+| **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Large-image speed. Placed size (#35) and model downloads (#38) are done. | An ONNX Real-ESRGAN backend whose model is declared in `[[models]]` (see the `local-upscale` README). |
 | **Others** (style transfer, colorize, denoise, captions) | Same job/result machinery; `text` output for captions; panes for assist UIs. | Nothing specific. | Plugins only; no host work. |
 
 ## Prototype

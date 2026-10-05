@@ -2671,6 +2671,8 @@ mod tests {
     fn the_protocol_docs_cover_every_method_the_host_speaks() {
         let source = include_str!("plugins.rs");
         let source = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
+        let source = format!("{source}{}", include_str!("plugin_models.rs"));
+        let source = source.as_str();
         let docs = include_str!("../../docs/PLUGINS.md");
         let mut methods = Vec::new();
         for (index, _) in source.match_indices('"') {

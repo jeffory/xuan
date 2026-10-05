@@ -41,10 +41,32 @@ To add a salient-object model:
    a model runtime. Start the plugin from it with
    `command = [".venv/bin/python", "main.py"]` (`.venv\Scripts\python.exe` on
    Windows), which the permission prompt shows and re-asks about if it changes.
-2. Put the model next to the plugin, or download it once into the plugin's
-   `data_dir` (that download is the only network use, so declare the host in
-   `permissions.network`). Check its SHA-256 against a value pinned in the
-   plugin before loading.
+2. Declare the model in `plugin.toml` and list it in the action, so that Xuan
+   downloads it (after asking, with its host, size and licence), checks its
+   size and SHA-256, and keeps it in the plugin's models folder, where it
+   survives plugin updates. The plugin needs no network permission for this:
+   Xuan downloads, the plugin only reads the file. The values below are
+   placeholders; use the URL, size and SHA-256 of the exact file you ship
+   against, and prefer `.onnx` or `.safetensors` files to pickles.
+
+   ```toml
+   [[models]]
+   id = "u2net"
+   url = "https://example.com/models/u2net.onnx"
+   sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+   size = 175997641          # bytes, exact
+   license = "Apache-2.0"
+   source = "U²-Net (Qin et al., 2020)"
+
+   [[actions]]
+   id = "select-bright"
+   # ...
+   models = ["u2net"]
+   ```
+
+   In `main.py`, `job.model_path("u2net")` returns the verified file (or
+   reports a setup error if it is missing); pass it to the backend in
+   `options`.
 3. Add `backend_u2net.py` with a `segment` function that resizes the image to
    the model's input size, runs the session, calls `check()` and `progress()`
    along the way, and returns the predicted matte as grey bytes at the size it

@@ -36,10 +36,33 @@ check) -> (width, height, rgba)` (see `upscale.py`). To add Real-ESRGAN:
    a model runtime. Start the plugin from it with
    `command = [".venv/bin/python", "main.py"]` (`.venv\Scripts\python.exe` on
    Windows), which the permission prompt shows and re-asks about if it changes.
-2. Put the model next to the plugin, or download it once into the plugin's
-   `data_dir` (that download is the only network use, so declare the host in
-   `permissions.network`). Check its SHA-256 against a value pinned in the
-   plugin before loading.
+2. Declare the model in `plugin.toml` and list it in the action, so that Xuan
+   downloads it (after asking, with its host, size and licence), checks its
+   size and SHA-256, and keeps it in the plugin's models folder, where it
+   survives plugin updates. The plugin needs no network permission for this:
+   Xuan downloads, the plugin only reads the file. The values below are
+   placeholders; use the URL, size and SHA-256 of the exact file you ship
+   against, and prefer `.onnx` or `.safetensors` files to pickles.
+
+   ```toml
+   [[models]]
+   id = "realesrgan-x4"
+   url = "https://example.com/models/realesrgan-x4plus.onnx"
+   sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+   size = 67040989                  # bytes, exact
+   file = "realesrgan-x4plus.onnx"  # optional; defaults to the URL's file name
+   license = "BSD-3-Clause"
+   source = "Real-ESRGAN (xinntao)"
+
+   [[actions]]
+   id = "upscale"
+   # ...
+   models = ["realesrgan-x4"]
+   ```
+
+   In `main.py`, `job.model_path("realesrgan-x4")` returns the verified file
+   (or reports a setup error if it is missing); pass it to the backend, for
+   example as a keyword argument like `sharpen`.
 3. Add `backend_realesrgan.py` with an `upscale` function that tiles the image
    (for example 256 px tiles with an 16 px overlap), runs the session on each
    tile, calls `check()` and `progress(done / total)` between tiles, and

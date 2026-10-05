@@ -122,10 +122,12 @@ update): `setup.sh` (Linux and macOS) and `setup.ps1` (Windows), or a single
 - runs from the plugin folder and creates the environment there, for example
   `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, with
   pinned versions (ideally `--require-hashes`);
-- puts large downloads such as models in the plugin's data folder,
-  `<config dir>/plugin-data/<id>/` (the `data_dir` the plugin gets in
-  `initialize`), so that an update, which replaces the plugin folder, keeps
-  them, and checks each download against a SHA-256 pinned in the script;
+- leaves model files to Xuan: declare them in `[[models]]` (see
+  [Models](#models)) and Xuan downloads and verifies them into the plugin's
+  models folder, which survives updates. Other large downloads go in the
+  plugin's data folder, `<config dir>/plugin-data/<id>/` (the `data_dir` the
+  plugin gets in `initialize`), so that an update, which replaces the plugin
+  folder, keeps them, each checked against a SHA-256 pinned in the script;
 - is safe to run again, and prints what it did.
 
 The manifest's command then points into the environment, for example
@@ -360,6 +362,14 @@ label = "JPEG XL"
 extensions = ["jxl"]
 import = true
 export = true
+
+[[models]]                        # files Xuan downloads for the plugin; see "Models"
+id = "u2net"
+url = "https://example.com/models/u2net.onnx"
+sha256 = "<64 hex digits>"
+size = 175997641
+license = "Apache-2.0"
+source = "U²-Net (Qin et al., 2020)"
 ```
 
 ### Settings
@@ -530,6 +540,77 @@ regions keep only finite coordinates, declared fields, and at most `max` (and
 never more than 256) regions. See
 [FORMAT.md](FORMAT.md) for the stored metadata.
 
+### Models
+
+A plugin that runs a local model declares the model files in `[[models]]`
+instead of downloading them itself. Xuan downloads each one once, checks it,
+keeps it in the plugin's **models folder** and passes its path to the plugin.
+The plugin never downloads its declared models, and needs no network
+permission for them.
+
+```toml
+[[models]]
+id = "u2net"                                   # [a-z0-9_-]+, unique in the plugin
+url = "https://example.com/models/u2net.onnx"  # https only, no user name or password
+sha256 = "<64 hex digits>"                     # of the file, checked while downloading
+size = 175997641                               # exact size in bytes, at most 8 GiB
+file = "u2net.onnx"                            # optional; default: the URL's file name, or the id
+license = "Apache-2.0"                         # optional, shown before downloading
+source = "U²-Net (Qin et al., 2020)"           # optional, shown before downloading
+
+[[actions]]
+id = "select-subject"
+label = "Select Subject"
+models = ["u2net"]                             # the models this action needs
+```
+
+A plugin declares at most 16 models, with distinct ids and file names. A file
+name is plain (letters, digits, `.`, `-` and `_`), not hidden and not ending
+in `.part`. Prefer ONNX or safetensors files: loading a pickle (`.pt`,
+`.pth`, `.ckpt`) runs code from the file. `license` and `source` are single
+lines of at most 200 bytes.
+
+**Downloading.** When an action that lists models runs and one of them is
+missing or corrupt, Xuan asks first, listing each model with its size, host,
+licence and source, with **Download** and **Cancel**; nothing is downloaded
+without that answer. **Plugins → Manage Plugins… → Models** downloads models
+the same way. Downloads run in the background with the other plugin jobs,
+with progress and **Cancel**, and the action runs once its models are ready.
+Each download:
+
+- uses https only, with certificates checked against the system's trust
+  store; at most 5 redirects are followed, each to https only;
+- times out when connecting or waiting for an answer, and otherwise takes as
+  long as the declared size needs on a slow link (it can always be cancelled);
+- is written to `<models folder>/<id>.part` (owner-only on Unix), stopping as
+  soon as it exceeds the declared size; then the size and SHA-256 are
+  compared, the file is synced and renamed to its final name. A failed or
+  cancelled download removes the `.part` file and leaves an earlier verified
+  file in place;
+- is never unpacked or run by Xuan: the plugin loads the file itself;
+- does not happen in offline mode ("Disable plugins that use the network"),
+  even for plugins that declare no hosts. Linux network blocking for plugins
+  does not apply, since Xuan downloads, not the plugin.
+
+**The models folder** is `<config dir>/plugin-data/<id>/models/` (inside
+`data_dir`, so models survive plugin updates), created owner-only (0700) on
+Unix. It belongs to Xuan: host-side file requests may read it but never write
+into it, even with `filesystem = "write"`. Without a configuration folder it
+is inside the private temporary data folder of the session.
+
+**Verification before use.** Xuan records the SHA-256 of each file with its
+size, modification and change times and inode. A model is handed to the plugin
+only while its file still matches that record; a file of the wrong size is
+**corrupt**, and one that changed since it was hashed is **not verified** and
+is hashed again (in the background) before an action that needs it runs.
+
+**In Manage Plugins**, the Models section of a plugin lists each declared
+model with its status (not downloaded, downloading or verifying with a
+percentage, ready, not verified or corrupt) and its size on disk, with
+**Download**, **Verify**, **Delete** and **Delete All Models**, which removes
+the plugin's whole models folder. The permission and install reviews list the
+models a plugin declares, with their size and host.
+
 ## Protocol
 
 Messages are JSON-RPC 2.0 objects, one per line, UTF-8, over the plugin's stdin
@@ -543,18 +624,26 @@ directories the host owns; messages carry paths, never pixels.
 
 | Request (host → plugin) | Params | Result |
 | --- | --- | --- |
-| `initialize` | `protocol`, `host: {name, version}`, `plugin_dir`, `data_dir`, `settings`, `secrets` | `{protocol}` |
+| `initialize` | `protocol`, `host: {name, version}`, `plugin_dir`, `data_dir`, `models_dir`, `models: {id: path}`, `settings`, `secrets` | `{protocol}` |
 | `shutdown` | — | `null`; the process must exit |
 
 `data_dir` is a per-plugin folder that persists between runs. Temporary files
 for a job go in the `work_dir` the host passes with each job and are removed when
-the job ends.
+the job ends. `models_dir` is the plugin's [models folder](#models) and
+`models` maps the id of each declared model that is downloaded and verified to
+its file; a model that is missing, downloading or corrupt is left out. The
+plugin process also gets `XUAN_PLUGIN_ID`, `XUAN_DATA_DIR` and
+`XUAN_MODELS_DIR` in its environment. In the SDKs, `job.model_path("id")`
+returns the path or fails with a setup error, and `plugin.model_path("id")`
+(Python) or `settings.model_path("id")` and `host.model_path("id")` (Rust)
+return it or nothing.
 
 ### Files
 
 The host reads and writes files for a plugin only inside its folders: the
 plugin folder, `data_dir`, the scratch folder that exports go to by default, and
-the `work_dir` of its running jobs and imports. Paths are resolved first, so a
+the `work_dir` of its running jobs and imports. `models_dir` can be read but
+is never written into. Paths are resolved first, so a
 symlink cannot lead out of them. This covers the images and masks of results,
 `document/edit` and imports, `host/open` paths, and the `dir` of exports. With
 `filesystem = "read"` the host reads files anywhere; with `filesystem =
@@ -725,8 +814,10 @@ Notifications from the plugin: `host/log` `{level, message}` and `host/status`
 a job, on one line after the plugin's name and id, as in `Mock (plugin mock):
 message`, so it cannot pass for Xuan's own. Notifications from the host: `document/changed` `{id, revision}`, sent to
 every running plugin after each edit of the current document (any plugin may
-read the document with `document/get`, so this reveals nothing more), and
-`settings/changed` `{settings, secrets}`.
+read the document with `document/get`, so this reveals nothing more),
+`settings/changed` `{settings, secrets}`, and `models/changed` `{models: {id:
+path}}`, sent to a running plugin after one of its models was downloaded,
+verified or deleted, with the same map as `initialize`.
 
 ### Panes
 
@@ -811,6 +902,9 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
   (hover a menu item for the plugin's id and folder), and permission
   prompts, errors and proposals name the plugin with its id, for example
   `Mock (plugin mock)`.
+- Model files are downloaded only by Xuan, only after the user confirmed the
+  list with sizes and hosts, over https, and are checked against the declared
+  size and SHA-256 before the plugin gets their path (see [Models](#models)).
 - Pixels never leave the user's machine unless the plugin sends them somewhere.
   Xuan asks before handing document data to a plugin that declares network
   hosts, offline mode keeps such plugins from running, and on Linux Xuan can

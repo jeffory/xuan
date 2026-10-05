@@ -214,18 +214,18 @@ impl EditorApp {
                 ModelStatus::Missing | ModelStatus::Corrupt => download.push(id),
             }
         }
-        let then = Some((action.to_owned(), inputs.cloned()));
+        let then = (action.to_owned(), inputs.cloned());
         if !download.is_empty() {
             self.plugins.model_request = Some(ModelRequest {
                 plugin: plugin.into(),
                 models: download,
-                then,
+                then: Some(then),
             });
             self.dialog = Some(Dialog::PluginModels);
             return false;
         }
         if waiting {
-            self.plugins.awaiting_models = Some((plugin.into(), then.unwrap()));
+            self.plugins.awaiting_models = Some((plugin.into(), then));
             self.status = tr("Waiting for the plugin's models…").into();
             return false;
         }
