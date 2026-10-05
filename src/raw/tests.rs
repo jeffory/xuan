@@ -855,3 +855,207 @@ fn hoisted_source_map_is_bit_identical_to_per_point_source_point() {
     }
     assert_eq!(checked, 10 * 5 * 3 * 121);
 }
+
+// --- Real camera files -----------------------------------------------------
+//
+// These decode genuine files fetched by scripts/fetch-raw-fixtures.sh from the
+// pinned list in testdata/raw/fixtures.txt. A missing file skips its test with a
+// message, unless XUAN_REQUIRE_RAW_FIXTURES is set (as in CI), which fails it.
+
+struct Fixture {
+    id: &'static str,
+    file: &'static str,
+    bytes: u64,
+    camera: &'static str,
+    width: u32,
+    height: u32,
+    reject: bool,
+}
+
+fn fixtures() -> Vec<Fixture> {
+    include_str!("../../testdata/raw/fixtures.txt")
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let f: Vec<&str> = line.split('|').map(str::trim).collect();
+            assert_eq!(f.len(), 10, "malformed fixture line: {line}");
+            Fixture {
+                id: f[0],
+                file: f[1],
+                bytes: f[3].parse().unwrap(),
+                camera: f[5],
+                width: f[6].parse().unwrap(),
+                height: f[7].parse().unwrap(),
+                reject: match f[8] {
+                    "ok" => false,
+                    "reject" => true,
+                    other => panic!("unknown expectation {other:?} for {}", f[0]),
+                },
+            }
+        })
+        .collect()
+}
+
+/// The fixture's bytes, or `None` (after printing why) when it is not fetched.
+fn fixture_bytes(id: &str) -> Option<(Fixture, Vec<u8>)> {
+    let fixture = fixtures()
+        .into_iter()
+        .find(|f| f.id == id)
+        .unwrap_or_else(|| panic!("no fixture {id} in testdata/raw/fixtures.txt"));
+    let dir = std::env::var_os("XUAN_RAW_FIXTURE_DIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/raw/cache"));
+    let path = dir.join(fixture.file);
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            assert_eq!(
+                bytes.len() as u64,
+                fixture.bytes,
+                "{} has the wrong size; rerun scripts/fetch-raw-fixtures.sh",
+                path.display()
+            );
+            Some((fixture, bytes))
+        }
+        Err(error) => {
+            let message = format!(
+                "RAW fixture {id} missing ({}: {error}); run scripts/fetch-raw-fixtures.sh",
+                path.display()
+            );
+            if std::env::var_os("XUAN_REQUIRE_RAW_FIXTURES").is_some_and(|v| !v.is_empty()) {
+                panic!("{message}");
+            }
+            eprintln!("skipping: {message}");
+            None
+        }
+    }
+}
+
+fn check_real_raw(id: &str) {
+    let Some((fixture, bytes)) = fixture_bytes(id) else {
+        return;
+    };
+    assert!(is_raw(Path::new(fixture.file)));
+    let raw = decode(&bytes).unwrap_or_else(|e| panic!("{id} failed to decode: {e:#}"));
+
+    assert_eq!(raw.metadata.camera, fixture.camera);
+    assert_eq!(
+        (raw.metadata.width, raw.metadata.height),
+        (fixture.width, fixture.height),
+        "{id}: oriented dimensions"
+    );
+    assert_eq!(raw.camera.dimensions(), (fixture.width, fixture.height));
+    assert!(raw.camera.as_raw().iter().all(|v| v.is_finite()));
+
+    let matrices = [raw.xyz_to_camera, raw.camera_to_rgb];
+    assert!(matrices.iter().flatten().flatten().all(|v| v.is_finite()));
+    assert!(raw.xyz_to_camera.iter().flatten().any(|v| *v != 0.0));
+    // camera_to_rgb is normalised so a neutral camera value stays neutral.
+    for row in raw.camera_to_rgb {
+        assert!(
+            (row.iter().sum::<f32>() - 1.0).abs() < 1e-3,
+            "{id}: {row:?}"
+        );
+    }
+
+    assert_eq!(raw.as_shot[1], 1.0);
+    for gain in raw.as_shot {
+        assert!(
+            gain.is_finite() && (0.3..8.0).contains(&gain),
+            "{id}: {gain}"
+        );
+    }
+
+    // A default develop of a downscaled copy must look like a photograph.
+    let preview = raw.preview(256);
+    assert!(preview.camera.width().max(preview.camera.height()) <= 256);
+    let image = render(
+        &preview,
+        &DevelopSettings::default(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(image.dimensions(), preview.camera.dimensions());
+    let luma: Vec<f64> = image
+        .pixels()
+        .map(|p| 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64)
+        .collect();
+    let mean = luma.iter().sum::<f64>() / luma.len() as f64;
+    let deviation =
+        (luma.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / luma.len() as f64).sqrt();
+    assert!(
+        (30.0..225.0).contains(&mean) && deviation > 20.0,
+        "{id}: degenerate develop (mean {mean:.1}, stddev {deviation:.1})"
+    );
+    let channel_mean =
+        |c: usize| image.pixels().map(|p| p[c] as f64).sum::<f64>() / luma.len() as f64;
+    assert!(
+        (0..3).all(|c| channel_mean(c) > 10.0 && channel_mean(c) < 245.0),
+        "{id}: a colour channel is blown out or empty"
+    );
+}
+
+#[test]
+fn real_nikon_nef_decodes() {
+    check_real_raw("nikon-d70-nef");
+}
+
+#[test]
+fn real_canon_cr2_portrait_decodes_oriented() {
+    check_real_raw("canon-rebel-xt-cr2-portrait");
+    if let Some((fixture, _)) = fixture_bytes("canon-rebel-xt-cr2-portrait") {
+        assert!(fixture.height > fixture.width, "fixture must be portrait");
+    }
+}
+
+#[test]
+fn real_canon_cr3_decodes() {
+    check_real_raw("canon-r6m3-cr3");
+}
+
+#[test]
+fn real_canon_crw_decodes() {
+    check_real_raw("canon-d30-crw");
+}
+
+#[test]
+fn real_fuji_raf_xtrans_decodes() {
+    check_real_raw("fuji-x20-raf-xtrans");
+    // Make sure the fixture really exercises the hand-written X-Trans path.
+    if let Some((_, bytes)) = fixture_bytes("fuji-x20-raf-xtrans") {
+        let header = rawler::decode_dummy(&RawSource::new_from_slice(&bytes)).unwrap();
+        assert!(matches!(&header.photometric,
+            RawPhotometricInterpretation::Cfa(c) if (c.cfa.width, c.cfa.height) == (6, 6)));
+    }
+}
+
+#[test]
+fn real_sony_arw_decodes() {
+    check_real_raw("sony-a7s-arw");
+}
+
+#[test]
+fn real_canon_sraw_is_rejected() {
+    let Some((fixture, bytes)) = fixture_bytes("canon-5d2-sraw-reject") else {
+        return;
+    };
+    assert!(fixture.reject);
+    // Only the failure matters: the message differs between the header pre-scan
+    // rejection and a decoder panic that is converted to an import error.
+    let error = decode(&bytes).expect_err("sRAW must not be accepted");
+    assert!(!format!("{error:#}").is_empty());
+}
+
+#[test]
+fn fixture_manifest_is_consistent() {
+    let list = fixtures();
+    assert!(list.len() >= 6);
+    let mut ids: Vec<_> = list.iter().map(|f| f.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), list.len(), "duplicate fixture ids");
+    for f in &list {
+        assert!(f.bytes > 0 && !f.file.is_empty(), "{}", f.id);
+        assert_eq!(f.reject, f.width == 0, "{}: reject iff no dimensions", f.id);
+    }
+}

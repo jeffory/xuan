@@ -21,6 +21,8 @@ jobs:
         shell: bash
     env:
       CARGO_TERM_COLOR: always
+      # Missing real-camera fixtures fail the RAW tests instead of skipping.
+      XUAN_REQUIRE_RAW_FIXTURES: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -31,6 +33,13 @@ jobs:
       - name: Set up Rust
         # Installs the toolchain pinned in rust-toolchain.toml.
         run: rustup toolchain install
+      - name: Cache RAW test fixtures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: testdata/raw/cache
+          key: raw-fixtures-${{ hashFiles('testdata/raw/fixtures.txt') }}
+      - name: Fetch RAW test fixtures
+        run: scripts/fetch-raw-fixtures.sh
       - name: Check and test
         run: scripts/check.sh
       - name: Package

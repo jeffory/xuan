@@ -154,7 +154,21 @@ scales. Automated tests do not certify individual Wacom or Parblo models.
 
 ## RAW sample checks
 
-The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local Nikon, Canon, Fujifilm, or Sony RAW file:
+### RAW test fixtures
+
+CI decodes real camera files (Nikon NEF, Canon CR2/CR3/CRW, Fujifilm X-Trans RAF, Sony ARW, and a Canon sRAW that must be rejected) so that regressions in the `rawler` decode path, sensor-layout checks, demosaicing, orientation, colour matrices and white balance are caught. The files are CC0 samples from raw.pixls.us, pinned by SHA-256 in `testdata/raw/fixtures.txt` and not committed. Sources and licenses are listed in [testdata/raw/README.md](../testdata/raw/README.md).
+
+```sh
+scripts/fetch-raw-fixtures.sh                      # about 60 MB into testdata/raw/cache/ (ignored by Git)
+cargo test --locked real_                          # run just the real-camera tests
+XUAN_REQUIRE_RAW_FIXTURES=1 cargo test --locked    # fail instead of skip when a fixture is missing
+```
+
+Set `XUAN_RAW_FIXTURE_DIR` to use another cache directory for both the script and the tests. Without the fixtures the `real_*` tests skip with a message, so a plain `cargo test` still works offline. CI sets `XUAN_REQUIRE_RAW_FIXTURES=1`, fetches the files before `scripts/check.sh` and caches them keyed on the manifest hash.
+
+### Other RAW files
+
+Camera files are not committed to the repository. Optional tests use any local Nikon, Canon, Fujifilm, or Sony RAW file:
 
 ```sh
 XUAN_TEST_RAW=/path/to/photo.CR3 cargo test --locked sample_raw -- --ignored --nocapture
