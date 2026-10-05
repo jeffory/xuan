@@ -1328,8 +1328,8 @@ mod windows_tests {
     use serde_json::json;
 
     /// Answers `initialize`, and `probe` with the outcome of each attempt
-    /// (0 for success, else the Windows error or errno), one of them from a
-    /// process it starts.
+    /// (0 for success, else the exception and its Windows error or errno),
+    /// one of them from a process it starts.
     const PROBE: &str = r#"
 import json, os, socket, subprocess, sys, tempfile
 
@@ -1338,10 +1338,10 @@ def attempt(action):
         action()
         return 0
     except OSError as error:
-        return getattr(error, "winerror", None) or error.errno or -1
+        return f"{type(error).__name__} {getattr(error, 'winerror', None) or error.errno}"
 
 def connect():
-    socket.create_connection(("127.0.0.1", int(os.environ["XUAN_TEST_PORT"])), timeout=10).close()
+    socket.create_connection(("127.0.0.1", int(os.environ["XUAN_TEST_PORT"])), timeout=5).close()
 
 def read_own():
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe.py")) as file:
@@ -1359,13 +1359,13 @@ def write_temp():
     with tempfile.NamedTemporaryFile() as file:
         file.write(b"ok")
 
-CHILD = "import os, socket\ntry:\n socket.create_connection(('127.0.0.1', int(os.environ['XUAN_TEST_PORT'])), timeout=10).close(); print(0)\nexcept OSError as e:\n print(getattr(e, 'winerror', None) or e.errno or -1)"
+CHILD = "import os, socket\ntry:\n socket.create_connection(('127.0.0.1', int(os.environ['XUAN_TEST_PORT'])), timeout=5).close(); print(0)\nexcept OSError as e:\n print(type(e).__name__, getattr(e, 'winerror', None) or e.errno)"
 
 def probe():
     child = subprocess.run([sys.executable, "-c", CHILD], capture_output=True, text=True)
     return {
         "connect": attempt(connect),
-        "child_connect": int(child.stdout.strip() or -1),
+        "child_connect": 0 if child.stdout.strip() == "0" else child.stdout.strip() or child.stderr,
         "read_own": attempt(read_own),
         "read_secret": attempt(read_secret),
         "write_data": attempt(write_data),
@@ -1495,6 +1495,9 @@ for line in sys.stdin:
         // it was given.
         for _ in 0..2 {
             let (probe, log) = run(&fixture, true);
+            // Not captured by the test harness, so CI logs show how the
+            // container refuses.
+            let _ = writeln!(std::io::stderr(), "blocked probe: {probe}");
             for blocked in ["connect", "child_connect", "read_secret"] {
                 assert_ne!(probe[blocked], 0, "{blocked}: {probe} {log:?}");
             }

@@ -161,7 +161,8 @@ fn profile(plugin: &str) -> Result<Sid> {
 }
 
 /// Whether `dacl` already lets `sid`, or ALL APPLICATION PACKAGES, do
-/// `access` on the object and, with `inherit`, on everything in it.
+/// `access` on the object and on everything in it, through an entry that
+/// applies to the object itself and is inherited by files and folders.
 ///
 /// # Safety
 ///
@@ -485,6 +486,9 @@ pub fn spawn(
     let (stdin, stdin_parent) = pipe()?;
     let (stdout_parent, stdout) = pipe()?;
     let (stderr_parent, stderr) = pipe()?;
+    // Only the child ends are inheritable, and the handle list below passes
+    // only them. A process std spawned on another thread in this instant
+    // could inherit them too; Xuan starts plugins from the UI thread only.
     for child_end in [&stdin, &stdout, &stderr] {
         inheritable(child_end)?;
     }
