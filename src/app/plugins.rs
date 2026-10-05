@@ -661,6 +661,9 @@ impl EditorApp {
             );
             let data_dir = self.plugins.data_dir(plugin)?;
             let models_dir = self.plugins.models_dir(plugin)?;
+            // Only files unchanged since they were verified, looked up
+            // before the process starts.
+            let models = self.model_paths(plugin);
             let env = vec![
                 ("XUAN_PLUGIN_ID".to_owned(), plugin.to_owned()),
                 ("XUAN_DATA_DIR".to_owned(), data_dir.display().to_string()),
@@ -685,8 +688,6 @@ impl EditorApp {
                 Err(error) => return Err(error),
             };
             let (settings, secrets) = self.plugin_settings(&manifest);
-            // Only files unchanged since they were verified.
-            let models = self.model_paths(plugin);
             // Started without waiting: the answer arrives with the other
             // messages, and what is sent meanwhile waits in the process.
             let id = process.initialize(json!({

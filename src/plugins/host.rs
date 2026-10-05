@@ -332,7 +332,12 @@ impl Process {
     /// [`Process::set_ready`], later requests and notifications are held back.
     pub fn initialize(&mut self, params: Value) -> Result<Id> {
         let id = Id::Number(NEXT_ID.fetch_add(1, Ordering::Relaxed));
-        self.send(&Message::request(id.clone(), "initialize", params))?;
+        // A plugin that exits at once may have closed its stdin already.
+        // It is then reported as failing to start, with its log, once its
+        // output closes, like one that exits just after reading this.
+        if let Err(error) = self.send(&Message::request(id.clone(), "initialize", params)) {
+            push_log(&self.log, format!("{error:#}"));
+        }
         self.ready = false;
         Ok(id)
     }
@@ -372,9 +377,8 @@ impl Process {
         if self.ready {
             return self.send(&message);
         }
-        if self.stdin.is_none() {
-            bail!("the plugin has stopped");
-        }
+        // Until `initialize` is answered, even a plugin whose stdin closed
+        // is still starting: what waits for it fails when it is reported.
         self.outbox.push(message);
         Ok(())
     }
