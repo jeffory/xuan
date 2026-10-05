@@ -14,7 +14,7 @@ fn example(name: &str) -> Manifest {
 #[test]
 fn bundled_plugins_load_with_their_shortcuts() {
     let (_context, mut app) = app();
-    let manifests = ["comfy-cloud", "histogram", "invert-regions"].map(example);
+    let manifests = ["comfy-cloud", "histogram", "invert-regions", "local-upscale"].map(example);
     app.install_plugins(manifests.to_vec(), vec![]);
     assert!(app.plugins.errors.is_empty(), "{:?}", app.plugins.errors);
     assert!(

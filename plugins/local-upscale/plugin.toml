@@ -1,0 +1,55 @@
+[plugin]
+id = "local-upscale"
+name = "Local Upscale"
+version = "0.1.0"
+description = "Enlarge the active layer 2x to 4x on this machine. A pure-Python Lanczos placeholder for an ML super-resolution model."
+command = ["python3", "main.py"]
+protocol = 1
+
+# No network, no secrets, no document edits: the result opens as a new document
+# and the pixels never leave the machine.
+[permissions]
+document = "read"
+filesystem = "none"
+
+[[settings]]
+id = "backend"
+type = "text"
+label = "Backend"
+help = "lanczos is built in. A name such as realesrgan loads backend_realesrgan.py from the plugin folder (see README.md)."
+default = "lanczos"
+
+[[settings]]
+id = "max_output_megapixels"
+type = "integer"
+label = "Largest result (megapixels)"
+help = "Pure Python is slow; about 1 megapixel takes several seconds."
+default = 16
+min = 1
+max = 100
+
+[[actions]]
+id = "upscale"
+label = "Upscale…"
+menu = "Image"
+kind = "edit"
+source = { from = "layer" }
+result = { into = "document" }
+description = "Enlarge the active layer into a new document. Everything stays on this computer."
+
+[[actions.inputs]]
+id = "scale"
+type = "enum"
+label = "Scale"
+values = [{ id = "2", label = "2x" }, { id = "3", label = "3x" }, { id = "4", label = "4x" }]
+default = "2"
+
+[[actions.inputs]]
+id = "sharpen"
+type = "number"
+label = "Sharpen"
+help = "Unsharp mask strength after enlarging. 0 turns it off."
+default = 0.4
+min = 0.0
+max = 2.0
+step = 0.1

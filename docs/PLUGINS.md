@@ -8,6 +8,8 @@ in a manifest, and Xuan draws the controls, runs the on-canvas tools, keeps
 undo history, and asks for permissions. A plugin never touches the document
 directly; it asks the host for pixels and returns results.
 
+See [GENERATIVE.md](GENERATIVE.md) for how generative and ML features fit this system.
+
 Any language works. The repository ships a Rust SDK crate (`sdk/xuan-plugin`), a
 Python module with no dependencies (`sdk/python/xuan_plugin.py`), and example
 plugins under `plugins/`:
@@ -17,6 +19,7 @@ plugins under `plugins/`:
 | `plugins/histogram` | Python | A pane that follows the document, settings, data-URL images |
 | `plugins/invert-regions` | Rust | A region action with per-region fields, a pane that reads the composite |
 | `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; three actions |
+| `plugins/local-upscale` | Python | A local, offline job with no permissions beyond reading; a swappable model backend |
 
 Both SDKs read requests on the main thread and run handlers on worker threads,
 so a handler may call the editor (`host.document()`, `host.export_layer()`, …)
