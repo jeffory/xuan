@@ -153,7 +153,10 @@ mod unix {
         let inside = pixels.get_pixel(pixels.width() / 2, pixels.height() / 2);
         assert_eq!(inside.0[..3], [55, 155, 205]);
         assert!(layer.mask.is_some());
-        assert_eq!(app.status, "Inverted 1 region(s)");
+        assert_eq!(
+            app.status,
+            "Invert Regions (plugin invert-regions): Inverted 1 region(s)"
+        );
         app.resolve_proposal(true);
     }
 }
