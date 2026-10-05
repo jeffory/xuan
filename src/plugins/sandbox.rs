@@ -47,31 +47,6 @@ pub fn blocks_network(setting: bool, permissions: &Permissions) -> bool {
 #[cfg(target_os = "linux")]
 pub use linux::{available, block_network};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_plugins_without_hosts_are_blocked_and_only_when_asked() {
-        let none = Permissions::default();
-        let hosts = Permissions {
-            network: vec!["localhost".into()],
-            ..Permissions::default()
-        };
-        // Other permissions do not matter.
-        let editing = Permissions {
-            document: super::super::manifest::DocumentAccess::Edit,
-            secrets: vec!["key".into()],
-            ..Permissions::default()
-        };
-        assert_eq!(blocks_network(true, &none), cfg!(target_os = "linux"));
-        assert_eq!(blocks_network(true, &editing), cfg!(target_os = "linux"));
-        assert!(!blocks_network(true, &hosts));
-        assert!(!blocks_network(false, &none));
-        assert!(!blocks_network(false, &hosts));
-    }
-}
-
 /// Arrange for `command` to start with its network blocked.
 #[cfg(not(target_os = "linux"))]
 pub fn block_network(_command: &mut std::process::Command) -> anyhow::Result<()> {
@@ -89,7 +64,7 @@ mod linux {
     };
 
     /// The errno a blocked call fails with.
-    pub(crate) const BLOCKED_ERRNO: i32 = libc::EACCES;
+    const BLOCKED_ERRNO: i32 = libc::EACCES;
 
     /// Set in the syscall number by the x32 ABI on x86_64.
     #[cfg(target_arch = "x86_64")]
@@ -124,9 +99,8 @@ mod linux {
     }
 
     /// The filter, compiled for the architecture Xuan was built for.
-    pub(crate) fn filter() -> Result<BpfProgram> {
+    fn filter() -> Result<BpfProgram> {
         let arch = TargetArch::try_from(std::env::consts::ARCH)
-            .map_err(|e| anyhow::anyhow!("{e}"))
             .context("Xuan cannot block the network on this architecture")?;
         let other_family = || -> Result<Vec<SeccompRule>> {
             // The domain is an `int`, so only its low 32 bits count, as in
@@ -154,9 +128,8 @@ mod linux {
             SeccompAction::Allow,
             SeccompAction::Errno(BLOCKED_ERRNO as u32),
             arch,
-        )
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-        BpfProgram::try_from(filter).map_err(|e| anyhow::anyhow!("{e}"))
+        )?;
+        Ok(BpfProgram::try_from(filter)?)
     }
 
     /// Arrange for `command` to start with its network blocked. Fails when
@@ -251,5 +224,30 @@ mod linux {
                 assert!(numbers.contains(&(number as u32)), "{number}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_plugins_without_hosts_are_blocked_and_only_when_asked() {
+        let none = Permissions::default();
+        let hosts = Permissions {
+            network: vec!["localhost".into()],
+            ..Permissions::default()
+        };
+        // Other permissions do not matter.
+        let editing = Permissions {
+            document: super::super::manifest::DocumentAccess::Edit,
+            secrets: vec!["key".into()],
+            ..Permissions::default()
+        };
+        assert_eq!(blocks_network(true, &none), cfg!(target_os = "linux"));
+        assert_eq!(blocks_network(true, &editing), cfg!(target_os = "linux"));
+        assert!(!blocks_network(true, &hosts));
+        assert!(!blocks_network(false, &none));
+        assert!(!blocks_network(false, &hosts));
     }
 }
