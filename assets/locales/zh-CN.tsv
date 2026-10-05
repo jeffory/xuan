@@ -807,3 +807,28 @@ on the left	于左侧
 at the top	于顶部
 on the right	于右侧
 at the bottom	于底部
+Install from Folder or Zip…	从文件夹或 Zip 安装…
+Install Plugin	安装插件
+Cannot install this plugin	无法安装此插件
+Choose a plugin folder or a .zip archive. Xuan checks it and shows what it asks for before anything is copied into your plugins folder.	请选择一个插件文件夹或 .zip 压缩包。Xuan 会先检查它并列出它请求的权限，然后才会把任何内容复制到你的插件文件夹。
+You can also drop a folder or a .zip file here.	也可以把文件夹或 .zip 文件拖放到这里。
+Choose Zip…	选择 Zip…
+Zip archive	Zip 压缩包
+Choose Folder…	选择文件夹…
+Update	更新
+Install	安装
+Install…	安装…
+Installed	已安装
+Name:	名称：
+Id:	标识：
+Version:	版本：
+From:	来源：
+Installs to:	安装到：
+Replaces the installed version	替换已安装的版本
+Replaces the plugin installed in this folder	替换此文件夹中已安装的插件
+Installing does not allow it to run: Xuan asks for that the first time it starts.	安装并不等于允许它运行：它第一次启动时，Xuan 会征求你的同意。
+It stays allowed: you allowed it before with the same folder, command and permissions.	它仍然被允许：你之前允许过相同文件夹、命令和权限的它。
+Its folder, command or permissions differ from what you allowed, so Xuan asks again before it runs.	它的文件夹、命令或权限与你允许的不同，因此 Xuan 会在它运行前再次询问。
+There is no configuration folder to install plugins into.	没有可用于安装插件的配置文件夹。
+is being updated	正在更新
+Install a plugin from a folder or a .zip archive. You can also drop one on this window.	从文件夹或 .zip 压缩包安装插件。也可以把它拖放到此窗口。

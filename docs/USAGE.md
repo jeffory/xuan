@@ -261,10 +261,16 @@ open are queued and handled once it closes.
 
 ## Plugins
 
-Plugins add menu actions, sidebar panes and file formats. Install one by
-placing its folder in the plugins directory shown under **Plugins → Manage
-Plugins…** (`~/.config/xuan/plugins/` on Linux, `%APPDATA%\xuan\plugins\` on
-Windows), then press **Reload**. Plugins that declare permissions, such as
+Plugins add menu actions, sidebar panes and file formats. Install one with
+**Plugins → Install from Folder or Zip…** (or drop its folder or `.zip` on
+**Plugins → Manage Plugins…**): Xuan checks it, shows what it is and what it
+asks for, and copies it only when you press **Install**; installing it again
+updates it. You can also place its folder in the plugins directory shown under
+**Plugins → Manage Plugins…** (`~/.config/xuan/plugins/` on Linux,
+`%APPDATA%\xuan\plugins\` on Windows) and press **Reload**. Every plugin asks
+before it first runs. Plugins that need a Python environment or models come
+with a setup script for you to run once; Xuan never runs it (see
+[Setup convention](PLUGINS.md#setup-convention)). Plugins that declare permissions, such as
 network access or an API key, ask for them before they first run. Their
 settings are edited in the same window.
 

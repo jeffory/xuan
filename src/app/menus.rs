@@ -547,6 +547,7 @@ impl EditorApp {
                         });
                         menu_bar_button(ui, tr("Plugins"), |ui| {
                             item(ui, &items, "plugins", &mut action);
+                            item(ui, &items, "install_plugin", &mut action);
                             ui.add_enabled_ui(!developing, |ui| {
                                 plugin_items(
                                     ui,

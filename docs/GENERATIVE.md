@@ -309,7 +309,12 @@ C2PA manifest and is not written to exports.
 **Have.** Plugins are folders with `plugin.toml` in the user plugins
 directory (`~/.config/xuan/plugins`, `%APPDATA%\xuan\plugins`) or
 `XUAN_PLUGIN_PATH`. The manifest carries id, version, protocol and permissions.
-Two folders with one id are rejected.
+Two folders with one id are rejected. **Plugins → Install from Folder or Zip…**
+(#41) checks a folder or an untrusted archive in a private temporary folder,
+shows a review, and copies it into the plugins directory, updating a plugin
+with the same id in place. `requires_xuan` is a semver range of compatible Xuan
+versions, and a `setup` script convention covers venvs and models (see
+"Installing" in [PLUGINS.md](PLUGINS.md)).
 
 The issue suggested `$XDG_DATA_HOME`; the implementation uses the config
 directory. It is documented and works; moving data-like content out of config is
@@ -317,14 +322,11 @@ a cosmetic change and not worth breaking existing installs.
 
 **Missing.**
 
-- **An install flow.** Users copy a folder by hand. Add **Plugins → Install
-  from Folder or Zip…** that validates the manifest, shows the same permission
-  review, and copies into the plugins directory. No registry yet.
-- **Version and update handling.** `version` is displayed but never compared;
-  there is no compatibility range for the host. Add `requires_xuan` (a semver
-  range) and refuse plugins that need a newer protocol with a clear message.
-- **Dependencies** (Python, venv, models) are the plugin's problem; document a
-  `setup` convention rather than automate it.
+- **Version comparison.** An update replaces whatever version is installed;
+  `version` is shown in the review but not compared, so a downgrade is not
+  flagged.
+- **Dependencies** (Python, venv, models) stay the plugin's problem: the
+  `setup` convention is documented, not automated.
 - **Signing and a registry**: defer (see section 5).
 
 ## Goals

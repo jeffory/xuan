@@ -28,6 +28,15 @@ impl EditorApp {
 
     /// Queues one drop (all files dropped together) for handling.
     pub(super) fn queue_drop(&mut self, paths: Vec<PathBuf>) {
+        // A folder or zip dropped on Manage Plugins or the install window is
+        // a plugin to install, not a document to open.
+        if matches!(self.dialog, Some(Dialog::Plugins | Dialog::PluginInstall))
+            && let [path] = paths.as_slice()
+            && super::plugin_install::installable(path)
+        {
+            self.stage_plugin_install(&path.clone());
+            return;
+        }
         if !paths.is_empty() {
             self.pending_drops.push_back(paths);
         }

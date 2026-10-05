@@ -42,7 +42,100 @@ every folder in the user plugins directory at start-up and from
 | Windows | `%APPDATA%\xuan\plugins\` |
 
 Set `XUAN_PLUGIN_PATH` (a `:`/`;`-separated list of directories) to load plugins
-from other places, for example a development checkout.
+from other places, for example a development checkout. Folders whose name starts
+with `.` are skipped.
+
+### Install from Folder or Zip
+
+**Plugins → Install from Folder or Zip…** (also **Install…** in Manage
+Plugins, or drop a folder or `.zip` on either window) installs a plugin into
+the user plugins directory as `<plugins dir>/<id>/`. The folder or archive
+holds `plugin.toml` at its top level or inside a single top-level folder (as
+GitHub's "Download ZIP" makes them).
+
+1. Xuan copies the folder, or extracts the archive, into a private temporary
+   folder (readable only by you) and checks it there. Nothing is copied into
+   the plugins directory yet.
+2. It reads the manifest with the same rules as at start-up, including
+   [`requires_xuan`](#compatibility). The command must name a file inside the
+   plugin folder (it may not exist yet; see [Setup
+   convention](#setup-convention)) or one of the interpreters `python3`,
+   `python`, `py`, `uv`, `node`, `deno`, `bun`, `ruby`, `perl`, `sh`, `bash`,
+   `pwsh` or `powershell`, and its arguments may not be absolute paths or
+   contain `..`.
+3. A review shows the plugin's name, id, version, where it comes from, where it
+   goes, its command and the permissions it declares, with the same network
+   wording as the permission prompt. **Install** (or **Update**) copies it;
+   **Cancel** copies nothing.
+4. The checked copy, exactly what was reviewed, is built in a hidden folder
+   next to the target and renamed into place, so a failed install leaves
+   nothing half-copied. Then the plugins are reloaded and Manage Plugins shows
+   the new plugin.
+
+**Installing does not allow the plugin to run.** It asks for permission the
+first time it starts, like any other plugin, and that prompt shows the folder it
+was installed to. The review says so.
+
+**Updating.** If `<plugins dir>/<id>/` already holds a plugin with the same id,
+the review offers **Update**, which stops the plugin and replaces the whole
+folder (files the old version or its setup created there are gone). The grant
+works as always: it is kept when the folder, command and permissions are
+unchanged, and otherwise the plugin asks again; the review says which. A folder
+named after the id that holds something else, and a plugin with the same id in
+another folder (for example on `XUAN_PLUGIN_PATH`), refuse the install: the
+same id in two folders loads neither.
+
+**Archives are untrusted.** An archive is refused if it has:
+
+- an entry with an absolute name, a drive letter or UNC prefix, a `..`
+  component, a name Windows cannot create (`CON`, `aux.txt`, `a:b`, `x.`), or a
+  control character;
+- a symbolic link, device, pipe or socket (only plain files and folders);
+- two names that differ only by letter case, a name that is both a file and a
+  folder, or a repeated name;
+- more than 10,000 entries, more than 512 MiB in total or 256 MiB in one file
+  once extracted, an encrypted entry, or an entry over 1 MiB that is more than
+  100 times its compressed size (a zip bomb).
+
+Files keep their executable bit from the archive's Unix mode (or the folder's)
+and become `rwxr-xr-x` or `rw-r--r--`; setuid, setgid and sticky bits are never
+kept. A folder is held to the same size and type rules. `__MACOSX` entries are
+skipped. There is no registry and no signing: install plugins from sources you
+trust.
+
+### Compatibility
+
+`requires_xuan` in `[plugin]` is an optional [semver](https://semver.org) range
+of the Xuan versions the plugin works with, such as `">=0.3, <0.5"` or `"^0.3"`.
+A plugin whose range excludes the running Xuan is not loaded, and not
+installed, with a message naming both, for example "plugin requires Xuan
+>=0.4, but this is Xuan 0.3.0". A pre-release build counts as its release
+(`0.4.0-dev` as `0.4.0`). `protocol` is checked separately.
+
+### Setup convention
+
+Plugins that need a Python virtual environment, packages or model files ship a
+**setup script** that the user runs once after installing (and again after an
+update): `setup.sh` (Linux and macOS) and `setup.ps1` (Windows), or a single
+`setup.py`. Xuan never runs it; the plugin's README says to. A setup script:
+
+- runs from the plugin folder and creates the environment there, for example
+  `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`, with
+  pinned versions (ideally `--require-hashes`);
+- puts large downloads such as models in the plugin's data folder,
+  `<config dir>/plugin-data/<id>/` (the `data_dir` the plugin gets in
+  `initialize`), so that an update, which replaces the plugin folder, keeps
+  them, and checks each download against a SHA-256 pinned in the script;
+- is safe to run again, and prints what it did.
+
+The manifest's command then points into the environment, for example
+`command = [".venv/bin/python", "main.py"]` (`.venv\Scripts\python.exe` on
+Windows). Such a command is accepted at install time although the file does not
+exist yet, and the permission prompt shows it. Until the setup has run, starting
+the plugin fails with an error in its log; a plugin can instead start with
+`python3` and report a missing environment as a setup error with a clear
+message. Network use by the setup script is not covered by the plugin's
+permissions or Xuan's network blocking, since Xuan does not run it.
 
 Plugins run as ordinary processes with the user's rights. No plugin starts
 until the user allows it: Xuan shows its folder, its command and the
@@ -203,6 +296,7 @@ version = "0.1.0"
 description = "Generate and edit images with ComfyUI workflows on Comfy Cloud."
 command = ["python3", "main.py"]  # run inside the plugin folder
 protocol = 1                      # protocol version this plugin speaks
+requires_xuan = ">=0.3, <0.5"     # optional semver range of Xuan versions; see "Compatibility"
 
 [permissions]
 network = ["cloud.comfy.org"]     # hosts it says it connects to (not enforced); see "Network"

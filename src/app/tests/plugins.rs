@@ -1557,6 +1557,201 @@ fn a_selection_mask_is_listed_for_consent_and_needs_a_selection() {
     );
 }
 
+/// A plugin folder to install, `<root>/<folder>`, with the id `inst`.
+fn installable_plugin(root: &Path, folder: &str, version: &str, permissions: &str) -> PathBuf {
+    let dir = root.join(folder);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        format!(
+            "[plugin]\nid = \"inst\"\nname = \"Installed\"\nversion = \"{version}\"\ncommand = [\"sh\", \"plugin.sh\"]\n{permissions}"
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.join("plugin.sh"), "exit 0\n").unwrap();
+    dir
+}
+
+fn staged(app: &EditorApp) -> &xuan::plugins::install::Staged {
+    let install = app.plugins.install.as_ref().expect("the install window");
+    install
+        .staged
+        .as_ref()
+        .unwrap_or_else(|| panic!("{:?}", install.error))
+}
+
+#[test]
+fn installing_does_not_allow_and_updates_keep_the_grant_only_when_unchanged() {
+    use crate::app::plugin_install::GrantAfterInstall;
+    let config = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let plugins_dir = config.path().join("plugins");
+    let (_context, mut app) = app();
+    app.config_path = Some(config.path().join("config.toml"));
+
+    app.dialog = Some(Dialog::Plugins);
+    app.open_plugin_install();
+    assert_eq!(app.dialog, Some(Dialog::PluginInstall));
+    let v1 = installable_plugin(source.path(), "v1", "1.0.0", "");
+    app.stage_plugin_install(&v1);
+    assert!(!staged(&app).update);
+    assert_eq!(staged(&app).target, plugins_dir.join("inst"));
+    assert_eq!(
+        app.grant_after_install(staged(&app)),
+        GrantAfterInstall::Asks
+    );
+    assert!(!plugins_dir.exists(), "nothing is copied before Install");
+    app.commit_plugin_install();
+    assert!(plugins_dir.join("inst/plugin.sh").is_file());
+    // Back in Manage Plugins with the new plugin selected, not allowed.
+    assert_eq!(app.dialog, Some(Dialog::Plugins));
+    assert!(app.plugins.install.is_none());
+    assert_eq!(app.plugins.manager_selected.as_deref(), Some("inst"));
+    assert!(app.plugins.manifest("inst").is_some());
+    assert!(!app.plugin_granted("inst"));
+    app.grant_plugin("inst", true);
+    assert!(app.plugin_granted("inst"));
+
+    // An update with the same command and permissions keeps the grant.
+    let v2 = installable_plugin(source.path(), "v2", "2.0.0", "");
+    app.stage_plugin_install(&v2);
+    assert!(staged(&app).update);
+    assert_eq!(
+        app.grant_after_install(staged(&app)),
+        GrantAfterInstall::Kept
+    );
+    app.commit_plugin_install();
+    assert_eq!(
+        app.plugins.manifest("inst").unwrap().plugin.version,
+        "2.0.0"
+    );
+    assert!(app.plugin_granted("inst"));
+
+    // One that asks for more is reviewed again before it runs.
+    let v3 = installable_plugin(
+        source.path(),
+        "v3",
+        "3.0.0",
+        "[permissions]\nnetwork = [\"example.com\"]\n",
+    );
+    app.stage_plugin_install(&v3);
+    assert_eq!(
+        app.grant_after_install(staged(&app)),
+        GrantAfterInstall::AsksAgain
+    );
+    app.commit_plugin_install();
+    assert_eq!(
+        app.plugins.manifest("inst").unwrap().plugin.version,
+        "3.0.0"
+    );
+    assert!(!app.plugin_granted("inst"));
+
+    // Problems are shown in the window and nothing is copied.
+    app.stage_plugin_install(&source.path().join("missing"));
+    let install = app.plugins.install.as_ref().unwrap();
+    assert!(install.staged.is_none());
+    assert!(install.error.as_ref().unwrap().contains("missing"));
+    assert_eq!(app.dialog, Some(Dialog::PluginInstall));
+
+    // Without a configuration folder there is nowhere to install to.
+    app.config_path = None;
+    app.stage_plugin_install(&v1);
+    assert!(
+        app.plugins
+            .install
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("configuration folder")
+    );
+}
+
+#[test]
+fn a_folder_or_zip_dropped_on_manage_plugins_is_staged_for_install() {
+    let config = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = Some(config.path().join("config.toml"));
+    let folder = installable_plugin(source.path(), "dropped", "1.0.0", "");
+    app.dialog = Some(Dialog::Plugins);
+    app.queue_drop(vec![folder.clone()]);
+    assert!(app.pending_drops.is_empty());
+    assert_eq!(app.dialog, Some(Dialog::PluginInstall));
+    assert_eq!(staged(&app).source, folder);
+    assert!(app.plugins.install.as_ref().unwrap().from_manager);
+    // Elsewhere a dropped folder is still a project to open.
+    app.dialog = None;
+    app.plugins.install = None;
+    app.queue_drop(vec![folder]);
+    assert_eq!(app.pending_drops.len(), 1);
+    assert!(app.plugins.install.is_none());
+}
+
+#[test]
+fn the_install_review_shows_the_plugin_before_anything_is_copied() {
+    use crate::app::tests::ui::UiTest;
+    let config = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let folder = installable_plugin(
+        source.path(),
+        "reviewed",
+        "1.2.3",
+        "[permissions]\nnetwork = [\"example.com\"]\ndocument = \"edit\"\n",
+    );
+    let target = config.path().join("plugins").join("inst");
+    let mut ui = UiTest::new();
+    ui.isolate_config(config.path());
+
+    ui.open_menu("Plugins");
+    ui.click("Install from Folder or Zip…");
+    assert!(ui.has("Choose Zip…") && ui.has("Choose Folder…"));
+    // The native file picker cannot run here; dropping the folder is the
+    // other way in.
+    ui.drop_files(&[&folder]);
+    assert!(ui.has("Id: inst"));
+    assert!(ui.has("Version: 1.2.3"));
+    assert!(ui.has(&format!("From: {}", folder.display())));
+    assert!(ui.has(&format!("Installs to: {}", target.display())));
+    assert!(ui.has("Runs: sh plugin.sh"));
+    assert!(ui.has("• Says it connects to: example.com"));
+    assert!(ui.has("• Edits documents directly (as undoable steps)"));
+    assert!(ui.has(
+        "• Installing does not allow it to run: Xuan asks for that the first time it starts."
+    ));
+    assert!(!target.exists());
+    ui.click("Cancel");
+    assert_eq!(ui.app().dialog, None);
+    assert!(!target.exists(), "Cancel copies nothing");
+
+    // From Manage Plugins, Install… leads to the same review.
+    ui.open_menu("Plugins");
+    ui.click("Manage Plugins…");
+    ui.click("Install…");
+    ui.drop_files(&[&folder]);
+    ui.click("Install");
+    assert!(target.join("plugin.toml").is_file());
+    assert_eq!(ui.app().dialog, Some(Dialog::Plugins));
+    assert_eq!(ui.app().plugins.manager_selected.as_deref(), Some("inst"));
+    assert!(!ui.app().plugin_granted("inst"));
+    assert!(
+        ui.has_role(egui::accesskit::Role::Button, "Allow"),
+        "allowing stays in the usual review"
+    );
+
+    // Installing it again is an update, and says what happens to the grant.
+    ui.app_mut().grant_plugin("inst", true);
+    ui.click("Install…");
+    ui.drop_files(&[&folder]);
+    assert!(ui.has("• Replaces the installed version 1.2.3"));
+    assert!(ui.has(
+        "• It stays allowed: you allowed it before with the same folder, command and permissions."
+    ));
+    ui.click("Update");
+    assert!(ui.app().plugin_granted("inst"));
+}
+
 #[cfg(unix)]
 mod unix {
     use super::*;

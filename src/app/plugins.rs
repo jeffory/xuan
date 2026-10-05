@@ -73,6 +73,8 @@ pub(super) struct PluginState {
     /// A plugin waiting for its permissions to be accepted, and what to do then.
     pub permission_request: Option<(String, PendingStart)>,
     pub manager_selected: Option<String>,
+    /// Plugins → Install from Folder or Zip…, while it is open.
+    pub install: Option<super::plugin_install::PluginInstall>,
     revisions: HashMap<Uuid, u64>,
     /// Problems found while loading the plugins, before shortcut collisions are added.
     load_errors: Vec<LoadError>,
@@ -529,7 +531,7 @@ impl EditorApp {
     }
 
     /// Stop a plugin and fail what was waiting for it with `reason`.
-    fn end_plugin(&mut self, plugin: &str, reason: &str) {
+    pub(super) fn end_plugin(&mut self, plugin: &str, reason: &str) {
         self.plugins.forget_session(plugin);
         self.plugins.starting.remove(plugin);
         if let Some(mut process) = self.plugins.processes.remove(plugin) {

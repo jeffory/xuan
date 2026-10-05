@@ -30,6 +30,7 @@ mod photoshop;
 mod pixel_grid;
 mod plugin_consent;
 mod plugin_dialogs;
+mod plugin_install;
 mod plugin_panes;
 mod plugins;
 mod rulers;
@@ -325,6 +326,8 @@ enum Dialog {
     /// Confirm sending document data to a plugin that declares network hosts.
     PluginConsent,
     Plugins,
+    /// Plugins → Install from Folder or Zip…: choose, review and install.
+    PluginInstall,
     PluginProposal,
     GridSettings,
     /// Layer → Layer Effects…; not `Effect`, which edits adjustments and filters.
@@ -1160,7 +1163,8 @@ impl EditorApp {
         if let Some(develop) = &mut self.develop {
             match command {
                 "new" | "open" | "open_clipboard" | "open_comp" => self.suspend_develop(),
-                "about" | "shortcuts" | "settings" | "reset_panels" | "plugins" => {}
+                "about" | "shortcuts" | "settings" | "reset_panels" | "plugins"
+                | "install_plugin" => {}
                 "close" => {
                     self.request_develop_close(develop::DevelopClose::Tab);
                     return;
@@ -1184,6 +1188,7 @@ impl EditorApp {
             "layer_effects" => self.start_layer_effects(None),
             "reset_panels" => self.reset_panes(),
             "plugins" => self.dialog = Some(Dialog::Plugins),
+            "install_plugin" => self.open_plugin_install(),
             "rerun_plugin" => self.rerun_plugin_action(),
             "develop" => {
                 if let Some(id) = self.session().and_then(|s| s.document.active) {

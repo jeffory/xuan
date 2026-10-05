@@ -453,6 +453,7 @@ impl EditorApp {
         let mut open = true;
         let mut done = false;
         let mut reload = false;
+        let mut install = false;
         let mut selected = self
             .plugins
             .manager_selected
@@ -505,9 +506,17 @@ impl EditorApp {
                                 }
                             });
                         ui.add_space(8.0);
-                        if widgets::button(ui, tr("Reload")).clicked() {
-                            reload = true;
-                        }
+                        ui.horizontal(|ui| {
+                            if widgets::button(ui, tr("Reload")).clicked() {
+                                reload = true;
+                            }
+                            if widgets::button(ui, tr("Install…"))
+                                .on_hover_text(tr("Install a plugin from a folder or a .zip archive. You can also drop one on this window."))
+                                .clicked()
+                            {
+                                install = true;
+                            }
+                        });
                     });
                     // A separator here would take all the height the window
                     // may grow to; draw one as tall as the columns instead.
@@ -703,6 +712,8 @@ impl EditorApp {
         }
         if !open || done {
             self.dialog = None;
+        } else if install {
+            self.open_plugin_install();
         }
     }
 
@@ -859,7 +870,7 @@ impl EditorApp {
 
 /// The permissions a plugin declares. `blocked` says whether it starts with
 /// its network blocked ([`xuan::plugins::sandbox`]).
-fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
+pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
     let mut any = false;
     if blocked {

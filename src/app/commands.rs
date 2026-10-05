@@ -851,6 +851,10 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .when(always)
         .aliases(&["extensions"]),
+    cmd("install_plugin", "Install from Folder or Zip…", C::Plugins)
+        .both()
+        .when(always)
+        .aliases(&["install plugin", "add plugin", "extensions"]),
     // Help
     cmd("command_palette", "Command Palette…", C::Help)
         .keys(&[ctrl(Key::K)])
