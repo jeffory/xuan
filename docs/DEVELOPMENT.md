@@ -183,7 +183,7 @@ scales. Automated tests do not certify individual Wacom or Parblo models.
 
 ### RAW test fixtures
 
-CI decodes real camera files (Nikon NEF, Canon CR2/CR3/CRW, Fujifilm X-Trans RAF, Sony ARW, and a Canon sRAW that must be rejected) so that regressions in the `rawler` decode path, sensor-layout checks, demosaicing, orientation, colour matrices and white balance are caught. The files are CC0 samples from raw.pixls.us, pinned by SHA-256 in `testdata/raw/fixtures.txt` and not committed. Sources and licenses are listed in [testdata/raw/README.md](../testdata/raw/README.md).
+CI decodes real camera files (Nikon NEF, Canon CR2/CR3/CRW, Fujifilm X-Trans RAF, Sony ARW, a Canon sRAW that must be rejected, and a Nikon D1H that must be rejected as an unsupported camera) so that regressions in the `rawler` decode path, sensor-layout checks, demosaicing, orientation, colour matrices and white balance are caught. The files are CC0 samples from raw.pixls.us, pinned by SHA-256 in `testdata/raw/fixtures.txt` and not committed. Sources and licenses are listed in [testdata/raw/README.md](../testdata/raw/README.md).
 
 ```sh
 scripts/fetch-raw-fixtures.sh                      # about 60 MB into testdata/raw/cache/ (ignored by Git)
