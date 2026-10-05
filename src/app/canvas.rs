@@ -14,6 +14,119 @@ use xuan::{
 
 use super::{EditorApp, Gesture, Tool, TransformDrag, theme};
 
+/// Colour of the Clone Stamp source marker: dimmer than the pointer's outline.
+pub(super) const CLONE_SOURCE_COLOR: Color32 = Color32::from_rgba_premultiplied(190, 190, 190, 190);
+
+/// Where the Clone Stamp samples from, in document coordinates. Before an
+/// offset exists (and in unaligned mode between strokes) that is the stored
+/// source; otherwise it is the pointer shifted by the offset (`source - start`).
+pub(super) fn clone_sample_position(
+    source: Option<Point>,
+    offset: Option<Point>,
+    pointer: Option<Point>,
+    aligned: bool,
+    stroking: bool,
+) -> Option<Point> {
+    source?;
+    match (offset, pointer) {
+        (Some(offset), Some(pointer)) if aligned || stroking => {
+            Some(Point::new(pointer.x + offset.x, pointer.y + offset.y))
+        }
+        _ => source,
+    }
+}
+
+/// Screen-space outline of the brush tip centred at `centre`; `shape` is the
+/// tilt axis, tilt aspect and pressure scale from `EditorApp::brush_shape`.
+fn brush_outline(
+    brush: &paint::Brush,
+    pencil: bool,
+    centre: Pos2,
+    origin: Pos2,
+    zoom: f32,
+    (axis, aspect, pressure): (Point, f32, f32),
+) -> Vec<Pos2> {
+    if pencil {
+        // Pixel-exact tip: whole-pixel size, snapped to the pixel grid.
+        let size = (brush.diameter * pressure).round().max(1.0);
+        let half = size * zoom * 0.5;
+        let doc = Point::new((centre.x - origin.x) / zoom, (centre.y - origin.y) / zoom);
+        let snapped = if size % 2.0 == 1.0 {
+            Point::new(doc.x.floor() + 0.5, doc.y.floor() + 0.5)
+        } else {
+            Point::new(doc.x.round(), doc.y.round())
+        };
+        let centre = origin + vec2(snapped.x, snapped.y) * zoom;
+        if brush.square {
+            vec![
+                centre + vec2(-half, -half),
+                centre + vec2(half, -half),
+                centre + vec2(half, half),
+                centre + vec2(-half, half),
+            ]
+        } else {
+            (0..48)
+                .map(|i| {
+                    let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                    centre + vec2(angle.cos(), angle.sin()) * half
+                })
+                .collect()
+        }
+    } else {
+        let radius = brush.diameter * zoom * pressure * 0.5;
+        (0..48)
+            .map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                let (sin, cos) = angle.sin_cos();
+                centre
+                    + vec2(
+                        axis.x * cos - axis.y * sin * aspect,
+                        axis.y * cos + axis.x * sin * aspect,
+                    ) * radius
+            })
+            .collect()
+    }
+}
+
+/// A contrasting double stroke: a dark halo under a light line.
+fn paint_brush_outline(painter: &egui::Painter, outline: Vec<Pos2>, light: Color32, halo: u8) {
+    painter.add(egui::Shape::closed_line(
+        outline.clone(),
+        Stroke::new(2.5_f32, Color32::from_black_alpha(halo)),
+    ));
+    painter.add(egui::Shape::closed_line(
+        outline,
+        Stroke::new(1.0_f32, light),
+    ));
+}
+
+impl EditorApp {
+    /// Tilt axis, tilt aspect and pressure scale of the brush tip right now.
+    fn brush_shape(&self) -> (Point, f32, f32) {
+        let pen = self.tablet.as_ref().and_then(|tablet| tablet.sample());
+        let tilt = if self.tilt_shape {
+            pen.and_then(|sample| sample.tilt).unwrap_or([0.0; 2])
+        } else {
+            [0.0; 2]
+        };
+        let (axis, aspect) = paint::tilt_shape(tilt);
+        let pressure = if self.pressure_size {
+            pen.filter(|sample| {
+                matches!(
+                    sample.phase,
+                    super::tablet::Phase::Down | super::tablet::Phase::Move
+                )
+            })
+            .and_then(|sample| sample.pressure)
+            .unwrap_or(1.0)
+            .max(0.01)
+        } else {
+            1.0
+        };
+        (axis, aspect, pressure)
+    }
+}
+
 const HANDLES: [Point; 8] = [
     Point::new(0.0, 0.0),
     Point::new(0.5, 0.0),
@@ -552,17 +665,6 @@ impl EditorApp {
                         Stroke::new(1.0_f32, Color32::WHITE),
                     ));
                 }
-                if let Some(source) = self.clone_source {
-                    let p = map(source);
-                    painter.line_segment(
-                        [p - vec2(5.0, 0.0), p + vec2(5.0, 0.0)],
-                        Stroke::new(1.0_f32, Color32::WHITE),
-                    );
-                    painter.line_segment(
-                        [p - vec2(0.0, 5.0), p + vec2(0.0, 5.0)],
-                        Stroke::new(1.0_f32, Color32::WHITE),
-                    );
-                }
                 let blocked = self.job.is_some()
                     || self.develop.is_some()
                     || self.dialog.is_some()
@@ -582,6 +684,34 @@ impl EditorApp {
                     .or_else(|| ctx.input(|i| i.pointer.hover_pos()));
                 let doc_point =
                     pointer.map(|p| Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom));
+                if self.tool == Tool::Clone {
+                    let doc_pointer = pointer
+                        .map(|p| Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom));
+                    let stroking = self.gesture.is_some();
+                    if let Some(sample) = clone_sample_position(
+                        self.clone_source,
+                        self.clone_offset,
+                        doc_pointer,
+                        self.clone_aligned,
+                        stroking,
+                    ) {
+                        let centre = map(sample);
+                        let shape = self.brush_shape();
+                        let outline =
+                            brush_outline(&self.brush, false, centre, origin, zoom, shape);
+                        paint_brush_outline(&painter, outline, CLONE_SOURCE_COLOR, 90);
+                        for arm in [vec2(5.0, 0.0), vec2(0.0, 5.0)] {
+                            painter.line_segment(
+                                [centre - arm, centre + arm],
+                                Stroke::new(2.5_f32, Color32::from_black_alpha(90)),
+                            );
+                            painter.line_segment(
+                                [centre - arm, centre + arm],
+                                Stroke::new(1.0_f32, CLONE_SOURCE_COLOR),
+                            );
+                        }
+                    }
+                }
                 let modifiers = ctx.input(|i| i.modifiers);
                 let panning = self.tool == Tool::Hand
                     || ctx.input(|i| i.key_down(egui::Key::Space))
@@ -628,72 +758,16 @@ impl EditorApp {
                             .map_or(p, |gesture| {
                                 origin + vec2(gesture.last.x, gesture.last.y) * zoom
                             });
-                        let tilt = if self.tilt_shape {
-                            pen.and_then(|sample| sample.tilt).unwrap_or([0.0; 2])
-                        } else {
-                            [0.0; 2]
-                        };
-                        let (axis, aspect) = paint::tilt_shape(tilt);
-                        let pressure = if self.pressure_size {
-                            pen.filter(|sample| {
-                                matches!(
-                                    sample.phase,
-                                    super::tablet::Phase::Down | super::tablet::Phase::Move
-                                )
-                            })
-                            .and_then(|sample| sample.pressure)
-                            .unwrap_or(1.0)
-                            .max(0.01)
-                        } else {
-                            1.0
-                        };
-                        let radius = self.brush.diameter * zoom * pressure * 0.5;
-                        let outline: Vec<_> = if self.tool == Tool::Pencil {
-                            // Pixel-exact tip: whole-pixel size, snapped to the pixel grid.
-                            let size = (self.brush.diameter * pressure).round().max(1.0);
-                            let half = size * zoom * 0.5;
-                            let doc = Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom);
-                            let centre = if size % 2.0 == 1.0 {
-                                Point::new(doc.x.floor() + 0.5, doc.y.floor() + 0.5)
-                            } else {
-                                Point::new(doc.x.round(), doc.y.round())
-                            };
-                            let centre = origin + vec2(centre.x, centre.y) * zoom;
-                            if self.brush.square {
-                                vec![
-                                    centre + vec2(-half, -half),
-                                    centre + vec2(half, -half),
-                                    centre + vec2(half, half),
-                                    centre + vec2(-half, half),
-                                ]
-                            } else {
-                                (0..48)
-                                    .map(|i| {
-                                        let angle = i as f32 * std::f32::consts::TAU / 48.0;
-                                        centre + vec2(angle.cos(), angle.sin()) * half
-                                    })
-                                    .collect()
-                            }
-                        } else {
-                            (0..48)
-                                .map(|i| {
-                                    let angle = i as f32 * std::f32::consts::TAU / 48.0;
-                                    let (sin, cos) = angle.sin_cos();
-                                    p + vec2(
-                                        axis.x * cos - axis.y * sin * aspect,
-                                        axis.y * cos + axis.x * sin * aspect,
-                                    ) * radius
-                                })
-                                .collect()
-                        };
-                        painter.add(egui::Shape::closed_line(
-                            outline.clone(),
-                            Stroke::new(2.5_f32, Color32::from_black_alpha(130)),
-                        ));
-                        painter.add(egui::Shape::closed_line(
-                            outline,
-                            Stroke::new(1.0_f32, Color32::WHITE),
-                        ));
+                        let (axis, aspect, pressure) = self.brush_shape();
+                        let outline = brush_outline(
+                            &self.brush,
+                            self.tool == Tool::Pencil,
+                            p,
+                            origin,
+                            zoom,
+                            (axis, aspect, pressure),
+                        );
+                        paint_brush_outline(&painter, outline, Color32::WHITE, 130);
                     }
                 }
                 let pen_frames = std::mem::take(&mut self.pen_samples);

@@ -3,6 +3,9 @@ use super::*;
 #[path = "tests/canvas_preview.rs"]
 mod canvas_preview;
 
+#[path = "tests/clone_marker.rs"]
+mod clone_marker;
+
 #[path = "tests/eyedropper.rs"]
 mod eyedropper;
 
