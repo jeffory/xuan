@@ -185,7 +185,7 @@ pub(crate) fn stroke(
     let size = [right - left, bottom - top];
     let mask = stroke.options.mask_target;
     let mode = match stroke.options.mode {
-        PaintMode::Paint => 0,
+        PaintMode::Paint | PaintMode::Pencil => 0,
         PaintMode::Erase => 1,
         PaintMode::Clone => 2,
         PaintMode::Blur => 3,

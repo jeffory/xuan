@@ -22,6 +22,7 @@
 | Show transform / Hide controls | Ctrl+T / Ctrl+H |
 | Move / Marquee / Lasso / Wand / Crop | V / M / L / W / C |
 | Brush / Eraser / Heal / Clone / Blur | B / E / J / S / R |
+| Switch between Brush and Pencil | Shift+B (B selects whichever you used last) |
 | Gradient / Shape / Eyedropper / Hand / Zoom | G / U / I / H / Z |
 | Text / Apply text / Cancel text | T / Ctrl+Enter / Escape |
 | Brush size / Hardness | [ and ] / Shift+[ and Shift+] |

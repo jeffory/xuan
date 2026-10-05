@@ -506,16 +506,44 @@ impl EditorApp {
                             1.0
                         };
                         let radius = self.brush.diameter * zoom * pressure * 0.5;
-                        let outline: Vec<_> = (0..48)
-                            .map(|i| {
-                                let angle = i as f32 * std::f32::consts::TAU / 48.0;
-                                let (sin, cos) = angle.sin_cos();
-                                p + vec2(
-                                    axis.x * cos - axis.y * sin * aspect,
-                                    axis.y * cos + axis.x * sin * aspect,
-                                ) * radius
-                            })
-                            .collect();
+                        let outline: Vec<_> = if self.tool == Tool::Pencil {
+                            // Pixel-exact tip: whole-pixel size, snapped to the pixel grid.
+                            let size = (self.brush.diameter * pressure).round().max(1.0);
+                            let half = size * zoom * 0.5;
+                            let doc = Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom);
+                            let centre = if size % 2.0 == 1.0 {
+                                Point::new(doc.x.floor() + 0.5, doc.y.floor() + 0.5)
+                            } else {
+                                Point::new(doc.x.round(), doc.y.round())
+                            };
+                            let centre = origin + vec2(centre.x, centre.y) * zoom;
+                            if self.brush.square {
+                                vec![
+                                    centre + vec2(-half, -half),
+                                    centre + vec2(half, -half),
+                                    centre + vec2(half, half),
+                                    centre + vec2(-half, half),
+                                ]
+                            } else {
+                                (0..48)
+                                    .map(|i| {
+                                        let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                                        centre + vec2(angle.cos(), angle.sin()) * half
+                                    })
+                                    .collect()
+                            }
+                        } else {
+                            (0..48)
+                                .map(|i| {
+                                    let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                                    let (sin, cos) = angle.sin_cos();
+                                    p + vec2(
+                                        axis.x * cos - axis.y * sin * aspect,
+                                        axis.y * cos + axis.x * sin * aspect,
+                                    ) * radius
+                                })
+                                .collect()
+                        };
                         painter.add(egui::Shape::closed_line(
                             outline.clone(),
                             Stroke::new(2.5_f32, Color32::from_black_alpha(130)),
@@ -1166,6 +1194,7 @@ impl EditorApp {
                 tool if tool.is_brush() => {
                     let mode = match tool {
                         Tool::Erase => PaintMode::Erase,
+                        Tool::Pencil => PaintMode::Pencil,
                         Tool::Clone => PaintMode::Clone,
                         Tool::Heal => PaintMode::Heal,
                         Tool::Blur => self.blur_mode,

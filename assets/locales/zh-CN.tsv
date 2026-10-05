@@ -102,6 +102,7 @@ Lasso	套索
 Magic Wand	魔棒
 Crop	裁剪
 Brush	画笔
+Pencil	铅笔
 Eraser	橡皮擦
 Spot Healing	污点修复
 Clone Stamp	仿制图章
@@ -432,6 +433,10 @@ Vertical	垂直
 Bounds as a fraction of the rotated image	以旋转后图像的比例设置边界
 Uncrop	取消裁剪
 Square	正方形
+Round	圆形
+Tip	笔尖
+Switch between Brush and Pencil	在画笔与铅笔之间切换
+Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan	拖动绘制硬边像素 · [ ] 大小 · Shift 单击绘制直线 · 1–0 不透明度 · 空格平移
 Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.	镜头校正需手动调整。照片编辑器目前使用 8 位 sRGB；RAW 数据和冲洗设置保留原始精度。
 Local adjustments	局部调整
 Add a mask, then drag over the photo to place it.	添加蒙版后，在照片上拖动以放置蒙版。

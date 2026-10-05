@@ -65,6 +65,7 @@ impl EditorApp {
                                             "B / E / J / S / R",
                                             tr("Brush / Eraser / Heal / Clone / Blur"),
                                         ),
+                                        ("Shift+B", tr("Switch between Brush and Pencil")),
                                         (
                                             "G / U / I / H / Z",
                                             tr("Gradient / Shape / Eyedropper / Hand / Zoom"),

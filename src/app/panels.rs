@@ -173,15 +173,24 @@ impl EditorApp {
                                             );
                                         }
                                         value!(ui, tr("Size"), &mut self.brush.diameter, 1.0..=2000.0, " px", width = 62.0);
-                                        ui.label(tr("Hardness"));
-                                        ui.add(
-                                            widgets::Slider::new(
-                                                &mut self.brush.hardness,
-                                                0.0..=1.0,
-                                            )
-                                            .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
-                                            .percentage(),
-                                        );
+                                        if self.tool == Tool::Pencil {
+                                            ui.label(tr("Tip"));
+                                            widgets::segmented(
+                                                ui,
+                                                &mut self.brush.square,
+                                                &[(false, tr("Round")), (true, tr("Square"))],
+                                            );
+                                        } else {
+                                            ui.label(tr("Hardness"));
+                                            ui.add(
+                                                widgets::Slider::new(
+                                                    &mut self.brush.hardness,
+                                                    0.0..=1.0,
+                                                )
+                                                .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                                                .percentage(),
+                                            );
+                                        }
                                         ui.label(tr("Opacity"));
                                         ui.add(
                                             widgets::Slider::new(

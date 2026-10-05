@@ -84,7 +84,7 @@ Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool
 - **Layers:** folders, 13 blend modes, opacity, visibility, locks, drag reordering/nesting, duplication, merge, clipping masks, linked or independent raster masks, and copying layers to another project tab.
 - **Transforms:** move, scale, rotate, flip, free perspective distortion, numeric controls, shared transforms for several layers or folders, and snapping to edges and centers. Original source pixels remain available during transforms. Move / Transform has **Ignore Transparent Pixels** checked by default to select only at visible pixels; uncheck it to select and drag anywhere inside a layer's bounds.
 - **Selections:** rectangle, ellipse, freehand/polygonal lasso, contiguous/global magic wand, add/subtract/intersect, inverse, feather, outline movement, and moving or duplicating selected pixels.
-- **Paint:** brush, eraser, aligned/unaligned clone stamp with layer/all-layer sampling, spot healing, blur/smudge, gradients, rectangles, rounded rectangles, ellipses, and eyedropper. Live shapes redraw at the new size until their pixels are edited.
+- **Paint:** brush, pencil, eraser, aligned/unaligned clone stamp with layer/all-layer sampling, spot healing, blur/smudge, gradients, rectangles, rounded rectangles, ellipses, and eyedropper. Live shapes redraw at the new size until their pixels are edited.
 - **Text:** editable multiline text layers, searchable installed font families, size and color, bold, italic, underline, and strikethrough. Click with the Text tool (T) to place or edit text; double-click a text layer to reopen its live preview. Move and transform text with the Move tool.
 - **Adjustments:** editable Hue/Saturation color ranges, per-channel Levels and Curves, Exposure, Gradient Map, Grain, and Invert. Apply directly or add an adjustment layer, with live preview and selection coverage.
 - **Filters:** Gaussian and Motion Blur with expanded bounds, Add Noise, Lens Correction, content-aware fill, and edge-color background removal. Filtering and expensive retouching run in cancellable workers.
@@ -97,6 +97,21 @@ inline editor. Double-click elsewhere on a text, RAW, filter, or adjustment row
 to reopen its settings.
 
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
+
+### Pencil
+
+The Pencil paints hard-edged, non-antialiased pixels. Each dab covers exactly the
+pixels whose centres fall inside the tip at full coverage times the opacity, so
+there is no feathering and no partial-alpha edge. Choose a **Round** or **Square**
+tip in the contextual header; size is in whole pixels. Size 1 paints a single pixel.
+Odd sizes are centred on the pixel under the pointer and even sizes on the nearest
+pixel corner. Strokes are drawn as Bresenham lines between pointer samples, so they
+have no gaps, and a pixel is applied at most once per stroke, so overlapping dabs
+do not darken at opacity below 100%. Shift-click draws a straight line from the last
+point. Pressure scales the size in whole pixels. The Pencil works on layer pixels,
+layer masks and mask layers and respects selections, locked layers and undo. Press
+Shift+B to switch between the Brush and the Pencil. It pairs well with the pixel grid
+shown at high zoom.
 
 ### Brush stroke smoothing
 

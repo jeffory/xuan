@@ -159,6 +159,16 @@ impl EditorApp {
             (Key::Z, Tool::Zoom),
         ] {
             if pressed(key) {
+                // B selects the last-used of Brush and Pencil; Shift+B switches between them.
+                let tool = if key != Key::B {
+                    tool
+                } else if !modifiers.shift {
+                    self.brush_variant
+                } else if self.tool == Tool::Brush {
+                    Tool::Pencil
+                } else {
+                    Tool::Brush
+                };
                 if modifiers.shift && tool == Tool::Marquee {
                     self.ellipse = !self.ellipse;
                 }

@@ -56,6 +56,7 @@ pub enum Tool {
     Wand,
     Crop,
     Brush,
+    Pencil,
     Erase,
     Heal,
     Clone,
@@ -69,13 +70,14 @@ pub enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 17] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
         Self::Wand,
         Self::Crop,
         Self::Brush,
+        Self::Pencil,
         Self::Erase,
         Self::Heal,
         Self::Clone,
@@ -96,6 +98,7 @@ impl Tool {
             Self::Wand => tr("Magic Wand"),
             Self::Crop => tr("Crop"),
             Self::Brush => tr("Brush"),
+            Self::Pencil => tr("Pencil"),
             Self::Erase => tr("Eraser"),
             Self::Heal => tr("Spot Healing"),
             Self::Clone => tr("Clone Stamp"),
@@ -116,6 +119,7 @@ impl Tool {
             Self::Wand => "W",
             Self::Crop => "C",
             Self::Brush => "B",
+            Self::Pencil => "Shift+B",
             Self::Erase => "E",
             Self::Heal => "J",
             Self::Clone => "S",
@@ -131,7 +135,7 @@ impl Tool {
     fn is_brush(self) -> bool {
         matches!(
             self,
-            Self::Brush | Self::Erase | Self::Heal | Self::Clone | Self::Blur
+            Self::Brush | Self::Pencil | Self::Erase | Self::Heal | Self::Clone | Self::Blur
         )
     }
     fn is_selection(self) -> bool {
@@ -152,6 +156,9 @@ impl Tool {
                 tr("Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect")
             }
             Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
+            Self::Pencil => tr(
+                "Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
+            ),
             Self::Brush | Self::Erase => tr(
                 "Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
             ),
@@ -362,6 +369,7 @@ impl Gesture {
                     tool,
                     Tool::Move
                         | Tool::Brush
+                        | Tool::Pencil
                         | Tool::Erase
                         | Tool::Clone
                         | Tool::Blur
@@ -392,6 +400,8 @@ pub struct EditorApp {
     tool: Tool,
     brush: Brush,
     brush_smoothing: f32,
+    /// The tool plain B selects: Brush or Pencil, whichever was used last.
+    brush_variant: Tool,
     pressure_size: bool,
     pressure_opacity: bool,
     tilt_shape: bool,
@@ -540,6 +550,7 @@ impl EditorApp {
             tool: Tool::Move,
             brush: Brush::default(),
             brush_smoothing: 0.0,
+            brush_variant: Tool::Brush,
             pressure_size: true,
             pressure_opacity: false,
             tilt_shape: false,
@@ -874,6 +885,9 @@ impl EditorApp {
     fn set_tool(&mut self, tool: Tool) {
         self.cancel_gesture();
         self.tool = tool;
+        if matches!(tool, Tool::Brush | Tool::Pencil) {
+            self.brush_variant = tool;
+        }
         self.polygon.clear();
         self.crop_rect = None;
     }
