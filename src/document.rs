@@ -271,6 +271,25 @@ pub struct ShapeStyle {
     pub corner_radius: f32,
 }
 
+/// Where a layer produced by a plugin came from, so the action can be repeated.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Generated {
+    pub plugin: String,
+    pub version: String,
+    pub action: String,
+    #[serde(default)]
+    pub inputs: serde_json::Value,
+    /// The layer the source pixels were taken from, if it still exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Uuid>,
+    /// Hash of the source pixels that were sent, to tell whether they changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    /// RFC 3339 timestamp.
+    #[serde(default)]
+    pub created: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
     pub id: Uuid,
@@ -295,6 +314,8 @@ pub struct Layer {
     pub text: Option<crate::text::TextStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<crate::raw::RawAsset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<Generated>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -327,6 +348,7 @@ impl Layer {
             shape: None,
             text: None,
             raw: None,
+            generated: None,
             pixels: None,
         }
     }
