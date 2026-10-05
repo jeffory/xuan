@@ -1195,3 +1195,76 @@ fn fixture_manifest_is_consistent() {
         assert_eq!(f.reject, f.width == 0, "{}: reject iff no dimensions", f.id);
     }
 }
+
+#[test]
+fn failed_header_scan_rejects_without_a_full_decode() {
+    let called = std::cell::Cell::new(false);
+    let header = Err(anyhow::anyhow!("header failed"));
+    let result = bounded_full_decode(header, || {
+        called.set(true);
+        Ok(())
+    });
+    assert!(!called.get());
+    assert!(result.unwrap_err().to_string().contains("header failed"));
+}
+
+#[test]
+fn oversized_header_rejects_without_a_full_decode() {
+    let called = std::cell::Cell::new(false);
+    let mut header = sensor_with(1, RawPhotometricInterpretation::LinearRaw);
+    header.width = 20_000;
+    header.height = 20_000;
+    let result = bounded_full_decode(Ok(header), || {
+        called.set(true);
+        Ok(())
+    });
+    assert!(result.is_err() && !called.get());
+    let header = sensor_with(1, RawPhotometricInterpretation::LinearRaw);
+    assert!(bounded_full_decode(Ok(header), || Ok(7)).is_ok());
+}
+
+fn sensor_with(cpp: usize, photometric: RawPhotometricInterpretation) -> rawler::RawImage {
+    use rawler::{
+        decoders::Camera,
+        rawimage::{BlackLevel, RawImageData, WhiteLevel},
+    };
+    let (width, height) = (12, 12);
+    rawler::RawImage::new_with_data(
+        Camera::default(),
+        RawImageData::Float(vec![0.5; width * height * cpp]),
+        width,
+        height,
+        cpp,
+        [1.0; 4],
+        photometric,
+        Some(BlackLevel::new(&vec![0u32; cpp], 1, 1, cpp)),
+        Some(WhiteLevel::new(vec![4096; cpp])),
+        false,
+    )
+}
+
+#[test]
+fn sensor_validation_accepts_only_single_plane_rgb_bayer_and_xtrans() {
+    use rawler::rawimage::CFAConfig;
+    let cfa = |pattern: &str| {
+        RawPhotometricInterpretation::Cfa(CFAConfig::new(
+            &rawler::CFA::new(pattern),
+            &Default::default(),
+        ))
+    };
+    let bayer = "RGGB";
+    let xtrans = "RBGBRGGGRGGBGGBGGRBRGRBGGGBGGRGGRGGB";
+    assert!(validate_sensor(&sensor_with(1, cfa(bayer))).is_ok());
+    assert!(validate_sensor(&sensor_with(1, cfa(xtrans))).is_ok());
+    // Canon sRAW/mRAW: three planes, linear photometric.
+    assert!(validate_sensor(&sensor_with(3, RawPhotometricInterpretation::LinearRaw)).is_err());
+    assert!(validate_sensor(&sensor_with(1, RawPhotometricInterpretation::LinearRaw)).is_err());
+    // Wrong plane count even with a valid CFA.
+    assert!(validate_sensor(&sensor_with(3, cfa(bayer))).is_err());
+    // Non-RGB filter arrays.
+    assert!(validate_sensor(&sensor_with(1, cfa("CMYG"))).is_err());
+    let message = validate_sensor(&sensor_with(3, RawPhotometricInterpretation::LinearRaw))
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("sRAW/mRAW"));
+}
