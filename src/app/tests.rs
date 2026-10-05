@@ -1671,6 +1671,8 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
         egui::Modifiers::NONE,
     );
     assert!(app.session().unwrap().document.active.is_none());
+    // The 4x3 marquee sits within snap reach of the pasted layers' edges.
+    app.config.snap.enabled = false;
     app.set_tool(Tool::Marquee);
     drag(
         &context,
