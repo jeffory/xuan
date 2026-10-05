@@ -7,6 +7,7 @@ mod develop_controls;
 mod develop_preview;
 mod dialogs;
 mod drops;
+mod eyedropper;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;
@@ -195,6 +196,9 @@ struct Session {
     composite: Option<Arc<RgbaImage>>,
     thumbnails: HashMap<(Uuid, bool), layers::LayerThumbnail>,
     collapsed: HashSet<Uuid>,
+    sample_cache: Option<eyedropper::SampleCache>,
+    /// Full renders made for eyedropper sampling; lets tests check the cache.
+    sample_renders: usize,
 }
 
 impl Session {
@@ -217,11 +221,14 @@ impl Session {
             composite: None,
             thumbnails: HashMap::new(),
             collapsed: HashSet::new(),
+            sample_cache: None,
+            sample_renders: 0,
         }
     }
 
     fn invalidate(&mut self) {
         self.dirty_preview = true;
+        self.sample_cache = None;
     }
 
     fn refresh(&mut self, ctx: &egui::Context, state: Option<&eframe::egui_wgpu::RenderState>) {
@@ -433,6 +440,9 @@ pub struct EditorApp {
     clone_offset: Option<Point>,
     clone_aligned: bool,
     clone_all: bool,
+    dropper: Option<eyedropper::DropperGesture>,
+    dropper_size: eyedropper::SampleSize,
+    dropper_source: eyedropper::SampleSource,
     last_brush: Option<Point>,
     gesture: Option<Gesture>,
     crop_rect: Option<(Point, Point)>,
@@ -582,6 +592,9 @@ impl EditorApp {
             clone_offset: None,
             clone_aligned: true,
             clone_all: true,
+            dropper: None,
+            dropper_size: eyedropper::SampleSize::default(),
+            dropper_source: eyedropper::SampleSource::AllLayers,
             last_brush: None,
             gesture: None,
             crop_rect: None,
@@ -894,6 +907,7 @@ impl EditorApp {
 
     fn cancel_gesture(&mut self) {
         self.pen_stroke = false;
+        self.dropper_cancel();
         if let Some(gesture) = self.gesture.take()
             && !gesture.panning
             && let Some(session) = self.session_mut()

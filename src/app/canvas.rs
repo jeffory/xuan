@@ -579,6 +579,48 @@ impl EditorApp {
                         || (!panning && self.tool.is_brush() && self.brush_smoothing > 0.0))
                 {
                     self.paint_smoothed_mouse_samples(ctx, &response, canvas, modifiers);
+                } else if self.tool == Tool::Dropper && !panning && self.gesture.is_none() {
+                    let (pressed, down) =
+                        ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+                    if pressed && response.hovered() {
+                        if let Some(point) = doc_point {
+                            self.dropper_press(point);
+                        }
+                    } else if self.dropper.is_some() {
+                        if down {
+                            if let Some(point) = doc_point {
+                                self.dropper_update(point);
+                            }
+                        } else {
+                            self.dropper_release();
+                        }
+                    }
+                    let inside = doc_point.is_some_and(|p| {
+                        p.x >= 0.0
+                            && p.y >= 0.0
+                            && p.x < self.sessions[self.current].document.width as f32
+                            && p.y < self.sessions[self.current].document.height as f32
+                    });
+                    if let (Some(screen), Some(point)) = (pointer, doc_point)
+                        && (response.hovered() || self.dropper.is_some())
+                    {
+                        let new = if self.dropper.is_some() {
+                            Some(self.brush.color)
+                        } else if inside {
+                            self.sample_color(point)
+                        } else {
+                            None
+                        };
+                        if let Some(new) = new {
+                            let current = self.dropper.map_or(self.brush.color, |g| g.previous);
+                            let rect = super::eyedropper::bubble_rect(
+                                screen,
+                                super::eyedropper::BUBBLE_SIZE,
+                                viewport,
+                            );
+                            super::eyedropper::paint_bubble(&painter, rect, new, current);
+                        }
+                    }
                 } else {
                     let started = response.drag_started()
                         || response.drag_started_by(egui::PointerButton::Middle);
@@ -855,12 +897,6 @@ impl EditorApp {
                         mode,
                     );
                 });
-            }
-            Tool::Dropper => {
-                if let Some(session) = self.session() {
-                    let pixel = render::pixel_at(&session.document, point);
-                    self.brush.color = pixel.map(|v| (v * 255.0).round() as u8);
-                }
             }
             Tool::Zoom => {
                 if let Some(s) = self.session_mut() {

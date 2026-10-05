@@ -3,6 +3,9 @@ use super::*;
 #[path = "tests/canvas_preview.rs"]
 mod canvas_preview;
 
+#[path = "tests/eyedropper.rs"]
+mod eyedropper;
+
 #[path = "tests/stroke_smoothing.rs"]
 mod stroke_smoothing;
 

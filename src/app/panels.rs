@@ -7,6 +7,7 @@ use xuan::{
     selection::SelectionMode,
 };
 
+use super::eyedropper::{SampleSize, SampleSource};
 use super::{EditorApp, Tool, icons, theme};
 
 const DEFAULT_VALUE_WIDTH: f32 = 74.0;
@@ -312,7 +313,24 @@ impl EditorApp {
                                         );
                                     }
                                     Tool::Dropper => {
-                                        ui.label(tr("Sample: All visible layers"));
+                                        ui.label(tr("Sample"));
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.dropper_source,
+                                            &[
+                                                (SampleSource::CurrentLayer, tr("Current layer")),
+                                                (SampleSource::AllLayers, tr("All visible layers")),
+                                            ],
+                                        );
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.dropper_size,
+                                            &[
+                                                (SampleSize::Point, tr("Point")),
+                                                (SampleSize::Three, tr("3×3")),
+                                                (SampleSize::Five, tr("5×5")),
+                                            ],
+                                        );
                                         widgets::color_well(ui, &mut self.brush.color);
                                     }
                                     Tool::Hand | Tool::Zoom => {

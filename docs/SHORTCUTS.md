@@ -57,4 +57,4 @@ Drag a layer row or thumbnail to reorder it. Drop on the upper or lower half of 
 
 Supported RAW files (NEF/NRW, CR2/CR3/CRW, RAF, and ARW) enter RAW Develop before becoming layers. In Develop, Ctrl+Z / Ctrl+Shift+Z undo and redo RAW settings; Escape exits the white-balance picker or mask drawing. Drag pans, wheel zooms, and the Fit / 100% buttons set the inspection scale. In Split view, drag near the comparison divider to move it; drag elsewhere or Alt-drag to pan. Space-drag or middle-button drag pans in every view, including with a picker or mask tool active. Side by side zooms both images around their pane centers and pans them together. Double-click a RAW layer (or its image with Move selected) to reopen Develop. Use Develop to commit, or Cancel to retain the previous layer state.
 
-**Ctrl+,** opens Settings in both the photo editor and RAW Develop. **Escape** closes Settings or cancels a Develop eyedropper.
+**Ctrl+,** opens Settings in both the photo editor and RAW Develop. **Escape** closes Settings or cancels a Develop eyedropper. **Escape** while dragging with the Eyedropper restores the previous colour.

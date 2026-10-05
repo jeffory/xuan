@@ -167,7 +167,12 @@ Radial	径向
 Blur	模糊
 Smudge	涂抹
 Aligned	对齐
-Sample: All visible layers	取样：所有可见图层
+Sample	取样
+Current layer	当前图层
+All visible layers	所有可见图层
+Point	单点
+3×3	3×3 平均
+5×5	5×5 平均
 Alt-click on the canvas to set a clone source	在画布上 Alt 单击设置仿制来源
 This Layer	当前图层
 All Layers	所有图层
