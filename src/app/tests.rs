@@ -4861,3 +4861,77 @@ fn drops_wait_while_develop_is_open() {
     app.process_drops();
     assert!(app.dialog == Some(Dialog::DropChoice));
 }
+
+#[test]
+fn spot_healing_is_one_undo_step_and_leaves_masks_alone() {
+    let (context, mut app) = app();
+    app.dimensions = [64, 48];
+    app.new_document();
+    let original = image::RgbaImage::from_fn(64, 48, |x, y| {
+        let (dx, dy) = (x as f32 - 32.0, y as f32 - 24.0);
+        if dx.hypot(dy) < 3.0 {
+            image::Rgba([250, 0, 0, 255])
+        } else {
+            image::Rgba([(3 * x) as u8, (4 * y) as u8, 90, 255])
+        }
+    });
+    let session = app.session_mut().unwrap();
+    session.document.layers[0].pixels = Some(std::sync::Arc::new(original.clone()));
+    let transform = session.document.layers[0].transform;
+    let steps = session.history.names().count();
+    app.set_tool(Tool::Heal);
+    app.brush.diameter = 12.0;
+    app.brush.hardness = 1.0;
+    app.brush.opacity = 1.0;
+    let wait = |app: &mut EditorApp| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.job.is_some() {
+            app.poll_job();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    };
+    drag(
+        &context,
+        &mut app,
+        Point::new(31.0, 24.0),
+        Point::new(33.0, 24.0),
+        egui::Modifiers::NONE,
+    );
+    wait(&mut app);
+    let session = app.session().unwrap();
+    assert_eq!(app.error, None);
+    assert_eq!(session.history.undo_name(), Some("Spot Healing"));
+    assert_eq!(session.history.names().count(), steps + 1);
+    let layer = &session.document.layers[0];
+    assert_eq!(layer.transform, transform);
+    let healed = layer.pixels.as_ref().unwrap();
+    assert_eq!(healed.dimensions(), (64, 48));
+    assert!(healed.get_pixel(32, 24)[0] < 200);
+    assert_eq!(healed.get_pixel(5, 5), original.get_pixel(5, 5));
+    app.command("undo");
+    let layer = &app.session().unwrap().document.layers[0];
+    assert_eq!(**layer.pixels.as_ref().unwrap(), original);
+    assert_eq!(layer.transform, transform);
+
+    // As upstream, Spot Healing has nothing to do on a mask.
+    let session = app.session_mut().unwrap();
+    session.document.layers[0].mask = Some(xuan::document::Mask::white());
+    let steps = session.history.names().count();
+    app.mask_target = true;
+    drag(
+        &context,
+        &mut app,
+        Point::new(31.0, 24.0),
+        Point::new(33.0, 24.0),
+        egui::Modifiers::NONE,
+    );
+    wait(&mut app);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps);
+    assert_eq!(
+        **session.document.layers[0].pixels.as_ref().unwrap(),
+        original
+    );
+    assert_eq!(app.status, "Spot Healing works on layer pixels, not masks");
+}

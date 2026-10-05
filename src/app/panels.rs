@@ -3,6 +3,7 @@ use egui::RichText;
 use xuan::i18n::tr;
 use xuan::{
     paint::{PaintMode, ShapeKind},
+    retouch::HealMode,
     selection::SelectionMode,
 };
 
@@ -145,6 +146,17 @@ impl EditorApp {
                                                 &[
                                                     (PaintMode::Blur, tr("Blur")),
                                                     (PaintMode::Smudge, tr("Smudge")),
+                                                ],
+                                            );
+                                        }
+                                        if self.tool == Tool::Heal {
+                                            widgets::segmented(
+                                                ui,
+                                                &mut self.heal_mode,
+                                                &[
+                                                    (HealMode::ContentAware, tr("Content-Aware")),
+                                                    (HealMode::CreateTexture, tr("Create Texture")),
+                                                    (HealMode::ProximityMatch, tr("Proximity Match")),
                                                 ],
                                             );
                                         }

@@ -8,7 +8,7 @@ The Linux port is implemented in Rust with egui 0.33 and wgpu 27. The source bas
 | --- | --- |
 | `document`, `geometry`, `history` | Validated layered document, affine/projective transforms, shared pixel assets, bounded snapshot undo/redo |
 | `blend`, `render`, `gpu`, `composite.wgsl`, `mipmap.wgsl` | CPU reference/fallback compositor and wgpu compute preview/export, thirteen blend modes, inherited masks and clipping, premultiplied Lanczos downsampling and preview mipmaps |
-| `selection`, `paint`, `retouch` | Selection coverage, swept brush strokes, clone/blur/smudge, gradients, live shapes, texture-based healing/fill, border-color background masks |
+| `selection`, `paint`, `retouch` | Selection coverage, swept brush strokes, clone/blur/smudge, gradients, live shapes, spot healing, texture-based fill, border-color background masks |
 | `color`, `effects` | Selective hue ranges, RGB channel levels/curves, linear-light exposure, gradient mapping, film grain, raster filters |
 | `operations`, `io` | Group/layer commands, canvas sizing/crop, cross-project copies, clipboard rasters, atomic project storage, Compositor import, image export |
 | `app` | Native egui shell, menus, contextual controls, tabs, canvas gestures, layer panel, live dialogs, cancellable editing workers |
@@ -56,7 +56,7 @@ The GitHub workflow is supplied for future repository runs; it has not been disp
 ## Explicit differences and limits
 
 - The macOS foreground-recognition service is replaced by editable edge-color masks. It suits simple backgrounds and is not semantic subject segmentation.
-- Content-aware fill and spot healing use portable patch matching. Results and performance will differ from the original implementation.
+- Content-aware fill uses portable patch matching; results and performance will differ from the original implementation. Spot healing ports upstream `HealPixels.c` (ring-matched source patch plus membrane fill, with Content-Aware, Create Texture and Proximity Match modes) and works in the layer's own pixels around the stroke.
 - The raster pipeline is 8-bit sRGB. Embedded ICC color profiles are not converted or preserved. Animated input formats import a single frame.
 - Original `.comp` packages are imported, not overwritten or exported. Save uses the portable `.xuan` format; selections and history remain session-only.
 - Perspective transforms retain source pixels in Xuan. Source Compositor often rasterizes such edits. Round trips through native `.xuan` retain the projective metadata.

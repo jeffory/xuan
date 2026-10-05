@@ -576,3 +576,7 @@ Insert as layer	插入为图层
 Pixel Grid	像素网格
 Show pixel grid above	显示像素网格的缩放比例高于
 Outlines individual pixels when zoomed in past this level, between 200% and 6400%.	放大超过此比例时勾勒出每个像素，范围为 200% 至 6400%。
+Content-Aware	内容识别
+Create Texture	创建纹理
+Proximity Match	近似匹配
+Spot Healing works on layer pixels, not masks	污点修复只能用于图层像素，不能用于蒙版

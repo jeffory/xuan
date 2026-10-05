@@ -972,6 +972,11 @@ impl EditorApp {
             self.clone_offset = None;
             return;
         }
+        if tool == Tool::Heal && self.editing_mask() {
+            // As upstream: Spot Healing reworks image pixels and has nothing to do on a mask.
+            self.status = tr("Spot Healing works on layer pixels, not masks").into();
+            return;
+        }
         if tool == Tool::Clone && self.clone_source.is_none() {
             self.status = tr("Alt-click on the canvas to set a clone source").into();
             return;
@@ -1354,8 +1359,9 @@ impl EditorApp {
         if tool == Tool::Heal {
             let points = gesture.points;
             let brushes = gesture.brushes;
+            let mode = self.heal_mode;
             self.start_job(tr("Spot Healing"), move |document, cancel| {
-                xuan::retouch::heal_path_varying(document, &points, &brushes, cancel)
+                xuan::retouch::heal_path_varying(document, &points, &brushes, mode, cancel)
             });
             return;
         }
