@@ -6,6 +6,7 @@
 | Import as layer / Save As | Ctrl+Shift+O / Ctrl+Shift+S |
 | Export | Ctrl+Alt+Shift+S |
 | Close project | Ctrl+W |
+| Quit | Ctrl+Q |
 | Undo / Redo | Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) |
 | Duplicate / Merge / Group | Ctrl+J / Ctrl+E / Ctrl+G |
 | Ungroup / Clipping mask | Ctrl+Shift+G / Ctrl+Alt+G |

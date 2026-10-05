@@ -48,6 +48,7 @@ impl EditorApp {
                                         ("Ctrl+N / O / S", tr("New / Open / Save")),
                                         ("Ctrl+Shift+O", tr("Import image as layer")),
                                         ("Ctrl+Alt+Shift+S", tr("Export image")),
+                                        ("Ctrl+W / Ctrl+Q", tr("Close / Quit")),
                                         ("Ctrl+Z / Ctrl+Shift+Z", tr("Undo / Redo")),
                                         (
                                             "Ctrl+J / Ctrl+E / Ctrl+G",

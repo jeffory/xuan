@@ -62,6 +62,7 @@ impl EditorApp {
             (ctrl, Key::O, "open"),
             (ctrl, Key::S, "save"),
             (ctrl, Key::W, "close"),
+            (ctrl, Key::Q, "quit"),
             (ctrl, Key::Z, "undo"),
             (ctrl, Key::Y, "redo"),
             (ctrl, Key::J, "duplicate"),

@@ -26,10 +26,53 @@ impl Language {
     }
 }
 
+/// How the main window draws its title bar and window controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitleBar {
+    /// Native decorations from the window manager; the menu bar is a normal panel.
+    #[serde(rename = "system")]
+    System,
+    /// Client-side title bar holding the menus, with monochrome controls.
+    #[serde(rename = "compact")]
+    Compact,
+    /// Client-side title bar with macOS traffic-light controls on the left.
+    #[serde(rename = "macos")]
+    MacOs,
+}
+
+impl Default for TitleBar {
+    fn default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Compact
+        }
+    }
+}
+
+impl TitleBar {
+    pub const ALL: [Self; 3] = [Self::System, Self::Compact, Self::MacOs];
+
+    /// The app draws the title bar itself, with system decorations turned off.
+    pub fn client_side(self) -> bool {
+        self != Self::System
+    }
+
+    /// Untranslated display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Compact => "Compact",
+            Self::MacOs => "macOS",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub language: Language,
+    pub title_bar: TitleBar,
 }
 
 impl Config {
@@ -63,6 +106,7 @@ impl Config {
             Err(error) => return Err(error.into()),
         };
         table.insert("language".into(), toml::Value::try_from(self.language)?);
+        table.insert("title_bar".into(), toml::Value::try_from(self.title_bar)?);
         let parent = path.parent().context("Configuration path has no parent")?;
         fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -98,6 +142,7 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), Config::default());
         let chinese = Config {
             language: Language::SimplifiedChinese,
+            title_bar: TitleBar::MacOs,
         };
         chinese.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), chinese);
@@ -117,6 +162,41 @@ mod tests {
         assert!(Config::default().save(&path).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "language = [broken");
         assert!(toml::from_str::<Config>("language = 'unknown'").is_err());
+    }
+
+    #[test]
+    fn settings_from_older_releases_load_with_the_default_title_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "language = 'zh-CN'\n").unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap(),
+            Config {
+                language: Language::SimplifiedChinese,
+                title_bar: TitleBar::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn title_bar_style_persists_and_defaults_to_compact() {
+        let config: Config = toml::from_str("language = 'en'").unwrap();
+        assert_eq!(config.title_bar, TitleBar::default());
+        if !cfg!(target_os = "macos") {
+            assert_eq!(TitleBar::default(), TitleBar::Compact);
+        }
+        for style in TitleBar::ALL {
+            let config = Config {
+                title_bar: style,
+                ..Config::default()
+            };
+            let text = toml::to_string(&config).unwrap();
+            assert_eq!(toml::from_str::<Config>(&text).unwrap(), config);
+        }
+        let config: Config = toml::from_str("title_bar = 'system'").unwrap();
+        assert_eq!(config.title_bar, TitleBar::System);
+        assert!(!TitleBar::System.client_side());
+        assert!(TitleBar::Compact.client_side() && TitleBar::MacOs.client_side());
     }
 
     #[test]

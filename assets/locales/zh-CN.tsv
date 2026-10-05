@@ -5,6 +5,16 @@ General preferences	常规设置
 Language	语言
 Language changes apply immediately.	语言更改立即生效。
 Configuration file	配置文件
+Appearance	外观
+Window appearance	窗口外观
+Window title bar	窗口标题栏
+System	系统
+Compact	紧凑
+Use the title bar and window buttons of your desktop.	使用桌面环境提供的标题栏和窗口按钮。
+Show the menus in the title bar, with window buttons on the right.	在标题栏中显示菜单，窗口按钮位于右侧。
+Show the menus in the title bar, with macOS-style window buttons on the left.	在标题栏中显示菜单，macOS 风格的窗口按钮位于左侧。
+Rounded window corners appear after restarting Xuan.	重新启动 Xuan 后显示圆角窗口。
+Title bar changes apply immediately.	标题栏更改立即生效。
 Could not load settings	无法加载设置
 Could not save settings	无法保存设置
 Done	完成
@@ -26,6 +36,7 @@ Save As…	另存为…
 Export Image…	导出图像…
 Close Project	关闭项目
 Close RAW Develop	关闭 RAW 冲洗
+Quit	退出
 Undo	撤销
 Redo	重做
 Cut	剪切
@@ -232,6 +243,7 @@ Some projects have unsaved changes.	部分项目有未保存的更改。
 Discard changes	放弃更改
 Couldn't complete the operation	无法完成操作
 Export image	导出图像
+Close / Quit	关闭 / 退出
 Export…	导出…
 Format	格式
 Quality	质量

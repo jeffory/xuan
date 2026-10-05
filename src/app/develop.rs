@@ -901,7 +901,9 @@ impl EditorApp {
                     });
                 });
             });
-        super::chrome::status_bar(ctx, "develop_status").show(ctx, |ui| {
+        let status_bar =
+            super::chrome::status_bar(self.window_corner_radius(ctx), "develop_status");
+        status_bar.show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if d.receiver.is_some() {
                     ui.spinner();
@@ -2046,7 +2048,7 @@ mod tests {
         frame(
             &ctx,
             &mut app,
-            vec![egui::Event::PointerMoved(pos2(61.0, 16.0))],
+            vec![egui::Event::PointerMoved(pos2(1221.0, 16.0))],
         );
         assert!(
             app.develop_close_requested.is_none(),
@@ -2065,7 +2067,8 @@ mod tests {
         assert_eq!(app.develop.as_ref().unwrap().settings.exposure, 1.25);
 
         click_text(&ctx, &mut app, "Photo");
-        click(&ctx, &mut app, pos2(21.0, 16.0));
+        // The compact title bar's close button.
+        click(&ctx, &mut app, pos2(1251.0, 16.0));
         assert!(matches!(
             app.develop_close_requested,
             Some(DevelopClose::Window)

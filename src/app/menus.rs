@@ -129,11 +129,11 @@ impl EditorApp {
             || self.close_app
             || self.develop_close_requested.is_some()
             || self.close_tab.is_some();
-        super::chrome::title_bar(ctx, "menubar").show(ctx, |ui| {
+        super::chrome::title_bar(self.window_corner_radius(ctx), "menubar").show(ctx, |ui| {
             egui::MenuBar::new()
                 .config(egui::containers::menu::MenuConfig::new().style(theme::menu_style))
                 .ui(ui, |ui| {
-                    self.window_controls(ui);
+                    self.leading_window_controls(ui);
                     ui.add_enabled_ui(!blocked, |ui| {
                         // Leave a small gap between the expanded highlights.
                         ui.spacing_mut().item_spacing.x += 2.0;
@@ -180,6 +180,8 @@ impl EditorApp {
                             if developing {
                                 item(ui, tr("Close RAW Develop"), "Ctrl+W", "close", &mut action);
                             }
+                            ui.separator();
+                            item(ui, tr("Quit"), "Ctrl+Q", "quit", &mut action);
                         });
                         menu_bar_button(ui, tr("Edit"), |ui| {
                             item(ui, tr("Settings…"), "Ctrl+,", "settings", &mut action);
@@ -457,7 +459,7 @@ impl EditorApp {
                             item(ui, tr("About Xuan"), "", "about", &mut action);
                         });
                     });
-                    self.titlebar_drag(ui);
+                    self.trailing_window_controls(ui);
                 });
         });
         if let Some(action) = action {

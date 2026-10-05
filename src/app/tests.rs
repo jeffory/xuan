@@ -3628,6 +3628,8 @@ fn menu_bar_hover_switches_only_while_a_menu_is_open() {
 #[test]
 fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     let (context, mut app) = app();
+    // The traffic lights sit at fixed positions on the left.
+    app.config.title_bar = xuan::config::TitleBar::MacOs;
     frame(&context, &mut app);
     frame(&context, &mut app);
     let output = pointer_frame(
@@ -3742,6 +3744,236 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     assert_eq!(app.sessions.len(), 1);
 }
 
+fn click(context: &egui::Context, app: &mut EditorApp, pos: Pos2) -> egui::FullOutput {
+    pointer_frame(context, app, pos, None, egui::Modifiers::NONE);
+    pointer_frame(context, app, pos, Some(true), egui::Modifiers::NONE);
+    pointer_frame(context, app, pos, Some(false), egui::Modifiers::NONE)
+}
+
+#[test]
+fn compact_titlebar_has_window_buttons_on_the_right() {
+    use xuan::config::TitleBar;
+    let (context, mut app) = app();
+    assert_eq!(app.config.title_bar, TitleBar::default());
+    app.config.title_bar = TitleBar::Compact;
+    frame(&context, &mut app);
+    let output = frame(&context, &mut app);
+    // Already undecorated, as the window was created.
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    // The title bar has a 14 px side margin and 30 px buttons, ending at the right.
+    let y = 16.0;
+    let output = click(&context, &mut app, Pos2::new(1191.0, y));
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Minimized(true)
+    )));
+    let output = click(&context, &mut app, Pos2::new(1221.0, y));
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Maximized(true)
+    )));
+    let output = click(&context, &mut app, Pos2::new(1251.0, y));
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Close
+    )));
+
+    // Closing with unsaved work goes through the save prompt.
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    let output = click(&context, &mut app, Pos2::new(1251.0, y));
+    assert!(app.close_app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Close
+    )));
+    assert_eq!(app.sessions.len(), 1);
+}
+
+#[test]
+fn system_titlebar_switches_decorations_at_runtime() {
+    use xuan::config::TitleBar;
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    assert_eq!(app.window_corner_radius(&context), 12);
+
+    app.config.title_bar = TitleBar::System;
+    let output = frame(&context, &mut app);
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(true)
+    )));
+    let output = frame(&context, &mut app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    assert_eq!(app.window_corner_radius(&context), 0);
+    // The window manager draws the controls and resize borders.
+    for pos in [Pos2::new(1251.0, 16.0), Pos2::new(21.0, 20.0)] {
+        let output = click(&context, &mut app, pos);
+        assert!(!has_command(&output, |c| matches!(
+            c,
+            egui::ViewportCommand::Close | egui::ViewportCommand::Minimized(_)
+        )));
+    }
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::BeginResize(_)
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+
+    // Back to a client-side title bar. A window created opaque stays square.
+    app.set_startup_title_bar(TitleBar::System);
+    app.config.title_bar = TitleBar::Compact;
+    let output = frame(&context, &mut app);
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(false)
+    )));
+    assert_eq!(app.window_corner_radius(&context), 0);
+}
+
+#[test]
+fn gnome_button_layout_picks_sides_and_order() {
+    use super::chrome::{ButtonLayout, WindowButton::*};
+    assert_eq!(
+        ButtonLayout::parse_gnome("'appmenu:minimize,maximize,close'\n"),
+        Some(ButtonLayout::default())
+    );
+    assert_eq!(
+        ButtonLayout::parse_gnome("'appmenu:close'"),
+        Some(ButtonLayout {
+            left: vec![],
+            right: vec![Close]
+        })
+    );
+    assert_eq!(
+        ButtonLayout::parse_gnome("close,minimize,maximize:icon"),
+        Some(ButtonLayout {
+            left: vec![Close, Minimize, Maximize],
+            right: vec![]
+        })
+    );
+    assert_eq!(
+        ButtonLayout::parse_gnome("close"),
+        Some(ButtonLayout {
+            left: vec![Close],
+            right: vec![]
+        })
+    );
+    assert_eq!(ButtonLayout::parse_gnome("'appmenu:'"), None);
+    assert_eq!(ButtonLayout::parse_gnome(""), None);
+}
+
+#[test]
+fn quit_with_unsaved_changes_prompts_from_menu_shortcut_and_window_manager() {
+    let ctrl = egui::Modifiers::CTRL;
+    for source in ["shortcut", "menu", "window manager"] {
+        let (context, mut app) = app();
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        let output = match source {
+            "shortcut" => {
+                keyboard_frame(&context, &mut app, vec![text_key(egui::Key::Q, ctrl)], ctrl)
+            }
+            "menu" => {
+                let file = layer_label(&context, &mut app, "File") + Vec2::splat(5.0);
+                pointer_frame(&context, &mut app, file, Some(true), egui::Modifiers::NONE);
+                pointer_frame(&context, &mut app, file, Some(false), egui::Modifiers::NONE);
+                let quit = layer_label(&context, &mut app, "Quit") + Vec2::splat(5.0);
+                pointer_frame(&context, &mut app, quit, None, egui::Modifiers::NONE);
+                pointer_frame(&context, &mut app, quit, Some(true), egui::Modifiers::NONE);
+                pointer_frame(&context, &mut app, quit, Some(false), egui::Modifiers::NONE)
+            }
+            _ => {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        Vec2::new(1280.0, 860.0),
+                    )),
+                    ..Default::default()
+                };
+                input
+                    .viewports
+                    .entry(egui::ViewportId::ROOT)
+                    .or_default()
+                    .events
+                    .push(egui::ViewportEvent::Close);
+                let output = context.run(input, |ctx| app.show(ctx));
+                assert!(has_command(&output, |c| matches!(
+                    c,
+                    egui::ViewportCommand::CancelClose
+                )));
+                output
+            }
+        };
+        assert!(app.close_app, "Quit via {source} did not prompt");
+        assert!(
+            !has_command(&output, |c| matches!(c, egui::ViewportCommand::Close)),
+            "Quit via {source} closed without saving"
+        );
+        assert_eq!(app.sessions.len(), 1);
+        assert!(app.sessions[0].history.dirty());
+        layer_label(&context, &mut app, "Some projects have unsaved changes.");
+    }
+
+    // Ctrl+Q stays available during a job and cancels it before prompting.
+    {
+        let (context, mut app) = app();
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        app.start_job("Long edit", |_, cancel| {
+            while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            anyhow::bail!("cancelled")
+        });
+        let cancel = app.job.as_ref().unwrap().cancel.clone();
+        keyboard_frame(&context, &mut app, vec![text_key(egui::Key::Q, ctrl)], ctrl);
+        assert!(app.close_app);
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    // Without unsaved work, Quit closes the window straight away.
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    let output = keyboard_frame(&context, &mut app, vec![text_key(egui::Key::Q, ctrl)], ctrl);
+    assert!(!app.close_app);
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Close
+    )));
+}
+
 #[test]
 fn native_window_gestures_work_without_a_mouse_release_event() {
     let (context, mut app) = app();
@@ -3788,7 +4020,8 @@ fn native_window_gestures_work_without_a_mouse_release_event() {
     }
 
     // A normal control must also respond to the first click after a drag.
-    let minimize = Pos2::new(41.0, 20.0);
+    // This is the compact title bar's minimize button, left of maximize and close.
+    let minimize = Pos2::new(1191.0, 16.0);
     pointer_frame(&context, &mut app, minimize, None, egui::Modifiers::NONE);
     pointer_frame(
         &context,

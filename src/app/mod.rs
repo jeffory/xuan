@@ -434,6 +434,11 @@ pub struct EditorApp {
     drop_prompt: Option<drops::DropPrompt>,
     pending_drops: std::collections::VecDeque<Vec<PathBuf>>,
     allow_close: bool,
+    /// Whether the native window was created transparent (needed for rounded corners).
+    transparent_window: bool,
+    /// The decorations last requested from the window system.
+    decorated: bool,
+    button_layout: chrome::ButtonLayout,
     clipboard: Option<(RgbaImage, Point)>,
     system_clipboard: Option<arboard::Clipboard>,
     jpeg_quality: u8,
@@ -466,6 +471,7 @@ impl EditorApp {
             Self::with_context(&cc.egui_ctx, vec![], demo, screenshot)
         });
         app.load_config();
+        app.button_layout = chrome::ButtonLayout::from_desktop();
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
@@ -573,6 +579,9 @@ impl EditorApp {
             drop_prompt: None,
             pending_drops: Default::default(),
             allow_close: false,
+            transparent_window: true,
+            decorated: false,
+            button_layout: Default::default(),
             clipboard: None,
             system_clipboard: None,
             jpeg_quality: 90,
@@ -990,6 +999,11 @@ impl EditorApp {
     }
 
     fn command(&mut self, command: &str) {
+        if command == "quit" {
+            // Ctrl+Q and the close button reach this while a job runs.
+            self.request_quit();
+            return;
+        }
         if self.job.is_some() {
             return;
         }
@@ -1436,27 +1450,23 @@ impl EditorApp {
         self.poll_job();
         self.poll_develop(ctx);
         self.frames += 1;
-        if (self.develop.is_some() || !self.inactive_develop.is_empty())
-            && !self.allow_close
-            && ctx.input(|i| i.viewport().close_requested())
-        {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.begin_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.request_develop_close(develop::DevelopClose::Window);
-        }
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.allow_close
-            && self.develop.is_none()
-            && self.inactive_develop.is_empty()
-            && self.sessions.iter().any(|s| s.history.dirty())
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if let Some(job) = &self.job {
-                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            self.close_app = true;
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
         self.queue_drop(dropped.into_iter().filter_map(|f| f.path).collect());
+        if self.job.is_some()
+            && self.dialog.is_none()
+            && self.develop_close_requested.is_none()
+            && self.error.is_none()
+            && self.close_tab.is_none()
+            && !self.close_app
+            && !ctx.wants_keyboard_input()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Q))
+        {
+            // Like the close button, Ctrl+Q works during a job; quitting cancels it.
+            self.request_quit();
+        }
         if !self.drops_blocked() {
             self.shortcuts(ctx);
             self.process_drops();
@@ -1464,9 +1474,10 @@ impl EditorApp {
         // Keep antialiased panel seams opaque while preserving the rounded window corners.
         ctx.layer_painter(egui::LayerId::background()).rect_filled(
             ctx.content_rect(),
-            theme::window_corner_radius(ctx),
+            self.window_corner_radius(ctx),
             theme::PANEL,
         );
+        self.sync_decorations(ctx);
         self.window_resize(ctx);
         self.menus(ctx);
         self.tabs(ctx);

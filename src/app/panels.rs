@@ -317,7 +317,7 @@ impl EditorApp {
     }
 
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
-        super::chrome::status_bar(ctx, "status_bar").show(ctx, |ui| {
+        super::chrome::status_bar(self.window_corner_radius(ctx), "status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if let Some(session) = self.session() {
                     ui.add_sized(

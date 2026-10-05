@@ -192,6 +192,22 @@ Open **Edit → Settings…** (Ctrl+,). The sidebar's **General** category conta
 language selector: **English** or **简体中文**. Changes apply immediately and are
 saved automatically. Chinese glyphs are bundled with the application.
 
+The **Appearance** category sets the **Window title bar**:
+
+- **Compact** (the default): the menus share the title bar with monochrome
+  minimize, maximize, and close buttons on the right. Under GNOME, the buttons
+  follow the desktop's `button-layout` setting for side and order.
+- **System**: the desktop draws the title bar, window buttons, and resize borders,
+  and the menus sit in a normal bar below it.
+- **macOS**: the menus share the title bar with macOS-style buttons on the left.
+
+The title bar changes immediately. Compact and macOS windows have rounded corners,
+which need a window created with transparency: after switching from **System**,
+corners stay square until Xuan restarts.
+
+Quit with **File → Quit** (Ctrl+Q). It asks about unsaved changes and open Develop
+sessions, like closing the window.
+
 Preferences are separate from projects and window layout:
 
 - Linux: `$XDG_CONFIG_HOME/xuan/config.toml`, or `~/.config/xuan/config.toml` when
@@ -202,6 +218,7 @@ The file is created when a preference changes. For example:
 
 ```toml
 language = "zh-CN" # Use "en" for English (the default).
+title_bar = "system" # Or "compact" (the default) or "macos".
 ```
 
 Invalid or unreadable configuration is reported and the app starts with defaults.
