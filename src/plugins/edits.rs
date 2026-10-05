@@ -244,6 +244,12 @@ impl Reader {
         use image::ImageDecoder;
         use std::io::Read;
         let resolved = self.access.readable(path)?;
+        // A FIFO or device would block the UI thread on open or read.
+        ensure!(
+            std::fs::metadata(&resolved).is_ok_and(|m| m.is_file()),
+            "{} is not a regular file",
+            path.display()
+        );
         let mut bytes = Vec::new();
         std::fs::File::open(&resolved)
             .with_context(|| format!("Cannot read {}", path.display()))?
@@ -860,6 +866,21 @@ mod tests {
             std::os::unix::fs::symlink(outside.path(), &folder).unwrap();
             assert!(confined.writable_dir(&folder).is_err());
         }
+        // Only regular files are read, so a FIFO cannot block the UI.
+        #[cfg(unix)]
+        {
+            let fifo = root.path().join("fifo.png");
+            let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+            if made.is_ok_and(|status| status.success()) {
+                let error = reader.rgba(&fifo).unwrap_err().to_string();
+                assert!(error.contains("regular file"), "{error}");
+                let error = read_png(&fifo).unwrap_err().to_string();
+                assert!(error.contains("regular file"), "{error}");
+                let error = crate::io::import_image(&fifo).unwrap_err().to_string();
+                assert!(error.contains("regular file"), "{error}");
+            }
+        }
+        assert!(reader.rgba(root.path()).is_err());
         // The manifest's filesystem permission widens it.
         let reads = Access::new([root.path().to_path_buf()], FilesystemAccess::Read);
         assert!(reads.readable(&elsewhere).is_ok());

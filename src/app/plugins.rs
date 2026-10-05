@@ -778,6 +778,14 @@ impl EditorApp {
                     let path = (self.plugins.access(plugin))
                         .readable(Path::new(&path))
                         .map_err(|e| RpcError::invalid_params(format!("{e:#}")))?;
+                    // Projects may be folders; anything else must be a
+                    // regular file, as a FIFO would block the UI.
+                    if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() || m.is_dir()) {
+                        return Err(RpcError::invalid_params(format!(
+                            "{} is not a regular file",
+                            path.display()
+                        )));
+                    }
                     self.open_path(&path, false);
                     Ok(json!({"ok": true}))
                 } else if let Some(url) = string("url") {

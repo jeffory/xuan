@@ -75,6 +75,12 @@ fn reserve_pixels(width: u32, height: u32, used: &mut u64) -> Result<()> {
 
 pub fn import_image(path: &Path) -> Result<RgbaImage> {
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
+    // Opening a FIFO or device could block forever.
+    ensure!(
+        metadata.is_file(),
+        "{} is not a regular file",
+        path.display()
+    );
     ensure!(metadata.len() <= MAX_ASSET, "Image exceeds 512 MiB");
     let mut bytes = Vec::new();
     File::open(path)?
