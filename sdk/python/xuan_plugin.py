@@ -244,6 +244,18 @@ class Job:
         """A file path inside the job's working directory."""
         return os.path.join(self.work_dir, name)
 
+    def model_path(self, id: str) -> str:
+        """The path of a verified ``[[models]]`` file the action needs.
+
+        Raises ``NeedsSetup`` when it is not downloaded. Xuan downloads the
+        models an action lists in its manifest before running it."""
+        path = self.plugin.model_path(id)
+        if path is None:
+            raise NeedsSetup(
+                f"Model `{id}` is not downloaded. Download it in Plugins → Manage Plugins… → Models."
+            )
+        return path
+
     @property
     def source_path(self) -> Optional[str]:
         return self.source.get("path") if self.source else None
@@ -405,6 +417,14 @@ class Secrets(dict):
     __str__ = __repr__
 
 
+def _models(params: Dict[str, Any]) -> Dict[str, str]:
+    """The verified models in ``initialize`` or ``models/changed`` params."""
+    models = params.get("models")
+    if not isinstance(models, dict):
+        return {}
+    return {str(id): path for id, path in models.items() if isinstance(path, str)}
+
+
 class Plugin:
     """Register handlers with the decorators, then call ``run()``."""
 
@@ -415,6 +435,10 @@ class Plugin:
         self.secrets: Secrets = Secrets()
         self.plugin_dir: str = os.getcwd()
         self.data_dir: str = os.environ.get("XUAN_DATA_DIR", os.getcwd())
+        # The folder Xuan downloads ``[[models]]`` into (read only), and the
+        # verified model files in it by id.
+        self.models_dir: str = os.environ.get("XUAN_MODELS_DIR", "")
+        self.models: Dict[str, str] = {}
         self.host_info: Dict[str, Any] = {}
         self._actions: Dict[str, Callable[[Job], Any]] = {}
         self._estimates: Dict[str, Callable[[Job], Any]] = {}
@@ -424,6 +448,7 @@ class Plugin:
         self._on_initialize: Optional[Callable[[], Any]] = None
         self._on_settings: Optional[Callable[[], Any]] = None
         self._on_document_changed: Optional[Callable[[Dict[str, Any]], Any]] = None
+        self._on_models: Optional[Callable[[], Any]] = None
         self._jobs: Dict[str, Job] = {}
         self._jobs_lock = threading.Lock()
         self._stopping = threading.Event()
@@ -481,6 +506,16 @@ class Plugin:
     def on_document_changed(self, function: Callable[[Dict[str, Any]], Any]) -> Callable[[Dict[str, Any]], Any]:
         self._on_document_changed = function
         return function
+
+    def on_models(self, function: Callable[[], Any]) -> Callable[[], Any]:
+        """Called after ``models/changed``, when a model was downloaded or deleted."""
+        self._on_models = function
+        return function
+
+    def model_path(self, id: str) -> Optional[str]:
+        """The path of a verified ``[[models]]`` file, or ``None`` while it
+        is missing, downloading or failed verification."""
+        return self.models.get(id)
 
     # --- runtime ------------------------------------------------------
     def update_pane(self, pane: str, tree: Dict[str, Any]) -> None:
@@ -546,6 +581,8 @@ class Plugin:
             self.secrets = Secrets(params.get("secrets") or {})
             self.plugin_dir = params.get("plugin_dir") or self.plugin_dir
             self.data_dir = params.get("data_dir") or self.data_dir
+            self.models_dir = params.get("models_dir") or self.models_dir
+            self.models = _models(params)
             self.host_info = params.get("host") or {}
             if self._on_initialize:
                 self._on_initialize()
@@ -607,6 +644,10 @@ class Plugin:
             self.secrets = Secrets(params.get("secrets") or {})
             if self._on_settings:
                 threading.Thread(target=self._on_settings, daemon=True).start()
+        elif method == "models/changed":
+            self.models = _models(params)
+            if self._on_models:
+                threading.Thread(target=self._on_models, daemon=True).start()
         elif method == "document/changed":
             if self._on_document_changed:
                 threading.Thread(target=self._on_document_changed, args=(params,), daemon=True).start()

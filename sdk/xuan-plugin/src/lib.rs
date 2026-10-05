@@ -20,7 +20,7 @@
 //! Handlers run on worker threads, so they may call back into the editor
 //! through [`Host`] while the editor keeps servicing messages.
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     io::{BufRead, Write},
     path::{Path, PathBuf},
     sync::{
@@ -162,9 +162,37 @@ impl Transport {
 pub struct Host {
     transport: Arc<Transport>,
     pub timeout: Duration,
+    /// The verified model files, by id, as the editor last sent them.
+    models: Arc<Mutex<BTreeMap<String, PathBuf>>>,
+}
+
+/// The verified models in `initialize` or `models/changed` params.
+fn models_from(params: &Value) -> BTreeMap<String, PathBuf> {
+    params
+        .get("models")
+        .and_then(Value::as_object)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|(id, path)| Some((id.clone(), PathBuf::from(path.as_str()?))))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl Host {
+    /// The path of a `[[models]]` file the editor downloaded and verified,
+    /// or `None` while it is missing, downloading or failed verification.
+    pub fn model_path(&self, id: &str) -> Option<PathBuf> {
+        self.models.lock().ok()?.get(id).cloned()
+    }
+
+    fn set_models(&self, models: BTreeMap<String, PathBuf>) {
+        if let Ok(mut current) = self.models.lock() {
+            *current = models;
+        }
+    }
+
     pub fn request(&self, method: &str, params: Value) -> Result<Value> {
         self.transport.request(method, params, self.timeout)
     }
@@ -365,6 +393,17 @@ impl Job {
             "job/progress",
             json!({"job": self.id, "fraction": fraction.map(|f| f.clamp(0.0, 1.0)), "message": message}),
         );
+    }
+
+    /// The path of a verified `[[models]]` file the action needs, or a
+    /// setup error when it is not there. Xuan downloads the models an
+    /// action lists in its manifest before running it.
+    pub fn model_path(&self, id: &str) -> Result<PathBuf> {
+        self.host.model_path(id).ok_or_else(|| {
+            RpcError::needs_setup(format!(
+                "Model `{id}` is not downloaded. Download it in Plugins → Manage Plugins… → Models."
+            ))
+        })
     }
 
     /// A file path inside the job's working directory. Write outputs here:
@@ -650,6 +689,11 @@ pub struct Settings {
     pub secrets: Value,
     pub plugin_dir: PathBuf,
     pub data_dir: PathBuf,
+    /// The folder Xuan downloads `[[models]]` into. Read only: only Xuan
+    /// writes there.
+    pub models_dir: PathBuf,
+    /// The verified model files, by id.
+    pub models: BTreeMap<String, PathBuf>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -669,6 +713,8 @@ impl std::fmt::Debug for Settings {
             .field("secrets", &secrets)
             .field("plugin_dir", &self.plugin_dir)
             .field("data_dir", &self.data_dir)
+            .field("models_dir", &self.models_dir)
+            .field("models", &self.models)
             .finish()
     }
 }
@@ -680,6 +726,11 @@ impl Settings {
 
     pub fn secret(&self, id: &str) -> Option<&str> {
         self.secrets.get(id).and_then(Value::as_str)
+    }
+
+    /// The path of a verified `[[models]]` file, if it is ready.
+    pub fn model_path(&self, id: &str) -> Option<&Path> {
+        self.models.get(id).map(PathBuf::as_path)
     }
 }
 
@@ -763,6 +814,7 @@ impl Plugin {
         let host = Host {
             transport: transport.clone(),
             timeout: Duration::from_secs(120),
+            models: Arc::default(),
         };
         let runtime = Arc::new(Runtime {
             plugin: self,
@@ -847,7 +899,10 @@ impl Runtime {
                     secrets: params.get("secrets").cloned().unwrap_or(Value::Null),
                     plugin_dir: PathBuf::from(string("plugin_dir")),
                     data_dir: PathBuf::from(string("data_dir")),
+                    models_dir: PathBuf::from(string("models_dir")),
+                    models: models_from(&params),
                 };
+                self.host.set_models(settings.models.clone());
                 if let Some(handler) = &self.plugin.on_settings {
                     handler(&settings);
                 }
@@ -955,6 +1010,16 @@ impl Runtime {
                 {
                     if let Some(flag) = jobs.get(job) {
                         flag.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+            Some("models/changed") => {
+                let models = models_from(&params);
+                self.host.set_models(models.clone());
+                if let Ok(mut settings) = self.settings.lock() {
+                    settings.models = models;
+                    if let Some(handler) = &self.plugin.on_settings {
+                        handler(&settings);
                     }
                 }
             }
@@ -1216,6 +1281,7 @@ mod tests {
                     pending: Mutex::new(HashMap::new()),
                 }),
                 timeout: Duration::from_secs(1),
+                models: Arc::default(),
             },
             cancelled: Arc::new(AtomicBool::new(false)),
         };
@@ -1226,5 +1292,20 @@ mod tests {
         assert!(job.input::<String>("missing").is_err());
         assert_eq!(job.path("out.png"), PathBuf::from("/tmp/out.png"));
         assert!(job.check_cancelled().is_ok());
+
+        // Models: a setup error until the editor reports the model verified.
+        let error = job.model_path("net").unwrap_err();
+        assert_eq!(error.code, codes::NEEDS_SETUP);
+        assert!(error.message.contains("Models"), "{error}");
+        job.host
+            .set_models(models_from(&json!({"models": {"net": "/m/net.onnx"}})));
+        assert_eq!(job.model_path("net").unwrap(), PathBuf::from("/m/net.onnx"));
+        assert_eq!(job.host.model_path("other"), None);
+        let settings = Settings {
+            models: models_from(&json!({"models": {"net": "/m/net.onnx", "bad": 3}})),
+            ..Settings::default()
+        };
+        assert_eq!(settings.model_path("net"), Some(Path::new("/m/net.onnx")));
+        assert_eq!(settings.model_path("bad"), None);
     }
 }

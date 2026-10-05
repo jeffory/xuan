@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from xuan_plugin import Job  # noqa: E402
+from xuan_plugin import Job, NEEDS_SETUP, NeedsSetup, Plugin  # noqa: E402
 
 
 class Provenance(unittest.TestCase):
@@ -28,6 +28,29 @@ class Provenance(unittest.TestCase):
         self.assertNotIn("provenance", Job.image("/tmp/a.png", provenance={}))
         self.assertNotIn("provenance", Job.new_document("/tmp/d.png"))
         self.assertNotIn("provenance", Job.mask("/tmp/m.png"))
+
+
+class Models(unittest.TestCase):
+    def test_paths_come_from_initialize_and_models_changed(self):
+        plugin = Plugin()
+        plugin._dispatch(
+            "initialize",
+            {"models_dir": "/d/models", "models": {"net": "/d/models/net.onnx", "bad": 3}},
+        )
+        self.assertEqual(plugin.models_dir, "/d/models")
+        self.assertEqual(plugin.model_path("net"), "/d/models/net.onnx")
+        self.assertIsNone(plugin.model_path("bad"))
+        job = Job(plugin, {"job": "j", "action": "a"})
+        self.assertEqual(job.model_path("net"), "/d/models/net.onnx")
+        with self.assertRaises(NeedsSetup) as raised:
+            job.model_path("extra")
+        self.assertEqual(raised.exception.code, NEEDS_SETUP)
+        self.assertIn("Models", raised.exception.message)
+        plugin._handle_notification(
+            {"method": "models/changed", "params": {"models": {"extra": "/d/models/extra.bin"}}}
+        )
+        self.assertEqual(job.model_path("extra"), "/d/models/extra.bin")
+        self.assertIsNone(plugin.model_path("net"))
 
 
 if __name__ == "__main__":
