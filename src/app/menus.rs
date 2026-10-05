@@ -54,11 +54,13 @@ fn plugin_items(
     };
     ui.separator();
     for item in items {
+        let mut button = Button::new(&item.label);
+        // An empty shortcut would still add a space to the accessible name.
+        if !item.shortcut.is_empty() {
+            button = button.shortcut_text(&item.shortcut);
+        }
         let response = ui
-            .add_enabled(
-                item.enabled,
-                Button::new(&item.label).shortcut_text(&item.shortcut),
-            )
+            .add_enabled(item.enabled, button)
             .on_hover_text(&item.source)
             .on_disabled_hover_text(&item.source);
         if response.clicked() {

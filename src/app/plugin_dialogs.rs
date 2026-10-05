@@ -184,6 +184,14 @@ impl EditorApp {
             self.close_plugin_action();
             return;
         };
+        // An action without inputs has no dialog; it is open only while the
+        // user confirms what it sends.
+        if spec.inputs.is_empty() {
+            if self.plugins.consent.is_none() {
+                self.close_plugin_action();
+            }
+            return;
+        }
         let mut open = true;
         let mut run = false;
         let mut cancel = false;
@@ -458,7 +466,8 @@ impl EditorApp {
             .default_width(680.0)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.horizontal_top(|ui| {
+                let mut separator = None;
+                let columns = ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(180.0);
                         ui.set_min_height(320.0);
@@ -490,7 +499,10 @@ impl EditorApp {
                             reload = true;
                         }
                     });
-                    ui.separator();
+                    // A separator here would take all the height the window
+                    // may grow to; draw one as tall as the columns instead.
+                    separator = Some(ui.cursor().min.x + 6.0);
+                    ui.add_space(12.0);
                     ui.vertical(|ui| {
                         ui.set_min_width(440.0);
                         let Some(manifest) = selected
@@ -617,6 +629,10 @@ impl EditorApp {
                         }
                     });
                 });
+                if let Some(x) = separator {
+                    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+                    ui.painter().vline(x, columns.response.rect.y_range(), stroke);
+                }
                 if !errors.is_empty() {
                     ui.separator();
                     ui.label(RichText::new(tr("Could not load")).strong());

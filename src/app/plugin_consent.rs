@@ -162,8 +162,8 @@ impl EditorApp {
         {
             let mut line = format!(
                 "{} {}",
-                edit.regions.len(),
-                tr("regions: their positions and sizes")
+                tr("Positions and sizes of the regions:"),
+                edit.regions.len()
             );
             if edit.regions.iter().any(|r| r.mask.is_some()) {
                 line.push_str(&format!(", {}", tr("with the shape of the selection")));

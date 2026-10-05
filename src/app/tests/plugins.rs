@@ -40,11 +40,14 @@ import = true
 "#;
 
 /// Answers initialize, copies the job's source image back as the result,
-/// renders a small pane and imports `.foo` files as a fixture PNG.
+/// renders a small pane and imports `.foo` files as a fixture PNG. Every
+/// line it receives is appended to `received.log` in its folder, and a click
+/// on a pane widget named `export` makes it ask for `document/export`.
 fn script(fixture: &Path) -> String {
     format!(
         r#"
 while IFS= read -r line; do
+  printf '%s\n' "$line" >> received.log
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\),"method".*/\1/p')
   case "$line" in
     *'"method":"initialize"'*)
@@ -61,6 +64,9 @@ while IFS= read -r line; do
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"outputs":[{{"kind":"image","path":"%s/result.png","name":"Echoed"}},{{"kind":"text","text":"prompt=%s"}}]}}}}\n' "$id" "$work" "$prompt" ;;
     *'"method":"pane/render"'*)
       case "$line" in
+        *'"widget":"export"'*)
+          printf '{{"jsonrpc":"2.0","id":"export","method":"document/export","params":{{}}}}\n'
+          text="exporting" ;;
         *'"reason":"event"'*) text="clicked" ;;
         *'"reason":"document"'*) text="changed" ;;
         *) text="opened" ;;
@@ -76,6 +82,7 @@ while IFS= read -r line; do
     *'"method":"shutdown"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":null}}\n' "$id"; exit 0 ;;
     *'"method":"host/'*|*'"method":"document/changed"'*|*'"method":"job/cancel"'*) ;;
+    *'"id":"export"'*) ;;
     *) printf 'unexpected: %s\n' "$line" >&2 ;;
   esac
 done
@@ -94,6 +101,132 @@ fn install_mock(app: &mut EditorApp, dir: &Path) {
     let manifest = Manifest::load(dir).unwrap();
     app.install_plugins(vec![manifest], vec![]);
     app.grant_plugin("mock", true);
+}
+
+/// The mock manifest declaring network `hosts`, with a second action,
+/// "Send Layer", that has no inputs and sends the active layer.
+fn network_manifest(hosts: &str) -> String {
+    format!(
+        "{}\n[[actions]]\nid = \"send\"\nlabel = \"Send Layer\"\n",
+        MANIFEST.replace(
+            "[[actions]]",
+            &format!("[permissions]\nnetwork = [{hosts}]\n\n[[actions]]"),
+        )
+    )
+}
+
+/// Installs and allows the mock plugin declaring the host `example.com`.
+fn install_network_mock(app: &mut EditorApp, dir: &Path) {
+    let fixture = dir.join("fixture.png");
+    RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
+        .save(&fixture)
+        .unwrap();
+    std::fs::write(dir.join("plugin.sh"), script(&fixture)).unwrap();
+    std::fs::write(dir.join("plugin.toml"), network_manifest("\"example.com\"")).unwrap();
+    app.install_plugins(vec![Manifest::load(dir).unwrap()], vec![]);
+    app.grant_plugin("mock", true);
+}
+
+fn send_without_asking(app: &EditorApp) -> bool {
+    app.stored_grant("mock")
+        .is_some_and(|grant| grant.send_without_asking)
+}
+
+#[test]
+fn exports_to_network_plugins_follow_the_consent_rules() {
+    use crate::app::plugin_consent::ConsentRequest;
+    use serde_json::json;
+    use xuan::plugins::protocol::CANCELLED;
+    let dir = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = Some(config.path().join("config.toml"));
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    // A plugin that declares no network hosts is never asked about.
+    assert!(!app.sends_need_consent("mock"));
+    assert_eq!(app.export_answer("mock"), Some(true));
+    assert!(plugin_request(&mut app, "document/export", json!({})).is_ok());
+
+    install_network_mock(&mut app, dir.path());
+    assert!(app.sends_need_consent("mock"));
+    assert_eq!(app.export_answer("mock"), None);
+    for method in ["document/export", "layer/export", "selection/export"] {
+        let refused = plugin_request(&mut app, method, json!({})).unwrap_err();
+        assert_eq!(refused.code, CANCELLED, "{method}");
+    }
+    // The document's structure is not document data.
+    assert!(plugin_request(&mut app, "document/get", json!({})).is_ok());
+    // While an action the user confirmed runs, the plugin may export more;
+    // a job that had nothing to confirm gives it nothing extra.
+    app.plugins.jobs.push(mock_job(&app));
+    assert_eq!(app.export_answer("mock"), None);
+    app.plugins.jobs[0].consented = true;
+    assert_eq!(app.export_answer("mock"), Some(true));
+    assert!(plugin_request(&mut app, "document/export", json!({})).is_ok());
+    app.plugins.jobs.clear();
+    // An answer holds until the plugin stops.
+    app.plugins.export_answers.insert("mock".into(), false);
+    assert_eq!(app.export_answer("mock"), Some(false));
+    app.stop_plugin("mock");
+    assert_eq!(app.export_answer("mock"), None);
+
+    // "Don't ask again" is stored in the grant and saved.
+    app.plugins.consent = Some(ConsentRequest {
+        plugin: "mock".into(),
+        action: None,
+        items: Vec::new(),
+        dont_ask: true,
+    });
+    app.dialog = Some(Dialog::PluginConsent);
+    app.answer_consent(true);
+    assert_eq!(app.dialog, None);
+    assert!(send_without_asking(&app));
+    assert!(!app.sends_need_consent("mock"));
+    assert_eq!(app.export_answer("mock"), Some(true));
+    let saved = xuan::config::Config::load(app.config_path.as_ref().unwrap()).unwrap();
+    assert!(
+        saved.plugins["mock"]
+            .grant
+            .as_ref()
+            .unwrap()
+            .send_without_asking
+    );
+    // Allowing the same plugin again keeps it; "Ask Again" forgets it.
+    app.grant_plugin("mock", true);
+    assert!(send_without_asking(&app));
+    app.ask_before_sending_again("mock");
+    assert!(!send_without_asking(&app));
+    assert_eq!(app.export_answer("mock"), None);
+
+    // A grant change resets it: the plugin is reviewed and asks again.
+    app.config
+        .plugins
+        .get_mut("mock")
+        .unwrap()
+        .grant
+        .as_mut()
+        .unwrap()
+        .send_without_asking = true;
+    let wider = Manifest::parse(
+        &network_manifest("\"example.com\", \"upload.example.com\""),
+        dir.path(),
+    )
+    .unwrap();
+    app.install_plugins(vec![wider], vec![]);
+    assert!(!app.plugin_granted("mock"));
+    assert!(app.sends_need_consent("mock"));
+    app.grant_plugin("mock", true);
+    assert!(!send_without_asking(&app));
+    assert!(app.sends_need_consent("mock"));
+
+    // A grant saved before the answer existed still allows the plugin.
+    app.save_config();
+    let text = std::fs::read_to_string(app.config_path.as_ref().unwrap()).unwrap();
+    assert!(!text.contains("send_without_asking"), "{text}");
+    app.config = toml::from_str(&text.replace('\n', "\r\n")).unwrap();
+    assert!(app.plugin_granted("mock"));
 }
 
 #[test]
@@ -1554,5 +1687,411 @@ done
             1
         );
         assert!(app.plugins.errors[0].error.contains("mock/echo"));
+    }
+
+    /// Everything the mock plugin received so far.
+    fn received(dir: &Path) -> String {
+        std::fs::read_to_string(dir.join("received.log")).unwrap_or_default()
+    }
+
+    /// Runs frames for a moment, so a plugin that was sent something has time to log it.
+    fn settle(context: &egui::Context, app: &mut EditorApp) {
+        for _ in 0..20 {
+            frame(context, app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_network_plugin_asks_before_its_action_sends_document_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_network_mock(&mut app, dir.path());
+        app.dimensions = [32, 32];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        let layer = app
+            .session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .name
+            .clone();
+
+        // The estimate goes out before the user agreed to anything, so it
+        // carries neither the image nor the texts.
+        app.start_plugin_action("mock", "echo");
+        run_until(&context, &mut app, |app| {
+            app.plugins.action.as_ref().unwrap().estimate.is_some()
+        });
+        let log = received(dir.path());
+        let estimate = log.lines().find(|l| l.contains("action/estimate")).unwrap();
+        assert!(estimate.contains("\"source\":null"), "{estimate}");
+        assert!(!estimate.contains("hello"), "{estimate}");
+
+        app.add_region(Point::new(4.0, 4.0), Point::new(20.0, 20.0));
+        (app.plugins.action.as_mut().unwrap().regions[0].fields)
+            .insert("desc".into(), "a red hat".into());
+        app.run_plugin_action();
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        assert!(app.plugins.jobs.is_empty());
+        let consent = app.plugins.consent.clone().unwrap();
+        assert_eq!(consent.action.as_deref(), Some("echo"));
+        assert_eq!(
+            consent.items,
+            [
+                format!("The pixels of the layer “{layer}”, cropped around the regions"),
+                "Positions and sizes of the regions: 1".into(),
+                "Region 1 · desc: “a red hat”".into(),
+                "prompt: “hello”".into(),
+                "The document's size and the names and positions of its layers".into(),
+            ]
+        );
+        frame(&context, &mut app);
+
+        // Cancel sends nothing and keeps the action's dialog for changes.
+        app.answer_consent(false);
+        assert_eq!(app.dialog, None);
+        assert!(app.plugins.consent.is_none());
+        assert!(app.plugins.action.is_some());
+        assert!(app.plugins.jobs.is_empty());
+        assert_eq!(app.status, "Cancelled; nothing was sent");
+        settle(&context, &mut app);
+        let log = received(dir.path());
+        assert!(!log.contains("action/run"), "{log}");
+        assert!(
+            !log.contains("a red hat") && !log.contains("source.png"),
+            "{log}"
+        );
+
+        // Send runs it with exactly that.
+        app.run_plugin_action();
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        app.answer_consent(true);
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert!(app.plugins.jobs[0].consented);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let log = received(dir.path());
+        let run = log.lines().find(|l| l.contains("action/run")).unwrap();
+        assert!(run.contains("a red hat") && run.contains("\"prompt\":\"hello\""));
+        assert!(run.contains("source.png"));
+        // Not saved: the next run asks again.
+        assert!(!send_without_asking(&app));
+    }
+
+    #[test]
+    fn a_plugin_without_network_hosts_runs_without_a_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        app.start_plugin_action("mock", "echo");
+        app.run_plugin_action();
+        assert!(app.plugins.consent.is_none());
+        assert_ne!(app.dialog, Some(Dialog::PluginConsent));
+        assert_eq!(app.plugins.jobs.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+    }
+
+    #[test]
+    fn dont_ask_again_lasts_until_the_grant_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        app.config_path = Some(config.path().join("config.toml"));
+        install_network_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let layer = app
+            .session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .name
+            .clone();
+
+        // An action without inputs asks straight away.
+        app.start_plugin_action("mock", "send");
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        assert_eq!(
+            app.plugins.consent.as_ref().unwrap().items,
+            [
+                format!("The pixels of the layer “{layer}”"),
+                "The document's size and the names and positions of its layers".into(),
+            ]
+        );
+        app.plugins.consent.as_mut().unwrap().dont_ask = true;
+        app.answer_consent(true);
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert!(send_without_asking(&app));
+        let text = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+        assert!(text.contains("send_without_asking = true"), "{text}");
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        app.resolve_proposal(false);
+
+        // The next run goes straight out.
+        app.start_plugin_action("mock", "send");
+        assert!(app.plugins.consent.is_none());
+        assert_eq!(app.plugins.jobs.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        app.resolve_proposal(false);
+
+        // New permissions are reviewed again, and the answer goes with the old grant.
+        let wider = Manifest::parse(
+            &network_manifest("\"example.com\", \"upload.example.com\""),
+            dir.path(),
+        )
+        .unwrap();
+        app.install_plugins(vec![wider], vec![]);
+        app.start_plugin_action("mock", "send");
+        assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+        app.dialog = None;
+        app.plugins.permission_request = None;
+        app.grant_plugin("mock", true);
+        app.start_plugin_action("mock", "send");
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        assert!(!send_without_asking(&app));
+        // Cancelling an action without inputs leaves nothing open.
+        app.answer_consent(false);
+        assert!(app.plugins.action.is_none());
+        assert!(app.plugins.jobs.is_empty());
+    }
+
+    #[test]
+    fn exports_outside_an_action_wait_for_the_users_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_network_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        frame(&context, &mut app);
+        let key = "plugin:mock/info";
+        run_until(&context, &mut app, |app| {
+            app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        let export = |app: &mut EditorApp| {
+            app.render_pane(
+                key,
+                "event",
+                Some(xuan::plugins::ui::Event {
+                    widget: "export".into(),
+                    value: serde_json::Value::Bool(true),
+                }),
+            );
+        };
+        let answers = |dir: &Path| -> Vec<String> {
+            received(dir)
+                .lines()
+                .filter(|l| l.contains("\"id\":\"export\""))
+                .map(str::to_owned)
+                .collect()
+        };
+
+        // The request waits while the user is asked.
+        export(&mut app);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginConsent)
+        });
+        let consent = app.plugins.consent.clone().unwrap();
+        assert_eq!(consent.action, None);
+        assert_eq!(consent.items, ["The whole image, flattened"]);
+        assert_eq!(app.plugins.held.len(), 1);
+        settle(&context, &mut app);
+        assert!(answers(dir.path()).is_empty());
+
+        // Cancel answers it with an error, and later ones without asking.
+        app.answer_consent(false);
+        run_until(&context, &mut app, |_| answers(dir.path()).len() == 1);
+        assert!(answers(dir.path())[0].contains("-32800"));
+        export(&mut app);
+        run_until(&context, &mut app, |_| answers(dir.path()).len() == 2);
+        assert!(answers(dir.path())[1].contains("-32800"));
+        assert_eq!(app.dialog, None);
+
+        // Once the plugin stops, it is asked again; Send hands over the export.
+        app.stop_plugin("mock");
+        export(&mut app);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginConsent)
+        });
+        app.answer_consent(true);
+        run_until(&context, &mut app, |_| answers(dir.path()).len() == 3);
+        let sent = &answers(dir.path())[2];
+        assert!(
+            sent.contains("\"result\"") && sent.contains(".png"),
+            "{sent}"
+        );
+        assert!(!send_without_asking(&app));
+    }
+
+    #[test]
+    fn offline_mode_stops_network_plugins_and_disables_their_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain_dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        app.config_path = Some(config.path().join("config.toml"));
+        install_network_mock(&mut app, dir.path());
+        std::fs::copy(
+            dir.path().join("plugin.sh"),
+            plain_dir.path().join("plugin.sh"),
+        )
+        .unwrap();
+        let plain = Manifest::parse(
+            &MANIFEST
+                .replace("id = \"mock\"", "id = \"plain\"")
+                .replace("shortcut = \"Ctrl+Shift+E\"\n", ""),
+            plain_dir.path(),
+        )
+        .unwrap();
+        let network = app.plugins.manifest("mock").unwrap().clone();
+        app.install_plugins(vec![network, plain], vec![]);
+        app.grant_plugin("plain", true);
+        app.config.panes.set_hidden("plugin:plain/info", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let key = "plugin:mock/info";
+        run_until(&context, &mut app, |app| {
+            app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        assert!(app.plugins.running("mock"));
+        assert!(app.command_enabled("mock/echo"));
+
+        app.set_network_plugins_disabled(true);
+        assert!(!app.plugins.running("mock"));
+        assert!(!app.command_enabled("mock/echo"));
+        assert!(!app.command_enabled("mock/send"));
+        assert!(app.command_enabled("plain/echo"));
+        let menu = app.plugin_menu_items();
+        let filter = &menu[&xuan::plugins::manifest::Menu::Filter];
+        assert!(filter.iter().any(|i| i.plugin == "mock" && !i.enabled));
+        assert!(filter.iter().any(|i| i.plugin == "plain" && i.enabled));
+        let text = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+        assert!(text.contains("disable_network_plugins = true"), "{text}");
+
+        // Nothing starts it again: not its pane, its actions or a render.
+        app.start_plugin_action("mock", "echo");
+        assert!(app.plugins.action.is_none());
+        assert!(app.status.contains("uses the network"), "{}", app.status);
+        app.run_command("mock/send");
+        assert!(app.plugins.consent.is_none() && app.plugins.jobs.is_empty());
+        app.render_pane(key, "open", None);
+        let output = frame(&context, &mut app);
+        settle(&context, &mut app);
+        assert!(!app.plugins.running("mock"));
+        assert!(app.plugins.panes.get(key).is_none_or(|p| p.tree.is_none()));
+        let placeholder = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.text().contains("plugins that use the network are disabled"))
+        });
+        assert!(placeholder, "the pane says why it is empty");
+        // A plugin that declares no network hosts still works.
+        app.start_plugin_action("plain", "echo");
+        assert!(
+            app.plugins.action.is_some(),
+            "{:?} {:?} {}",
+            app.error,
+            app.dialog,
+            app.status
+        );
+        app.close_plugin_action();
+
+        // Turned off, the pane opens again.
+        app.set_network_plugins_disabled(false);
+        assert!(app.command_enabled("mock/echo"));
+        run_until(&context, &mut app, |app| {
+            app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        assert!(app.plugins.running("mock"));
+    }
+
+    #[test]
+    fn the_send_prompt_works_through_the_ui() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_network_mock(ui.app_mut(), dir.path());
+        ui.app_mut()
+            .config
+            .panes
+            .set_hidden("plugin:mock/info", true);
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+
+        ui.open_menu("Plugins");
+        ui.click("Send Layer · Mock");
+        assert_eq!(ui.app().dialog, Some(Dialog::PluginConsent));
+        assert!(ui.has_role(Role::Button, "Send"));
+        assert!(ui.has_role(Role::Button, "Cancel"));
+        assert!(ui.has_role(Role::CheckBox, "Don't ask again for this plugin"));
+        assert!(ui.has("Mock (plugin mock) says it connects to: example.com"));
+        ui.click_role(Role::Button, "Cancel");
+        assert_eq!(ui.app().dialog, None);
+        assert!(ui.app().plugins.jobs.is_empty());
+        assert!(!received(dir.path()).contains("action/run"));
+
+        ui.open_menu("Plugins");
+        ui.click("Send Layer · Mock");
+        ui.click_role(Role::CheckBox, "Don't ask again for this plugin");
+        ui.click_role(Role::Button, "Send");
+        assert_ne!(ui.app().dialog, Some(Dialog::PluginConsent));
+        assert!(send_without_asking(ui.app()));
+        assert!(
+            !ui.app().plugins.jobs.is_empty() || ui.app().plugins.proposal.is_some(),
+            "{:?}",
+            ui.app().error
+        );
+    }
+
+    #[test]
+    fn offline_mode_greys_out_network_actions_in_the_menus_and_palette() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_network_mock(ui.app_mut(), dir.path());
+        ui.app_mut()
+            .config
+            .panes
+            .set_hidden("plugin:mock/info", true);
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+
+        // The quick toggle in Plugins → Manage Plugins…
+        ui.open_menu("Plugins");
+        ui.click("Manage Plugins…");
+        ui.click_role(Role::CheckBox, "Disable plugins that use the network");
+        assert!(ui.app().config.disable_network_plugins);
+        ui.click("Done");
+
+        ui.open_menu("Plugins");
+        assert!(!ui.enabled("Send Layer · Mock"));
+        ui.key(egui::Key::Escape);
+        ui.press(egui::Modifiers::CTRL, egui::Key::K);
+        ui.type_keys("send layer");
+        assert!(!ui.enabled("Send Layer · Mock, Plugins"));
+        ui.key(egui::Key::Enter);
+        assert!(ui.app().plugins.consent.is_none());
+        assert!(!ui.app().plugins.running("mock"));
     }
 }
