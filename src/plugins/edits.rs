@@ -471,6 +471,39 @@ pub enum Edit {
     Select {
         layer: Uuid,
     },
+    /// Grow the canvas by whole document pixels on each side, moving the
+    /// layers and guides like Canvas Size does. Needs `document = "edit"`,
+    /// also in a result.
+    ExtendCanvas {
+        #[serde(default)]
+        left: u32,
+        #[serde(default)]
+        top: u32,
+        #[serde(default)]
+        right: u32,
+        #[serde(default)]
+        bottom: u32,
+    },
+}
+
+impl Edit {
+    /// Whether the edit changes the document beyond what a read-only plugin
+    /// may propose as a result.
+    pub fn needs_edit_access(&self) -> bool {
+        matches!(self, Self::ExtendCanvas { .. })
+    }
+}
+
+/// How far a batch moves the document's content: the sum of the `left` and
+/// `top` of its `extend_canvas` edits. Outputs placed in the coordinates of
+/// the document as it was sent move by this much to stay on their content.
+pub fn origin_shift<'a>(edits: impl IntoIterator<Item = &'a Edit>) -> (f32, f32) {
+    edits
+        .into_iter()
+        .fold((0.0, 0.0), |(x, y), edit| match edit {
+            Edit::ExtendCanvas { left, top, .. } => (x + *left as f32, y + *top as f32),
+            _ => (x, y),
+        })
 }
 
 /// Apply a batch, reading its images through `reader`. The caller clones the
@@ -633,6 +666,14 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
             Edit::Select { layer } => {
                 find(document, *layer)?;
                 document.select(*layer, false);
+            }
+            Edit::ExtendCanvas {
+                left,
+                top,
+                right,
+                bottom,
+            } => {
+                crate::operations::extend_canvas(document, *left, *top, *right, *bottom)?;
             }
         }
     }
@@ -1076,6 +1117,63 @@ mod tests {
         assert!(document.selection.is_some());
         let parsed: Edit = serde_json::from_value(json!({"op": "select", "layer": base})).unwrap();
         assert_eq!(parsed, Edit::Select { layer: base });
+    }
+
+    #[test]
+    fn extend_canvas_parses_with_defaults_and_moves_the_content() {
+        let parsed: Edit =
+            serde_json::from_value(json!({"op": "extend_canvas", "left": 4, "bottom": 2})).unwrap();
+        assert_eq!(
+            parsed,
+            Edit::ExtendCanvas {
+                left: 4,
+                top: 0,
+                right: 0,
+                bottom: 2
+            }
+        );
+        assert!(parsed.needs_edit_access());
+        assert!(!Edit::Select { layer: Uuid::nil() }.needs_edit_access());
+        // Shrinking is not part of the op.
+        for bad in [json!(-1), json!(1.5), json!("4")] {
+            let value = json!({"op": "extend_canvas", "left": bad});
+            assert!(serde_json::from_value::<Edit>(value).is_err());
+        }
+        let mut document = Document::new(10, 8).unwrap();
+        document.layers[0].transform.x = 1.0;
+        let edits = [
+            parsed.clone(),
+            Edit::ExtendCanvas {
+                left: 0,
+                top: 3,
+                right: 5,
+                bottom: 0,
+            },
+        ];
+        run(&mut document, &edits).unwrap();
+        assert_eq!((document.width, document.height), (19, 13));
+        assert_eq!(
+            (
+                document.layers[0].transform.x,
+                document.layers[0].transform.y
+            ),
+            (5.0, 3.0)
+        );
+        assert_eq!(origin_shift(&edits), (4.0, 3.0));
+        assert_eq!(origin_shift(&[]), (0.0, 0.0));
+        // The size limits refuse the whole batch.
+        let mut copy = document.clone();
+        let error = run(
+            &mut copy,
+            &[Edit::ExtendCanvas {
+                left: 30_000,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            }],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("30000"), "{error}");
     }
 
     #[test]

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::{
     edits::{Export, fit, sub_transform, write_gray_png, write_png},
-    manifest::{MAX_MASK_RADIUS, MaskEmpty, Source, SourceKind, SourceMask},
+    manifest::{MAX_MASK_RADIUS, Margins, MaskEmpty, Source, SourceKind, SourceMask},
 };
 use crate::document::{Document, Layer, Mask, Point, Transform};
 
@@ -120,6 +120,10 @@ pub struct Prepared {
     pub regions: Vec<Value>,
     /// The selection mask sent with the source, same size as the export.
     pub mask: Option<PathBuf>,
+    /// New canvas the source was padded with (`source.extend`), in document
+    /// pixels, and the mask of that new area, same size as the export.
+    pub extend: Option<Margins>,
+    pub extend_mask: Option<PathBuf>,
     pub hash: Option<String>,
 }
 
@@ -134,6 +138,8 @@ impl Prepared {
             transform: Transform::new(1, 1),
             regions: Vec::new(),
             mask: None,
+            extend: None,
+            extend_mask: None,
             hash: None,
         }
     }
@@ -151,6 +157,8 @@ impl Prepared {
                 "document_x": export.x,
                 "document_y": export.y,
                 "mask": self.mask,
+                "extend": self.extend,
+                "extend_mask": self.extend_mask,
             }),
             None => Value::Null,
         }
@@ -242,6 +250,13 @@ pub fn prepare(
             Transform::new(document.width, document.height),
         ),
     };
+    let extend = (source.extend.as_ref())
+        .map(|extend| extend.margins())
+        .filter(|margins| !margins.is_empty() && source.from == SourceKind::Composite);
+    let (pixels, transform) = match extend {
+        Some(margins) => extended(&pixels, margins)?,
+        None => (pixels, transform),
+    };
     let (w, h) = pixels.dimensions();
     let mut prepared = Prepared {
         export: None,
@@ -252,6 +267,8 @@ pub fn prepare(
         transform,
         regions: Vec::new(),
         mask: None,
+        extend,
+        extend_mask: None,
         hash: Some(super::edits::pixel_hash(&pixels)),
     };
     let selection_mask = source_mask(document, source)?;
@@ -377,7 +394,71 @@ pub fn prepare(
         }
         None => {}
     }
+    if let Some(margins) = extend {
+        let size = (
+            pixels.width() - margins.left - margins.right,
+            pixels.height() - margins.top - margins.bottom,
+        );
+        let new_area = new_area_mask(&prepared, margins, size, exported.dimensions());
+        let path = dir.join("extend.png");
+        write_gray_png(&new_area, &path)?;
+        prepared.extend_mask = Some(path);
+    }
     Ok(prepared)
+}
+
+/// The composite padded with transparent pixels, and the document placement
+/// of the padded raster: its top-left is at `(-left, -top)`.
+fn extended(composite: &RgbaImage, margins: Margins) -> Result<(Arc<RgbaImage>, Transform)> {
+    let grow = |size: u32, a: u32, b: u32| {
+        size.checked_add(a)
+            .and_then(|size| size.checked_add(b))
+            .unwrap_or(u32::MAX)
+    };
+    let width = grow(composite.width(), margins.left, margins.right);
+    let height = grow(composite.height(), margins.top, margins.bottom);
+    crate::document::validate_size(width, height)
+        .context("The extended canvas would be too large")?;
+    let mut padded = RgbaImage::new(width, height);
+    image::imageops::replace(
+        &mut padded,
+        composite,
+        i64::from(margins.left),
+        i64::from(margins.top),
+    );
+    let transform = Transform {
+        x: -(margins.left as f32),
+        y: -(margins.top as f32),
+        ..Transform::new(width, height)
+    };
+    Ok((Arc::new(padded), transform))
+}
+
+/// White over every export pixel that touches the new canvas, black over
+/// those wholly on the old one. `size` is the old canvas, in pixels of the
+/// padded source.
+fn new_area_mask(
+    prepared: &Prepared,
+    margins: Margins,
+    size: (u32, u32),
+    export: (u32, u32),
+) -> GrayImage {
+    let (x0, y0) = (margins.left as f32, margins.top as f32);
+    let (x1, y1) = (x0 + size.0 as f32, y0 + size.1 as f32);
+    let (crop_x, crop_y, crop_w, crop_h) = prepared.crop;
+    // Per axis, as the export was resampled.
+    let sx = crop_w / export.0.max(1) as f32;
+    let sy = crop_h / export.1.max(1) as f32;
+    const EPSILON: f32 = 1e-3;
+    GrayImage::from_fn(export.0, export.1, |px, py| {
+        let left = crop_x + px as f32 * sx;
+        let top = crop_y + py as f32 * sy;
+        let old = left + EPSILON >= x0
+            && left + sx <= x1 + EPSILON
+            && top + EPSILON >= y0
+            && top + sy <= y1 + EPSILON;
+        image::Luma([if old { 0 } else { 255 }])
+    })
 }
 
 /// The selection mask an action asked for, before it is cut to the export.
@@ -894,7 +975,7 @@ mod tests {
 
         let selection_source = Source {
             from: SourceKind::Selection,
-            ..source
+            ..source.clone()
         };
         let prepared = prepare(&document, &selection_source, &[], dir.path()).unwrap();
         assert_eq!(prepared.crop, (100.0, 100.0, 200.0, 100.0));
@@ -1255,6 +1336,172 @@ mod tests {
                 .mask
                 .is_none()
         );
+    }
+
+    fn extending(max_side: Option<u32>, mask: SourceMask) -> Source {
+        use super::super::manifest::{Amount, Extend};
+        Source {
+            from: SourceKind::Composite,
+            max_side,
+            mask,
+            extend: Some(Extend {
+                left: Amount::Pixels(10),
+                top: Amount::Pixels(20),
+                right: Amount::Pixels(30),
+                bottom: Amount::Pixels(0),
+            }),
+            ..Source::default()
+        }
+    }
+
+    #[test]
+    fn an_extended_source_is_padded_and_sends_a_mask_of_the_new_area() {
+        let dir = tempfile::tempdir().unwrap();
+        // 400x300, with 100..300 x 100..200 selected.
+        let document = selected();
+        let prepared = prepare(
+            &document,
+            &extending(None, SourceMask::Selection),
+            &[],
+            dir.path(),
+        )
+        .unwrap();
+        let export = prepared.export.as_ref().unwrap();
+        assert_eq!((export.width, export.height), (440, 320));
+        assert_eq!((export.x, export.y, prepared.scale), (-10.0, -20.0, 1.0));
+        assert_eq!(
+            prepared.extend,
+            Some(Margins {
+                left: 10,
+                top: 20,
+                right: 30,
+                bottom: 0
+            })
+        );
+        let sent = super::super::edits::read_png(&export.path).unwrap();
+        // New canvas is transparent; the layer (blue from document (20, 10))
+        // sits 10 right and 20 down.
+        assert_eq!(sent.get_pixel(5, 5)[3], 0);
+        assert_eq!(sent.get_pixel(435, 100)[3], 0);
+        assert_eq!(*sent.get_pixel(60, 60), image::Rgba([0, 0, 255, 255]));
+        // The layer's red pixel is document (220, 160).
+        assert!(sent.get_pixel(231, 181)[0] > 100);
+        let new_area =
+            super::super::edits::read_gray_png(prepared.extend_mask.as_ref().unwrap()).unwrap();
+        assert_eq!(new_area.dimensions(), (440, 320));
+        let at = |x, y| new_area.get_pixel(x, y)[0];
+        assert_eq!(
+            (at(9, 100), at(10, 100), at(409, 100), at(410, 100)),
+            (255, 0, 0, 255)
+        );
+        assert_eq!((at(100, 19), at(100, 20), at(100, 319)), (255, 0, 0));
+        // The selection mask uses the same grid: document (110, 110) is
+        // selected, and nothing in the new area is.
+        let selection = sent_mask(&prepared);
+        assert_eq!(selection.dimensions(), (440, 320));
+        assert_eq!(selection.get_pixel(120, 130)[0], 255);
+        assert_eq!(selection.get_pixel(110, 120)[0], 255);
+        assert_eq!(selection.get_pixel(109, 130)[0], 0);
+        assert_eq!(selection.get_pixel(5, 5)[0], 0);
+        let described = prepared.describe();
+        assert_eq!(
+            described["extend"],
+            json!({"left": 10, "top": 20, "right": 30, "bottom": 0})
+        );
+        assert_eq!(described["extend_mask"], json!(prepared.extend_mask));
+        assert_eq!(
+            (&described["document_x"], &described["document_y"]),
+            (&json!(-10.0), &json!(-20.0))
+        );
+
+        // fit = "source" covers the extended bounds: once the canvas grows by
+        // the same margins, that is the whole new canvas.
+        let fit = Placed {
+            fit: Some(Fit::Source),
+            ..Placed::default()
+        };
+        let image = RgbaImage::new(880, 640);
+        let layer = place_layer(&prepared, "Out", image, 0.0, 0.0, &fit, None).unwrap();
+        let t = layer.transform;
+        assert_eq!((t.x, t.y, t.width, t.height), (-10.0, -20.0, 440.0, 320.0));
+    }
+
+    #[test]
+    fn an_extended_source_scales_both_masks_with_max_side() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = selected();
+        let prepared = prepare(
+            &document,
+            &extending(Some(220), SourceMask::Selection),
+            &[],
+            dir.path(),
+        )
+        .unwrap();
+        let export = prepared.export.as_ref().unwrap();
+        assert_eq!(
+            (export.width, export.height, prepared.scale),
+            (220, 160, 0.5)
+        );
+        let new_area =
+            super::super::edits::read_gray_png(prepared.extend_mask.as_ref().unwrap()).unwrap();
+        let selection = sent_mask(&prepared);
+        assert_eq!(new_area.dimensions(), (220, 160));
+        assert_eq!(selection.dimensions(), (220, 160));
+        let at = |x, y| new_area.get_pixel(x, y)[0];
+        // Export pixel 5 covers padded pixels 10..12, the first old column.
+        assert_eq!(
+            (at(4, 50), at(5, 50), at(204, 50), at(205, 50)),
+            (255, 0, 0, 255)
+        );
+        assert_eq!((at(50, 9), at(50, 10), at(50, 159)), (255, 0, 0));
+        // Document (110, 110) is padded (120, 130), export (60, 65).
+        assert_eq!(selection.get_pixel(60, 65)[0], 255);
+        assert_eq!(selection.get_pixel(2, 2)[0], 0);
+        // Without a selection mask the new-area mask still comes.
+        let plain = prepare(
+            &document,
+            &extending(Some(220), SourceMask::None),
+            &[],
+            dir.path(),
+        )
+        .unwrap();
+        assert!(plain.mask.is_none());
+        assert!(plain.extend_mask.is_some());
+        // Only composite sources extend; an unextended source sends no mask.
+        let layer = Source {
+            from: SourceKind::Layer,
+            ..extending(None, SourceMask::None)
+        };
+        let prepared = prepare(&document, &layer, &[], dir.path()).unwrap();
+        assert!(prepared.extend.is_none() && prepared.extend_mask.is_none());
+        assert!(prepared.describe()["extend"].is_null());
+    }
+
+    #[test]
+    fn an_extension_past_the_size_limits_is_refused_before_export() {
+        use super::super::manifest::{Amount, Extend};
+        let dir = tempfile::tempdir().unwrap();
+        let document = document();
+        for extend in [
+            Extend {
+                left: Amount::Pixels(29_700),
+                ..Extend::default()
+            },
+            Extend {
+                left: Amount::Pixels(19_600),
+                top: Amount::Pixels(9_700),
+                ..Extend::default()
+            },
+        ] {
+            let source = Source {
+                from: SourceKind::Composite,
+                extend: Some(extend),
+                ..Source::default()
+            };
+            let error = prepare(&document, &source, &[], dir.path()).unwrap_err();
+            assert!(format!("{error:#}").contains("too large"), "{error:#}");
+        }
+        assert!(!dir.path().join("source.png").exists());
     }
 
     #[test]

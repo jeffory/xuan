@@ -318,9 +318,34 @@ pub fn canvas_size(
     height: u32,
     anchor: [f32; 2],
 ) -> Result<()> {
-    validate_size(width, height)?;
     let dx = (width as f32 - document.width as f32) * anchor[0];
     let dy = (height as f32 - document.height as f32) * anchor[1];
+    resize_canvas(document, width, height, dx, dy)
+}
+
+/// Grow the canvas by whole pixels on each side: Canvas Size with the
+/// content moved `left`, `top` pixels into the larger canvas.
+pub fn extend_canvas(
+    document: &mut Document,
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+) -> Result<()> {
+    let grow = |size: u32, a: u32, b: u32| {
+        size.checked_add(a)
+            .and_then(|size| size.checked_add(b))
+            .unwrap_or(u32::MAX)
+    };
+    let width = grow(document.width, left, right);
+    let height = grow(document.height, top, bottom);
+    resize_canvas(document, width, height, left as f32, top as f32)
+}
+
+/// Change the canvas size, moving every layer, mask placement and guide by
+/// `dx`, `dy` so the content keeps its place relative to the new origin.
+fn resize_canvas(document: &mut Document, width: u32, height: u32, dx: f32, dy: f32) -> Result<()> {
+    validate_size(width, height)?;
     for layer in &mut document.layers {
         layer.transform.x += dx;
         layer.transform.y += dy;
@@ -667,5 +692,68 @@ mod tests {
         assert_eq!(positions(&document), [140.0, 7.5]);
         flip_canvas(&mut document, false);
         assert_eq!(positions(&document), [140.0, 22.5]);
+    }
+
+    #[test]
+    fn extending_the_canvas_moves_content_like_canvas_size() {
+        use crate::layout::{Guide, GuideAxis};
+        let setup = || {
+            let mut document = Document::new(100, 50).unwrap();
+            document.layers[0].transform.x = 10.0;
+            document.layers[0].transform.y = 5.0;
+            document.layers[0].mask = Some(crate::document::Mask {
+                placement: Some(Transform::new(100, 50)),
+                ..crate::document::Mask::white()
+            });
+            document.guides = vec![
+                Guide::new(GuideAxis::Vertical, 30.0),
+                Guide::new(GuideAxis::Horizontal, 10.0),
+            ];
+            document.selection = Some(Arc::new(GrayImage::new(100, 50)));
+            document
+        };
+        let state = |document: &Document| {
+            let layer = &document.layers[0];
+            let placement = layer.mask.as_ref().unwrap().placement.unwrap();
+            (
+                (document.width, document.height),
+                (layer.transform.x, layer.transform.y),
+                (placement.x, placement.y),
+                document
+                    .guides
+                    .iter()
+                    .map(|g| g.position)
+                    .collect::<Vec<_>>(),
+                document.selection.is_some(),
+            )
+        };
+        let mut extended = setup();
+        extend_canvas(&mut extended, 20, 10, 0, 30).unwrap();
+        assert_eq!(
+            state(&extended),
+            (
+                (120, 90),
+                (30.0, 15.0),
+                (20.0, 10.0),
+                vec![50.0, 20.0],
+                false
+            )
+        );
+        // Canvas Size to the same size, anchored right and a quarter down.
+        let mut resized = setup();
+        canvas_size(&mut resized, 120, 90, [1.0, 0.25]).unwrap();
+        assert_eq!(state(&resized), state(&extended));
+        // Nothing to add changes nothing but the selection, as Canvas Size does.
+        let mut same = setup();
+        extend_canvas(&mut same, 0, 0, 0, 0).unwrap();
+        assert_eq!(same.layers[0].transform.x, 10.0);
+        // The document size limits apply, overflow included.
+        let mut document = setup();
+        let error = extend_canvas(&mut document, 29_901, 0, 0, 0).unwrap_err();
+        assert!(error.to_string().contains("30000"), "{error}");
+        let error = extend_canvas(&mut document, 19_900, 9_950, 0, 0).unwrap_err();
+        assert!(error.to_string().contains("100 megapixels"), "{error}");
+        assert!(extend_canvas(&mut document, u32::MAX, 0, u32::MAX, 0).is_err());
+        assert_eq!(state(&document), state(&setup()));
     }
 }

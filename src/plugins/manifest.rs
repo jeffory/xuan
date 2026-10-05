@@ -378,6 +378,104 @@ pub struct Source {
     pub mask_grow: i32,
     /// What the mask is when nothing is selected.
     pub mask_empty: MaskEmpty,
+    /// Pad a `composite` source with new, transparent canvas on each side.
+    pub extend: Option<Extend>,
+}
+
+impl Source {
+    /// The source with every `extend` side that names an input replaced by
+    /// that input's value in `inputs`.
+    pub fn with_inputs(&self, inputs: &serde_json::Map<String, Value>) -> Self {
+        let mut source = self.clone();
+        if let Some(extend) = &mut source.extend {
+            for side in extend.sides_mut() {
+                if let Amount::Input(id) = side {
+                    *side = Amount::Pixels(
+                        inputs
+                            .get(id.as_str())
+                            .and_then(Value::as_f64)
+                            .filter(|v| v.is_finite())
+                            .map_or(0, |v| v.round().clamp(0.0, f64::from(MAX_EXTEND)) as u32),
+                    );
+                }
+            }
+        }
+        source
+    }
+}
+
+/// Largest `extend` side, in document pixels.
+pub const MAX_EXTEND: u32 = crate::document::MAX_SIDE;
+
+/// `source.extend`: how many document pixels of new canvas to add on each
+/// side of a `composite` source. Each side is a number or the id of an
+/// `integer` or `number` input of the action that holds it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Extend {
+    pub left: Amount,
+    pub top: Amount,
+    pub right: Amount,
+    pub bottom: Amount,
+}
+
+impl Extend {
+    fn sides(&self) -> [&Amount; 4] {
+        [&self.left, &self.top, &self.right, &self.bottom]
+    }
+
+    fn sides_mut(&mut self) -> [&mut Amount; 4] {
+        [
+            &mut self.left,
+            &mut self.top,
+            &mut self.right,
+            &mut self.bottom,
+        ]
+    }
+
+    /// The sides in pixels, once [`Source::with_inputs`] resolved the
+    /// inputs; a side still naming an input counts as 0.
+    pub fn margins(&self) -> Margins {
+        let [left, top, right, bottom] = self.sides().map(|side| match side {
+            Amount::Pixels(pixels) => *pixels,
+            Amount::Input(_) => 0,
+        });
+        Margins {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+}
+
+/// One side of `source.extend`: pixels, or the id of the input holding them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Amount {
+    Pixels(u32),
+    Input(String),
+}
+
+impl Default for Amount {
+    fn default() -> Self {
+        Self::Pixels(0)
+    }
+}
+
+/// Pixels added on each side of the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Margins {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+}
+
+impl Margins {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Default for Source {
@@ -391,6 +489,7 @@ impl Default for Source {
             mask_feather: 0.0,
             mask_grow: 0,
             mask_empty: MaskEmpty::Error,
+            extend: None,
         }
     }
 }
@@ -693,6 +792,28 @@ impl Manifest {
                 "action `{}` mask_feather and mask_grow must be within {MAX_MASK_RADIUS}",
                 action.id
             );
+            if let Some(extend) = &source.extend {
+                ensure!(
+                    action.kind == ActionKind::Edit && source.from == SourceKind::Composite,
+                    "action `{}` can only extend a composite source",
+                    action.id
+                );
+                for side in extend.sides() {
+                    match side {
+                        Amount::Pixels(pixels) => ensure!(
+                            *pixels <= MAX_EXTEND,
+                            "action `{}` extend sides must be at most {MAX_EXTEND}",
+                            action.id
+                        ),
+                        Amount::Input(id) => ensure!(
+                            action.inputs.iter().any(|input| &input.id == id
+                                && matches!(input.kind, InputKind::Integer | InputKind::Number)),
+                            "action `{}` extends by `{id}`, which is not one of its integer or number inputs",
+                            action.id
+                        ),
+                    }
+                }
+            }
             ensure!(
                 action
                     .source
@@ -921,6 +1042,80 @@ import = true
                 .to_string()
                 .contains("protocol 2")
         );
+    }
+
+    #[test]
+    fn extend_takes_pixels_or_a_number_input_of_a_composite_edit() {
+        use serde_json::json;
+        let action = |source: &str, input: &str| {
+            let text = format!(
+                "{EXAMPLE}\n[[actions]]\nid = \"out\"\nlabel = \"Out\"\nsource = {source}\n{input}"
+            );
+            Manifest::parse(&text, Path::new("."))
+        };
+        let amount = "[[actions.inputs]]\nid = \"amount\"\ntype = \"integer\"\ndefault = 64\n";
+        let manifest = action(
+            "{ from = \"composite\", max_side = 1024, extend = { left = 32, right = \"amount\" } }",
+            amount,
+        )
+        .unwrap();
+        let source = &manifest.action("out").unwrap().source;
+        let extend = source.extend.as_ref().unwrap();
+        assert_eq!(
+            (&extend.left, &extend.top, &extend.right),
+            (
+                &Amount::Pixels(32),
+                &Amount::Pixels(0),
+                &Amount::Input("amount".into())
+            )
+        );
+        // Input references count once the dialog's values are known.
+        assert_eq!(extend.margins().right, 0);
+        let resolve = |value: Value| {
+            let inputs = serde_json::Map::from_iter([("amount".to_owned(), value)]);
+            let margins = source.with_inputs(&inputs).extend.unwrap().margins();
+            (margins.left, margins.right)
+        };
+        assert_eq!(resolve(json!(100)), (32, 100));
+        assert_eq!(resolve(json!(12.6)), (32, 13));
+        assert_eq!(resolve(json!(-5)), (32, 0));
+        assert_eq!(resolve(json!(1e12)), (32, MAX_EXTEND));
+        assert_eq!(resolve(json!("lots")), (32, 0));
+        assert!(Margins::default().is_empty());
+        // Without extend nothing changes.
+        assert!(
+            manifest
+                .action("precise-edit")
+                .unwrap()
+                .source
+                .extend
+                .is_none()
+        );
+
+        let error = |source: &str, input: &str| action(source, input).unwrap_err().to_string();
+        assert!(error("{ from = \"layer\", extend = { left = 8 } }", "").contains("composite"));
+        assert!(error("{ from = \"selection\", extend = { left = 8 } }", "").contains("composite"));
+        assert!(
+            error("{ from = \"composite\", extend = { top = 30001 } }", "").contains("at most")
+        );
+        assert!(action("{ from = \"composite\", extend = { top = -1 } }", "").is_err());
+        assert!(
+            error(
+                "{ from = \"composite\", extend = { top = \"missing\" } }",
+                ""
+            )
+            .contains("missing")
+        );
+        let text = "[[actions.inputs]]\nid = \"amount\"\ntype = \"text\"\n";
+        assert!(
+            error(
+                "{ from = \"composite\", extend = { top = \"amount\" } }",
+                text
+            )
+            .contains("integer or number")
+        );
+        let generate = "{ from = \"composite\", extend = { left = 8 } }\nkind = \"generate\"";
+        assert!(error(generate, "").contains("composite"));
     }
 
     #[test]

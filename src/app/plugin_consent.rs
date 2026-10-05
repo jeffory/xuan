@@ -208,6 +208,24 @@ impl EditorApp {
                 {
                     image.push_str(&format!(", {}", tr("cropped around the regions")));
                 }
+                if spec.source.from == SourceKind::Composite
+                    && let Some(extend) = &spec.source.with_inputs(&edit.values).extend
+                {
+                    let margins = extend.margins();
+                    let sides: Vec<String> = [
+                        (margins.left, tr("on the left")),
+                        (margins.top, tr("at the top")),
+                        (margins.right, tr("on the right")),
+                        (margins.bottom, tr("at the bottom")),
+                    ]
+                    .into_iter()
+                    .filter(|(pixels, _)| *pixels > 0)
+                    .map(|(pixels, side)| format!("{pixels} px {side}"))
+                    .collect();
+                    if !sides.is_empty() {
+                        image.push_str(&format!(", {} {}", tr("extended by"), sides.join(", ")));
+                    }
+                }
                 if let Some(side) = spec.source.max_side {
                     image.push_str(&format!(", {} {side} px", tr("longest side at most")));
                 }

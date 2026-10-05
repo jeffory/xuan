@@ -802,3 +802,8 @@ Generation	生成信息
 Plugin	插件
 The plugin reported no model details.	插件没有报告模型详情。
 provenance entries that looked like secrets were removed	个看起来像密钥的来源信息条目已被移除
+extended by	并扩展画布
+on the left	于左侧
+at the top	于顶部
+on the right	于右侧
+at the bottom	于底部

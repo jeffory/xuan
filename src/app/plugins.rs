@@ -935,6 +935,8 @@ impl EditorApp {
                 let mut document = session.document.clone();
                 edits::apply(&mut document, &edits, &mut reader).map_err(internal)?;
                 session.history.begin(&name, &session.document);
+                session.fit |= (document.width, document.height)
+                    != (session.document.width, session.document.height);
                 session.document = document;
                 session.document.promote_image_masks();
                 session.history.commit();
@@ -1396,7 +1398,12 @@ impl EditorApp {
                 if !withheld
                     && (!estimate || spec.source.from != plugins::manifest::SourceKind::None) =>
             {
-                jobs::prepare(document, &spec.source, &regions, work_dir)?
+                jobs::prepare(
+                    document,
+                    &spec.source.with_inputs(&edit.values),
+                    &regions,
+                    work_dir,
+                )?
             }
             _ => Prepared::none(),
         };
@@ -1688,11 +1695,29 @@ impl EditorApp {
             "The plugin returned more than {} edits",
             edits::MAX_EDITS
         );
+        let manifest = self.plugins.manifest(&job.plugin).cloned();
+        // Extending the canvas is a document change, even as a proposal.
+        let result_edits = || {
+            outputs.iter().flat_map(|output| match output {
+                Output::Edit { edits } => edits.as_slice(),
+                _ => &[],
+            })
+        };
+        if result_edits().any(edits::Edit::needs_edit_access) {
+            ensure!(
+                manifest
+                    .as_ref()
+                    .is_some_and(|m| m.permissions.document == DocumentAccess::Edit),
+                "extend_canvas needs document = \"edit\" in the plugin's manifest"
+            );
+        }
+        // Images and masks are placed on the document as it was sent; when
+        // the result also extends the canvas they move with its content.
+        let (dx, dy) = edits::origin_shift(result_edits());
         // Every image of the result shares one pixel and layer budget, and
         // is read only from the plugin's folders, including this job's.
         let access = self.plugins.access(&job.plugin).with(job._work_dir.path());
         let mut reader = edits::Reader::new(access, edits::MAX_LAYERS);
-        let manifest = self.plugins.manifest(&job.plugin).cloned();
         let generated = |source: Option<Uuid>, hash: Option<String>| Generated {
             plugin: job.plugin.clone(),
             version: manifest
@@ -1772,6 +1797,8 @@ impl EditorApp {
                     }
                     layer.generated = Some(generated(source_layer, job.prepared.hash.clone()));
                     layer.provenance = provenance;
+                    layer.transform.x += dx;
+                    layer.transform.y += dy;
                     layers.push(layer);
                 }
                 Output::Document {
@@ -1869,9 +1896,18 @@ impl EditorApp {
         // Masks become the selection, in order, after every other change.
         // Changing the selection is not a pixel edit, so any plugin may.
         let before = (!masks.is_empty()).then(|| document.selection.clone());
+        let mut shifted = job.prepared.clone();
+        shifted.transform.x += dx;
+        shifted.transform.y += dy;
         for (mask, mode, x, y, placed) in masks {
             let size = (document.width, document.height);
-            let coverage = jobs::place_mask(&job.prepared, size, &mask, x, y, &placed)?;
+            // Without a source, `x`, `y` are document units themselves.
+            let (x, y) = if shifted.export.is_some() {
+                (x, y)
+            } else {
+                (x + dx, y + dy)
+            };
+            let coverage = jobs::place_mask(&shifted, size, &mask, x, y, &placed)?;
             selection::combine(&mut document, coverage, mode);
         }
         let selection = before.map(|before| ProposedSelection {
@@ -1880,6 +1916,9 @@ impl EditorApp {
         });
         document.validate()?;
         session.history.begin(&job.label, &session.document);
+        // A result that resized the canvas is shown whole.
+        session.fit |=
+            (document.width, document.height) != (session.document.width, session.document.height);
         session.document = document;
         session.invalidate();
         self.plugins.proposal = Some(Proposal {
@@ -1916,7 +1955,9 @@ impl EditorApp {
                 session.history.commit();
                 self.status = format!("{} {}", proposal.name, tr("applied"));
             } else {
+                let size = (session.document.width, session.document.height);
                 session.history.cancel(&mut session.document);
+                session.fit |= size != (session.document.width, session.document.height);
                 self.status = format!("{} {}", proposal.name, tr("discarded"));
             }
             session.invalidate();
