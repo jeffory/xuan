@@ -1,16 +1,22 @@
 name: Linux
 on:
   push:
-    branches: ['**']
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
   workflow_call:
 permissions:
   contents: read
+# Literal prefix: inside a reusable-workflow call github.workflow is the
+# caller's name, which would put Linux and Windows in one group.
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     # Keep native release binaries usable on glibc 2.35 and newer.
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
       XUAN_MAX_GLIBC: '2.35'
@@ -41,9 +47,8 @@ jobs:
           echo "$RUNNER_TEMP/appimage-tools" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/appimage-tools/bin" >> "$GITHUB_PATH"
       - name: Set up Rust
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
+        # Installs the toolchain pinned in rust-toolchain.toml.
+        run: rustup toolchain install
       - name: Check and test
         run: scripts/check.sh --gpu
       - name: Validate desktop integration

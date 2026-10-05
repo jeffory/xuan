@@ -1,12 +1,17 @@
 name: Windows
 on:
   push:
-    branches: ['**']
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
   workflow_call:
 permissions:
   contents: read
+# Literal prefix: inside a reusable-workflow call github.workflow is the
+# caller's name, which would put Linux and Windows in one group.
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: windows-2022
@@ -24,9 +29,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Set up Rust
-        run: |
-          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy
-          rustup default stable-x86_64-pc-windows-msvc
+        # Installs the toolchain pinned in rust-toolchain.toml.
+        run: rustup toolchain install
       - name: Check and test
         run: scripts/check.sh
       - name: Package
