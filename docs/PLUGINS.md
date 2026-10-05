@@ -39,9 +39,14 @@ every folder in the user plugins directory at start-up and from
 Set `XUAN_PLUGIN_PATH` (a `:`/`;`-separated list of directories) to load plugins
 from other places, for example a development checkout.
 
-Plugins run as ordinary processes with the user's rights. Xuan shows the
-permissions a plugin declares before it runs for the first time and records the
-grant in `config.toml`; it cannot enforce them. Install plugins you trust.
+Plugins run as ordinary processes with the user's rights. No plugin starts
+until the user allows it: Xuan shows its folder, its command and the
+permissions it declares (a plugin that declares none still asks to run), and
+records the grant in `config.toml`. Until then its panes show a "Review
+Permissions…" button instead of starting it. If the folder, the command or the
+permissions change, the plugin asks again. Folders that share a plugin id are
+reported and none of them is loaded. Xuan cannot enforce the permissions;
+install plugins you trust.
 
 ## Manifest
 

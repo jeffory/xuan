@@ -310,14 +310,14 @@ impl EditorApp {
     }
 
     /// Whether the plugin may run: enabled, and allowed by the user exactly as
-    /// it is now (same folder, command and permissions).
+    /// it is now (same folder, command and permissions). Every plugin needs
+    /// this before its process first starts, even one that declares nothing,
+    /// so a folder dropped into a plugin directory never runs on its own.
     pub(super) fn plugin_granted(&self, plugin: &str) -> bool {
         let Some(manifest) = self.plugins.manifest(plugin) else {
             return false;
         };
-        self.plugin_enabled(plugin)
-            && (manifest.permissions.is_empty()
-                || self.stored_grant(plugin) == Some(&grant_for(manifest)))
+        self.plugin_enabled(plugin) && self.stored_grant(plugin) == Some(&grant_for(manifest))
     }
 
     /// What the user last allowed for this plugin, which may no longer match it.

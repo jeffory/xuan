@@ -825,6 +825,59 @@ fn host_run_only_allows_safe_commands_and_the_plugins_own_actions() {
     assert_eq!(edit.values["prompt"], "from host/run");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_new_plugin_without_permissions_does_not_start_until_allowed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (context, mut app) = app();
+    let fixture = dir.path().join("fixture.png");
+    RgbaImage::new(2, 2).save(&fixture).unwrap();
+    // The process would leave a marker if it ever started.
+    let marker = dir.path().join("started");
+    std::fs::write(
+        dir.path().join("plugin.sh"),
+        format!("touch '{}'\n{}", marker.display(), script(&fixture)),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("plugin.toml"), MANIFEST).unwrap();
+    let manifest = Manifest::load(dir.path()).unwrap();
+    assert!(manifest.permissions.is_empty());
+    app.install_plugins(vec![manifest], vec![]);
+    app.dimensions = [16, 16];
+    app.new_document();
+    let key = "plugin:mock/info";
+    // The pane is visible, but only offers a review.
+    assert!(app.pane_open(key));
+    for _ in 0..5 {
+        frame(&context, &mut app);
+    }
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    assert!(!app.plugin_granted("mock"));
+    assert!(!app.plugins.running("mock"));
+    assert!(app.plugins.panes.get(key).is_none_or(|p| !p.pending));
+    let shapes = frame(&context, &mut app).shapes;
+    assert!(shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "Review Permissions…"
+    )));
+    // Actions and formats ask first too.
+    app.start_plugin_action("mock", "echo");
+    assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+    assert!(app.plugins.action.is_none());
+    app.dialog = None;
+    app.plugins.permission_request = None;
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!marker.exists());
+
+    app.grant_plugin("mock", true);
+    run_until(&context, &mut app, |app| {
+        app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+    });
+    assert!(app.plugins.running("mock"));
+    assert!(marker.exists());
+}
+
 #[test]
 fn grants_cover_the_reviewed_folder_command_and_permissions() {
     let dir = tempfile::tempdir().unwrap();
