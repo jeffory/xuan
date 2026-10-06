@@ -474,13 +474,10 @@ pub fn run(xuan: Xuan) {
                     xuan.shared.set_status(Status::Listening { port });
                     let app = router(xuan.clone(), port);
                     let shared = xuan.shared.clone();
-                    let served = axum::serve(listener, app)
-                        .with_graceful_shutdown(async move { shared.restart.notified().await })
-                        .await;
-                    if let Err(error) = served {
-                        xuan.shared.set_status(Status::Failed(error.to_string()));
-                        xuan.shared.restart.notified().await;
-                    }
+                    serve(listener, app, Limits::default(), async move {
+                        shared.restart.notified().await
+                    })
+                    .await;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
                     xuan.shared.set_status(Status::PortInUse { port: wanted });
@@ -496,6 +493,63 @@ pub fn run(xuan: Xuan) {
             }
         }
     });
+}
+
+/// How many connections are served at once, and how long a client may take
+/// to send a request's headers.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub connections: usize,
+    pub header_timeout: std::time::Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            connections: 32,
+            header_timeout: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
+/// Serve HTTP/1 on the listener until `shutdown`: at most
+/// `limits.connections` at a time (more are closed at once), and a
+/// connection that does not send its headers in time is closed, so a local
+/// program cannot tie the server up by opening idle connections.
+pub async fn serve(
+    listener: TcpListener,
+    app: Router,
+    limits: Limits,
+    shutdown: impl std::future::Future<Output = ()>,
+) {
+    let permits = Arc::new(tokio::sync::Semaphore::new(limits.connections));
+    tokio::pin!(shutdown);
+    loop {
+        let stream = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => stream,
+                Err(_) => {
+                    // Out of file descriptors, say: wait a moment.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    continue;
+                }
+            },
+            () = &mut shutdown => break,
+        };
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
+        let service = hyper_util::service::TowerToHyperService::new(app.clone());
+        tokio::spawn(async move {
+            let _permit = permit;
+            let connection = hyper::server::conn::http1::Builder::new()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(limits.header_timeout)
+                .serve_connection(hyper_util::rt::TokioIo::new(stream), service);
+            let _ = connection.await;
+        });
+    }
 }
 
 /// `connection.json` in the data folder: where the server listens (the

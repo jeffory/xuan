@@ -549,7 +549,12 @@ async fn the_server_listens_on_loopback_only_and_never_moves_port_silently() {
     let editor = FakeEditor::new(false);
     let shared = Arc::new(Shared::new("k".repeat(64), editor.dir.clone()));
     let app = server::router(Xuan { editor, shared }, port);
-    tokio::spawn(async move { axum::serve(second, app).await });
+    tokio::spawn(server::serve(
+        second,
+        app,
+        server::Limits::default(),
+        std::future::pending(),
+    ));
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
@@ -628,4 +633,49 @@ async fn edit_sessions_are_only_the_ones_the_server_issued() {
     assert_eq!(issued, ["MCP client 1", "MCP client 2"], "{sessions:?}");
     assert!(!shared.is_empty());
     assert!(shared.iter().all(|s| *s == server::STATELESS_SESSION));
+}
+
+#[tokio::test]
+async fn idle_and_excess_connections_are_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let editor = FakeEditor::new(false);
+    let listener = server::bind(0).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let shared = Arc::new(Shared::new("k".repeat(64), editor.dir.clone()));
+    let app = server::router(Xuan { editor, shared }, port);
+    let limits = server::Limits {
+        connections: 2,
+        header_timeout: Duration::from_millis(300),
+    };
+    tokio::spawn(server::serve(listener, app, limits, std::future::pending()));
+    let connect = || tokio::net::TcpStream::connect(("127.0.0.1", port));
+    // Two idle connections take the places; a third is closed at once.
+    let mut idle = [connect().await.unwrap(), connect().await.unwrap()];
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut third = connect().await.unwrap();
+    let mut buffer = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_millis(250), third.read_to_end(&mut buffer));
+    assert!(
+        matches!(closed.await, Ok(Ok(0))),
+        "the third is closed before any timeout"
+    );
+    // An idle connection that sends no headers is closed after the timeout.
+    let started = std::time::Instant::now();
+    let read = tokio::time::timeout(Duration::from_secs(5), idle[0].read_to_end(&mut buffer));
+    assert!(read.await.is_ok(), "closed");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    // Then there is room again.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let mut stream = connect().await.unwrap();
+    stream
+        .write_all(
+            format!("GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+    let _ = idle[1].write_all(b"").await;
 }
