@@ -180,7 +180,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `get_document` | Size, selection and all layers; with `document`, switches to it first | `document/get` |
 | `get_layer` | One layer | `document/get` |
 | `get_preview` | The flattened image as a PNG (`max_side`, default 1024) | `document/export` |
-| `get_layer_image` | A layer's pixels or mask as a PNG | `layer/export` |
+| `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer) | `layer/export` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
 | `set_layer` | Name, visibility, lock, opacity, blend mode, position, size, rotation | `set`, `transform` |
@@ -191,9 +191,10 @@ larger tool arguments with a tool error saying the request is too large.
 | `delete_layer` | Delete a layer or group | `remove_layer` |
 | `merge_layers`, `group_layers`, `ungroup_layer` | Merge, group, ungroup | `merge_layers`, `group_layers`, `ungroup_layers` |
 | `move_layer` | Move a layer above or below another, or into a group | `move_layer` |
+| `select_layers` | Select layers, the last one active, as clicking them does | `select_layers` |
 | `select_shape` | Rectangle, ellipse or polygon selection with a `mode` | `select_rect`, `select_polygon` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
-| `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels | `host/run`, `grow_selection`, `feather_selection` |
+| `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels (of `layer`) | `host/run`, `grow_selection`, `feather_selection` |
 | `paint_stroke` | A brush stroke (or eraser) through points | `stroke` |
 | `fill` | Fill the selection with a colour | `fill` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
@@ -201,7 +202,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
 | `crop_canvas`, `resize_canvas`, `resize_image` | Crop, Canvas Size, Image Size | `crop`, `resize_canvas`, `resize_image` |
 | `undo`, `redo` | Up to 20 steps | `host/run` |
-| `run_command` | Flatten, duplicate, flip, invert, clear, content-aware fill, remove background, masks, zoom… | `host/run` |
+| `run_command` | Flatten, duplicate, flip, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
 | `save_document` | Save as a `.xuan` project, through the save dialog | `file/save_as` |
 | `export_document` | Export PNG, JPEG, TIFF or WebP, through the save dialog | `file/export` |
@@ -213,6 +214,28 @@ Filters and adjustments use the shapes `.xuan` files store, for example
 10, "gamma": 1.2, "white": 245, "output_black": 0, "output_white": 255}}`; the
 tool descriptions list them all with their ranges, and
 [PLUGINS.md](PLUGINS.md#reading-and-editing-the-document) has the full list.
+A setting out of range is refused with the field and its range.
+
+### Layers, masks and the active layer
+
+`run_command` and `modify_selection` `layer_pixels` act on the active layer
+(and `duplicate` and `delete_layer` on all selected layers). Pass `layers`
+(or `layer`) to choose them in the same call, or select them first with
+`select_layers`. `get_document` lists each layer's `kind` (`image`, `text`,
+`shape` with its style, `raw`, `group`, `mask`, `adjustment` or `filter`) and
+its `flip_x` and `flip_y`; `get_layer_image` returns pixels before the flips.
+
+A mask is a layer of its own. `run_command` `mask` attaches one, made from the
+selection, to the active image: a layer of kind `mask` whose `parent` and
+`attached_to` are the image. The image lists it under `masks`, with whether it
+is `enabled` and `linked` (moves with the image). To disable, link or delete
+it, run `disable_mask`, `link_mask` or `delete_mask` with `layers` set to the
+mask layer's id. Adjustment and filter layers attached to an image the same
+way change only that image.
+
+`content_fill`, `remove_background` and `remove_flat_background` run in the
+background: `run_command` returns while they run, and other edits fail with
+"The editor is busy" until they finish.
 
 ### Resources
 
