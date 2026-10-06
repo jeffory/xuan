@@ -62,6 +62,13 @@ def main():
             ".github",
         ):
             shutil.copytree(ROOT / folder, source / folder, ignore=ignore)
+        # The MCP server plugin ships in the binary packages; it is its own
+        # Cargo workspace with its own lock file, built on the plugin SDK.
+        plugin_ignore = shutil.ignore_patterns(
+            "*.env", "__pycache__", "*.pyc", ".git", "target"
+        )
+        for folder in ("plugins/mcp-server", "sdk/xuan-plugin"):
+            shutil.copytree(ROOT / folder, source / folder, ignore=plugin_ignore)
         for filename in (
             "build.rs",
             "Cargo.toml",

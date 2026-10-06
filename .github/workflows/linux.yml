@@ -53,8 +53,11 @@ jobs:
           echo "$RUNNER_TEMP/appimage-tools" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/appimage-tools/bin" >> "$GITHUB_PATH"
       - name: Set up Rust
-        # Installs the toolchain pinned in rust-toolchain.toml.
-        run: rustup toolchain install
+        # Installs the toolchain pinned in rust-toolchain.toml, and the musl
+        # target the packaged MCP server plugin is linked statically with.
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
       - name: Cache RAW test fixtures
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

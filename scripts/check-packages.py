@@ -22,6 +22,9 @@ VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["pack
 ]
 NAME = f"xuan-{VERSION}-linux-{platform.machine()}"
 SOURCE_NAME = f"xuan-{VERSION}-source"
+# The MCP server plugin ships in every package, in the bundled plugins folder
+# Xuan finds next to its executable (src/plugins/mod.rs, bundled_dir_for).
+PLUGIN_MANIFEST = ROOT / "plugins/mcp-server/plugin.toml"
 
 
 def check_checksum(package):
@@ -45,6 +48,12 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
     }
     executable = prefix / ("xuan.exe" if windows else "bin/xuan")
     expected.add(executable.relative_to(prefix).as_posix())
+    plugin = prefix / ("plugins" if windows else "lib/xuan/plugins") / "mcp-server"
+    plugin_executable = plugin / (
+        "target/release/xuan-mcp-server" + (".exe" if windows else "")
+    )
+    for path in (plugin / "plugin.toml", plugin_executable):
+        expected.add(path.relative_to(prefix).as_posix())
     if not windows:
         expected.update(
             {
@@ -113,14 +122,9 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
             assert path.stat().st_mode & required == required, (
                 f"Not publicly readable: {path}"
             )
+    check_plugin(plugin, plugin_executable, windows)
     if windows:
-        data = executable.read_bytes()
-        assert data[:2] == b"MZ", "Not a Windows executable"
-        pe = int.from_bytes(data[0x3C:0x40], "little")
-        assert data[pe : pe + 6] == b"PE\0\0\x64\x86", "Not an x86_64 PE executable"
-        assert int.from_bytes(data[pe + 92 : pe + 94], "little") == 2, (
-            "Expected a GUI executable"
-        )
+        assert pe_subsystem(executable) == 2, "Expected a GUI executable"
     else:
         assert executable.stat().st_mode & 0o777 == 0o755
         if maximum := os.environ.get("XUAN_MAX_GLIBC"):
@@ -167,6 +171,45 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
         check_version(actual_version)
 
 
+def pe_subsystem(executable):
+    """The subsystem of an x86_64 Windows executable: 2 GUI, 3 console."""
+    data = executable.read_bytes()
+    assert data[:2] == b"MZ", f"Not a Windows executable: {executable}"
+    pe = int.from_bytes(data[0x3C:0x40], "little")
+    assert data[pe : pe + 6] == b"PE\0\0\x64\x86", (
+        f"Not an x86_64 PE executable: {executable}"
+    )
+    return int.from_bytes(data[pe + 92 : pe + 94], "little")
+
+
+def check_plugin(plugin, executable, windows):
+    """The bundled MCP server plugin: its manifest as in the repository and
+    a release build of the command it names."""
+    assert (plugin / "plugin.toml").read_bytes() == PLUGIN_MANIFEST.read_bytes(), (
+        "The bundled MCP server manifest differs from plugins/mcp-server/plugin.toml"
+    )
+    manifest = tomllib.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+    command = manifest["plugin"]["command"][0] + (".exe" if windows else "")
+    assert plugin / command == executable, manifest["plugin"]["command"]
+    if windows:
+        assert pe_subsystem(executable) == 3, "Expected a console plugin executable"
+    else:
+        assert executable.stat().st_mode & 0o777 == 0o755, executable
+        assert executable.read_bytes()[:4] == b"\x7fELF", executable
+        # Plugins run with the host's loader and C library, also from the
+        # AppImage on systems older than the build host: no dependencies.
+        headers = subprocess.check_output(["readelf", "-lW", executable], text=True)
+        dynamic = subprocess.check_output(["readelf", "-dW", executable], text=True)
+        assert "INTERP" not in headers and "(NEEDED)" not in dynamic, (
+            f"The bundled plugin must be statically linked: {executable}"
+        )
+    if not windows or sys.platform == "win32":
+        # Without a host on stdin it starts and exits at once.
+        subprocess.run(
+            [executable], stdin=subprocess.DEVNULL, check=True, timeout=30
+        )
+
+
 def check_version(actual):
     """Match `xuan --version` against the build channel (see src/buildinfo.rs).
 
@@ -211,16 +254,25 @@ def check_source(temporary):
         "packaging/AppRun",
         ".github/workflows/linux.yml",
         ".github/workflows/windows.yml",
+        "plugins/mcp-server/Cargo.toml",
+        "plugins/mcp-server/Cargo.lock",
+        "plugins/mcp-server/plugin.toml",
+        "plugins/mcp-server/src/main.rs",
+        "sdk/xuan-plugin/Cargo.toml",
         "docs/DEVELOPMENT.md",
         "LICENSE",
         "THIRD_PARTY.md",
     ):
         assert (source / name).is_file(), f"Missing rebuild source: {name}"
-    for original in (ROOT / "src").rglob("*"):
-        if original.suffix in (".rs", ".wgsl"):
-            assert (
-                source / original.relative_to(ROOT)
-            ).read_bytes() == original.read_bytes(), original
+    for folder in ("src", "plugins/mcp-server/src", "sdk/xuan-plugin/src"):
+        for original in (ROOT / folder).rglob("*"):
+            if original.suffix in (".rs", ".wgsl"):
+                assert (
+                    source / original.relative_to(ROOT)
+                ).read_bytes() == original.read_bytes(), original
+    assert not (source / "plugins/mcp-server/target").exists(), (
+        "Build output in sources"
+    )
     manifest = tomllib.loads((source / "Cargo.toml").read_text(encoding="utf-8"))
     assert manifest["package"]["version"] == VERSION
     assert manifest["patch"]["crates-io"]["rawler"]["path"] == "vendor/rawler"
@@ -241,6 +293,23 @@ def check_source(temporary):
             host,
             "--manifest-path",
             source / "Cargo.toml",
+        ],
+        stdout=subprocess.DEVNULL,
+        check=True,
+    )
+    # The plugin rebuilds from the archive alone with its own lock file.
+    subprocess.run(
+        [
+            "cargo",
+            "metadata",
+            "--offline",
+            "--locked",
+            "--format-version",
+            "1",
+            "--filter-platform",
+            host,
+            "--manifest-path",
+            source / "plugins/mcp-server/Cargo.toml",
         ],
         stdout=subprocess.DEVNULL,
         check=True,
@@ -397,11 +466,15 @@ def main():
                 check_files(stage, portable=True)
                 installed = temporary / "portable installation"
                 subprocess.run([stage / "scripts/install.sh", installed], check=True)
-                for path in (stage / "share").rglob("*"):
+                for path in (
+                    *(stage / "share").rglob("*"),
+                    *(stage / "lib").rglob("*"),
+                ):
                     if path.is_file():
-                        assert (
-                            installed / path.relative_to(stage)
-                        ).read_bytes() == path.read_bytes(), path
+                        copy = installed / path.relative_to(stage)
+                        assert copy.read_bytes() == path.read_bytes(), path
+                        mode = path.stat().st_mode & 0o777
+                        assert copy.stat().st_mode & 0o777 == mode, path
                 subprocess.run([installed / "bin/xuan", "--version"], check=True)
                 print(
                     f"Verified {package.name}: runtime files, documentation, portable installation"

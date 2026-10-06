@@ -19,7 +19,19 @@ done
 if [[ "$xuan_format" != archive ]]; then
     python3 scripts/package-native.py --check-tools "$xuan_format"
 fi
+xuan_target_dir=${CARGO_TARGET_DIR:-target}
+# The MCP server plugin ships in every package, statically linked against
+# musl: the AppImage runs plugins with the host's C library, which can be
+# older than the one the plugin was built with.
+xuan_plugin_target=${XUAN_PLUGIN_TARGET:-"$(uname -m)-unknown-linux-musl"}
+xuan_plugin_target_dir=${XUAN_PLUGIN_TARGET_DIR:-plugins/mcp-server/target}
 cargo build --release --locked
+cargo build --release --locked --manifest-path plugins/mcp-server/Cargo.toml \
+    --target "$xuan_plugin_target" --target-dir "$xuan_plugin_target_dir" || {
+    printf 'Building the MCP server plugin failed. Add its target with: rustup target add %s\n' \
+        "$xuan_plugin_target" >&2
+    exit 1
+}
 xuan_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
 xuan_name="xuan-${xuan_version}-linux-$(uname -m)"
 mkdir -p dist
@@ -27,8 +39,15 @@ xuan_temporary=$(mktemp -d "$xuan_root/dist/.package.XXXXXX")
 trap 'rm -rf -- "$xuan_temporary"' EXIT
 xuan_stage="$xuan_temporary/$xuan_name"
 mkdir -p "$xuan_stage"/{bin,share,scripts}
-install -m755 target/release/xuan "$xuan_stage/bin/xuan"
+install -m755 "$xuan_target_dir/release/xuan" "$xuan_stage/bin/xuan"
 strip "$xuan_stage/bin/xuan"
+# Bundled plugins: <prefix>/lib/xuan/plugins, which Xuan finds from bin/xuan.
+# The manifest's command stays target/release/xuan-mcp-server.
+xuan_plugin="$xuan_stage/lib/xuan/plugins/mcp-server"
+install -Dm644 plugins/mcp-server/plugin.toml "$xuan_plugin/plugin.toml"
+install -Dm755 "$xuan_plugin_target_dir/$xuan_plugin_target/release/xuan-mcp-server" \
+    "$xuan_plugin/target/release/xuan-mcp-server"
+strip "$xuan_plugin/target/release/xuan-mcp-server"
 if [[ -n ${XUAN_MAX_GLIBC:-} ]]; then
     python3 scripts/check-glibc.py --max-version "$XUAN_MAX_GLIBC" "$xuan_stage/bin/xuan"
 fi

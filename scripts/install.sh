@@ -12,6 +12,23 @@ if [[ ! -f "$xuan_binary" ]]; then
     exit 1
 fi
 install -Dm755 "$xuan_binary" "$xuan_prefix/bin/xuan"
+# Plugins that come with Xuan go to <prefix>/lib/xuan/plugins, where Xuan
+# looks for them next to bin/xuan. The folder belongs to Xuan: it is
+# replaced, so a plugin removed from a release does not linger. Plugins the
+# user installs live in the configuration folder and are left alone.
+xuan_bundled="$xuan_prefix/lib/xuan/plugins"
+if [[ -d "$xuan_root/lib/xuan/plugins" ]]; then
+    rm -rf -- "$xuan_bundled"
+    install -d "$xuan_bundled"
+    cp -R --preserve=mode "$xuan_root/lib/xuan/plugins/." "$xuan_bundled/"
+elif [[ -f "$xuan_root/plugins/mcp-server/target/release/xuan-mcp-server" ]]; then
+    # A source checkout with the plugin built (cargo build --release in
+    # plugins/mcp-server).
+    rm -rf -- "$xuan_bundled"
+    install -Dm644 "$xuan_root/plugins/mcp-server/plugin.toml" "$xuan_bundled/mcp-server/plugin.toml"
+    install -Dm755 "$xuan_root/plugins/mcp-server/target/release/xuan-mcp-server" \
+        "$xuan_bundled/mcp-server/target/release/xuan-mcp-server"
+fi
 if [[ -d "$xuan_root/share" ]]; then
     install -d "$xuan_prefix/share"
     cp -R --preserve=mode "$xuan_root/share/." "$xuan_prefix/share/"

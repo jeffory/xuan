@@ -52,10 +52,40 @@ def main():
         check=True,
     )
 
+    # The MCP server plugin ships in the package. It is its own Cargo
+    # workspace, so it gets its own target directory.
+    plugin_source = ROOT / "plugins/mcp-server"
+    plugin_target_directory = plugin_source / "target"
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "--target",
+            TARGET,
+            "--target-dir",
+            str(plugin_target_directory),
+        ],
+        cwd=plugin_source,
+        env=env,
+        check=True,
+    )
+
     with tempfile.TemporaryDirectory(prefix=".windows-", dir=destination) as directory:
         stage = Path(directory) / name
         stage.mkdir()
         shutil.copy2(target_directory / TARGET / "release/xuan.exe", stage / "xuan.exe")
+        # Bundled plugins sit in `plugins` next to xuan.exe, where Xuan looks
+        # for them. The manifest's command, target/release/xuan-mcp-server,
+        # starts the .exe: Windows adds the extension.
+        plugin = stage / "plugins/mcp-server"
+        (plugin / "target/release").mkdir(parents=True)
+        shutil.copy2(plugin_source / "plugin.toml", plugin / "plugin.toml")
+        shutil.copy2(
+            plugin_target_directory / TARGET / "release/xuan-mcp-server.exe",
+            plugin / "target/release/xuan-mcp-server.exe",
+        )
         licenses = stage / "share/licenses/xuan"
         licenses.mkdir(parents=True)
         for filename in (

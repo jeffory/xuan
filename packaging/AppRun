@@ -20,6 +20,9 @@ if [ -n "$host_version" ] && [ "$host_version" != "$bundled_version" ] &&
     fi
 fi
 export XDG_DATA_DIRS="$appdir/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# Started through the loader, Xuan cannot find its bundled plugins from its
+# own executable path, so name the folder (src/plugins/mod.rs).
+export XUAN_BUNDLED_PLUGINS="$appdir/usr/lib/xuan/plugins"
 
 # --library-path applies only to Xuan, so spawned host programs retain their own
 # libc. Preserve the caller's working directory and arguments.

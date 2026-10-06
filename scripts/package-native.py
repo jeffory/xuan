@@ -14,6 +14,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ARCHITECTURES = {"x86_64": ("amd64", 62), "aarch64": ("arm64", 183)}
+# Plugins that come with Xuan, relative to the prefix; Xuan finds them from
+# bin/xuan (src/plugins/mod.rs, bundled_dir_for).
+BUNDLED_PLUGINS = "lib/xuan/plugins"
+PLUGIN_EXECUTABLES = ["mcp-server/target/release/xuan-mcp-server"]
 DEB_LIBRARIES = [
     "libgcc-s1",
     "libvulkan1",
@@ -89,11 +93,14 @@ def stage_payload(stage, payload):
     prefix = payload / "usr"
     shutil.copytree(stage / "bin", prefix / "bin")
     shutil.copytree(stage / "share", prefix / "share")
+    shutil.copytree(stage / BUNDLED_PLUGINS, prefix / BUNDLED_PLUGINS)
     # Package files must stay readable even when the builder has a private umask.
     payload.chmod(0o755)
     for path in payload.rglob("*"):
         path.chmod(0o755 if path.is_dir() else 0o644)
     (prefix / "bin/xuan").chmod(0o755)
+    for executable in PLUGIN_EXECUTABLES:
+        (prefix / BUNDLED_PLUGINS / executable).chmod(0o755)
 
 
 def build_deb(payload, output, version, architecture, glibc):
@@ -158,7 +165,7 @@ def build_rpm(payload, output, version, architecture, temporary):
         '\n%install\nmkdir -p "%{buildroot}"\n'
         'cp -a "%{xuan_payload}/usr" "%{buildroot}/"\n'
         f"\n%post\n{refresh}\n%postun\n{refresh}"
-        "\n%files\n%defattr(-,root,root,-)\n/usr/bin/xuan\n"
+        "\n%files\n%defattr(-,root,root,-)\n/usr/bin/xuan\n/usr/lib/xuan\n"
         "/usr/share/applications/me.silverl.xuan.desktop\n"
         "/usr/share/mime/packages/me.silverl.xuan.xml\n"
         "/usr/share/icons/hicolor/*/apps/me.silverl.xuan.png\n"
@@ -287,9 +294,23 @@ def bundle_glibc(payload):
         raise ValueError("Missing glibc license notices")
     for path in (*destination.iterdir(), *notices.iterdir()):
         path.chmod(0o755 if path.name.startswith("ld-") else 0o644)
+    restore_bundled_plugins(payload)
 
 
-def build_appimage(payload, output, version, architecture):
+def restore_bundled_plugins(payload):
+    # build_appimage moves the bundled plugins aside so that linuxdeploy does
+    # not rewrite or follow their static executables; put them back unchanged.
+    held = os.environ.get("XUAN_HELD_PLUGINS")
+    if held:
+        shutil.copytree(held, payload / "usr" / BUNDLED_PLUGINS)
+
+
+def build_appimage(payload, output, version, architecture, temporary):
+    # linuxdeploy patches every ELF file under usr/lib. The bundled plugins
+    # are statically linked and run with the host's loader, not the AppImage's
+    # glibc, so they are held back until its input plugin (bundle_glibc).
+    held = temporary / "appimage-plugins"
+    shutil.move(payload / "usr" / BUNDLED_PLUGINS, held)
     # These libraries are opened with dlopen, so ELF dependency scanning misses them.
     # Keep the Vulkan loader and GPU drivers on the host.
     cache = subprocess.check_output(["ldconfig", "-p"], text=True)
@@ -309,6 +330,7 @@ def build_appimage(payload, output, version, architecture):
         "LDAI_OUTPUT": str(output),
         "LDAI_NO_APPSTREAM": "1",
         "PATH": f"{ROOT / 'scripts'}{os.pathsep}{os.environ['PATH']}",
+        "XUAN_HELD_PLUGINS": str(held),
     }
     subprocess.run(
         [
@@ -383,7 +405,7 @@ def main():
             elif package_format == "rpm":
                 build_rpm(payload, output, version, architecture, temporary)
             else:
-                build_appimage(payload, output, args.version, architecture)
+                build_appimage(payload, output, args.version, architecture, temporary)
             with output.open("rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
             output.with_name(output.name + ".sha256").write_text(
