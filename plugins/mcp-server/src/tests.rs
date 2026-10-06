@@ -475,15 +475,60 @@ fn images_from_the_client_are_written_to_the_plugins_folder_and_removed() {
 }
 
 #[tokio::test]
-async fn the_server_listens_on_loopback_only_and_falls_back_to_another_port() {
+async fn the_server_listens_on_loopback_only_and_never_moves_port_silently() {
     let first = server::bind(0).await.unwrap();
     let address = first.local_addr().unwrap();
     assert!(address.ip().is_loopback(), "{address}");
     assert_eq!(address.ip().to_string(), "127.0.0.1");
-    // The port is taken: the next one is used.
-    let second = server::bind(address.port()).await.unwrap();
+    // A taken port is not swapped for another.
+    let taken = server::bind(address.port()).await.unwrap_err();
+    assert_eq!(taken.kind(), std::io::ErrorKind::AddrInUse);
+    // The server says so and waits for the user's choice.
+    let editor = FakeEditor::new(false);
+    let shared = Arc::new(Shared::new("k".repeat(64), editor.dir.clone()));
+    *shared.port.lock().unwrap() = address.port();
+    let xuan = Xuan {
+        editor: editor.clone(),
+        shared: shared.clone(),
+    };
+    std::thread::spawn(move || server::run(xuan));
+    let wait_for = |wanted: &dyn Fn(&server::Status) -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !wanted(&shared.status()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                shared.status()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait_for(&|status| {
+        *status
+            == server::Status::PortInUse {
+                port: address.port(),
+            }
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        shared.status(),
+        server::Status::PortInUse {
+            port: address.port()
+        }
+    );
+    let pane = crate::pane::tree(&shared, None).to_string();
+    assert!(pane.contains("in use by another program"), "{pane}");
+    // Only once the user chooses does it listen elsewhere.
+    shared
+        .any_port
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    shared.restart.notify_one();
+    wait_for(
+        &|status| matches!(status, server::Status::Listening { port } if *port != address.port()),
+    );
+
+    let second = server::bind(0).await.unwrap();
     let port = second.local_addr().unwrap().port();
-    assert_ne!(port, address.port());
     assert!(second.local_addr().unwrap().ip().is_loopback());
 
     // A real connection over TCP gets the same checks.

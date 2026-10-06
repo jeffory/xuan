@@ -33,9 +33,8 @@ use crate::{auth, editor::Editor, tools};
 
 /// The port tried first unless the settings name another.
 pub const DEFAULT_PORT: u16 = 8765;
-/// How many ports after the chosen one are tried before letting the system
-/// pick one.
-const FALLBACK_PORTS: u16 = 10;
+/// How often a taken port is tried again.
+const RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 /// The MCP endpoint's path.
 pub const PATH: &str = "/mcp";
 /// Tool calls the pane lists.
@@ -45,7 +44,15 @@ const ACTIVITY: usize = 8;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
     Starting,
-    Listening { port: u16 },
+    Listening {
+        port: u16,
+    },
+    /// Another program listens on the configured port. Clients set up for
+    /// it would send it their requests, token included, so the server does
+    /// not move to another port until the user says so.
+    PortInUse {
+        port: u16,
+    },
     Failed(String),
 }
 
@@ -55,6 +62,9 @@ pub struct Shared {
     pub status: Mutex<Status>,
     /// The port the settings ask for (0: let the system choose).
     pub port: Mutex<u16>,
+    /// The user chose, in the pane, to listen on any free port because the
+    /// configured one is taken. Cleared when the port setting changes.
+    pub any_port: std::sync::atomic::AtomicBool,
     pub data_dir: Mutex<PathBuf>,
     /// Recent tool calls, newest last.
     pub activity: Mutex<VecDeque<String>>,
@@ -90,6 +100,7 @@ impl Shared {
             token: RwLock::new(token),
             status: Mutex::new(Status::Starting),
             port: Mutex::new(DEFAULT_PORT),
+            any_port: std::sync::atomic::AtomicBool::new(false),
             data_dir: Mutex::new(data_dir),
             activity: Mutex::new(VecDeque::new()),
             restart: tokio::sync::Notify::new(),
@@ -424,24 +435,10 @@ async fn guard(
     response
 }
 
-/// Listen on 127.0.0.1, only: the chosen port, the next few if it is taken,
-/// and then any port the system gives.
+/// Listen on 127.0.0.1 only, on exactly this port (0: any free one). A taken
+/// port is an error, never a reason to move silently.
 pub async fn bind(port: u16) -> std::io::Result<TcpListener> {
-    let listen = |port: u16| TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
-    if port == 0 {
-        return listen(0).await;
-    }
-    let mut last = None;
-    for candidate in port..=port.saturating_add(FALLBACK_PORTS) {
-        match listen(candidate).await {
-            Ok(listener) => return Ok(listener),
-            Err(error) => last = Some(error),
-        }
-    }
-    match listen(0).await {
-        Ok(listener) => Ok(listener),
-        Err(error) => Err(last.unwrap_or(error)),
-    }
+    TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await
 }
 
 /// Serve until the plugin stops, listening again when the port changes.
@@ -460,7 +457,9 @@ pub fn run(xuan: Xuan) {
     };
     runtime.block_on(async move {
         loop {
-            let wanted = xuan.shared.port.lock().map(|p| *p).unwrap_or(DEFAULT_PORT);
+            let configured = xuan.shared.port.lock().map(|p| *p).unwrap_or(DEFAULT_PORT);
+            let any = (xuan.shared.any_port).load(std::sync::atomic::Ordering::Relaxed);
+            let wanted = if any { 0 } else { configured };
             match bind(wanted).await {
                 Ok(listener) => {
                     let port = listener.local_addr().map(|a| a.port()).unwrap_or(wanted);
@@ -475,6 +474,11 @@ pub fn run(xuan: Xuan) {
                         xuan.shared.set_status(Status::Failed(error.to_string()));
                         xuan.shared.restart.notified().await;
                     }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    xuan.shared.set_status(Status::PortInUse { port: wanted });
+                    // Try again now and then, or when the user decides.
+                    let _ = tokio::time::timeout(RETRY, xuan.shared.restart.notified()).await;
                 }
                 Err(error) => {
                     xuan.shared.set_status(Status::Failed(format!(

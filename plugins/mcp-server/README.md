@@ -34,7 +34,8 @@ before each client session's first edit, and is treated as a network plugin
 Open **Window → MCP Server**. The pane shows the address and has **Copy**
 buttons for the token, the `claude mcp add` command and a JSON `mcpServers`
 entry. The port is a setting in **Plugins → Manage Plugins… → MCP Server**
-(default 8765; the next free port is used if it is taken).
+(default 8765). If another program already listens there, the pane warns you
+and waits: clients set up for that port may be talking to the other program.
 
 ## Files
 

@@ -29,6 +29,15 @@ pub fn tree(shared: &Shared, permissions: Option<&Value>) -> Value {
     let token = shared.token();
     match shared.status() {
         Status::Starting => children.push(ui::progress(None, "Starting…")),
+        Status::PortInUse { port } => {
+            children.push(ui::label(&format!(
+                "Port {port} is in use by another program. Clients set up for it may be talking to that program instead of Xuan, and sending it the token: check them."
+            )));
+            children.push(ui::muted(
+                "Choose another port in Plugins → Manage Plugins… → MCP Server, or listen on any free port and set up your clients again.",
+            ));
+            children.push(ui::button("any_port", "Listen on a Free Port"));
+        }
         Status::Failed(error) => {
             children.push(ui::label(&format!("Not running: {error}")));
             children.push(ui::muted(
@@ -38,6 +47,12 @@ pub fn tree(shared: &Shared, permissions: Option<&Value>) -> Value {
         Status::Listening { port } => {
             let url = Shared::url(port);
             children.push(ui::label(&format!("Listening on {url}")));
+            let configured = shared.port.lock().map(|p| *p).unwrap_or(port);
+            if configured != 0 && configured != port {
+                children.push(ui::muted(&format!(
+                    "Port {configured} was taken, so this is a free port you chose: set up your clients with this address."
+                )));
+            }
             children.push(ui::muted(
                 "Only programs on this computer that have the token can connect.",
             ));

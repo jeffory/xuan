@@ -60,6 +60,14 @@ follow instructions hidden in something it read.
 
 - **This computer only.** The server listens on `127.0.0.1`, never on other
   interfaces.
+- **A fixed port is a name anyone on this computer can take.** Your client
+  sends the token to whatever listens on `127.0.0.1:8765`. If another
+  program got there first (while Xuan was closed, say), it receives the token
+  and your client's requests. So the server never moves to another port by
+  itself: when its port is taken, the pane says **Port 8765 is in use by
+  another program** and waits until you pick another port in the settings or
+  press **Listen on a Free Port** (and then set up your clients again). If you
+  see that warning without knowing why, press **New Token**.
 - **A token.** Every request needs `Authorization: Bearer <token>`. The
   token is 32 random bytes, kept in the plugin's data folder readable only by
   you (`plugin-data/mcp-server/token`). **New Token** in the pane replaces it

@@ -49,6 +49,9 @@ fn apply_settings(settings: &Settings) {
         && *current != wanted
     {
         *current = wanted;
+        shared
+            .any_port
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         // Listen again on the new port (a permit waits if it is starting).
         shared.restart.notify_one();
     }
@@ -88,6 +91,13 @@ fn main() {
                     "Starting…",
                 )]));
             };
+            if pane.widget.as_deref() == Some("any_port") {
+                // The user saw the warning and chose to move.
+                shared
+                    .any_port
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                shared.restart.notify_one();
+            }
             if pane.widget.as_deref() == Some("new_token") {
                 let dir = shared
                     .data_dir
