@@ -901,7 +901,7 @@ wait for the user's answer (see [Network](#network)).
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
 | `session/status` | `{session?}` | `{edit_prompt, edits, auto}`: how direct edits are handled in the session; see [Edit sessions](#edit-sessions) |
-| `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does |
+| `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does; a plugin may switch at most once a second (`-32003` with `retry_after` otherwise; naming the current document always succeeds) |
 | `host/run` | `{action, inputs?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
 | `file/save_as` | `{document?, suggested_name?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; see [Files the user chooses](#files-the-user-chooses) |
@@ -1039,20 +1039,28 @@ answer:
 
 - `file/save_as` shows the system's save dialog for the document (the
   current one, or `document`), titled with the plugin's name and id and
-  prefilled with `suggested_name` (reduced to a plain file name) and `.xuan`.
-  The user chooses the folder and name, and the system dialog asks before
-  replacing a file. The project is saved there and from then on lives there,
-  as with **File → Save As…**.
+  prefilled with `suggested_name` and `.xuan`. The suggested name is reduced
+  to a plain file name: no folders, extension, control characters, bidi
+  controls or invisible characters, and a name Windows reserves for a device
+  (`CON`, `NUL`, `COM1`, …) gets a leading `_`. The user chooses the folder
+  and name, and the system dialog asks before replacing a file. The file is
+  written exactly where the user confirmed: if the chosen name lacks `.xuan`,
+  the dialog opens again in that folder with the extension added, and if the
+  second answer lacks it too nothing is written (`-32602`). The project is
+  saved there and from then on lives there, as with **File → Save As…**.
 - `file/export` does the same for an image in `format` (`png`, `jpg`, `tiff`
-  or `webp`); the document itself is not changed.
+  or `webp`); the document itself is not changed. The name the user confirms
+  must end in `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff` or `.webp` (which picks
+  the format written), with the same second dialog otherwise.
 - `file/open` shows **Open a file?**, naming the plugin and the file's full
   path (symbolic links resolved), with **Open** and **Cancel**. The path must
   be absolute and name a regular file or a project folder. It opens as a new
   document, as **File → Open…** would.
 
 `file/save_as` and `file/export` answer with the file's name only, never
-the folder the user chose; `file/open` with the new document's id. Each fails
-with `-32800` when the user cancels;
+the folder the user chose; `file/open` with the new document's id. Their
+error messages name files the same way, without folders (a symbolic link's
+target folder included). Each fails with `-32800` when the user cancels;
 for 30 seconds after a cancel, the plugin's file requests fail at once
 without a dialog.
 Requests wait until no other dialog is open; a plugin has at most one waiting,

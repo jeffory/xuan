@@ -130,6 +130,31 @@ three requests route the decision through the user:
   after resolving symbolic links, and opens it only on **Open**. Reading the
   file needs no `filesystem` permission because the user approved that file.
 
+Hardening from the review (#49):
+
+- **The path the user confirmed is the path written.** Xuan used to add the
+  extension to a name chosen without one, which could replace a file next to
+  the one the dialog asked about. Now the dialog opens again, in the chosen
+  folder, with the extension added; a second name without it writes nothing.
+- **Suggested names** lose bidi controls and invisible characters (which can
+  make `gpj.exe` read as `exe.jpg`), and names Windows reserves for devices
+  (`CON`, `NUL`, `COM1`, …, whatever the extension) get a leading `_`.
+- **No folders in errors.** Xuan's errors for `file/*` requests name files
+  only, and the MCP server also reduces any absolute path in an error it
+  passes on (from Xuan, the system or itself) to its file name.
+- **Request sizes.** rmcp caps HTTP bodies at 4 MiB by default, below the
+  64 MiB image `create_image_layer` documents, so large images failed with a
+  bare 413. The server now accepts bodies up to 96 MiB (a 64 MiB PNG as base64
+  plus the JSON around it), answers a larger declared length with a 413 that
+  states the limits, and refuses a tool whose request to Xuan would exceed
+  Xuan's 16 MiB plugin message limit with a tool error, rather than sending
+  it (Xuan stops a plugin that writes a longer line). Only clients with the
+  token get as far as sending a body.
+- **Switching documents** (`document/activate`) is limited to once a second
+  per plugin, so a client cannot flip the user's tabs under their hands.
+  Switching is a view change, like clicking a tab, so it is throttled rather
+  than gated behind the edit prompt.
+
 Alternatives considered: an export confined to the plugin's own folders already
 exists (`document/export` writes a PNG into its folders) and is enough for
 previews, but it does not put a file where the user wants it, and a plugin
@@ -170,6 +195,33 @@ ask Xuan to gate those edits: `edit_prompt = "session"` in `[permissions]`.
   switch to turn it off.
 - Action results keep their per-result **Accept**/**Discard** proposals; the
   session answer covers only direct edits.
+
+**The token is the trust boundary for sessions.** A client that holds the
+token and knows another client's session id can send requests in that
+session and use its answer. Binding the answer to more than the id is not
+practical: Streamable HTTP has no notion of a connection (clients pool
+connections, reconnect and may send each request on a new one), rmcp offers
+no hook to rotate an id during a session, and the protocol has no client
+identity a server could check. The id itself is a random UUID (122 bits)
+that only that client and the server see, over loopback; a program that
+could read it (by reading the client's memory or traffic) runs as the user
+and could read the token file too. Two things limit the damage: **New
+Token** also forgets every session id issued so far, so earlier answers
+cannot be reused by whoever gets the new token (requests carrying an old id
+count as having no session, and labels are never reused), and every session
+ends when the plugin stops.
+
+**Providers.** `run_command` `remove_background` and `modify_selection`
+`subject` are the `host/run` commands `remove_background` and
+`select_subject`, and wait for the session's edit answer like every other
+edit. When the user chose a provider plugin for them (see
+[PLUGINS.md](PLUGINS.md#providers)), that plugin's action runs exactly as
+from the menu: it must itself be allowed, a provider
+that declares network hosts asks before the image is sent to it, its model
+downloads are confirmed, and its result is a proposal the user accepts or
+discards. The MCP server gains no access to the provider plugin, and the
+provider none to the MCP client; offline mode makes the command fall back to
+the built-in algorithm.
 
 ## Network and the sandbox
 

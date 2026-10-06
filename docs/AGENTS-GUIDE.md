@@ -120,8 +120,26 @@ follow instructions hidden in something it read.
   a suggested name, and you choose where (or cancel); opening a file shows its
   full path and opens it only if you agree. The client cannot pick where a
   file goes, replace one without the save dialog asking you to confirm, or
-  open something silently. Xuan's other file
+  open something silently. The file is written exactly where you confirmed:
+  if the name you typed lacks the extension, the dialog asks again with it
+  added rather than writing next to the file you saw. Suggested names are
+  cleaned of folders, invisible and right-to-left control characters and
+  Windows device names (`CON`, `NUL`, …). The client learns only file names,
+  never folders, in answers and in error messages. Xuan's other file
   commands, the clipboard, settings and other plugins are out of reach.
+- **Switching documents** is limited to once a second, so a client cannot
+  flip your tabs about while you work.
+- **Providers.** `run_command` `remove_background` and `modify_selection`
+  `subject` run like their menu items, after the session's edit answer. If
+  you chose a plugin as the provider for Select Subject or Remove Background,
+  it runs
+  under its own permissions and prompts, as from the menu (its send prompt,
+  model downloads, and the result as a proposal you accept or discard).
+- **Sessions and the token.** Anyone with the token who also knows another
+  client's session id could use that session's edit answer. Session ids are
+  random and seen only by that client and the server, so in practice the
+  token is what to protect. **New Token** also forgets every session issued
+  so far, so earlier **Allow** answers stop counting.
 - **Offline mode** (**Disable plugins that use the network**) stops the
   server. On Linux, Xuan's network blocking for plugins does not apply to it:
   the seccomp filter cannot tell a socket listening on 127.0.0.1 from a
@@ -137,6 +155,12 @@ Ids come from `get_document`. Coordinates and sizes are in document pixels,
 with the origin at the top-left of the canvas. Colours are `#rrggbb` or
 `#rrggbbaa`. Tools that change the document wait for the session's answer the
 first time; refusals come back as tool errors that say so.
+
+Size limits: an HTTP request body may be up to 96 MiB, room for the largest
+image `create_image_layer` takes (64 MiB of PNG, sent as base64). Everything
+else a tool sends on to Xuan must fit in Xuan's 16 MiB plugin message limit.
+A larger body is answered with HTTP 413 and a message giving these limits;
+larger tool arguments with a tool error saying the request is too large.
 
 | Tool | What it does | Plugin protocol |
 | --- | --- | --- |
