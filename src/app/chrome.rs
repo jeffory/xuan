@@ -1,4 +1,5 @@
 use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, emath::GuiRounding as _, pos2, vec2};
+#[cfg(target_os = "linux")]
 use xuan::config::WindowButtons;
 use xuan::{config::TitleBar, i18n::tr};
 
@@ -164,6 +165,7 @@ impl ButtonLayout {
 }
 
 /// A window theme shared between the main title bar and the dialogs.
+#[cfg(target_os = "linux")]
 pub(super) type SharedWindowTheme =
     std::sync::Arc<std::sync::Mutex<Option<super::window_theme::WindowTheme>>>;
 
@@ -171,7 +173,9 @@ pub(super) type SharedWindowTheme =
 /// the user chose the built-in glyphs.
 #[derive(Clone)]
 pub(super) struct ButtonStyle {
+    #[cfg(target_os = "linux")]
     pub buttons: WindowButtons,
+    #[cfg(target_os = "linux")]
     pub theme: SharedWindowTheme,
 }
 
@@ -181,6 +185,13 @@ pub(super) struct DialogChrome {
     pub title_bar: TitleBar,
     pub layout: ButtonLayout,
     pub style: ButtonStyle,
+}
+
+impl DialogChrome {
+    /// The temp-data slot the app publishes this under.
+    pub(super) fn id() -> egui::Id {
+        egui::Id::new("xuan.dialog_chrome")
+    }
 }
 
 /// Paints one compact-style window button: the theme's image when there is one, else
@@ -199,7 +210,7 @@ pub(super) fn paint_window_button(
         return;
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = (style.buttons, &style.theme);
+    let _ = style;
     let painter = ui.painter();
     let p = ui.palette();
     if response.hovered() || response.has_focus() {
@@ -420,7 +431,9 @@ impl EditorApp {
 
     pub(super) fn button_style(&self) -> ButtonStyle {
         ButtonStyle {
+            #[cfg(target_os = "linux")]
             buttons: self.config.window_buttons,
+            #[cfg(target_os = "linux")]
             theme: self.window_theme.clone(),
         }
     }
@@ -432,7 +445,7 @@ impl EditorApp {
             layout: self.button_layout.clone(),
             style: self.button_style(),
         };
-        ctx.data_mut(|data| data.insert_temp(egui::Id::NULL, chrome));
+        ctx.data_mut(|data| data.insert_temp(DialogChrome::id(), chrome));
     }
 
     /// Compact-style monochrome minimize, maximize and close buttons.

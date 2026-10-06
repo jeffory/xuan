@@ -804,7 +804,7 @@ pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
 /// puts it. Returns whether it was clicked.
 fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
     use super::chrome::{BUTTON_SIZE, DialogChrome, WindowButton, paint_window_button};
-    let chrome: Option<DialogChrome> = ui.data(|data| data.get_temp(egui::Id::NULL));
+    let chrome: Option<DialogChrome> = ui.data(|data| data.get_temp(DialogChrome::id()));
     let label = tr("Close panel");
     let compact = chrome
         .as_ref()
