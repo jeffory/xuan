@@ -1405,6 +1405,7 @@ fn live_shape(record: &Record<'_>) -> Option<(ShapeStyle, Rect)> {
             kind,
             color: fill,
             corner_radius,
+            path: None,
         },
         rect,
     ))

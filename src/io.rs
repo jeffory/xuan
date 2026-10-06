@@ -157,13 +157,21 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 9;
+const LATEST_VERSION: u32 = 10;
 
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    // Older readers would drop the paths, and cannot draw a path shape.
+    if !document.paths.is_empty()
+        || document
+            .layers
+            .iter()
+            .any(|l| l.shape.as_ref().is_some_and(|s| s.path.is_some()))
+    {
+        10
     // Older readers reject a folder as a clipping base.
-    if document.layers.iter().any(|l| {
+    } else if document.layers.iter().any(|l| {
         l.clip_to
             .is_some_and(|id| document.layers.iter().any(|b| b.id == id && b.group))
     }) {
@@ -507,6 +515,79 @@ mod tests {
         save(&doc, &path).unwrap();
         assert_eq!(manifest_json(&path)["version"], 5);
         assert_eq!(load(&path).unwrap().grid, None);
+    }
+
+    #[test]
+    fn path_shapes_and_document_paths_round_trip_as_version_10() {
+        use crate::vector::{FillRule, NamedPath, VectorPath};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("paths.xuan");
+        let mut doc = Document::new(64, 48).unwrap();
+        let outline = VectorPath::parse(
+            "M 8 40 C 8 4 56 4 56 40 Z M 24 30 a 8 8 0 1 0 16 0 a 8 8 0 1 0 -16 0 Z",
+        )
+        .unwrap();
+        let mut shape =
+            crate::paint::path_shape(&outline, FillRule::Evenodd, [30, 120, 200, 230]).unwrap();
+        shape.transform.rotation = 12.0;
+        doc.insert(shape);
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 10);
+        let stored = &manifest["document"]["layers"][1]["shape"];
+        assert_eq!(stored["kind"], "Path");
+        assert_eq!(stored["path"]["fill_rule"], "evenodd");
+        assert!(stored["path"]["d"].as_str().unwrap().starts_with("M0,"));
+        let loaded = load(&path).unwrap();
+        let style = loaded.layers[1].shape.as_ref().unwrap();
+        assert_eq!(style.path, doc.layers[1].shape.as_ref().unwrap().path);
+        assert_eq!(render::render(&loaded), render::render(&doc));
+        // Still live after loading: a new size redraws the outline.
+        let mut resized = loaded.clone();
+        resized.layers[1].transform.width = 96.0;
+        crate::paint::refresh_shapes(&mut resized).unwrap();
+        assert_eq!(resized.layers[1].pixels.as_ref().unwrap().width(), 96);
+
+        // Document paths alone also need version 10, and keep their names and data.
+        let mut plain = Document::new(8, 8).unwrap();
+        save(&plain, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 1);
+        assert!(manifest_json(&path)["document"].get("paths").is_none());
+        plain.paths.push(NamedPath::new(
+            "Hill",
+            VectorPath::parse("M 0 7 Q 4 0 8 7").unwrap(),
+        ));
+        save(&plain, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 10);
+        assert_eq!(manifest["document"]["paths"][0]["name"], "Hill");
+        assert_eq!(manifest["document"]["paths"][0]["d"], "M0,7 Q4,0 8,7");
+        assert_eq!(load(&path).unwrap().paths, plain.paths);
+
+        // Broken path data, or a path shape without its outline, is refused on load.
+        for (pointer, value) in [
+            ("/document/paths/0/d", serde_json::json!("M 0 0 L")),
+            ("/document/paths/0/name", serde_json::json!(" ")),
+        ] {
+            let mut bad = manifest.clone();
+            *bad.pointer_mut(pointer).unwrap() = value;
+            let hostile = directory.path().join("bad.xuan");
+            write_manifest(&hostile, &bad);
+            assert!(load(&hostile).is_err(), "{pointer}");
+        }
+        let mut shapeless = doc.clone();
+        shapeless.layers[1].shape.as_mut().unwrap().path = None;
+        assert!(shapeless.validate().is_err());
+        let mut boxless = doc.clone();
+        boxless.layers[1]
+            .shape
+            .as_mut()
+            .unwrap()
+            .path
+            .as_mut()
+            .unwrap()
+            .width = 0.0;
+        assert!(boxless.validate().is_err());
     }
 
     #[test]

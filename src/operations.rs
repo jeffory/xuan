@@ -470,6 +470,10 @@ fn resize_canvas(document: &mut Document, width: u32, height: u32, dx: f32, dy: 
     for guide in &mut document.guides {
         guide.offset(dx, dy);
     }
+    crate::vector::transform_paths(
+        &mut document.paths,
+        kurbo::Affine::translate((f64::from(dx), f64::from(dy))),
+    );
     document.width = width;
     document.height = height;
     document.selection = None;
@@ -493,6 +497,10 @@ pub fn crop(document: &mut Document, start: Point, end: Point) -> Result<()> {
     for guide in &mut document.guides {
         guide.offset(-left, -top);
     }
+    crate::vector::transform_paths(
+        &mut document.paths,
+        kurbo::Affine::translate((-f64::from(left), -f64::from(top))),
+    );
     document.width = width;
     document.height = height;
     document.selection = None;
@@ -517,6 +525,10 @@ pub fn image_size(document: &mut Document, width: u32, height: u32) -> Result<()
     for guide in &mut document.guides {
         guide.scale(sx, sy);
     }
+    crate::vector::transform_paths(
+        &mut document.paths,
+        kurbo::Affine::scale_non_uniform(f64::from(sx), f64::from(sy)),
+    );
     document.width = width;
     document.height = height;
     if let Some(selection) = &document.selection {
@@ -550,6 +562,15 @@ pub fn flip_canvas(document: &mut Document, horizontal: bool) {
     for guide in &mut document.guides {
         guide.mirror(horizontal, extent);
     }
+    let extent = f64::from(extent);
+    crate::vector::transform_paths(
+        &mut document.paths,
+        if horizontal {
+            kurbo::Affine::new([-1.0, 0.0, 0.0, 1.0, extent, 0.0])
+        } else {
+            kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, extent])
+        },
+    );
     if let Some(selection) = &document.selection {
         document.selection = Some(Arc::new(if horizontal {
             image::imageops::flip_horizontal(&**selection)

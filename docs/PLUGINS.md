@@ -932,7 +932,7 @@ wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
-| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, layers: [{id, name, kind, visible, locked, opacity, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
+| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
 | `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips; an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
@@ -948,9 +948,16 @@ wait for the user's answer (see [Network](#network)).
 
 ### Layer descriptions
 
+A `Path` shape's description also has `path`, its outline where the layer is now
+as SVG path data in document coordinates (`null` once the layer is warped),
+`fill_rule` (`nonzero` or `evenodd`), and `local_path` and `local_size`, the
+outline as stored in the layer's own `[width, height]` box, which the layer
+stretches over. The document's description lists the paths saved with it under
+`paths`: `[{id, name, path}]`, `path` being SVG path data.
+
 `kind` is `image`, `text`, `shape` (with `shape: {shape: "Rectangle" |
-"Ellipse" | "RoundedRectangle", color: "#rrggbbaa", corner_radius}`; `null`
-for other kinds), `raw`, `group`, `mask`, `adjustment` or `filter`. `flip_x`
+"Ellipse" | "RoundedRectangle" | "Path", color: "#rrggbbaa", corner_radius}`;
+`null` for other kinds), `raw`, `group`, `mask`, `adjustment` or `filter`. `flip_x`
 and `flip_y` are the layer's flips, which **Flip Horizontal** and **Flip
 Vertical** toggle.
 
@@ -1025,6 +1032,17 @@ Layers and their properties:
 - `{"op": "add_shape_layer", "shape": "Rectangle" | "Ellipse" |
   "RoundedRectangle", "x", "y", "width", "height", "color"?,
   "corner_radius"?, "name"?, "above"?}`: an editable shape layer.
+- `{"op": "add_shape_layer", "shape": "Path", "path", "fill_rule"?, "color"?,
+  "name"?, "above"?}`: an editable, antialiased vector shape filled inside
+  `path`, [SVG path data](#svg-path-data) in document coordinates, which also
+  places it (give no `x`, `y`, `width` or `height`). The layer covers the whole
+  pixels the curves touch; resizing or rotating it redraws the outline, as for
+  the other shapes. The path must enclose some area, and the layer is at most
+  30,000 pixels a side.
+- `{"op": "add_path", "path", "name"?}`: keep SVG path data with the document
+  as a named path, as in **Select → Paths…** (format 10). A path with the same
+  name is replaced; without `name` it is called `Path 1`, `Path 2`, …. A
+  document keeps at most 1,000 paths.
 - `{"op": "add_adjustment_layer", "adjustment" | "filter", "name"?,
   "above"?}`: a non-destructive adjustment or filter layer, masked by the
   selection when there is one.
@@ -1034,6 +1052,9 @@ becomes the active layer, or the active layer; it must be an unlocked pixel
 layer, so text and shape layers become pixel layers):
 
 - `{"op": "fill", "layer"?, "color"}`.
+- `{"op": "fill_path", "layer"?, "path", "color", "fill_rule"?}`: fill the
+  inside of `path` ([SVG path data](#svg-path-data)), within the selection when
+  there is one, with antialiased edges. The selection does not change.
 - `{"op": "gradient", "layer"?, "start": [x, y], "end": [x, y], "stops":
   [{"position", "color"}, …], "radial"?, "opacity"?, "mask"?}`: the Gradient
   tool, with two to 64 colour stops (`position` 0 at `start` to 1 at `end`,
@@ -1049,6 +1070,12 @@ layer, so text and shape layers become pixel layers):
   and 1), and `erase` erases instead of painting. A single point paints one
   round dab the size of the brush. The layer grows to hold the stroke, as with
   the Brush tool. Several strokes in one request are one undo step.
+
+  Instead of `points` a stroke may give `path`, [SVG path data](#svg-path-data)
+  with one subpath (one `M`): its curves are flattened to points within 0.2
+  pixels, a closed subpath returns to its start, and a path of a single `M`
+  is one dab. A path with several subpaths is refused (paint each as its own
+  stroke); the flattened points count against the same limits as `points`.
 
   A point may carry pen pressure as `[x, y, pressure]` (0–1; a two-number
   point has pressure 1). Pressure scales the size between the points, as a
@@ -1093,9 +1120,16 @@ Colours are `"#rrggbb"` or `"#rrggbbaa"` (default black).
 The selection, combined with the current one by `mode` (`replace`, the
 default, `add`, `subtract` or `intersect`):
 
-- `{"op": "select_rect", "x", "y", "width", "height", "ellipse"?, "mode"?}`.
-- `{"op": "select_polygon", "points": [[x, y], …], "mode"?}`: at least three
-  and at most 10,000 points.
+- `{"op": "select_rect", "x", "y", "width", "height", "ellipse"?, "mode"?,
+  "feather"?}`.
+- `{"op": "select_polygon", "points": [[x, y], …], "mode"?, "feather"?}`: at
+  least three and at most 10,000 points.
+- `{"op": "select_path", "path", "fill_rule"?, "mode"?, "feather"?}`: the
+  inside of [SVG path data](#svg-path-data), with antialiased edges (partly
+  covered pixels are partly selected).
+
+`feather` (0–256 pixels, default 0) softens the new shape's edge before it is
+combined, so the rest of the selection keeps its edge.
 - `{"op": "select_color", "x", "y", "tolerance"?, "contiguous"?, "mode"?}`:
   the Magic Wand at a point of the flattened image (`tolerance` 0–255,
   default 32; `contiguous` default `true`).
@@ -1119,6 +1153,21 @@ the menu commands do):
   Size…**, which may also shrink; `anchor` `[0, 0]` keeps the top-left corner,
   `[0.5, 0.5]` (the default) the centre.
 - `{"op": "resize_image", "width", "height"}`: **Image → Image Size…**.
+
+### SVG path data
+
+Paths are written as the `d` attribute of an SVG `<path>`, in document pixels:
+`M`/`m` (move), `L`/`l`, `H`/`h`, `V`/`v` (lines), `C`/`c`, `S`/`s` (cubic
+Béziers), `Q`/`q`, `T`/`t` (quadratic Béziers), `A`/`a` (elliptical arcs) and
+`Z`/`z` (close), lowercase relative to the current point, with SVG's implicit
+repetition (numbers after `M` are lines) and compact numbers (`10-5.5.5e1`).
+For example `"M 0 700 C 120 640 380 640 512 700 Z"`. The text is at most
+256 KiB, with at most 10,000 segments (an arc counts as the curves it becomes)
+and coordinates within ±1,000,000. Fills and selections close open subpaths,
+as SVG does, and take `fill_rule` `nonzero` (the default, SVG's) or `evenodd`
+(an inner subpath always cuts a hole). Errors say what was expected and at
+which character, e.g. `SVG path: expected the y of the line's end for `L` at
+character 11, found the end of the path`.
 
 Edits apply in order, each in the document's coordinates at that point: an
 `add_layer` after an `extend_canvas` is placed on the grown canvas. A batch

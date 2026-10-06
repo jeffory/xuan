@@ -7,6 +7,7 @@ use crate::{
     blend::{BlendMode, composite},
     document::{Document, Layer, Mask, Point, validate_size},
     render, selection,
+    vector::{FillRule, VectorPath},
 };
 
 #[cfg(test)]
@@ -681,6 +682,8 @@ pub enum ShapeKind {
     Rectangle,
     Ellipse,
     RoundedRectangle,
+    /// A Bézier outline, kept in the layer's [`crate::document::ShapePath`] (format 10).
+    Path,
 }
 
 pub fn shape(
@@ -714,6 +717,8 @@ pub fn shape(
                             let cy = py.clamp(radius, height as f32 - radius);
                             (px - cx).hypot(py - cy) <= radius
                         }
+                        // Drawn by `path_shape`; without an outline, nothing is inside.
+                        ShapeKind::Path => false,
                     };
                     if inside {
                         coverage += 0.25;
@@ -733,6 +738,7 @@ pub fn shape(
             ShapeKind::Rectangle => "Rectangle",
             ShapeKind::Ellipse => "Ellipse",
             ShapeKind::RoundedRectangle => "Rounded rectangle",
+            ShapeKind::Path => "Path",
         },
         image,
     );
@@ -740,10 +746,100 @@ pub fn shape(
         kind,
         color,
         corner_radius,
+        path: None,
     });
     layer.transform.x = start.x.min(end.x);
     layer.transform.y = start.y.min(end.y);
     Ok(layer)
+}
+
+/// The whole-pixel box a path shape layer covers: its curves' bounds rounded outwards.
+fn path_box(path: &VectorPath) -> Result<kurbo::Rect> {
+    let bounds = path
+        .bounds()
+        .filter(|b| b.width() > 0.0 && b.height() > 0.0)
+        .ok_or_else(|| anyhow::anyhow!("The path encloses no area"))?;
+    Ok(kurbo::Rect::new(
+        bounds.x0.floor(),
+        bounds.y0.floor(),
+        bounds.x1.ceil(),
+        bounds.y1.ceil(),
+    ))
+}
+
+/// The pixel size of the layer [`path_shape`] makes for `path`.
+pub fn path_shape_size(path: &VectorPath) -> Result<(u32, u32)> {
+    let area = path_box(path)?;
+    ensure!(
+        area.width() <= f64::from(crate::document::MAX_SIDE)
+            && area.height() <= f64::from(crate::document::MAX_SIDE),
+        "Dimensions must be between 1 and {} pixels",
+        crate::document::MAX_SIDE
+    );
+    let size = (area.width() as u32, area.height() as u32);
+    validate_size(size.0, size.1)?;
+    Ok(size)
+}
+
+/// An editable, antialiased shape layer filled with `color` inside `path`, given in document
+/// coordinates. The layer covers the whole pixels the path touches.
+pub fn path_shape(path: &VectorPath, fill_rule: FillRule, color: [u8; 4]) -> Result<Layer> {
+    let (width, height) = path_shape_size(path)?;
+    let area = path_box(path)?;
+    let style = crate::document::ShapeStyle {
+        kind: ShapeKind::Path,
+        color,
+        corner_radius: 0.0,
+        path: Some(crate::document::ShapePath {
+            d: path.transformed(kurbo::Affine::translate((-area.x0, -area.y0))),
+            width: width as f32,
+            height: height as f32,
+            fill_rule,
+        }),
+    };
+    let mut layer = Layer::image("Path", path_pixels(&style, width, height));
+    layer.shape = Some(style);
+    layer.transform.x = area.x0 as f32;
+    layer.transform.y = area.y0 as f32;
+    Ok(layer)
+}
+
+/// A path shape's pixels at `width` × `height`, its box stretched over them.
+fn path_pixels(style: &crate::document::ShapeStyle, width: u32, height: u32) -> RgbaImage {
+    let Some(shape) = &style.path else {
+        return RgbaImage::new(width, height);
+    };
+    let to_pixels = kurbo::Affine::scale_non_uniform(
+        f64::from(width) / f64::from(shape.width),
+        f64::from(height) / f64::from(shape.height),
+    );
+    let coverage = shape.d.coverage(shape.fill_rule, to_pixels, width, height);
+    let [r, g, b, a] = style.color;
+    let mut image = RgbaImage::new(width, height);
+    for (pixel, value) in image.pixels_mut().zip(coverage) {
+        *pixel = Rgba([r, g, b, (f32::from(a) * value).round() as u8]);
+    }
+    image
+}
+
+/// Fill the inside of `path` (document coordinates) on the active layer with `color`, within
+/// the selection when there is one, with antialiased edges.
+pub fn fill_path(
+    document: &mut Document,
+    path: &VectorPath,
+    fill_rule: FillRule,
+    color: [u8; 4],
+) -> Result<()> {
+    let mut mask = path.mask(fill_rule, document.width, document.height);
+    if let Some(selection) = &document.selection {
+        for (value, limit) in mask.as_mut().iter_mut().zip(selection.as_raw()) {
+            *value = (u16::from(*value) * u16::from(*limit) / 255) as u8;
+        }
+    }
+    let selection = document.selection.replace(Arc::new(mask));
+    let result = fill(document, color, false, false);
+    document.selection = selection;
+    result
 }
 
 pub fn refresh_shapes(document: &mut Document) -> Result<()> {
@@ -760,6 +856,10 @@ pub fn refresh_shapes(document: &mut Document) -> Result<()> {
             continue;
         }
         validate_size(width, height)?;
+        if style.path.is_some() {
+            layer.pixels = Some(Arc::new(path_pixels(style, width, height)));
+            continue;
+        }
         let redrawn = shape(
             Point::default(),
             Point::new(width as f32, height as f32),
