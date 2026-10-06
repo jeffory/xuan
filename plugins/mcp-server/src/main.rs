@@ -105,9 +105,7 @@ fn main() {
                     .map(|d| d.clone())
                     .unwrap_or_default();
                 let token = auth::replace(&dir).unwrap_or_else(|_| auth::generate());
-                if let Ok(mut current) = shared.token.write() {
-                    *current = token;
-                }
+                shared.replace_token(token);
             }
             let permissions = pane.host.request("session/status", json!({})).ok();
             Ok(pane::tree(shared, permissions.as_ref()))

@@ -91,6 +91,11 @@ impl Editor for FakeEditor {
             }),
             "document/edit" => Ok(json!({"ok": true, "layers": ["new-layer"]})),
             "host/run" | "document/activate" => Ok(json!({"ok": true})),
+            // As Xuan words a file that fails to load.
+            "file/open" => Err(EditorError {
+                code: -32603,
+                message: "Could not open /home/someone/Secret Plans/broken.png\n\nformat error at \"/home/someone/Secret Plans/broken.png\"".into(),
+            }),
             "file/save_as" => Err(EditorError {
                 code: CANCELLED,
                 message: "The user cancelled the save dialog".into(),
@@ -692,4 +697,153 @@ async fn idle_and_excess_connections_are_closed() {
     stream.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 401"), "{response}");
     let _ = idle[1].write_all(b"").await;
+}
+
+#[test]
+fn absolute_paths_in_messages_become_file_names() {
+    let cases = [
+        (
+            "Could not open /home/me/Secret Plans/broken.png",
+            "Could not open broken.png",
+        ),
+        (
+            "error at path \"/home/me/My Pictures/.tmpAb1\" (os error 2)",
+            "error at path \".tmpAb1\" (os error 2)",
+        ),
+        (
+            "Cannot read /tmp/x/y.png: denied.",
+            "Cannot read y.png: denied.",
+        ),
+        (
+            "at \"C:\\\\Users\\\\me\\\\Pictures\\\\a b.png\"",
+            "at \"a b.png\"",
+        ),
+        ("C:\\Users\\me\\a.png is locked", "a.png is locked"),
+        ("on \\\\server\\share\\a.png", "on a.png"),
+        ("(/srv/data/b.jpg)", "(b.jpg)"),
+        ("/home/me/My File.png", "My File.png"),
+        // Left alone: no absolute path.
+        ("http://127.0.0.1:8765/mcp", "http://127.0.0.1:8765/mcp"),
+        ("xuan://document/preview.png", "xuan://document/preview.png"),
+        (
+            "relative/a.png and 1/2 of `/`",
+            "relative/a.png and 1/2 of `/`",
+        ),
+        ("Unknown argument `colour`", "Unknown argument `colour`"),
+    ];
+    for (message, redacted) in cases {
+        assert_eq!(tools::redact_paths(message), redacted, "{message}");
+    }
+}
+
+#[tokio::test]
+async fn tool_and_resource_errors_name_files_never_folders() {
+    let editor = FakeEditor::new(false);
+    let (app, _) = app(editor.clone());
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let failed = client
+        .tool("open_document", json!({"path": "/home/someone/link.png"}))
+        .await;
+    assert_eq!(failed.is_error, Some(true));
+    let text = text_of(&failed);
+    assert!(text.contains("broken.png"), "{text}");
+    assert!(!text.contains("someone"), "{text}");
+    assert!(!text.contains("Secret"), "{text}");
+    // The plugin's own messages too.
+    let missing = editor.dir.join("private").join("gone.png");
+    let error = tools::read_export(&json!({"path": missing})).unwrap_err();
+    assert!(error.contains("gone.png"), "{error}");
+    assert!(!error.contains("private"), "{error}");
+    let blocked = editor.dir.join("a file");
+    std::fs::write(&blocked, b"").unwrap();
+    let incoming = blocked.join("incoming");
+    let cx = tools::Context {
+        editor: editor.as_ref(),
+        session: None,
+        incoming: &incoming,
+    };
+    let args = serde_json::from_value(json!({"png_base64": PNG})).unwrap();
+    let result = tools::call(&cx, "create_image_layer", args);
+    let text = text_of(&result);
+    assert_eq!(result.is_error, Some(true));
+    assert!(!text.contains(editor.dir.to_str().unwrap()), "{text}");
+}
+
+#[tokio::test]
+async fn large_images_fit_and_larger_requests_get_a_clear_answer() {
+    let editor = FakeEditor::new(false);
+    let (app, _) = app(editor.clone());
+    let mut client = Client::new(app);
+    client.initialize().await;
+    // Over rmcp's default 4 MiB body: an image well inside the 64 MiB limit.
+    let mut png = STANDARD.decode(PNG).unwrap();
+    png.resize(6 * 1024 * 1024, 0);
+    let added = client
+        .tool(
+            "create_image_layer",
+            json!({"png_base64": STANDARD.encode(png)}),
+        )
+        .await;
+    assert_ne!(added.is_error, Some(true), "{}", text_of(&added));
+    // A body over the limit is refused before it is read, saying why.
+    let body = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"});
+    let mut request = client.request(&body);
+    request.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        (server::MAX_BODY_BYTES + 1).to_string().parse().unwrap(),
+    );
+    let (status, _, text) = client.send(request).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(text, server::TOO_LARGE);
+    assert!(text.contains("64 MiB") && text.contains("96 MiB"), "{text}");
+    // What Xuan would refuse as a message is refused here, not sent (Xuan
+    // would stop the plugin).
+    let before = editor.requests().len();
+    let cx = tools::Context {
+        editor: editor.as_ref(),
+        session: None,
+        incoming: &editor.dir,
+    };
+    let text = "x".repeat(tools::MAX_REQUEST_BYTES + 1);
+    let args = serde_json::from_value(json!({"text": text})).unwrap();
+    let result = tools::call(&cx, "create_text_layer", args);
+    assert_eq!(result.is_error, Some(true));
+    assert!(
+        text_of(&result).contains("too large"),
+        "{}",
+        text_of(&result)
+    );
+    assert_eq!(editor.requests().len(), before, "nothing sent");
+}
+
+#[tokio::test]
+async fn a_new_token_forgets_the_sessions_issued_before() {
+    let editor = FakeEditor::new(false);
+    let (app, shared) = app(editor.clone());
+    let mut first = Client::new(app.clone());
+    first.initialize().await;
+    first.tool("fill", json!({"color": "#0000ff"})).await;
+    // New Token (the same text here, so this client still gets in): its
+    // session id no longer names the session the user answered for.
+    shared.replace_token("k".repeat(64));
+    first.tool("fill", json!({"color": "#0000ff"})).await;
+    let mut second = Client::new(app);
+    second.initialize().await;
+    second.tool("fill", json!({"color": "#0000ff"})).await;
+    let sessions: Vec<String> = editor
+        .requests()
+        .into_iter()
+        .filter(|(_, method, _)| method == "document/edit")
+        .map(|(session, ..)| session.unwrap())
+        .collect();
+    assert_eq!(
+        sessions,
+        [
+            "MCP client 1",
+            server::STATELESS_SESSION,
+            // Labels are never reused.
+            "MCP client 2",
+        ]
+    );
 }

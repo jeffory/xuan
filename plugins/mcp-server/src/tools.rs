@@ -14,6 +14,9 @@ use crate::editor::{CANCELLED, Editor, EditorError};
 
 /// Largest image a client may send for `create_image_layer`, decoded.
 pub const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+/// Largest request this plugin sends Xuan, as JSON. Xuan stops a plugin
+/// that writes a line over 16 MiB; this leaves room for the envelope.
+pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024 - 64 * 1024;
 /// Longest side of previews unless the client asks for another.
 pub const DEFAULT_PREVIEW: u64 = 1024;
 
@@ -853,13 +856,23 @@ pub fn call(cx: &Context, name: &str, args: Map<String, Value>) -> CallToolResul
     };
     match (spec.run)(cx, args) {
         Ok(content) => CallToolResult::success(content),
-        Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+        // Where the user keeps files is not the client's business.
+        Err(message) => CallToolResult::error(vec![ContentBlock::text(redact_paths(&message))]),
     }
 }
 
 impl Context<'_> {
     /// A request, with Xuan's error turned into a message for the model.
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        // Refused here with a clear message rather than sent: Xuan would
+        // stop the whole plugin over a message that large.
+        let size = serde_json::to_vec(&params).map_or(0, |bytes| bytes.len());
+        if size > MAX_REQUEST_BYTES {
+            return Err(format!(
+                "The request is too large for Xuan ({} MiB of JSON; at most 16 MiB). Send less at once, for example fewer points or a shorter text",
+                size.div_ceil(1024 * 1024)
+            ));
+        }
         self.editor
             .request(self.session, method, params)
             .map_err(|error| explain(method, &error))
@@ -987,7 +1000,8 @@ pub fn read_export(export: &Value) -> Result<(String, Value), String> {
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .ok_or("Xuan did not write the image")?;
-    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read {}: {e}", path.display()));
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read {name}: {e}"));
     let _ = std::fs::remove_file(&path);
     let mut info = export.clone();
     if let Some(map) = info.as_object_mut() {
@@ -1012,6 +1026,102 @@ fn decode_png(text: &str) -> Result<Vec<u8>, String> {
 }
 
 fn incoming_file(dir: &Path) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("Cannot create the plugin's folder for images: {e}"))?;
     Ok(dir.join(format!("{}.png", &crate::auth::generate()[..24])))
+}
+
+/// A message with every absolute path in it reduced to its file name, so
+/// errors from Xuan or from the system never tell a client where the user
+/// keeps files. Paths in quotes are taken whole, spaces included; others
+/// end at a space. URLs and relative paths are left alone.
+pub fn redact_paths(message: &str) -> String {
+    let chars: Vec<char> = message.chars().collect();
+    let mut out = String::with_capacity(message.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let before = i.checked_sub(1).map(|j| chars[j]);
+        let boundary = before.is_none_or(|c| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '"' | '\'' | '`' | '(' | '[' | '{' | '<' | '=' | ',' | ';'
+                )
+        });
+        let length = if boundary { path_start(&chars[i..]) } else { 0 };
+        if length == 0 {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        // The path runs to the closing quote, or else to a space.
+        let quote = before.filter(|c| matches!(c, '"' | '\'' | '`'));
+        let ends = |c: char| {
+            c.is_whitespace() || matches!(c, '"' | '\'' | '`' | ')' | ']' | '}' | '>' | ',' | ';')
+        };
+        let mut end = i + length;
+        while end < chars.len() {
+            let c = chars[end];
+            let stop = match quote {
+                Some(q) => c == q,
+                None => ends(c),
+            };
+            if !stop {
+                end += 1;
+                continue;
+            }
+            // `/home/me/My Pictures/a.png`: a folder name with a space goes
+            // on while the next word still holds a separator.
+            if quote.is_none() && c == ' ' {
+                let word = (end + 1..chars.len())
+                    .find(|&j| ends(chars[j]))
+                    .unwrap_or(chars.len());
+                let next = &chars[end + 1..word];
+                if path_start(next) == 0 && next.iter().any(|&c| matches!(c, '/' | '\\')) {
+                    end = word;
+                    continue;
+                }
+            }
+            break;
+        }
+        // A sentence's full stop or colon is not part of the path.
+        if quote.is_none() {
+            while end > i + length && matches!(chars[end - 1], '.' | ':') {
+                end -= 1;
+            }
+        }
+        let path: String = chars[i..end].iter().collect();
+        let name = path
+            .split(['/', '\\'])
+            .rfind(|part| !part.is_empty())
+            .unwrap_or_default();
+        out.push_str(name);
+        i = end;
+    }
+    out
+}
+
+/// How many characters start an absolute path here (0: none): `/x` on
+/// Unix, `C:\x` or `C:/x` on Windows (also with `\\` as `Debug` writes
+/// it), `\\server` for a share.
+fn path_start(chars: &[char]) -> usize {
+    let at = |i: usize| chars.get(i).copied();
+    let named = |c: Option<char>| {
+        c.is_some_and(|c| !c.is_whitespace() && !matches!(c, '/' | '\\' | '"' | '\'' | '`'))
+    };
+    match (at(0), at(1), at(2)) {
+        (Some('/'), next, _) if named(next) => 1,
+        (Some(drive), Some(':'), Some('/' | '\\'))
+            if drive.is_ascii_alphabetic()
+                && at(3).is_some_and(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '`')) =>
+        {
+            3
+        }
+        (Some('\\'), Some('\\'), Some(c))
+            if !c.is_whitespace() && !matches!(c, '"' | '\'' | '`') =>
+        {
+            2
+        }
+        _ => 0,
+    }
 }

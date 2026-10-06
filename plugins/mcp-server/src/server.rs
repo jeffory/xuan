@@ -39,6 +39,13 @@ const RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 pub const PATH: &str = "/mcp";
 /// Tool calls the pane lists.
 const ACTIVITY: usize = 8;
+/// Largest HTTP request body: room for the largest image
+/// `create_image_layer` takes (64 MiB of PNG, a third more as base64) and
+/// the JSON around it. Everything else a tool sends Xuan must fit in 16 MiB
+/// ([`tools::MAX_REQUEST_BYTES`]).
+pub const MAX_BODY_BYTES: usize = 96 * 1024 * 1024;
+/// The answer to a larger body, which says what the limits are.
+pub const TOO_LARGE: &str = "The request is larger than 96 MiB, the most this server accepts. An image for create_image_layer may be at most 64 MiB as PNG; other tool arguments at most 16 MiB.";
 
 /// What the server is doing, for the pane.
 #[derive(Clone, Debug, PartialEq)]
@@ -136,6 +143,19 @@ impl Shared {
                 .map(|(_, label)| format!("MCP client {label}"))
         });
         label.unwrap_or_else(|| STATELESS_SESSION.to_owned())
+    }
+
+    /// Replace the token (**New Token**). The session ids issued so far are
+    /// forgotten, so an edit approval given to one of them cannot be used
+    /// by whoever holds the new token and knows an old id: such a request
+    /// counts as having no session. Labels are never reused.
+    pub fn replace_token(&self, token: String) {
+        if let Ok(mut current) = self.token.write() {
+            *current = token;
+        }
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.known.clear();
+        }
     }
 
     pub fn token(&self) -> String {
@@ -349,7 +369,7 @@ pub fn read(
     session: Option<&str>,
     uri: &str,
 ) -> Result<Vec<ResourceContents>, ErrorData> {
-    let failed = |message: String| ErrorData::internal_error(message, None);
+    let failed = |message: String| ErrorData::internal_error(tools::redact_paths(&message), None);
     let request = |method: &str, params: Value| {
         editor
             .request(session, method, params)
@@ -401,7 +421,8 @@ pub fn router(xuan: Xuan, port: u16) -> Router {
     let shared = xuan.shared.clone();
     let config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(["127.0.0.1", "localhost"])
-        .enforce_origin_validation();
+        .enforce_origin_validation()
+        .with_max_request_body_bytes(MAX_BODY_BYTES);
     let service = StreamableHttpService::new(
         move || Ok(xuan.clone()),
         Arc::new(LocalSessionManager::default()),
@@ -426,6 +447,14 @@ async fn guard(
             );
         }
         return response;
+    }
+    // Said before the body is read, when its length is known; rmcp cuts
+    // off a longer body without a length at the same limit.
+    let length = (request.headers().get(header::CONTENT_LENGTH))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if length.is_some_and(|length| length > MAX_BODY_BYTES as u64) {
+        return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, TOO_LARGE).into_response();
     }
     // A session id in the answer to a request that had none was issued by
     // rmcp just now (to `initialize`): that is the only way one is trusted.
