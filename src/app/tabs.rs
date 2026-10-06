@@ -583,16 +583,6 @@ impl EditorApp {
             let delta = if delta.x != 0.0 { delta.x } else { delta.y };
             offset = strip.clamp_scroll(offset - delta, visible);
         }
-        if keys.is_empty() {
-            ui.painter().text(
-                pos2(viewport.left() + 10.0, viewport.center().y),
-                egui::Align2::LEFT_CENTER,
-                tr("Untitled"),
-                FontId::proportional(12.0),
-                p.muted,
-            );
-        }
-
         let clip = ui
             .painter()
             .clip_rect()
