@@ -214,3 +214,42 @@ fn many_tabs_overflow_into_a_list() {
     let ui = three_tabs();
     assert!(!ui.has("List all tabs"));
 }
+
+#[test]
+fn the_tab_bar_sits_between_the_tool_options_and_the_canvas() {
+    let mut ui = three_tabs();
+    ui.app_mut().tool = Tool::Move;
+    ui.settle();
+    let options = ui.harness.get_by_label("Auto Select").rect();
+    let tab = tab_rect(&ui, "Gamma");
+    let canvas = ui.app().canvas_rect.expect("the canvas was drawn");
+    assert!(
+        options.bottom() <= tab.top(),
+        "tool options {options:?} above the tabs {tab:?}"
+    );
+    assert!(
+        (canvas.top() - tab.bottom()).abs() < 2.0,
+        "tabs {tab:?} directly above the canvas {canvas:?}"
+    );
+    assert!((34.0..=36.5).contains(&tab.height()), "about 36 px tall");
+}
+
+#[test]
+fn the_new_canvas_button_is_square_and_still_works() {
+    let mut ui = three_tabs();
+    let gamma = tab_rect(&ui, "Gamma");
+    // The zoom-in button has the same name, so pick the one right after the last tab.
+    let plus = ui
+        .harness
+        .get_all_by_label("+")
+        .map(|node| node.rect())
+        .find(|r| (r.center().y - gamma.center().y).abs() < 1.0 && r.left() >= gamma.right())
+        .expect("a + button in the tab bar");
+    assert!((plus.width() - plus.height()).abs() < 1.0, "square");
+    ui.app_mut().command_trace = Some(Vec::new());
+    ui.click_at(plus.center());
+    assert_eq!(
+        ui.app().command_trace.as_deref(),
+        Some(&["new".to_owned()][..])
+    );
+}

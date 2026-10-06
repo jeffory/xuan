@@ -1813,11 +1813,14 @@ impl EditorApp {
         self.window_resize(ctx);
         self.poll_plugins();
         self.menus(ctx);
-        self.tabs(ctx);
         if self.develop.is_some() {
+            // The Develop workspace has its own toolbar; RAW tabs stay reachable above it.
+            self.tabs(ctx);
             self.develop_workspace(ctx);
         } else {
+            // Tool options, then the tabs as the canvas's own header.
             self.tool_options(ctx);
+            self.tabs(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);
             self.sidebar(ctx);

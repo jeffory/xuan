@@ -1,6 +1,8 @@
-//! The document tab bar (issue #48), after Firefox's tabs.
+//! The document tab bar (issues #48 and #50).
 //!
-//! The selected tab is a raised pill; the others are flat and light up under the pointer.
+//! Issue #50 restyled them after KDE's (Breeze) tabs and moved the bar directly above the
+//! canvas. Tabs are flat, with a document icon, 1 px separators and a lighter active tab with
+//! an accent line; the others light up under the pointer.
 //! Tabs share the width between [`MIN_TAB`] and [`MAX_TAB`]; when even the narrowest no longer
 //! fit, the strip scrolls, with arrows and a "List all tabs" menu at its end. Tabs can be
 //! dragged into a new order, closed with the middle button, and have a context menu. The
@@ -11,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{FontId, Painter, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{FontId, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
 use uuid::Uuid;
 use xuan::i18n::tr;
 
@@ -24,16 +26,19 @@ use super::{
 /// Narrowest and widest tab, in points (Firefox's are 76 and 225).
 pub(super) const MIN_TAB: f32 = 76.0;
 pub(super) const MAX_TAB: f32 = 225.0;
-pub(super) const TAB_HEIGHT: f32 = 30.0;
-/// Space between two tabs.
-pub(super) const GAP: f32 = 2.0;
+pub(super) const TAB_HEIGHT: f32 = 36.0;
+/// Space inside a tab before its icon.
+const PADDING: f32 = 8.0;
+/// The document icon's size.
+const ICON: f32 = 16.0;
+/// Space between two tabs: a 1 px separator.
+pub(super) const GAP: f32 = 1.0;
 /// Closed documents remembered for Reopen Closed Tab.
 const CLOSED_LIMIT: usize = 20;
 /// Width of the overflow arrows and the list button.
 const STRIP_BUTTON: f32 = 24.0;
 /// Room kept on the right of the bar for the zoom buttons.
 const ZOOM_BUTTONS: f32 = 228.0;
-const RADIUS: u8 = 6;
 
 /// One tab: a document, or a RAW Develop session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -156,37 +161,61 @@ fn shows_close(look: &TabLook<'_>) -> bool {
 }
 
 fn close_rect(tab: Rect) -> Rect {
-    Rect::from_center_size(pos2(tab.right() - 15.0, tab.center().y), vec2(20.0, 20.0))
+    Rect::from_center_size(pos2(tab.right() - 18.0, tab.center().y), vec2(20.0, 20.0))
+}
+
+/// A small page with a folded corner, drawn in `color`: the document icon at a tab's left.
+fn paint_document_icon(painter: &Painter, rect: Rect, color: egui::Color32) {
+    let stroke = Stroke::new(1.2_f32, color);
+    let r = rect.shrink2(vec2(2.5, 1.0));
+    let fold = 4.5;
+    let outline = [
+        r.left_top(),
+        pos2(r.right() - fold, r.top()),
+        pos2(r.right(), r.top() + fold),
+        r.right_bottom(),
+        r.left_bottom(),
+        r.left_top(),
+    ];
+    painter.add(egui::Shape::line(outline.to_vec(), stroke));
+    painter.add(egui::Shape::line(
+        vec![
+            pos2(r.right() - fold, r.top()),
+            pos2(r.right() - fold, r.top() + fold),
+            pos2(r.right(), r.top() + fold),
+        ],
+        stroke,
+    ));
 }
 
 fn paint_tab(ui: &Ui, painter: &Painter, p: &Palette, rect: Rect, look: &TabLook<'_>) {
+    // KDE (Breeze) tabs: flat; the active one a step lighter than the bar, with an accent
+    // line on top; a faint fill under the pointer.
     if look.selected {
-        // A raised pill, as Firefox's Proton tabs.
-        painter.rect_filled(rect.translate(vec2(0.0, 1.0)), RADIUS, p.tab_shadow);
-        painter.rect(
-            rect,
-            RADIUS,
-            p.tab_selected,
-            Stroke::new(1.0_f32, p.tab_selected_edge),
-            StrokeKind::Inside,
+        painter.rect_filled(rect, 0.0, p.panel);
+        painter.rect_filled(
+            Rect::from_min_size(rect.min, vec2(rect.width(), 2.0)),
+            0.0,
+            p.accent,
         );
-    } else {
-        let fill = if look.hovered {
-            p.tab_hover
-        } else {
-            p.tab_fill
-        };
-        painter.rect(
-            rect,
-            RADIUS,
-            fill,
-            Stroke::new(1.0_f32, p.tab_edge),
-            StrokeKind::Inside,
-        );
+    } else if look.hovered {
+        painter.rect_filled(rect, 0.0, p.tab_hover);
     }
     let close = close_rect(rect);
+    let text = if look.dragging {
+        p.muted
+    } else if look.selected || look.hovered {
+        p.text
+    } else {
+        p.text.lerp_to_gamma(p.muted, 0.35)
+    };
+    let icon = Rect::from_center_size(
+        pos2(rect.left() + PADDING + ICON / 2.0, rect.center().y),
+        vec2(ICON, ICON),
+    );
+    paint_document_icon(painter, icon, text);
     let text_rect = Rect::from_min_max(
-        pos2(rect.left() + 10.0, rect.top()),
+        pos2(icon.right() + 6.0, rect.top()),
         pos2(close.left() - 2.0, rect.bottom()),
     );
     let galley = egui::WidgetText::from(look.title).into_galley(
@@ -195,14 +224,6 @@ fn paint_tab(ui: &Ui, painter: &Painter, p: &Palette, rect: Rect, look: &TabLook
         text_rect.width().max(0.0),
         FontId::proportional(12.0),
     );
-    let text = if look.dragging {
-        p.muted
-    } else if look.selected || look.hovered {
-        p.text
-    } else {
-        // Inactive tabs read a step quieter, as in Firefox.
-        p.text.lerp_to_gamma(p.muted, 0.35)
-    };
     painter
         .with_clip_rect(text_rect)
         .galley_with_override_text_color(
@@ -473,19 +494,20 @@ impl EditorApp {
             || self.develop_close_requested.is_some();
         let mut actions = Actions::default();
         egui::TopBottomPanel::top("project_tabs")
-            .exact_height(46.0)
+            .exact_height(TAB_HEIGHT)
             .frame(
                 egui::Frame::new()
                     .fill(ctx.palette().titlebar)
-                    .inner_margin(egui::Margin::symmetric(10, 8)),
+                    .inner_margin(egui::Margin::ZERO),
             )
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!blocked, |ui| {
                     ui.horizontal_centered(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.spacing_mut().item_spacing.x = 0.0;
                         self.tab_strip_ui(ui, &mut actions);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.add_space(8.0);
                             self.zoom_buttons(ui, &mut actions);
                         });
                     });
@@ -522,9 +544,9 @@ impl EditorApp {
         let keys = self.tab_keys();
         let selected = self.selected_tab();
         let documents = self.sessions.len();
-        let new_button = 30.0;
+        let new_button = TAB_HEIGHT;
         let available =
-            (ui.available_width() - ZOOM_BUTTONS - new_button - ui.spacing().item_spacing.x)
+            (ui.available_width() - ZOOM_BUTTONS - new_button)
                 .max(MIN_TAB);
         let strip = Strip::new(keys.len(), available);
         let overflow = strip.overflows(available);
@@ -634,6 +656,17 @@ impl EditorApp {
                 dragging,
             };
             paint_tab(ui, &ui.painter().with_clip_rect(clip), &p, rect, &look);
+            if index + 1 < keys.len() {
+                // The 1 px separator in the gap after this tab, not after the last.
+                let x = rect.right() + GAP / 2.0;
+                ui.painter().with_clip_rect(clip).line_segment(
+                    [
+                        pos2(x, rect.top() + 8.0),
+                        pos2(x, rect.bottom() - 8.0),
+                    ],
+                    Stroke::new(GAP, p.divider),
+                );
+            }
             if let TabKey::Document(_) = key {
                 if let Some(layer) = response.dnd_release_payload::<super::LayerDrag>() {
                     actions.copy_layer = Some((*layer, index));
@@ -641,9 +674,9 @@ impl EditorApp {
                 if response.dnd_hover_payload::<super::LayerDrag>().is_some() {
                     ui.painter().with_clip_rect(clip).rect_stroke(
                         rect,
-                        RADIUS,
+                        0.0,
                         Stroke::new(2.0_f32, p.accent),
-                        StrokeKind::Inside,
+                        egui::StrokeKind::Inside,
                     );
                 }
             }
@@ -722,8 +755,20 @@ impl EditorApp {
         }
         self.tab_strip.offset = offset;
 
-        if ui
-            .add(widgets::Button::new("+").min_size(vec2(28.0, 26.0)))
+        let (rect, new) = ui.allocate_exact_size(vec2(TAB_HEIGHT, TAB_HEIGHT), Sense::click());
+        new.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "+")
+        });
+        if new.hovered() {
+            ui.painter().rect_filled(rect, 0.0, p.tab_hover);
+        }
+        let c = rect.center();
+        let stroke = Stroke::new(1.4_f32, p.text);
+        ui.painter()
+            .line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], stroke);
+        ui.painter()
+            .line_segment([c - vec2(0.0, 5.0), c + vec2(0.0, 5.0)], stroke);
+        if new
             .on_hover_text(match self.keymap.shortcut("new") {
                 shortcut if shortcut.is_empty() => tr("New canvas").to_owned(),
                 shortcut => format!("{} ({shortcut})", tr("New canvas")),

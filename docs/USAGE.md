@@ -83,9 +83,11 @@ The sidebar is a stack of panes, each with a header. Click a header to collapse 
 
 ### Document tabs
 
-Each open document and RAW Develop session has a tab above the canvas, styled after
-Firefox: the selected tab is a raised pill and the others are flat until the pointer is
-over them. Hover a tab for its full path.
+Each open document and RAW Develop session has a tab, in a bar directly above the canvas
+(below the tool options). The tabs are styled after KDE's: flat, with a document icon, the
+title and a **✕**, thin separators between them, and the selected tab a little lighter than
+the bar with an accent line along its top edge. The others get a faint fill under the pointer.
+The **+** button after the last tab starts a new canvas. Hover a tab for its full path.
 
 - **Close** a tab with its **✕** (shown on the selected tab and the one under the
   pointer), with the middle mouse button, or with **Ctrl+W**. A tab with unsaved changes
