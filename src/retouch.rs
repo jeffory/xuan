@@ -826,6 +826,75 @@ mod tests {
         }
     }
 
+    /// A long thin stroke takes its texture from alongside itself, not from a box-width
+    /// away. Everything outside the strip around the stroke is a loud stripe pattern,
+    /// which the box-based overlap test used to pick as the only candidate.
+    #[test]
+    fn long_thin_stroke_heals_from_alongside() {
+        let (a, b) = (Point::new(200.0, 330.0), Point::new(440.0, 150.0));
+        let distance_to_stroke = |x: u32, y: u32| {
+            let p = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            p.distance(Point::new(a.x + t * dx, a.y + t * dy))
+        };
+        let skin = |x: u32, y: u32| {
+            let grain = noise(x / 2, y / 2, 11, 6) + noise(x, y, 12, 2);
+            Rgba([
+                (200 + grain) as u8,
+                (150 + grain) as u8,
+                (130 + grain) as u8,
+                255,
+            ])
+        };
+        let near = |x: u32, y: u32| (100..540).contains(&x) && (60..420).contains(&y);
+        let clean = RgbaImage::from_fn(640, 480, |x, y| {
+            if near(x, y) {
+                skin(x, y)
+            } else if (x / 6).is_multiple_of(2) {
+                Rgba([40, 40, 40, 255])
+            } else {
+                Rgba([220, 220, 220, 255])
+            }
+        });
+        let mut blemished = clean.clone();
+        for (x, y, pixel) in blemished.enumerate_pixels_mut() {
+            if distance_to_stroke(x, y) <= 2.0 {
+                *pixel = Rgba([90, 40, 40, 255]);
+            }
+        }
+        for mode in [HealMode::ContentAware, HealMode::ProximityMatch] {
+            let mut document = document_with(Layer::image("Skin", blemished.clone()), 640, 480);
+            heal(&mut document, &[a, b], 14.0, mode);
+            let healed = pixels(&document);
+            let (mut worst, mut sum, mut count) = (0u32, 0u64, 0u64);
+            for (x, y, pixel) in healed.enumerate_pixels() {
+                if distance_to_stroke(x, y) <= 7.0 {
+                    let error = (luminance(*pixel) - luminance(*clean.get_pixel(x, y)))
+                        .abs()
+                        .round() as u32;
+                    worst = worst.max(error);
+                    sum += u64::from(error);
+                    count += 1;
+                }
+            }
+            let mean = sum as f64 / count as f64;
+            assert!(
+                worst < 40 && mean < 8.0,
+                "{mode:?}: healed stroke is off by up to {worst} (mean {mean:.1}) from the skin"
+            );
+            for (x, y, pixel) in healed.enumerate_pixels() {
+                if distance_to_stroke(x, y) > 8.0 {
+                    assert_eq!(
+                        pixel,
+                        blemished.get_pixel(x, y),
+                        "{mode:?}: ({x}, {y}) changed outside the stroke"
+                    );
+                }
+            }
+        }
+    }
+
     fn checker_with_blemish(width: u32, height: u32, cell: u32) -> RgbaImage {
         RgbaImage::from_fn(width, height, |x, y| {
             let (dx, dy) = (
