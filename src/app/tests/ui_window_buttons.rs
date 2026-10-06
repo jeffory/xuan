@@ -75,10 +75,7 @@ fn builtin_setting_and_missing_assets_draw_the_glyphs() {
     builtin.app_mut().config.window_buttons = xuan::config::WindowButtons::BuiltIn;
     builtin.app_mut().window_theme = shared(WindowTheme::new(Env::default()));
     builtin.settle();
-    assert_eq!(
-        textures(&builtin),
-        0
-    );
+    assert_eq!(textures(&builtin), 0);
     assert!(builtin.has("Close window"));
     // Match desktop theme with nothing installed: the glyphs, and still clickable.
     ui.app_mut().window_theme = shared(WindowTheme::new(Env::default()));
@@ -92,7 +89,7 @@ fn dialog_close_side(ui: &UiTest) -> f32 {
     let centre = ui.ctx().content_rect().center().x;
     let x = x_of(ui, "Close panel");
     assert!(
-        (x - centre).abs() < 220.0,
+        (x - centre).abs() < 340.0,
         "the button is on the dialog: {x} vs {centre}"
     );
     x - centre

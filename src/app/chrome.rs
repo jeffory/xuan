@@ -164,7 +164,8 @@ impl ButtonLayout {
 }
 
 /// A window theme shared between the main title bar and the dialogs.
-pub(super) type SharedWindowTheme = std::sync::Arc<std::sync::Mutex<Option<super::window_theme::WindowTheme>>>;
+pub(super) type SharedWindowTheme =
+    std::sync::Arc<std::sync::Mutex<Option<super::window_theme::WindowTheme>>>;
 
 /// What a compact-style button needs to be drawn: the desktop theme's images, unless
 /// the user chose the built-in glyphs.
@@ -199,66 +200,64 @@ pub(super) fn paint_window_button(
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (style.buttons, &style.theme);
-        let painter = ui.painter();
-        let p = ui.palette();
-        if response.hovered() || response.has_focus() {
-            let fill = if response.is_pointer_button_down_on() {
-                p.pressed
-            } else {
-                p.hover
-            };
-            painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
-        }
-        let color = if focused || response.hovered() {
-            p.text
+    let painter = ui.painter();
+    let p = ui.palette();
+    if response.hovered() || response.has_focus() {
+        let fill = if response.is_pointer_button_down_on() {
+            p.pressed
         } else {
-            p.muted
+            p.hover
         };
-        let stroke = Stroke::new(1.0_f32, color);
-        // Pixel-centered 1 px strokes stay crisp at integer offsets.
-        let c = rect
-            .center()
-            .round_to_pixel_center(painter.pixels_per_point());
-        match button {
-            WindowButton::Minimize => {
-                painter.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], stroke);
-            }
-            WindowButton::Maximize if maximized => {
-                // Two overlapping windows: the front one, then the visible
-                // top and right edges of the one behind it.
-                painter.rect_stroke(
-                    Rect::from_min_max(c + vec2(-4.0, -2.0), c + vec2(2.0, 4.0)),
-                    0.0,
-                    stroke,
-                    StrokeKind::Middle,
-                );
-                painter.add(egui::Shape::line(
-                    vec![
-                        c + vec2(-2.0, -2.0),
-                        c + vec2(-2.0, -4.0),
-                        c + vec2(4.0, -4.0),
-                        c + vec2(4.0, 2.0),
-                        c + vec2(2.0, 2.0),
-                    ],
-                    stroke,
-                ));
-            }
-            WindowButton::Maximize => {
-                painter.rect_stroke(
-                    Rect::from_center_size(c, vec2(8.0, 8.0)),
-                    0.0,
-                    stroke,
-                    StrokeKind::Middle,
-                );
-            }
-            WindowButton::Close => {
-                painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
-                painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
-            }
+        painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
+    }
+    let color = if focused || response.hovered() {
+        p.text
+    } else {
+        p.muted
+    };
+    let stroke = Stroke::new(1.0_f32, color);
+    // Pixel-centered 1 px strokes stay crisp at integer offsets.
+    let c = rect
+        .center()
+        .round_to_pixel_center(painter.pixels_per_point());
+    match button {
+        WindowButton::Minimize => {
+            painter.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], stroke);
         }
-    
+        WindowButton::Maximize if maximized => {
+            // Two overlapping windows: the front one, then the visible
+            // top and right edges of the one behind it.
+            painter.rect_stroke(
+                Rect::from_min_max(c + vec2(-4.0, -2.0), c + vec2(2.0, 4.0)),
+                0.0,
+                stroke,
+                StrokeKind::Middle,
+            );
+            painter.add(egui::Shape::line(
+                vec![
+                    c + vec2(-2.0, -2.0),
+                    c + vec2(-2.0, -4.0),
+                    c + vec2(4.0, -4.0),
+                    c + vec2(4.0, 2.0),
+                    c + vec2(2.0, 2.0),
+                ],
+                stroke,
+            ));
+        }
+        WindowButton::Maximize => {
+            painter.rect_stroke(
+                Rect::from_center_size(c, vec2(8.0, 8.0)),
+                0.0,
+                stroke,
+                StrokeKind::Middle,
+            );
+        }
+        WindowButton::Close => {
+            painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
+            painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
+        }
+    }
 }
-
 
 /// Draws the button with the desktop theme's image. `false` means none was found (or
 /// the setting is Built-in) and the caller draws its own glyph.

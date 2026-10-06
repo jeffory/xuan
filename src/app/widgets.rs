@@ -829,7 +829,7 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
             ui.painter()
                 .line_segment([center + vec2(-2.0, 2.0), center + vec2(2.0, -2.0)], stroke);
         }
-        return response.on_hover_text(&label).clicked();
+        return response.on_hover_text(label).clicked();
     };
     let on_left = !chrome.layout.right.contains(&WindowButton::Close)
         && chrome.layout.left.contains(&WindowButton::Close);
@@ -857,7 +857,7 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
         &response,
         focused,
     );
-    response.on_hover_text(&label).clicked()
+    response.on_hover_text(label).clicked()
 }
 
 /// Floating utility panel: compact centered title, a close control placed as in the
