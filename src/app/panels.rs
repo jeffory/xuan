@@ -210,6 +210,7 @@ impl EditorApp {
                                         });
                                         if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase) {
                                             ui.menu_button(tr("Brush dynamics"), |ui| self.brush_dynamics(ui));
+                                            ui.menu_button(tr("Symmetry"), |ui| self.brush_symmetry(ui));
                                         }
                                         ui.label(tr("Smoothing"));
                                         ui.add(
@@ -566,6 +567,73 @@ impl EditorApp {
                 seed: dynamics.seed,
                 ..Default::default()
             };
+        }
+    }
+
+    /// Tool options → Symmetry: mirror or radial copies of each stroke.
+    fn brush_symmetry(&mut self, ui: &mut egui::Ui) {
+        use xuan::paint::{SymmetryMode, symmetry};
+        let size = self
+            .session()
+            .map(|session| (session.document.width, session.document.height));
+        let symmetry = &mut self.brush.symmetry;
+        widgets::segmented(
+            ui,
+            &mut symmetry.mode,
+            &[
+                (SymmetryMode::Off, tr("Off")),
+                (SymmetryMode::Vertical, tr("Vertical")),
+                (SymmetryMode::Horizontal, tr("Horizontal")),
+                (SymmetryMode::Radial, tr("Radial")),
+            ],
+        )
+        .on_hover_text(tr(
+            "Vertical mirrors left and right across the axis, Horizontal mirrors top and bottom, Radial turns the stroke around the centre.",
+        ));
+        ui.add_space(4.0);
+        egui::Grid::new("brush_symmetry")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(tr("Segments"));
+                ui.add_enabled(
+                    symmetry.mode == SymmetryMode::Radial,
+                    widgets::Number::new(&mut symmetry.segments)
+                        .size(egui::vec2(
+                            DEFAULT_PERCENT_VALUE_WIDTH,
+                            DEFAULT_VALUE_HEIGHT,
+                        ))
+                        .range(symmetry::MIN_SEGMENTS..=symmetry::MAX_SEGMENTS),
+                )
+                .on_hover_text(tr("Copies of the stroke around the centre."));
+                ui.end_row();
+                if let Some((width, height)) = size {
+                    let mut center = symmetry.center_in(width, height);
+                    let mut changed = false;
+                    for (label, value, max) in [
+                        (tr("Centre X"), &mut center.x, width),
+                        (tr("Centre Y"), &mut center.y, height),
+                    ] {
+                        ui.label(label);
+                        changed |= ui
+                            .add(
+                                widgets::Number::new(value)
+                                    .size(egui::vec2(DEFAULT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
+                                    .speed(1.0)
+                                    .range(0.0..=max as f32)
+                                    .suffix(" px")
+                                    .max_decimals(1),
+                            )
+                            .changed();
+                        ui.end_row();
+                    }
+                    if changed {
+                        symmetry.center = Some(center);
+                    }
+                }
+            });
+        if widgets::button(ui, tr("Centre on canvas")).clicked() {
+            symmetry.center = None;
         }
     }
 }

@@ -1016,3 +1016,11 @@ Click to start a path · Click a path to edit it	单击开始绘制路径 · 单
 Edit with Pen	用钢笔编辑
 Stroke with	描边工具
 Make Path from Selection	从选区建立路径
+Symmetry	对称
+Off	关闭
+Vertical mirrors left and right across the axis, Horizontal mirrors top and bottom, Radial turns the stroke around the centre.	垂直沿轴左右镜像，水平上下镜像，径向绕中心旋转笔画。
+Segments	分段
+Copies of the stroke around the centre.	笔画绕中心的副本数。
+Centre X	中心 X
+Centre Y	中心 Y
+Centre on canvas	居中于画布

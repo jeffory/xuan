@@ -193,6 +193,17 @@ like the existing ones, rather than anything specific to MCP:
   the kurbo crate's. `get_document` lists the saved paths and each path
   shape's outline in document coordinates. `select_shape` also takes
   `feather` for rectangles, ellipses and polygons.
+- **Paint symmetry** (#66). The 12 rays of a starburst were drawn one at a
+  time, and a mirrored figure meant computing x → 512 − x for every point.
+  `paint_stroke` (at the top level and in each item of `strokes`) and the
+  `stroke` edit take `symmetry: {mode: "vertical" | "horizontal" | "radial",
+  segments?, center?: [x, y]}`, the Symmetry menu of the Brush, Pencil and
+  Eraser. The stroke's pieces (swept segments or dabs, with their scatter and
+  jitter) are laid out once and each is painted for every copy, mirrored or
+  turned around the centre (the canvas centre by default), so copies are
+  exact mirror images and one stroke's coverage keeps crossing copies from
+  darkening each other. The work budget and stroke length limit count every
+  copy. Without `symmetry` a stroke paints exactly as before.
 - **Batching** (#61). Painting detail one tool call at a time took hundreds
   of round trips and undo steps. `paint_stroke` takes `strokes`, sent as one
   `stroke` edit each in one request (a one-point stroke already painted a

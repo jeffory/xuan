@@ -840,9 +840,11 @@ fn specs() -> Vec<Spec> {
             title: "Paint strokes",
             description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows (a single point paints one round dab), or `path`, SVG path data such as \"M 0 700 C 120 640 380 640 512 700\" whose curves Xuan flattens to points (one subpath; `taper_in`/`taper_out` taper its ends). For several strokes or dabs give `strokes` instead: a list of {points, color, size, …}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. \
 A point may be [x, y, pressure] with pressure 0–1 (default 1), as from a pen: it scales the size along the stroke, and the opacity too with `pressure_opacity`, e.g. [[10, 50, 0.1], [60, 40, 1], [110, 50, 0.1]] for a blade thin at both ends. \
+Symmetry paints each stroke again as one coat with it: `symmetry` {\"mode\": \"vertical\"} mirrors it left↔right across a vertical axis (x → 2·cx − x), \"horizontal\" top↔bottom, and {\"mode\": \"radial\", \"segments\": 12} turns it into 12 copies around the centre, e.g. a starburst's rays from one ray. `center` [x, y] (on the canvas, default its middle) is where the axis or the turns go through. Scatter and jitter are mirrored with the stroke, and every copy counts against the limits. \
 Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
             properties: {
                 let mut properties = brush_properties();
+                properties.insert(SYMMETRY.into(), symmetry_schema());
                 let mut item = properties.clone();
                 item.insert("points".into(), stroke_points());
                 item.insert("path".into(), svg_path("The stroke's path instead of `points`: SVG path data with one subpath (one M)"));
@@ -866,7 +868,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             required: &[],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = pick(args, &STROKE_ARGS)?;
+                let args = pick(args, &[&STROKE_ARGS[..], &[SYMMETRY]].concat())?;
                 Ok(Plan::new("Paint Stroke", strokes(&args)?, Reply::Ok))
             }),
         },
@@ -1494,6 +1496,25 @@ const BRUSH: [&str; 15] = [
     "seed",
 ];
 
+/// `paint_stroke`'s paint symmetry, at the top level and in each stroke.
+const SYMMETRY: &str = "symmetry";
+
+fn symmetry_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "enum": ["off", "vertical", "horizontal", "radial"],
+                     "description": "vertical: mirrored across a vertical axis (left↔right); horizontal: across a horizontal axis (top↔bottom); radial: turned into `segments` copies"},
+            "segments": {"type": "integer", "minimum": 2, "maximum": 32, "description": "Copies around the centre in radial mode (default 6)"},
+            "center": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2,
+                       "description": "[x, y] in document pixels on the canvas that the axis or turns go through (default the canvas centre)"},
+        },
+        "required": ["mode"],
+        "additionalProperties": false,
+        "description": "Paint each stroke again mirrored or turned around a centre, all as one coat (overlaps don't darken)",
+    })
+}
+
 /// The schema of the brush settings `paint_stroke` and each of its
 /// `strokes` take.
 fn brush_properties() -> Map<String, Value> {
@@ -1526,6 +1547,7 @@ fn strokes(args: &Map<String, Value>) -> Result<Vec<Value>, String> {
     let given = |key: &str| args.get(key).filter(|value| !value.is_null());
     let mut shared = op("stroke", args, &["layer"]);
     shared.extend(op("stroke", args, &BRUSH));
+    shared.extend(op("stroke", args, &[SYMMETRY]));
     let line = match (given("points"), given("path")) {
         (Some(_), Some(_)) => return Err("Give `points` or `path`, not both".into()),
         (Some(points), None) => Some(("points", points)),
@@ -1553,7 +1575,8 @@ fn strokes(args: &Map<String, Value>) -> Result<Vec<Value>, String> {
                     format!("Stroke {number} must be an object with `points` or `path`")
                 })?;
                 if let Some(unknown) = (stroke.keys()).find(|key| {
-                    !matches!(key.as_str(), "points" | "path") && !BRUSH.contains(&key.as_str())
+                    !matches!(key.as_str(), "points" | "path" | SYMMETRY)
+                        && !BRUSH.contains(&key.as_str())
                 }) {
                     return Err(format!("Stroke {number}: unknown argument `{unknown}`"));
                 }

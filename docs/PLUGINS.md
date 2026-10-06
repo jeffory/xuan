@@ -1064,7 +1064,7 @@ layer, so text and shape layers become pixel layers):
   `mask` paints the layer's mask with the gradient's brightness instead of its
   pixels. `start` and `end` must differ.
 - `{"op": "stroke", "layer"?, "points": [[x, y], …], "color"?, "size"?,
-  "hardness"?, "opacity"?, "erase"?, …dynamics}`: one brush stroke through the
+  "hardness"?, "opacity"?, "erase"?, …dynamics, "symmetry"?}`: one brush stroke through the
   points (at most 10,000) in document coordinates; `size` is the brush
   diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (defaults 0.8
   and 1), and `erase` erases instead of painting. A single point paints one
@@ -1097,6 +1097,20 @@ layer, so text and shape layers become pixel layers):
   0.25. Dabs are drawn by the same brush as continuous strokes (on the GPU
   when it is available), and like a stroke's segments they do not darken
   where they overlap: each pixel keeps the strongest dab.
+
+  `"symmetry": {"mode", "segments"?, "center"?}` paints the stroke again
+  mirrored or turned, as the Symmetry menu does. `mode` is `"vertical"`
+  (mirrored left and right across a vertical axis, x → 2·cx − x),
+  `"horizontal"` (top and bottom, y → 2·cy − y), `"radial"` (`segments`
+  copies, 2–32 and 6 by default, turned around the centre) or `"off"`.
+  `center` is `[x, y]` in document pixels and must be on the canvas (0 to its
+  width and height); it defaults to the middle of the canvas. The dab layout,
+  taper, scatter and jitter are worked out once along the given points and
+  then mirrored or turned with every copy, so a seeded stroke is symmetric
+  and repeats exactly. All copies share the stroke's coverage, so they do not
+  darken each other where they cross, and they are part of the same undo
+  step. Each copy counts against the work budget and the stroke length
+  limit below.
 - `{"op": "apply_filter", "layer"?, "filter"}` and `{"op":
   "apply_adjustment", "layer"?, "adjustment"}`.
 
@@ -1180,7 +1194,8 @@ also has a **work budget**, estimated before anything runs: about 1,000
 million pixel visits, where a colour selection costs a render of every layer,
 a filter, grow or feather costs the layer or canvas area several times over,
 a stroke costs the area each segment sweeps (or, with spacing, scatter or
-jitter, each dab's area, at the closest spacing its size allows), and a mask or adjustment layer
+jitter, each dab's area, at the closest spacing its size allows) for each of
+its symmetric copies, and a mask or adjustment layer
 costs the canvas area; at most 256 MiB of new masks and drawn layers; and
 strokes at most 200,000 pixels long in total. A request over budget is
 refused as a whole, with an error that says so; send it in smaller parts.
