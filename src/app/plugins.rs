@@ -1072,10 +1072,10 @@ impl EditorApp {
                     ));
                 }
                 let name = string("name").unwrap_or_else(|| manifest.plugin.name.clone());
-                let edits: Vec<edits::Edit> = serde_json::from_value(
+                let edits = edits::parse_edits(
                     params.get("edits").cloned().unwrap_or(Value::Array(vec![])),
                 )
-                .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                .map_err(|e| RpcError::invalid_params(format!("{e:#}")))?;
                 if self.dialog.is_some() || self.job.is_some() || self.gesture.is_some() {
                     return Err(RpcError::new(
                         protocol::INVALID_REQUEST,

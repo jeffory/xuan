@@ -1016,8 +1016,9 @@ layer, so text and shape layers become pixel layers):
   "hardness"?, "opacity"?, "erase"?}`: one brush stroke through the points (at
   most 10,000) in document coordinates; `size` is the brush diameter (1–2000,
   default 20), `hardness` and `opacity` 0–1 (defaults 0.8 and 1), and `erase`
-  erases instead of painting. The layer grows to hold the stroke, as with the
-  Brush tool.
+  erases instead of painting. A single point paints one round dab the size of
+  the brush. The layer grows to hold the stroke, as with the Brush tool.
+  Several strokes in one request are one undo step.
 - `{"op": "apply_filter", "layer"?, "filter"}` and `{"op":
   "apply_adjustment", "layer"?, "adjustment"}`.
 
@@ -1082,6 +1083,19 @@ a stroke costs the area each segment sweeps, and a mask or adjustment layer
 costs the canvas area; at most 256 MiB of new masks and drawn layers; and
 strokes at most 200,000 pixels long in total. A request over budget is
 refused as a whole, with an error that says so; send it in smaller parts.
+
+When a request of several edits fails, the error names the edit, counted from
+1, and its op: `Edit 3 (stroke): Layer Sky is locked`.
+
+**Layers added earlier in the request.** A later edit can name a layer an
+earlier edit of the same request added, before it knows its id: in `layer`,
+`above`, `below`, `parent` or an item of `layers`, `"$n"` is the n-th
+layer (from `"$1"`) the request has added so far, in the order the answer's
+`layers` lists them. Every `add_*` op adds one, and so do `merge_layers`
+(the merged layer) and `group_layers` (the group). For example
+`[{"op": "add_text_layer", "text": "A"}, {"op": "transform", "layer": "$1",
+"rotation": 15}]`. A reference to a layer not yet added fails the request;
+text that starts with `$` in other fields is just text.
 
 ### Files the user chooses
 

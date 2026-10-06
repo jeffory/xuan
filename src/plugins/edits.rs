@@ -1093,14 +1093,163 @@ pub fn origin_shift<'a>(edits: impl IntoIterator<Item = &'a Edit>) -> (f32, f32)
         })
 }
 
+/// The fields of a `document/edit` edit that name a layer, where `"$n"` may
+/// stand for the n-th layer the request added before it.
+const LAYER_KEYS: [&str; 4] = ["layer", "above", "below", "parent"];
+/// The ids `"$n"` references are parsed to until [`apply`] resolves them:
+/// "xuan" then zeros and `n`, a version-0 UUID that no layer ever has.
+const REFERENCE: u128 = 0x7875_616e_0000_0000_0000_0000_0000_0000;
+
+/// The id that stands for `"$n"` until the edit runs.
+fn reference(n: u32) -> Uuid {
+    Uuid::from_u128(REFERENCE | u128::from(n))
+}
+
+/// Which `"$n"` an id stands for, if it is a reference.
+fn referenced(id: &Uuid) -> Option<u32> {
+    let value = id.as_u128();
+    (value & !u128::from(u32::MAX) == REFERENCE).then_some(value as u32)
+}
+
+/// Parse the `edits` of a `document/edit` request. Besides layer ids, the
+/// layer fields (`layer`, `above`, `below`, `parent` and the items of
+/// `layers`) may say `"$n"`: the n-th layer (from 1) this request added
+/// before that edit, counted as the answer's `layers` lists them.
+pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
+    let mut edits = edits;
+    for edit in edits.as_array_mut().into_iter().flatten() {
+        let Some(edit) = edit.as_object_mut() else {
+            continue;
+        };
+        let fields = edit.iter_mut().flat_map(|(key, value)| match value {
+            Value::Array(items) if key == "layers" => items.iter_mut().collect(),
+            _ if LAYER_KEYS.contains(&key.as_str()) => vec![value],
+            _ => Vec::new(),
+        });
+        for field in fields {
+            let Some(text) = field.as_str().and_then(|t| t.strip_prefix('$')) else {
+                continue;
+            };
+            let n = text.parse::<u32>().ok().filter(|n| *n >= 1).with_context(|| {
+                format!(
+                    "`${text}` is not a layer reference: `$1` is the first layer this request adds"
+                )
+            })?;
+            *field = json!(reference(n));
+        }
+    }
+    Ok(serde_json::from_value(edits)?)
+}
+
+/// The layer ids an edit names, by reference (`as_ref`, `iter`) or mutably
+/// (`as_mut`, `iter_mut`).
+macro_rules! layer_ids {
+    ($edit:expr, $option:ident, $list:ident) => {
+        match $edit {
+            Edit::ReplacePixels { layer, .. }
+            | Edit::Set { layer, .. }
+            | Edit::RemoveLayer { layer }
+            | Edit::SetMask { layer, .. }
+            | Edit::Select { layer }
+            | Edit::UngroupLayers { layer }
+            | Edit::Transform { layer, .. } => vec![layer],
+            Edit::SelectLayers { layers }
+            | Edit::MergeLayers { layers }
+            | Edit::GroupLayers { layers } => layers.$list().collect(),
+            Edit::MoveLayer {
+                layer,
+                above,
+                below,
+                parent,
+            } => std::iter::once(layer)
+                .chain(above.$option())
+                .chain(below.$option())
+                .chain(parent.$option())
+                .collect(),
+            Edit::Fill { layer, .. }
+            | Edit::Gradient { layer, .. }
+            | Edit::Stroke { layer, .. }
+            | Edit::ApplyFilter { layer, .. }
+            | Edit::ApplyAdjustment { layer, .. } => layer.$option().into_iter().collect(),
+            Edit::AddLayer { above, .. }
+            | Edit::AddAdjustmentLayer { above, .. }
+            | Edit::AddEmptyLayer { above, .. }
+            | Edit::AddMaskLayer { above, .. }
+            | Edit::AddTextLayer { above, .. }
+            | Edit::AddShapeLayer { above, .. } => above.$option().into_iter().collect(),
+            Edit::SetSelection { .. }
+            | Edit::ExtendCanvas { .. }
+            | Edit::SelectRect { .. }
+            | Edit::SelectPolygon { .. }
+            | Edit::SelectColor { .. }
+            | Edit::SelectColorRange { .. }
+            | Edit::GrowSelection { .. }
+            | Edit::FeatherSelection { .. }
+            | Edit::Crop { .. }
+            | Edit::ResizeCanvas { .. }
+            | Edit::ResizeImage { .. } => Vec::new(),
+        }
+    };
+}
+
+impl Edit {
+    /// Whether the edit names a layer by a `"$n"` reference.
+    fn has_references(&self) -> bool {
+        let ids: Vec<&Uuid> = layer_ids!(self, as_ref, iter);
+        ids.into_iter().any(|id| referenced(id).is_some())
+    }
+
+    /// The edit with its `"$n"` references replaced by the layers they name.
+    fn resolved(&self, added: &[Uuid]) -> Result<Self> {
+        let mut edit = self.clone();
+        let ids: Vec<&mut Uuid> = layer_ids!(&mut edit, as_mut, iter_mut);
+        for id in ids {
+            if let Some(n) = referenced(id) {
+                *id = *added.get(n as usize - 1).with_context(|| {
+                    format!(
+                        "`${n}` names layer {n} of the ones this request added, but it has added {} so far",
+                        added.len()
+                    )
+                })?;
+            }
+        }
+        Ok(edit)
+    }
+}
+
 /// Apply a batch, reading its images through `reader`. The caller clones the
 /// document first and only keeps the result when every edit succeeded, so a
-/// failing batch changes nothing.
+/// failing batch changes nothing. When a batch of several edits fails, the
+/// error says which edit, as `Edit 3 (stroke): …`.
 pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Result<Vec<Uuid>> {
+    let mut at = None;
+    apply_each(document, edits, reader, &mut at).map_err(|error| match at {
+        Some(index) if edits.len() > 1 => {
+            anyhow::anyhow!("Edit {} ({}): {error:#}", index + 1, edits[index].op())
+        }
+        _ => error,
+    })
+}
+
+/// [`apply`], noting in `at` which edit runs.
+fn apply_each(
+    document: &mut Document,
+    edits: &[Edit],
+    reader: &mut Reader,
+    at: &mut Option<usize>,
+) -> Result<Vec<Uuid>> {
     reader.add_edits(edits.len())?;
     reader.charge(cost(document, edits))?;
     let mut added = Vec::new();
-    for edit in edits {
+    for (index, edit) in edits.iter().enumerate() {
+        *at = Some(index);
+        let resolved;
+        let edit = if edit.has_references() {
+            resolved = edit.resolved(&added)?;
+            &resolved
+        } else {
+            edit
+        };
         match edit {
             Edit::AddLayer {
                 image,
@@ -2544,6 +2693,75 @@ mod tests {
             let error = run(&mut document.clone(), &[edit(locked.clone())]).unwrap_err();
             assert!(error.to_string().contains("lock"), "{locked}: {error}");
         }
+    }
+
+    #[test]
+    fn a_one_point_stroke_paints_one_round_dab() {
+        let (mut document, _) = grey_document();
+        let edits = parse_edits(json!([
+            {"op": "add_empty_layer", "name": "Stars"},
+            {"op": "stroke", "layer": "$1", "points": [[10, 10]], "size": 8, "hardness": 1, "color": "#ff0000"},
+            {"op": "stroke", "layer": "$1", "points": [[30, 20]], "size": 2, "hardness": 1, "color": "#00ff00"},
+        ]))
+        .unwrap();
+        let added = run(&mut document, &edits).unwrap();
+        let stars = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+        let pixels = stars.pixels.clone().unwrap();
+        // A disc of diameter 8 around (10, 10): its centre and just inside
+        // its edge are painted, outside it nothing is.
+        assert_eq!(pixels.get_pixel(10, 10).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(12, 10).0[3], 255);
+        assert_eq!(pixels.get_pixel(15, 10).0[3], 0);
+        assert_eq!(pixels.get_pixel(10, 15).0[3], 0);
+        assert_eq!(pixels.get_pixel(13, 13).0[3], 0, "round, not square");
+        // The second dab is separate: nothing is painted between them.
+        assert_eq!(pixels.get_pixel(30, 20).0[1], 255);
+        assert_eq!(pixels.get_pixel(20, 15).0[3], 0);
+        let painted = pixels.pixels().filter(|p| p.0[3] > 0).count();
+        assert!((40..=80).contains(&painted), "{painted} pixels painted");
+    }
+
+    #[test]
+    fn references_name_the_layers_added_before_and_say_which_edit_failed() {
+        let (document, base) = grey_document();
+        let edits = parse_edits(json!([
+            {"op": "add_empty_layer", "name": "A"},
+            {"op": "add_text_layer", "text": "B", "above": "$1"},
+            {"op": "merge_layers", "layers": ["$2"]},
+            {"op": "set", "layer": "$3", "name": "Merged"},
+            {"op": "move_layer", "layer": "$3", "below": base},
+        ]))
+        .unwrap();
+        let mut copy = document.clone();
+        let added = run(&mut copy, &edits).unwrap();
+        assert_eq!(added.len(), 3);
+        assert_eq!(copy.layers.len(), 2, "B merged into A");
+        assert_eq!(copy.layers[0].id, added[2]);
+        assert_eq!(copy.layers[0].name, "Merged");
+
+        // A reference past the layers added so far, before any, or not a
+        // number at all is refused, naming the edit.
+        let ahead = parse_edits(json!([
+            {"op": "add_empty_layer"},
+            {"op": "fill", "layer": "$2", "color": "#000000"},
+        ]))
+        .unwrap();
+        let error = run(&mut document.clone(), &ahead).unwrap_err().to_string();
+        assert!(error.starts_with("Edit 2 (fill): `$2`"), "{error}");
+        let first = parse_edits(json!([{"op": "set", "layer": "$1", "visible": false}])).unwrap();
+        let error = run(&mut document.clone(), &first).unwrap_err().to_string();
+        assert!(error.contains("added 0 so far"), "{error}");
+        for bad in ["$0", "$", "$one", "$-1"] {
+            let error = parse_edits(json!([{"op": "select", "layer": bad}])).unwrap_err();
+            assert!(format!("{error:#}").contains("not a layer reference"), "{bad}: {error:#}");
+        }
+        // Text is never taken for a reference; a single failing edit is
+        // reported as before, without an edit number.
+        let text = parse_edits(json!([{"op": "add_text_layer", "text": "$1"}])).unwrap();
+        assert!(matches!(&text[0], Edit::AddTextLayer { text, .. } if text == "$1"));
+        let lone = [edit(json!({"op": "fill", "layer": Uuid::new_v4(), "color": "#000000"}))];
+        let error = run(&mut document.clone(), &lone).unwrap_err().to_string();
+        assert!(!error.contains("Edit 1"), "{error}");
     }
 
     fn near(actual: [u8; 4], expected: [u8; 4], tolerance: u8) {

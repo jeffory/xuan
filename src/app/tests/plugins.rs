@@ -2086,6 +2086,60 @@ fn a_gradient_edit_is_one_undo_step() {
 }
 
 #[test]
+fn edits_name_layers_the_request_added_and_fail_as_a_whole() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    let before = app.session().unwrap().document.clone();
+    let steps = app.session().unwrap().history.names().count();
+    // A text layer, then its opacity and placement through `$1`, and two
+    // dabs on a new layer `$2`: one request, one undo step.
+    let edits = json!({"name": "Batch", "edits": [
+        {"op": "add_text_layer", "text": "A", "x": 2, "y": 2, "size": 12},
+        {"op": "set", "layer": "$1", "opacity": 0.5, "name": "Letter"},
+        {"op": "transform", "layer": "$1", "rotation": 15},
+        {"op": "add_empty_layer", "name": "Stars", "above": "$1"},
+        {"op": "stroke", "layer": "$2", "points": [[8, 8]], "size": 4, "hardness": 1, "color": "#ffffff"},
+        {"op": "stroke", "layer": "$2", "points": [[24, 16]], "size": 4, "hardness": 1, "color": "#ffffff"},
+    ]});
+    let answer = plugin_request(&mut app, "document/edit", edits).unwrap();
+    let added: Vec<uuid::Uuid> = serde_json::from_value(answer["layers"].clone()).unwrap();
+    assert_eq!(added.len(), 2);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    let layer = |id| session.document.layers.iter().find(|l| l.id == id).unwrap();
+    assert_eq!(layer(added[0]).name, "Letter");
+    assert_eq!(layer(added[0]).opacity, 0.5);
+    assert_eq!(layer(added[0]).transform.rotation, 15.0);
+    let stars = layer(added[1]).pixels.clone().unwrap();
+    assert_eq!(stars.get_pixel(8, 8).0[3], 255);
+    assert_eq!(stars.get_pixel(24, 16).0[3], 255);
+    assert_eq!(stars.get_pixel(16, 12).0[3], 0, "no line between the dabs");
+
+    // A step naming a layer the request has not added fails the request,
+    // saying which edit; nothing is applied and no step is added.
+    let failing = json!({"edits": [
+        {"op": "add_empty_layer"},
+        {"op": "set", "layer": "$2", "opacity": 0.5},
+    ]});
+    let error = plugin_request(&mut app, "document/edit", failing).unwrap_err();
+    assert!(
+        error.message.contains("Edit 2 (set)") && error.message.contains("`$2`"),
+        "{}",
+        error.message
+    );
+    let bad = json!({"edits": [{"op": "set", "layer": "$0", "opacity": 0.5}]});
+    let error = plugin_request(&mut app, "document/edit", bad).unwrap_err();
+    assert!(error.message.contains("`$0`"), "{}", error.message);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    assert_eq!(session.document.layers.len(), before.layers.len() + 2);
+}
+
+#[test]
 fn move_layer_is_one_undo_step() {
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();
