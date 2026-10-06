@@ -922,3 +922,5 @@ Dark mode	深色模式
 Follow your desktop's light or dark setting.	跟随桌面的浅色或深色设置。
 Always use light colours.	始终使用浅色。
 Always use dark colours.	始终使用深色。
+Use system accent colour	使用系统强调色
+Highlights take your desktop's accent colour instead of Xuan's blue, when it has one.	高亮使用桌面的强调色（如有），而不是 Xuan 的蓝色。

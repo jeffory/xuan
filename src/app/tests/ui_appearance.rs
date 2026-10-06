@@ -30,6 +30,34 @@ fn switching_the_theme_in_settings_recolours_the_interface_at_once() {
     assert_eq!(saved.theme, xuan::config::Theme::Dark);
 }
 
+#[test]
+fn the_system_accent_can_be_turned_off_in_settings() {
+    use crate::app::system_theme::SystemTheme;
+    let directory = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::with_document();
+    ui.isolate_config(directory.path());
+    let green = egui::Color32::from_rgb(0x3a, 0x94, 0x4a);
+    let ctx = ui.ctx();
+    ui.app_mut().watch_system_theme(
+        Box::new(move || SystemTheme {
+            dark: Some(true),
+            accent: Some(green),
+        }),
+        Some(ctx),
+    );
+    ui.settle();
+    assert_eq!(ui.ctx().palette(), Palette::DARK.with_accent(green));
+
+    ui.press(Modifiers::CTRL, Key::Comma);
+    ui.click("Appearance");
+    ui.click("Use system accent colour");
+    assert!(!ui.app().config.system_accent);
+    assert_eq!(ui.ctx().palette(), Palette::DARK);
+    ui.click("Done");
+    let saved = xuan::config::Config::load(&directory.path().join("config.toml")).unwrap();
+    assert!(!saved.system_accent);
+}
+
 /// Runs frames until `done` holds, as the app would while the desktop changes.
 fn wait_for(ui: &mut UiTest, mut done: impl FnMut(&UiTest) -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

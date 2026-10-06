@@ -140,6 +140,9 @@ pub struct Config {
     pub language: Language,
     /// Settings → Appearance → Theme.
     pub theme: Theme,
+    /// Settings → Appearance → "Use system accent colour": highlights take the desktop's
+    /// accent instead of Xuan's blue, when the desktop has one.
+    pub system_accent: bool,
     pub title_bar: TitleBar,
     /// Where Compact's window buttons come from.
     pub window_buttons: WindowButtons,
@@ -240,6 +243,7 @@ impl Default for Config {
         Self {
             language: Language::default(),
             theme: Theme::default(),
+            system_accent: true,
             title_bar: TitleBar::default(),
             window_buttons: WindowButtons::default(),
             pixel_grid: true,
@@ -440,6 +444,10 @@ impl Config {
         };
         table.insert("language".into(), toml::Value::try_from(self.language)?);
         table.insert("theme".into(), toml::Value::try_from(self.theme)?);
+        table.insert(
+            "system_accent".into(),
+            toml::Value::Boolean(self.system_accent),
+        );
         table.insert("title_bar".into(), toml::Value::try_from(self.title_bar)?);
         table.insert(
             "window_buttons".into(),
@@ -620,6 +628,26 @@ mod tests {
         }
         let light: Config = toml::from_str("theme = 'light'").unwrap();
         assert_eq!(light.theme, Theme::Light);
+    }
+
+    #[test]
+    fn system_accent_defaults_on_and_older_files_still_load() {
+        assert!(Config::default().system_accent);
+        // A file from before the setting existed (and before the Theme setting).
+        let old: Config = toml::from_str("language = 'zh-CN'\r\nrulers = true\r\n").unwrap();
+        assert!(old.system_accent);
+        assert!(old.rulers);
+        for choice in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            Config {
+                system_accent: choice,
+                ..Config::default()
+            }
+            .save(&path)
+            .unwrap();
+            assert_eq!(Config::load(&path).unwrap().system_accent, choice);
+        }
     }
 
     #[test]

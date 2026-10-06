@@ -1736,7 +1736,11 @@ impl EditorApp {
         if let Some(watcher) = &mut self.system_theme {
             self.system = watcher.poll().0;
         }
-        let palette = theme::palette_for(self.config.theme, self.system.dark, self.system.accent);
+        let palette = theme::palette_for(
+            self.config.theme,
+            self.system.dark,
+            self.system.accent.filter(|_| self.config.system_accent),
+        );
 
         if palette != self.palette_applied {
             theme::set_palette(ctx, &palette);

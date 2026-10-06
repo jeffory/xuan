@@ -229,6 +229,23 @@ impl EditorApp {
             })
             .wrap(),
         );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            widgets::checkbox(
+                ui,
+                &mut config.system_accent,
+                tr("Use system accent colour"),
+            );
+        });
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(tr(
+                    "Highlights take your desktop's accent colour instead of Xuan's blue, when it has one.",
+                ))
+                .color(ui.palette().muted),
+            )
+            .wrap(),
+        );
         ui.add_space(16.0);
         ui.horizontal(|ui| {
             ui.label(tr("Window title bar"));
