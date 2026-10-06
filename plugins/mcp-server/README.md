@@ -8,10 +8,27 @@ client and the security model are in
 [docs/AGENTS-GUIDE.md](../../docs/AGENTS-GUIDE.md); the design is in
 [docs/MCP.md](../../docs/MCP.md).
 
-## Build and install
+## Install
 
-The plugin is a Rust program; Xuan's packages do not include it, so build it
-once (Rust 1.88 or later):
+**Xuan's release packages include this plugin**, in the bundled plugins folder
+next to Xuan (see "Bundled plugins" in
+[docs/PLUGINS.md](../../docs/PLUGINS.md#bundled-plugins)):
+
+| Package | Folder |
+| --- | --- |
+| deb, rpm | `/usr/lib/xuan/plugins/mcp-server/` |
+| Linux tar.gz | `lib/xuan/plugins/mcp-server/` (`scripts/install.sh` copies it to `~/.local/lib/xuan/plugins/`) |
+| AppImage | `usr/lib/xuan/plugins/mcp-server/` inside the image |
+| Windows zip | `plugins\mcp-server\` next to `xuan.exe` |
+
+It is off until you allow it. Xuan asks before the plugin first runs, showing
+that it edits documents, asks before each client session's first edit, and is
+treated as a network plugin (it listens on `127.0.0.1`). The grant carries over
+when you upgrade Xuan, unless the plugin's command or permissions change.
+
+## Build from source
+
+To run a build of your own (Rust 1.88 or later):
 
 ```sh
 cd plugins/mcp-server
@@ -25,9 +42,15 @@ Then either point Xuan at the repository's plugins with
 `target/release/xuan-mcp-server` (`.exe` on Windows) into a folder of their own
 is enough). Rebuild after updating the source.
 
-Xuan asks before the plugin first runs, showing that it edits documents, asks
-before each client session's first edit, and is treated as a network plugin
-(it listens on `127.0.0.1`).
+Your copy replaces the bundled one: with the same id `mcp-server`, Xuan loads
+yours and skips the bundled copy, without reporting a conflict. As it is in
+another folder, Xuan asks for permission again. Remove your copy to go back to
+the bundled plugin.
+
+The release packages build it with `cargo build --release --locked` (on Linux
+for the `x86_64-unknown-linux-musl` target, so the binary is static and also
+runs from the AppImage on older systems; `rustup target add
+x86_64-unknown-linux-musl` before `scripts/package.sh`).
 
 ## Use
 

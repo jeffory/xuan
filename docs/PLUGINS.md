@@ -47,6 +47,42 @@ Set `XUAN_PLUGIN_PATH` (a `:`/`;`-separated list of directories) to load plugins
 from other places, for example a development checkout. Folders whose name starts
 with `.` are skipped.
 
+### Bundled plugins
+
+Some plugins come with Xuan: today the [MCP server](MCP.md)
+(`plugins/mcp-server`). The release packages put them in a bundled plugins
+folder that Xuan finds next to its own executable, and Xuan loads them after
+the user's plugins:
+
+| Package | Bundled plugins folder |
+| --- | --- |
+| deb, rpm | `/usr/lib/xuan/plugins/` |
+| Linux tar.gz | `lib/xuan/plugins/` in the extracted folder; `scripts/install.sh` copies it to `<prefix>/lib/xuan/plugins/` (default `~/.local/lib/xuan/plugins/`) |
+| AppImage | `usr/lib/xuan/plugins/` inside the image (`AppRun` names it in `XUAN_BUNDLED_PLUGINS`, as Xuan is started through the dynamic loader there) |
+| Windows zip | `plugins\` next to `xuan.exe` |
+
+In general it is `<prefix>/lib/xuan/plugins` for `<prefix>/bin/xuan` on Linux,
+and `plugins` beside `xuan.exe` on Windows.
+
+**A bundled plugin is off until you allow it.** It asks for permission the
+first time it starts, with the same prompt and the same permissions as any
+other plugin; nothing in the bundled folder runs on its own. Its grant stores
+the folder by name (`<bundled>/mcp-server` in `config.toml`) rather than by
+path, so it carries over when Xuan is upgraded, moved, or its AppImage is
+mounted somewhere else. The command and permissions are still checked: an
+update that changes either asks again.
+
+**Your own copy wins.** A plugin with the same id in the user plugins directory
+or on `XUAN_PLUGIN_PATH` replaces the bundled one, which is then not loaded and
+not reported as a conflict. That holds even when your copy fails to load, so a
+broken copy shows its error instead of the bundled plugin quietly running in its
+place. This is how to run a newer build of a bundled plugin: install it with
+**Install from Folder or Zip…** (the bundled copy does not block that), or copy
+it into the user plugins directory. Your copy has another folder, so it asks
+for permission again, and a stored secret for the bundled copy is not handed
+to it. Remove your copy to go back to the bundled one. The installer never
+writes into the bundled folder; it changes only when Xuan is updated.
+
 ### Install from Folder or Zip
 
 **Plugins → Install from Folder or Zip…** (also **Install…** in Manage
@@ -85,7 +121,8 @@ works as always: it is kept when the folder, command and permissions are
 unchanged, and otherwise the plugin asks again; the review says which. A folder
 named after the id that holds something else, and a plugin with the same id in
 another folder (for example on `XUAN_PLUGIN_PATH`), refuse the install: the
-same id in two folders loads neither.
+same id in two folders loads neither. A [bundled plugin](#bundled-plugins)
+with the same id does not refuse it: the installed copy replaces it.
 
 **Archives are untrusted.** An archive is refused if it has:
 
@@ -147,7 +184,8 @@ permissions it declares (a plugin that declares none still asks to run), and
 records the grant in `config.toml`. Until then its panes show a "Review
 Permissions…" button instead of starting it. If the folder, the command or the
 permissions change, the plugin asks again. Folders that share a plugin id are
-reported and none of them is loaded.
+reported and none of them is loaded, except that a copy outside the bundled
+folder replaces a [bundled plugin](#bundled-plugins).
 
 Xuan enforces the permissions for what it does on a plugin's behalf: it edits
 documents only for plugins that declare `document = "edit"` (see

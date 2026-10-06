@@ -31,7 +31,36 @@ MCP client ──HTTP, 127.0.0.1, bearer token──▶ mcp-server plugin ──
 
 The plugin is an ordinary plugin process: Xuan starts it after the user
 allowed it, it gets no more access than its grant, and every request it makes
-goes through the same checks as any other plugin's. The MCP client never talks
+goes through the same checks as any other plugin's.
+
+## Packaging
+
+Every release package ships the plugin built in release mode (issue #51), in
+the [bundled plugins folder](PLUGINS.md#bundled-plugins) Xuan finds next to its
+executable: `/usr/lib/xuan/plugins/mcp-server/` for the deb and rpm,
+`lib/xuan/plugins/mcp-server/` in the tar archive, `usr/lib/xuan/plugins/` in
+the AppImage, and `plugins\mcp-server\` beside `xuan.exe` in the Windows zip.
+The source archive has its source and lock file, and the SDK it builds on.
+
+- **The same manifest everywhere.** The package keeps the repository's
+  `plugin.toml` and its relative layout, so the command is
+  `target/release/xuan-mcp-server` in a checkout and in every package. On
+  Windows the file is `xuan-mcp-server.exe`; Rust's process spawning adds
+  `.exe` to a program path without an extension.
+- **Static on Linux.** The Linux packages build it for
+  `x86_64-unknown-linux-musl`, with no shared library dependencies. The
+  AppImage brings its own glibc for Xuan, but plugins are started with the
+  host's loader and C library, which can be older than the build host's.
+- **Off until allowed.** Bundled is not trusted: it asks for its grant like
+  any plugin. The grant names the folder `<bundled>/mcp-server` instead of
+  its path, so it outlives upgrades and the AppImage's per-launch mount
+  point; the command and permissions are compared as always.
+- **A user copy replaces it.** One installed in the user plugins directory or
+  found on `XUAN_PLUGIN_PATH` loads instead, so a newer build can be tried by
+  hand; it asks for its own grant.
+- `scripts/check-packages.py` fails a package without the plugin, with a
+  manifest that differs from the repository's, or (on Linux) with a
+  dynamically linked plugin binary. The MCP client never talks
 to Xuan directly. The plugin translates each MCP tool call into one or a few
 host requests and turns the answers into MCP results. Because the editor
 answers plugin requests between frames on its UI thread, a tool call that edits

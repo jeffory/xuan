@@ -9,12 +9,16 @@ protocol it uses in [PLUGINS.md](PLUGINS.md).
 
 ## Setting it up
 
-1. **Build the plugin** (Rust 1.88 or later): `cargo build --release` in
-   `plugins/mcp-server`. Xuan's packages do not ship it yet.
-2. **Load it**: start Xuan with `XUAN_PLUGIN_PATH` pointing at the
-   repository's `plugins` folder, or install the folder with **Plugins →
-   Install from Folder or Zip…**.
-3. **Allow it**: open **Window → MCP Server** and press **Review
+1. **Get the plugin**: Xuan's release packages include it, in the [bundled
+   plugins folder](PLUGINS.md#bundled-plugins), so there is nothing to
+   install. From a source checkout, build it (Rust 1.88 or later) with
+   `cargo build --release` in `plugins/mcp-server`.
+2. **Load it** (source builds only): start Xuan with `XUAN_PLUGIN_PATH`
+   pointing at the repository's `plugins` folder, or install the folder with
+   **Plugins → Install from Folder or Zip…**. Either copy replaces the bundled
+   one.
+3. **Allow it**: the bundled plugin is off until you do. Open **Window → MCP
+   Server** and press **Review
    Permissions…**. The prompt says that it edits documents, asks before each
    session's first edit, and connects to `127.0.0.1`.
 4. **Copy the connection**: the pane shows `Listening on
