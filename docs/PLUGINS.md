@@ -973,6 +973,13 @@ Layers and their properties:
   Merge** (one layer merges down, several merge together), **Group** and
   **Ungroup** on those layers in a single step; the merged layer and the new
   group are reported as added.
+- `{"op": "move_layer", "layer", "above"?, "below"?, "parent"?}`: move a
+  layer in the stack as dragging it in the Layers panel does: directly above
+  or below the `above`/`below` layer (joining that layer's group), or, with
+  only `parent`, to the top of that group. `parent` must be a group, and with
+  `above`/`below` it must be that layer's group. A layer cannot be moved
+  into or next to itself or its own children. The layer becomes the active
+  layer.
 - `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?}`:
   move, scale or rotate a layer (a group with its layers) to this box in
   document units, as **Free Transform** does; missing fields keep their value.

@@ -2968,9 +2968,17 @@ mod tests {
         let mv = |document: &mut Document, value: serde_json::Value| run(document, &[edit(value)]);
         assert_eq!(order(&document), [base, a, b, c]);
         // Above and below.
-        mv(&mut document, json!({"op": "move_layer", "layer": base, "above": c})).unwrap();
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": base, "above": c}),
+        )
+        .unwrap();
         assert_eq!(order(&document), [a, b, c, base]);
-        mv(&mut document, json!({"op": "move_layer", "layer": base, "below": b})).unwrap();
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": base, "below": b}),
+        )
+        .unwrap();
         assert_eq!(order(&document), [a, base, b, c]);
         assert_eq!(document.active, Some(base));
         // Into a group, then back out next to a root layer.
@@ -2979,15 +2987,27 @@ mod tests {
             &[edit(json!({"op": "group_layers", "layers": [b, c]}))],
         )
         .unwrap()[0];
-        mv(&mut document, json!({"op": "move_layer", "layer": a, "parent": group})).unwrap();
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": a, "parent": group}),
+        )
+        .unwrap();
         let parent = |document: &Document, id: Uuid| {
             document.layers.iter().find(|l| l.id == id).unwrap().parent
         };
         assert_eq!(parent(&document, a), Some(group));
         assert_eq!(*order(&document).last().unwrap(), a);
-        mv(&mut document, json!({"op": "move_layer", "layer": a, "above": b, "parent": group})).unwrap();
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": a, "above": b, "parent": group}),
+        )
+        .unwrap();
         assert_eq!(parent(&document, a), Some(group));
-        mv(&mut document, json!({"op": "move_layer", "layer": a, "below": base})).unwrap();
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": a, "below": base}),
+        )
+        .unwrap();
         assert_eq!(parent(&document, a), None);
         for bad in [
             json!({"op": "move_layer", "layer": Uuid::new_v4(), "above": base}),

@@ -85,6 +85,7 @@ the document takes effect on the next frame and is drawn at once.
 | selections: rect, ellipse, polygon, by colour | `document/edit` `select_rect`, `select_polygon`, `select_color`, `select_color_range`, `grow_selection`, `feather_selection` (new); `host/run` `select_all`, `deselect`, `invert_selection`, `select_subject`, `select_layer_pixels` |
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
+| reorder layers | `document/edit` `move_layer` (new) |
 | crop / resize canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas` |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |

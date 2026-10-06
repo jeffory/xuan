@@ -2101,7 +2101,13 @@ fn move_layer_is_one_undo_step() {
     .unwrap();
     let added: Vec<uuid::Uuid> = serde_json::from_value(answer["layers"].clone()).unwrap();
     let order = |app: &EditorApp| -> Vec<uuid::Uuid> {
-        app.session().unwrap().document.layers.iter().map(|l| l.id).collect()
+        app.session()
+            .unwrap()
+            .document
+            .layers
+            .iter()
+            .map(|l| l.id)
+            .collect()
     };
     let before = order(&app);
     let steps = app.session().unwrap().history.names().count();

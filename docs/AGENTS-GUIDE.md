@@ -182,6 +182,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `create_image_layer` | A PNG the client sends (base64) | `add_layer` |
 | `delete_layer` | Delete a layer or group | `remove_layer` |
 | `merge_layers`, `group_layers`, `ungroup_layer` | Merge, group, ungroup | `merge_layers`, `group_layers`, `ungroup_layers` |
+| `move_layer` | Move a layer above or below another, or into a group | `move_layer` |
 | `select_shape` | Rectangle, ellipse or polygon selection with a `mode` | `select_rect`, `select_polygon` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
 | `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels | `host/run`, `grow_selection`, `feather_selection` |

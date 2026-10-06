@@ -300,6 +300,7 @@ async fn the_server_speaks_mcp_initialize_tools_and_resources() {
         "apply_adjustment",
         "merge_layers",
         "group_layers",
+        "move_layer",
         "crop_canvas",
         "resize_canvas",
         "undo",
@@ -530,6 +531,34 @@ async fn refusals_and_bad_arguments_are_tool_errors_the_model_can_read() {
     assert!(
         !activity.iter().any(|line| line.contains("Ignore")),
         "{activity:?}"
+    );
+}
+
+#[test]
+fn move_layer_sends_one_move_edit() {
+    let editor = FakeEditor::new(false);
+    let incoming = editor.dir.join("incoming");
+    let cx = tools::Context {
+        editor: editor.as_ref(),
+        session: Some("s"),
+        incoming: &incoming,
+    };
+    let (layer, target) = (
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    );
+    let result = tools::call(
+        &cx,
+        "move_layer",
+        serde_json::from_value(json!({"layer": layer, "below": target})).unwrap(),
+    );
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    let requests = editor.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].2["name"], "Move Layer");
+    assert_eq!(
+        requests[0].2["edits"],
+        json!([{"op": "move_layer", "layer": layer, "below": target}])
     );
 }
 

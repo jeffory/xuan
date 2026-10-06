@@ -477,6 +477,31 @@ fn specs() -> Vec<Spec> {
                 text(json!({"ok": true}))
             },
         },
+        Spec {
+            name: "move_layer",
+            title: "Move a layer in the stack",
+            description: "Move a layer up or down the stack, as dragging it in the Layers panel does. Give `above` or `below` (a layer id) to put it directly above or below that layer, in that layer's group; or give only `parent` (a group id) to put it at the top of that group. A group cannot be moved into itself.",
+            properties: json!({
+                "layer": layer(),
+                "above": {"type": "string", "description": "Put it directly above this layer id"},
+                "below": {"type": "string", "description": "Put it directly below this layer id"},
+                "parent": {"type": "string", "description": "A group id: the group to move into (at its top) when neither above nor below is given; with above or below it must be that layer's group"},
+            }),
+            required: &["layer"],
+            kind: Kind::Edit,
+            run: |cx, args| {
+                let args = pick(args, &["layer", "above", "below", "parent"])?;
+                cx.edit(
+                    "Move Layer",
+                    vec![Value::Object(op(
+                        "move_layer",
+                        &args,
+                        &["layer", "above", "below", "parent"],
+                    ))],
+                )?;
+                text(json!({"ok": true}))
+            },
+        },
         // Selections.
         Spec {
             name: "select_shape",
