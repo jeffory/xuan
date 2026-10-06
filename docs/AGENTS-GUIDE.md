@@ -186,17 +186,18 @@ larger tool arguments with a tool error saying the request is too large.
 | `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation | `set`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
 | `create_text_layer` | Editable text | `add_text_layer` |
-| `create_shape_layer` | Rectangle, ellipse or rounded rectangle | `add_shape_layer` |
+| `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
 | `create_image_layer` | A PNG the client sends (base64) | `add_layer` |
 | `delete_layer` | Delete a layer or group | `remove_layer` |
 | `merge_layers`, `group_layers`, `ungroup_layer` | Merge, group, ungroup | `merge_layers`, `group_layers`, `ungroup_layers` |
 | `move_layer` | Move a layer above or below another, or into a group | `move_layer` |
 | `select_layers` | Select layers, the last one active, as clicking them does | `select_layers` |
-| `select_shape` | Rectangle, ellipse or polygon selection with a `mode` | `select_rect`, `select_polygon` |
+| `select_shape` | Rectangle, ellipse, polygon or SVG path selection with a `mode` and optional `feather` | `select_rect`, `select_polygon`, `select_path` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
 | `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels (of `layer`) | `host/run`, `grow_selection`, `feather_selection` |
-| `paint_stroke` | Brush strokes (or eraser) through points: one with `points`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`) | `stroke` |
-| `fill` | Fill the selection with a colour | `fill` |
+| `paint_stroke` | Brush strokes (or eraser) through points: one with `points` or an SVG `path`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`) | `stroke` |
+| `fill` | Fill the selection with a colour, or with `path` the inside of an SVG path | `fill`, `fill_path` |
+| `save_path` | Keep an SVG path with the document under a name, for the Paths dialog | `add_path` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
@@ -216,6 +217,37 @@ Filters and adjustments use the shapes `.xuan` files store, for example
 tool descriptions list them all with their ranges, and
 [PLUGINS.md](PLUGINS.md#reading-and-editing-the-document) has the full list.
 A setting out of range is refused with the field and its range.
+
+### Curves: SVG paths
+
+Draw curves with SVG path data instead of dense point lists: `select_shape`
+with `shape: "path"`, `paint_stroke` with `path`, `fill` with `path` and
+`create_shape_layer` with `shape: "path"` all take a `d` string in document
+pixels, such as `"M 0 700 C 120 640 380 640 512 700 Z"` (M, L, H, V, C, S, Q,
+T, A, Z; lowercase is relative). For example, a hill as an editable shape, a
+glowing thread along a curve, and a selection of the hill's top:
+
+```json
+{"tool": "batch", "arguments": {"steps": [
+  {"tool": "create_shape_layer", "arguments": {"shape": "path", "color": "#3a6b45",
+    "path": "M 0 700 C 120 640 380 640 512 700 L 512 768 L 0 768 Z"}},
+  {"tool": "create_layer", "arguments": {"name": "Thread"}},
+  {"tool": "paint_stroke", "arguments": {"layer": "$2", "color": "#ffe9a8", "size": 4,
+    "taper_in": 40, "taper_out": 40, "path": "M 60 300 C 160 180 300 420 450 260"}},
+  {"tool": "select_shape", "arguments": {"shape": "path", "feather": 6,
+    "path": "M 0 700 C 120 640 380 640 512 700 Z"}}
+]}}
+```
+
+A stroke follows one subpath (one `M`); give several strokes for several. Fills
+and selections close open subpaths and are antialiased; `fill_rule: "evenodd"`
+makes inner subpaths holes. A path shape layer stays a vector: `set_layer` can
+move, stretch or rotate it and the outline is redrawn, and `get_document`
+reports its outline (`shape.path`) where it is now. `save_path` keeps a path
+with the document so the user can fill, stroke or select it again from
+**Select → Paths…**; `get_document` lists them under `paths`. A malformed path
+is refused with what was expected and the character, e.g. `SVG path: expected
+the y of the line's end for `L` at character 11, found the end of the path`.
 
 ### Layers, masks and the active layer
 

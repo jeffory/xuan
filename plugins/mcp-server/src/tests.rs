@@ -1582,11 +1582,11 @@ fn paint_stroke_sends_several_strokes_or_dabs_as_one_edit_request() {
             json!({"points": [[1, 1]], "strokes": [{"points": [[1, 1]]}]}),
             "not both",
         ),
-        (json!({"color": "#000000"}), "Give `points`"),
+        (json!({"color": "#000000"}), "Give `points` or `path`"),
         (json!({"strokes": []}), "at least one"),
         (
             json!({"strokes": [{"points": [[1, 1]]}, {"size": 3}]}),
-            "Stroke 2 has no `points`",
+            "Stroke 2 has no `points` or `path`",
         ),
         (
             json!({"strokes": [{"points": [[1, 1]], "layer": "base"}]}),
@@ -1609,7 +1609,9 @@ fn paint_stroke_sends_several_strokes_or_dabs_as_one_edit_request() {
         .unwrap();
     assert!(tool.input_schema.get("required").is_none());
     let strokes = &tool.input_schema["properties"]["strokes"];
-    assert_eq!(strokes["items"]["required"], json!(["points"]));
+    // Each stroke gives `points` or `path`, which the code checks.
+    assert!(strokes["items"].get("required").is_none());
+    assert_eq!(strokes["items"]["properties"]["path"]["type"], "string");
     let description = tool.description.unwrap_or_default();
     assert!(
         description.contains("a single point paints one round dab"),
@@ -1792,4 +1794,162 @@ fn a_batch_takes_only_edit_tools() {
         batch.annotations.as_ref().unwrap().destructive_hint,
         Some(true)
     );
+}
+
+#[test]
+fn svg_paths_are_sent_to_selections_strokes_fills_shapes_and_saved_paths() {
+    let editor = FakeEditor::new(false);
+    let d = "M 0 700 C 120 640 380 640 512 700 Z";
+    for (tool, arguments, edit) in [
+        (
+            "select_shape",
+            json!({"shape": "path", "path": d, "mode": "add", "feather": 4, "fill_rule": "evenodd"}),
+            json!({"op": "select_path", "path": d, "mode": "add", "feather": 4, "fill_rule": "evenodd"}),
+        ),
+        (
+            "select_shape",
+            json!({"shape": "ellipse", "x": 1, "y": 2, "width": 3, "height": 4, "feather": 2}),
+            json!({"op": "select_rect", "x": 1, "y": 2, "width": 3, "height": 4, "feather": 2, "ellipse": true}),
+        ),
+        (
+            "select_shape",
+            json!({"shape": "polygon", "points": [[0, 0], [5, 0], [0, 5]], "feather": 1}),
+            json!({"op": "select_polygon", "points": [[0, 0], [5, 0], [0, 5]], "feather": 1}),
+        ),
+        (
+            "paint_stroke",
+            json!({"path": "M 10 50 C 40 0 80 100 110 50", "size": 6, "taper_out": 30}),
+            json!({"op": "stroke", "path": "M 10 50 C 40 0 80 100 110 50", "size": 6, "taper_out": 30}),
+        ),
+        (
+            "fill",
+            json!({"path": d, "color": "#ff0000", "layer": "base"}),
+            json!({"op": "fill_path", "path": d, "color": "#ff0000", "layer": "base"}),
+        ),
+        (
+            "fill",
+            json!({"color": "#ff0000"}),
+            json!({"op": "fill", "color": "#ff0000"}),
+        ),
+        (
+            "create_shape_layer",
+            json!({"shape": "path", "path": d, "color": "#00ff00", "fill_rule": "nonzero"}),
+            json!({"op": "add_shape_layer", "shape": "Path", "path": d, "color": "#00ff00", "fill_rule": "nonzero"}),
+        ),
+        (
+            "save_path",
+            json!({"path": d, "name": "Hill"}),
+            json!({"op": "add_path", "path": d, "name": "Hill"}),
+        ),
+    ] {
+        let result = call_tool(&editor, tool, arguments.clone());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "{tool} {arguments}: {}",
+            text_of(&result)
+        );
+        let requests = edit_requests(&editor);
+        assert_eq!(
+            requests.last().unwrap()["edits"],
+            json!([edit]),
+            "{tool} {arguments}"
+        );
+    }
+    // Several strokes may each follow a path.
+    let result = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"size": 3, "strokes": [{"path": "M 0 0 L 9 9"}, {"points": [[1, 1]]}]}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    assert_eq!(
+        edit_requests(&editor).last().unwrap()["edits"],
+        json!([
+            {"op": "stroke", "path": "M 0 0 L 9 9", "size": 3},
+            {"op": "stroke", "points": [[1, 1]], "size": 3},
+        ])
+    );
+    let sent = edit_requests(&editor).len();
+    for (tool, arguments, says) in [
+        (
+            "select_shape",
+            json!({"shape": "path"}),
+            "shape path needs `path`",
+        ),
+        (
+            "select_shape",
+            json!({"shape": "rectangle", "path": d, "x": 0, "y": 0, "width": 1, "height": 1}),
+            "go only with shape path",
+        ),
+        (
+            "select_shape",
+            json!({"shape": "star"}),
+            "rectangle, ellipse, polygon or path",
+        ),
+        (
+            "paint_stroke",
+            json!({"path": d, "points": [[1, 1]]}),
+            "Give `points` or `path`, not both",
+        ),
+        (
+            "paint_stroke",
+            json!({"strokes": [{"path": d, "points": [[1, 1]]}]}),
+            "Stroke 1: give `points` or `path`, not both",
+        ),
+        (
+            "fill",
+            json!({"color": "#000000", "fill_rule": "evenodd"}),
+            "`fill_rule` goes only with `path`",
+        ),
+        (
+            "create_shape_layer",
+            json!({"shape": "path"}),
+            "shape path needs `path`",
+        ),
+        (
+            "create_shape_layer",
+            json!({"shape": "path", "path": d, "x": 4}),
+            "leave out `x`",
+        ),
+        (
+            "create_shape_layer",
+            json!({"shape": "ellipse", "x": 0, "y": 0, "width": 4}),
+            "shape ellipse needs `height`",
+        ),
+        ("save_path", json!({"name": "x"}), "save_path needs `path`"),
+    ] {
+        let result = call_tool(&editor, tool, arguments.clone());
+        assert_eq!(result.is_error, Some(true), "{tool} {arguments}");
+        assert!(
+            text_of(&result).contains(says),
+            "{tool} {arguments}: {}",
+            text_of(&result)
+        );
+    }
+    assert_eq!(edit_requests(&editor).len(), sent, "nothing more sent");
+    // The schemas offer the new arguments.
+    let schema = |name: &str| {
+        (tools::list().into_iter())
+            .find(|t| t.name == name)
+            .unwrap()
+            .input_schema
+    };
+    assert!(
+        schema("select_shape")["properties"]["shape"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("path"))
+    );
+    assert_eq!(
+        schema("select_shape")["properties"]["feather"]["type"],
+        "number"
+    );
+    assert_eq!(
+        schema("paint_stroke")["properties"]["path"]["type"],
+        "string"
+    );
+    assert_eq!(schema("fill")["properties"]["path"]["type"], "string");
+    assert_eq!(schema("create_shape_layer")["required"], json!(["shape"]));
+    assert_eq!(schema("save_path")["required"], json!(["path"]));
 }

@@ -82,8 +82,9 @@ the document takes effect on the next frame and is drawn at once.
 | create text / shape layer | `document/edit` `add_text_layer`, `add_shape_layer` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
-| paint via strokes, fills and gradients | `document/edit` `stroke`, `fill`, `gradient` (new) |
-| selections: rect, ellipse, polygon, by colour | `document/edit` `select_rect`, `select_polygon`, `select_color`, `select_color_range`, `grow_selection`, `feather_selection` (new); `host/run` `select_all`, `deselect`, `invert_selection`, `select_subject`, `select_layer_pixels` |
+| paint via strokes, fills and gradients | `document/edit` `stroke` (with `points` or an SVG `path`), `fill`, `fill_path`, `gradient` (new) |
+| vector paths (#62) | SVG path data in `select_path`, `stroke` `path`, `fill_path`, `add_shape_layer` `Path`; `add_path` keeps a named path with the document (new) |
+| selections: rect, ellipse, polygon, path, by colour | `document/edit` `select_rect`, `select_polygon`, `select_path`, `select_color`, `select_color_range`, `grow_selection`, `feather_selection` (new); `host/run` `select_all`, `deselect`, `invert_selection`, `select_subject`, `select_layer_pixels` |
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
 | reorder layers | `document/edit` `move_layer` (new) |
@@ -176,6 +177,22 @@ like the existing ones, rather than anything specific to MCP:
   segment by the existing brush, so the GPU and CPU paths and the stroke's
   coverage rules are shared and agree. All are off by default; a stroke that
   uses none of them is painted exactly as before.
+- **Vector paths** (#62). Every curve had to be computed outside Xuan and
+  sent as dense point lists, and changing one meant recomputing it. Agents
+  write SVG path data easily, so the tools take it: `select_shape` with
+  `shape: "path"` selects inside a path (antialiased, with `feather` and
+  `mode`); `paint_stroke` takes `path` in place of `points` (one per stroke,
+  also in `strokes`), which Xuan flattens to points within 0.2 pixels, so the
+  brush dynamics and limits are those of a point stroke; `fill` with `path`
+  sends `fill_path`; `create_shape_layer` with `shape: "path"` makes an
+  editable, antialiased vector shape layer (`ShapeKind::Path`), redrawn from
+  its outline when it is resized and saved in `.xuan` format 10; and
+  `save_path` keeps a named path with the document for the Paths dialog.
+  Parsing is Xuan's own (so errors name the command, what was expected and the
+  character), and the geometry (flattening, exact curve bounds, SVG arcs) is
+  the kurbo crate's. `get_document` lists the saved paths and each path
+  shape's outline in document coordinates. `select_shape` also takes
+  `feather` for rectangles, ellipses and polygons.
 - **Batching** (#61). Painting detail one tool call at a time took hundreds
   of round trips and undo steps. `paint_stroke` takes `strokes`, sent as one
   `stroke` edit each in one request (a one-point stroke already painted a
