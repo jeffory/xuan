@@ -447,11 +447,13 @@ impl EditorApp {
                 }
             }
         }
+        let bundled = plugins::bundled_dir();
         let dirs = plugins::plugin_dirs(
             config_dir.as_deref(),
             std::env::var_os(plugins::PATH_VARIABLE).as_deref(),
+            bundled.as_deref(),
         );
-        let (manifests, errors) = plugins::discover(&dirs);
+        let (manifests, errors) = plugins::discover(&dirs, bundled.as_deref());
         self.install_plugins(manifests, errors);
     }
 
@@ -2748,10 +2750,12 @@ pub(super) fn one_line(text: &str, max: usize) -> String {
         .collect()
 }
 
-/// The grant that allows this manifest to run as it is.
+/// The grant that allows this manifest to run as it is. A bundled plugin's
+/// folder is stored by name (see [`plugins::grant_dir`]), so the grant
+/// survives Xuan upgrades and the AppImage's changing mount point.
 pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
     PluginGrant {
-        dir: std::fs::canonicalize(&manifest.dir).unwrap_or_else(|_| manifest.dir.clone()),
+        dir: plugins::grant_dir(&manifest.dir, plugins::bundled_dir().as_deref()),
         command: manifest.plugin.command.clone(),
         permissions: manifest.permissions.clone(),
         send_without_asking: false,

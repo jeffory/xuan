@@ -1196,3 +1196,32 @@ for line in sys.stdin:
         }
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// A manifest command without `.exe`, such as the MCP server's
+    /// `target/release/xuan-mcp-server` in the Windows package, starts the
+    /// `.exe`: the standard library adds the extension to a program path
+    /// that has none.
+    #[test]
+    fn a_command_without_exe_starts_the_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let bin = dir.path().join("target").join("release");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::copy(
+            Path::new(&system).join("System32").join("whoami.exe"),
+            bin.join("tool.exe"),
+        )
+        .unwrap();
+        let program = resolve("target/release/tool", dir.path());
+        assert_eq!(program, dir.path().join("target/release/tool"));
+        let status = Command::new(&program)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+}

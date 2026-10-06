@@ -14,6 +14,21 @@ use xuan::{
 
 use super::{EditorApp, plugins::PendingStart, theme, widgets};
 
+/// A grant's folder in the permission prompt: `dir` itself, or for a plugin
+/// that comes with Xuan (whose grant stores only the folder's name, see
+/// `plugins::grant_dir`), the folder it is in now, `actual`.
+fn grant_folder_text(dir: &std::path::Path, actual: &std::path::Path) -> String {
+    if !xuan::plugins::is_bundled_grant_dir(dir) {
+        return dir.display().to_string();
+    }
+    if actual == dir {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        format!("{} ({name})", tr("the plugins that come with Xuan"))
+    } else {
+        format!("{} ({})", actual.display(), tr("comes with Xuan"))
+    }
+}
+
 /// Draw one input and update its JSON value. Returns whether it changed.
 pub(super) fn input_widget(
     ui: &mut egui::Ui,
@@ -382,7 +397,7 @@ impl EditorApp {
                     RichText::new(format!(
                         "{} {}\n{} {}",
                         tr("Folder:"),
-                        grant.dir.display(),
+                        grant_folder_text(&grant.dir, &manifest.dir),
                         tr("Runs:"),
                         grant.command.join(" ")
                     ))
@@ -398,7 +413,7 @@ impl EditorApp {
                         ui.label(format!(
                             "• {} {}",
                             tr("It was in"),
-                            previous.dir.display()
+                            grant_folder_text(&previous.dir, &previous.dir)
                         ));
                     }
                     if previous.command != grant.command {
@@ -562,7 +577,8 @@ impl EditorApp {
                             ui.add(egui::Label::new(&manifest.plugin.description).wrap());
                         }
                         ui.add_space(4.0);
-                        ui.label(RichText::new(manifest.dir.display().to_string()).small().color(ui.palette().muted));
+                        let folder = grant_folder_text(&super::plugins::grant_for(manifest).dir, &manifest.dir);
+                        ui.label(RichText::new(folder).small().color(ui.palette().muted));
                         let status = if self.plugin_offline(&id) {
                             tr("Off: plugins that use the network are disabled")
                         } else if self.plugins.running(&id) {

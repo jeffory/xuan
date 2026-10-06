@@ -58,11 +58,15 @@ impl EditorApp {
     /// configuration folder to hold it.
     pub(super) fn plugin_installer(&self) -> Option<Installer> {
         let config_dir = self.config_path.as_ref()?.parent()?;
+        let bundled = plugins::bundled_dir();
         let search_dirs = plugins::plugin_dirs(
             Some(config_dir),
             std::env::var_os(plugins::PATH_VARIABLE).as_deref(),
+            bundled.as_deref(),
         );
-        Some(Installer::new(config_dir.join("plugins"), search_dirs))
+        let mut installer = Installer::new(config_dir.join("plugins"), search_dirs);
+        installer.bundled_dir = bundled;
+        Some(installer)
     }
 
     /// Open the install window to choose a folder or an archive.
