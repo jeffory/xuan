@@ -212,11 +212,20 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
             enabled,
             copy,
         } => {
+            // A copy button says what it copies, and how many lines.
+            let label = match copy {
+                Some(text) => copy_label(label, text),
+                None => label.clone(),
+            };
             let response = ui.add_enabled_ui(*enabled, |ui| {
-                if *primary {
-                    widgets::primary_button(ui, label)
+                let response = if *primary {
+                    widgets::primary_button(ui, &label)
                 } else {
-                    widgets::button(ui, label)
+                    widgets::button(ui, &label)
+                };
+                match copy {
+                    Some(text) => response.on_hover_text(copy_hint(text)),
+                    None => response,
                 }
             });
             if response.inner.clicked() {
@@ -569,10 +578,40 @@ fn decode_pane_image(bytes: Vec<u8>) -> Result<egui::ColorImage> {
     ))
 }
 
+/// A copy button's label, marked when it copies more than one line.
+fn copy_label(label: &str, text: &str) -> String {
+    match text.lines().count() {
+        0 | 1 => label.to_owned(),
+        lines => format!("{label} ({lines} {})", tr("lines")),
+    }
+}
+
+/// The tooltip of a copy button: exactly what it puts on the clipboard.
+fn copy_hint(text: &str) -> String {
+    let lines = text.lines().count();
+    let lead = if lines > 1 {
+        format!("{} {lines} {}", tr("Copies"), tr("lines to the clipboard:"))
+    } else {
+        tr("Copies to the clipboard:").to_owned()
+    };
+    format!("{lead}\n{text}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use xuan::plugins::manifest::FilesystemAccess;
+
+    #[test]
+    fn copy_buttons_show_what_they_copy() {
+        assert_eq!(copy_label("Copy URL", "http://x"), "Copy URL");
+        assert_eq!(copy_label("Copy JSON", "{\n}\n"), "Copy JSON (2 lines)");
+        assert_eq!(copy_hint("abc"), "Copies to the clipboard:\nabc");
+        assert_eq!(
+            copy_hint("a\nb\nc"),
+            "Copies 3 lines to the clipboard:\na\nb\nc"
+        );
+    }
 
     fn pane_image(dir: &Path, name: &str, size: u32) -> PathBuf {
         let path = dir.join(name);

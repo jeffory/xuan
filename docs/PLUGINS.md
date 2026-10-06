@@ -1091,7 +1091,7 @@ Widget tree nodes (`type` plus fields):
 | `heading`, `label` | `text`, `muted?`, `small?`, `wrap?` |
 | `separator` | — |
 | `space` | `size` |
-| `button` | `id`, `label`, `primary?`, `enabled?`, `copy?` (text Xuan copies to the clipboard when the user clicks it) |
+| `button` | `id`, `label`, `primary?`, `enabled?`, `copy?` (text Xuan copies to the clipboard when the user clicks it; the button shows it as a tooltip and says how many lines it has) |
 | `checkbox` | `id`, `label`, `value` |
 | `text` | `id`, `value`, `placeholder?`, `multiline?`, `width?` |
 | `number` | `id`, `value`, `min?`, `max?`, `step?`, `suffix?`, `integer?` |
