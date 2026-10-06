@@ -267,7 +267,14 @@ impl ServerHandler for Xuan {
                 } else {
                     "done"
                 };
-                this.shared.record(format!("{name}: {outcome}"));
+                // Only names of real tools reach the pane, never client text.
+                let known = tools::list().iter().any(|tool| tool.name == name);
+                let shown = if known {
+                    name.as_str()
+                } else {
+                    "an unknown tool"
+                };
+                this.shared.record(format!("{shown}: {outcome}"));
                 result
             })
             .await?;
