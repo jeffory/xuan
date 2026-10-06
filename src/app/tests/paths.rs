@@ -111,6 +111,8 @@ fn text_is_set_along_a_document_path_in_the_text_window() {
     app.new_document();
     // Without paths, the window says where to make one.
     app.start_text(None, Point::new(20.0, 20.0));
+    // Windows are measured on their first frame and drawn from the second.
+    frame(&context, &mut app);
     let output = frame(&context, &mut app);
     let texts = shown_text(&output);
     assert!(
@@ -133,6 +135,7 @@ fn text_is_set_along_a_document_path_in_the_text_window() {
         options.size_end = Some(20.0);
     }
     app.preview_text();
+    frame(&context, &mut app);
     let output = frame(&context, &mut app);
     assert!(app.text_edit.as_ref().unwrap().error.is_none());
     let texts = shown_text(&output);
