@@ -229,7 +229,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock, opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
@@ -245,6 +245,13 @@ fn specs() -> Vec<Spec> {
                         "width", "height", "rotation",
                     ],
                 )?;
+                // Locks protect layers from the agent: it may lock, but only
+                // the user unlocks.
+                if args.get("locked") == Some(&json!(false)) {
+                    return Err(
+                        "Only the user can unlock a layer in Xuan; ask them to unlock it".into(),
+                    );
+                }
                 let layer = args.get("layer").cloned().unwrap_or(Value::Null);
                 let mut edits = Vec::new();
                 let set = op(
@@ -261,7 +268,6 @@ fn specs() -> Vec<Spec> {
                     &["layer", "x", "y", "width", "height", "rotation"],
                 );
                 if transform.len() > 2 {
-                    // Unlocking comes before moving.
                     edits.push(Value::Object(transform));
                 }
                 if edits.is_empty() {

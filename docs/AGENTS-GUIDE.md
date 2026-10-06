@@ -32,6 +32,17 @@ claude mcp add --transport http xuan http://127.0.0.1:8765/mcp --header "Authori
 Then ask Claude about the open image, for example "Look at my image in Xuan
 and make the sky warmer", and allow the first edit when Xuan asks.
 
+**Keep the token out of shared places.** `claude mcp add` stores the server
+for you alone by default (user or local scope); do not add it with `--scope
+project`, which writes a `.mcp.json` into the project that is easily
+committed, and do not commit any client configuration that holds the token.
+Typing the command puts the token in your shell history: paste it with a
+leading space where your shell skips such lines, or refer to an environment
+variable instead, for example `--header "Authorization: Bearer
+$XUAN_MCP_TOKEN"` with the variable set from the pane's **Copy Token**, or
+`${XUAN_MCP_TOKEN}` inside a JSON configuration that expands variables. If the
+token leaks, press **New Token**.
+
 ### Other clients
 
 Most clients that speak Streamable HTTP read an `mcpServers` entry like the one
@@ -99,13 +110,17 @@ follow instructions hidden in something it read.
   switch in **Plugins → Manage Plugins… → MCP Server** ("Edit without asking"),
   and it is dropped if the plugin's folder, command or permissions change.
 - **Every edit is one undo step** and shows on the canvas at once. Edits obey
-  the same rules as the menus: locked layers stay unchanged, documents stay
-  within 30,000 pixels a side and 100 megapixels, and a request that fails
-  part way changes nothing.
+  the same rules as the menus: documents stay within 30,000 pixels a side
+  and 100 megapixels, a request that fails part way changes nothing, and a
+  request too heavy for the editor's thread is refused. Locked layers keep
+  their pixels and placement, and the MCP server can lock a layer but never
+  unlock one (the plugin protocol itself lets a plugin with `document =
+  "edit"` unlock a layer, as the Layers panel does).
 - **Files go through you.** Saving and exporting open Xuan's save dialog with
   a suggested name, and you choose where (or cancel); opening a file shows its
-  full path and opens it only if you agree. The client can never save over a
-  file, write elsewhere, or open something silently. Xuan's other file
+  full path and opens it only if you agree. The client cannot pick where a
+  file goes, replace one without the save dialog asking you to confirm, or
+  open something silently. Xuan's other file
   commands, the clipboard, settings and other plugins are out of reach.
 - **Offline mode** (**Disable plugins that use the network**) stops the
   server. On Linux, Xuan's network blocking for plugins does not apply to it:
