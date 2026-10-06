@@ -128,7 +128,10 @@ pub(super) fn set_layer_outline(layer: &mut Layer, path: &EditPath) -> Result<()
     let to_box = Affine::scale_non_uniform(w, h) * unit.inverse();
     let local = to_box * path.to_vector()?.bez();
     ensure!(
-        local.elements().iter().any(|e| !matches!(e, PathEl::MoveTo(_))),
+        local
+            .elements()
+            .iter()
+            .any(|e| !matches!(e, PathEl::MoveTo(_))),
         "A path shape needs at least one segment"
     );
     let bounds = local.bounding_box();
@@ -500,8 +503,7 @@ impl EditorApp {
         let Some(draft) = self.pen.draft.take() else {
             return;
         };
-        if Some(draft.document) != self.current_document_id() || draft.subpath.anchors.len() < 2
-        {
+        if Some(draft.document) != self.current_document_id() || draft.subpath.anchors.len() < 2 {
             return;
         }
         let path = EditPath {
@@ -648,7 +650,11 @@ impl EditorApp {
                 let p = kurbo::Point::new(f64::from(pointer.x), f64::from(pointer.y));
                 let c = screen(last.handle_out);
                 band.curve_to(kurbo::Point::new(f64::from(c.x), f64::from(c.y)), p, p);
-                draw_bez(painter, &band, Stroke::new(1.0_f32, PATH_COLOR.gamma_multiply(0.7)));
+                draw_bez(
+                    painter,
+                    &band,
+                    Stroke::new(1.0_f32, PATH_COLOR.gamma_multiply(0.7)),
+                );
             } else {
                 painter.line_segment(
                     [start, pointer],
@@ -709,12 +715,7 @@ fn draw_anchor(
         if handle != anchor.point {
             let h = screen(handle);
             painter.line_segment([at, h], Stroke::new(1.0_f32, PATH_COLOR));
-            painter.circle(
-                h,
-                3.0,
-                Color32::WHITE,
-                Stroke::new(1.0_f32, PATH_COLOR),
-            );
+            painter.circle(h, 3.0, Color32::WHITE, Stroke::new(1.0_f32, PATH_COLOR));
         }
     }
     painter.rect(

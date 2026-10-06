@@ -77,6 +77,7 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Tools | Gradient | G |
 | Tools | Shape | U |
 | Tools | Switch Rectangle / Ellipse Shape | Shift+U |
+| Tools | Pen | P |
 | Tools | Text | T |
 | Tools | Eyedropper | I |
 | Tools | Hand | H |

@@ -266,7 +266,12 @@ impl EditPath {
 
     /// What lies within `radius` of `point`: handles first (they sit on top), then anchors,
     /// then the nearest segment. `handles` limits handle hits to those shown.
-    pub fn hit(&self, point: Point, radius: f64, handles: impl Fn(usize, usize) -> bool) -> Option<Hit> {
+    pub fn hit(
+        &self,
+        point: Point,
+        radius: f64,
+        handles: impl Fn(usize, usize) -> bool,
+    ) -> Option<Hit> {
         let mut best: Option<(f64, Hit)> = None;
         let consider = |best: &mut Option<(f64, Hit)>, distance: f64, hit: Hit| {
             if distance <= radius && best.is_none_or(|(d, _)| distance < d) {
@@ -346,7 +351,14 @@ impl EditPath {
     /// Move one handle to `to`. On a smooth anchor the other handle turns to stay opposite,
     /// keeping its length (or mirroring this one when it had none), unless `independent`
     /// breaks the symmetry, which makes the anchor a corner.
-    pub fn move_handle(&mut self, subpath: usize, anchor: usize, side: Side, to: Point, independent: bool) {
+    pub fn move_handle(
+        &mut self,
+        subpath: usize,
+        anchor: usize,
+        side: Side,
+        to: Point,
+        independent: bool,
+    ) {
         let a = &mut self.subpaths[subpath].anchors[anchor];
         *a.handle_mut(side) = to;
         if independent {
@@ -606,7 +618,11 @@ mod tests {
         let path = trace_mask(&mask, 0.5).unwrap();
         let edit = EditPath::from_vector(&path);
         assert_eq!(edit.subpaths.len(), 2);
-        assert!(edit.subpaths.iter().all(|s| s.closed && s.anchors.len() == 4));
+        assert!(
+            edit.subpaths
+                .iter()
+                .all(|s| s.closed && s.anchors.len() == 4)
+        );
         // Filled back, it is the same selection.
         let filled = path.mask(crate::vector::FillRule::Nonzero, 20, 20);
         assert_eq!(filled.as_raw(), mask.as_raw());
@@ -618,7 +634,11 @@ mod tests {
         });
         let traced = EditPath::from_vector(&trace_mask(&circle, 1.0).unwrap());
         assert_eq!(traced.subpaths.len(), 1);
-        assert!(traced.subpaths[0].anchors.len() < 60, "{}", traced.subpaths[0].anchors.len());
+        assert!(
+            traced.subpaths[0].anchors.len() < 60,
+            "{}",
+            traced.subpaths[0].anchors.len()
+        );
     }
 
     fn sample(path: &BezPath, n: usize) -> Vec<Point> {
@@ -704,7 +724,10 @@ mod tests {
         };
         edit.move_handle(0, 1, Side::Out, Point::new(10.0, 8.0), false);
         let a = edit.subpaths[0].anchors[1];
-        assert!((a.handle_in - Point::new(10.0, -4.0)).hypot() < 1e-9, "{a:?}");
+        assert!(
+            (a.handle_in - Point::new(10.0, -4.0)).hypot() < 1e-9,
+            "{a:?}"
+        );
         assert!(a.smooth);
         edit.move_handle(0, 1, Side::In, Point::new(5.0, 0.0), true);
         let a = edit.subpaths[0].anchors[1];
@@ -714,7 +737,8 @@ mod tests {
 
     #[test]
     fn anchors_are_deleted_and_converted() {
-        let mut edit = EditPath::from_vector(&VectorPath::parse("M 0 0 L 10 0 L 20 0 L 20 10").unwrap());
+        let mut edit =
+            EditPath::from_vector(&VectorPath::parse("M 0 0 L 10 0 L 20 0 L 20 10").unwrap());
         edit.convert(0, 1);
         let a = edit.subpaths[0].anchors[1];
         assert!(a.smooth);
@@ -722,7 +746,7 @@ mod tests {
         edit.convert(0, 1);
         assert!(!edit.subpaths[0].anchors[1].has_out());
         edit.delete_anchor(0, 1);
-        assert_eq!(edit.to_bez().to_svg(), "M0 0L20 0L20 10");
+        assert_eq!(edit.to_bez().to_svg(), "M0,0 L20,0 L20,10");
         edit.delete_anchor(0, 0);
         edit.delete_anchor(0, 0);
         assert!(edit.is_empty());
@@ -742,11 +766,20 @@ mod tests {
         let all = |_, _| true;
         assert!(matches!(
             edit.hit(Point::new(0.5, 9.0), 3.0, all),
-            Some(Hit::Handle { side: Side::Out, .. })
+            Some(Hit::Handle {
+                side: Side::Out,
+                ..
+            })
         ));
-        assert!(matches!(edit.hit(Point::new(19.0, 1.0), 3.0, all), Some(Hit::Anchor { anchor: 1, .. })));
+        assert!(matches!(
+            edit.hit(Point::new(19.0, 1.0), 3.0, all),
+            Some(Hit::Anchor { anchor: 1, .. })
+        ));
         let on = edit.subpaths[0].segment(0).eval(0.5);
-        assert!(matches!(edit.hit(on, 3.0, all), Some(Hit::Segment { segment: 0, .. })));
+        assert!(matches!(
+            edit.hit(on, 3.0, all),
+            Some(Hit::Segment { segment: 0, .. })
+        ));
         assert_eq!(edit.hit(Point::new(50.0, 50.0), 3.0, all), None);
     }
 }

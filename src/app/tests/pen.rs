@@ -111,10 +111,18 @@ fn clicks_and_enter_make_an_open_polyline_path() {
     let path = edit_path(&app, 0);
     assert!(!path.subpaths[0].closed);
     let anchors = points(&path);
-    for (anchor, expected) in anchors.iter().zip([(10.0, 10.0), (50.0, 10.0), (50.0, 40.0)]) {
+    for (anchor, expected) in anchors
+        .iter()
+        .zip([(10.0, 10.0), (50.0, 10.0), (50.0, 40.0)])
+    {
         assert!(near(*anchor, expected), "{anchors:?}");
     }
-    assert!(path.subpaths[0].anchors.iter().all(|a| !a.has_in() && !a.has_out()));
+    assert!(
+        path.subpaths[0]
+            .anchors
+            .iter()
+            .all(|a| !a.has_in() && !a.has_out())
+    );
     assert!(!paths(&app)[0].d.to_svg().contains('C'));
     assert_eq!(revision(&app), start + 1, "one undo step");
     // It is shown for editing.
@@ -198,7 +206,10 @@ fn handles_move_symmetrically_and_alt_breaks_the_symmetry() {
     let anchor = edit_path(&app, 0).subpaths[0].anchors[1];
     assert!(near(anchor.handle_out, (70.0, 0.0)), "{anchor:?}");
     // The in handle turned to stay opposite, keeping its length.
-    let (a, b) = (anchor.handle_in - anchor.point, anchor.handle_out - anchor.point);
+    let (a, b) = (
+        anchor.handle_in - anchor.point,
+        anchor.handle_out - anchor.point,
+    );
     assert!(a.cross(b).abs() < 1e-3 && a.dot(b) < 0.0, "{anchor:?}");
     assert!((a.hypot() - 20.0).abs() < 1e-3);
     assert!(anchor.smooth);
@@ -208,7 +219,10 @@ fn handles_move_symmetrically_and_alt_breaks_the_symmetry() {
     pen_drag(&context, &mut app, (70.0, 0.0), (75.0, 15.0), ALT);
     let anchor = edit_path(&app, 0).subpaths[0].anchors[1];
     assert!(near(anchor.handle_out, (75.0, 15.0)), "{anchor:?}");
-    assert!(anchor.handle_in.distance(before) < 1e-3, "the in handle stays");
+    assert!(
+        anchor.handle_in.distance(before) < 1e-3,
+        "the in handle stays"
+    );
     assert!(!anchor.smooth);
     assert_eq!(revision(&app), start + 2);
 
@@ -250,7 +264,10 @@ fn clicking_an_anchor_deletes_it_and_alt_click_converts_it() {
     let start = revision(&app);
     pen_click(&context, &mut app, 50.0, 10.0, ALT);
     let anchor = edit_path(&app, 0).subpaths[0].anchors[1];
-    assert!(anchor.smooth && anchor.has_in() && anchor.has_out(), "{anchor:?}");
+    assert!(
+        anchor.smooth && anchor.has_in() && anchor.has_out(),
+        "{anchor:?}"
+    );
     pen_click(&context, &mut app, 50.0, 10.0, ALT);
     let anchor = edit_path(&app, 0).subpaths[0].anchors[1];
     assert!(!anchor.smooth && !anchor.has_in() && !anchor.has_out());
@@ -311,7 +328,10 @@ fn path_shape_layer_outlines_are_edited_in_place() {
     // Still box-local: the box grew to the new bounds and the layer with it.
     assert_eq!((shape.width, shape.height), (60.0, 50.0));
     assert_eq!((layer.transform.x, layer.transform.y), (10.0, 10.0));
-    assert_eq!((layer.transform.width, layer.transform.height), (60.0, 50.0));
+    assert_eq!(
+        (layer.transform.width, layer.transform.height),
+        (60.0, 50.0)
+    );
     assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (60, 50));
     let anchors = points(&pen_tool::layer_outline(layer).unwrap());
     assert!(near(anchors[2], (70.0, 60.0)), "{anchors:?}");
