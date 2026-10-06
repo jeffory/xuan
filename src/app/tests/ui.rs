@@ -24,6 +24,9 @@ mod palette;
 #[path = "ui_appearance.rs"]
 mod appearance;
 
+#[path = "ui_tabs.rs"]
+mod tabs;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

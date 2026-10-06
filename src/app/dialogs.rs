@@ -977,6 +977,7 @@ impl EditorApp {
                 return;
             }
             if !self.sessions[index].history.dirty() {
+                self.remember_closed(index);
                 self.sessions.remove(index);
                 self.current = self.current.min(self.sessions.len().saturating_sub(1));
                 self.close_tab = None;
@@ -1037,6 +1038,7 @@ impl EditorApp {
                             return;
                         }
                     }
+                    self.remember_closed(index);
                     self.sessions.remove(index);
                     self.current = self.current.min(self.sessions.len().saturating_sub(1));
                     self.close_tab = None;

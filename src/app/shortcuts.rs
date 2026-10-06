@@ -96,6 +96,12 @@ impl EditorApp {
                 continue;
             };
             ctx.input_mut(|i| consume_exact(i, mods, key));
+            if key == Key::Tab {
+                // egui moves keyboard focus on any Tab press, even with Ctrl held. A bound
+                // Tab chord (Ctrl+Tab) is a command, so keep the focus where it is; it could
+                // otherwise land in a text field and swallow the next shortcut.
+                ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            }
             if !self.command_enabled(&id) {
                 continue;
             }

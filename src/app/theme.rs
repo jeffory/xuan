@@ -170,6 +170,8 @@ pub struct Palette {
     pub tab_selected_edge: Color32,
     /// The round highlight behind a tab's close button.
     pub tab_close_hover: Color32,
+    /// The soft shadow under the selected tab.
+    pub tab_shadow: Color32,
 
     // Rulers
     pub ruler_tick: Color32,
@@ -282,12 +284,13 @@ impl Palette {
         close_dot: [gray(98), gray(143)],
         traffic_inactive: gray(83),
 
-        tab_fill: white(9),
+        tab_fill: Color32::TRANSPARENT,
         tab_hover: white(19),
         tab_selected: white(31),
-        tab_edge: white(20),
+        tab_edge: Color32::TRANSPARENT,
         tab_selected_edge: white(56),
         tab_close_hover: white(22),
+        tab_shadow: black(90),
 
         ruler_tick: gray(158),
         ruler_label: gray(199),
@@ -403,6 +406,7 @@ impl Palette {
         tab_edge: Color32::TRANSPARENT,
         tab_selected_edge: black(34),
         tab_close_hover: black(22),
+        tab_shadow: black(26),
 
         ruler_tick: rgb(118, 118, 126),
         ruler_label: rgb(64, 64, 70),

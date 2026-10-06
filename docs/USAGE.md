@@ -81,6 +81,32 @@ Xuan has charcoal and light themes (Settings → Appearance → Theme), contextu
 
 The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
+### Document tabs
+
+Each open document and RAW Develop session has a tab above the canvas, styled after
+Firefox: the selected tab is a raised pill and the others are flat until the pointer is
+over them. Hover a tab for its full path.
+
+- **Close** a tab with its **✕** (shown on the selected tab and the one under the
+  pointer), with the middle mouse button, or with **Ctrl+W**. A tab with unsaved changes
+  shows a dot instead of the **✕**, which turns into the **✕** under the pointer; closing
+  it asks first.
+- **Reorder** document tabs by dragging them; a line shows where the tab will land.
+- **Double-click** the empty part of the bar, or click **+**, for a new canvas.
+- **Right-click** a tab for **Close Tab**, **Close Other Tabs**, **Close Tabs to the
+  Right**, **Reopen Closed Tab**, **Copy Path** and **Show in Folder** (which selects the
+  file in the file manager on Windows, macOS and Linux desktops that support it, and
+  otherwise opens its folder). Closing several tabs stops at the first one whose
+  unsaved-changes prompt you cancel.
+- **Keys:** **Ctrl+Tab** / **Ctrl+Page Down** for the next tab, **Ctrl+Shift+Tab** /
+  **Ctrl+Page Up** for the previous one, **Alt+1** to **Alt+8** for the first eight tabs and
+  **Alt+9** for the last (as in Firefox on Linux; **Ctrl+1** stays Actual Pixels), and
+  **Ctrl+Shift+T** to reopen the last closed file. All of them can be changed in Settings →
+  Keyboard Shortcuts, where **Close Other Tabs** and **Close Tabs to the Right** can be given
+  keys too.
+- Tabs shrink as more open, down to a minimum width. Beyond that the bar scrolls: use the
+  **‹** / **›** arrows or the mouse wheel over the tabs, or **⌄** for a list of all tabs.
+
 ### Command palette
 
 Press **Ctrl+K** (or choose **Help → Command Palette…**) to search every command, tool and plugin action. A filter field has focus as soon as the palette opens; type to narrow the list, and press **Ctrl+K** again, **Esc**, or click outside to close it.

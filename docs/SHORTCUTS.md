@@ -49,6 +49,18 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | View | Rulers | Ctrl+R |
 | View | Snap | Ctrl+Shift+; / Ctrl+Shift+: |
 | View | Lock Guides | Ctrl+Alt+; |
+| Window | Next Tab | Ctrl+Tab / Ctrl+PageDown |
+| Window | Previous Tab | Ctrl+Shift+Tab / Ctrl+PageUp |
+| Window | Tab 1 | Alt+1 |
+| Window | Tab 2 | Alt+2 |
+| Window | Tab 3 | Alt+3 |
+| Window | Tab 4 | Alt+4 |
+| Window | Tab 5 | Alt+5 |
+| Window | Tab 6 | Alt+6 |
+| Window | Tab 7 | Alt+7 |
+| Window | Tab 8 | Alt+8 |
+| Window | Last Tab | Alt+9 |
+| Window | Reopen Closed Tab | Ctrl+Shift+T |
 | Tools | Move / Transform | V |
 | Tools | Marquee | M |
 | Tools | Switch Rectangle / Ellipse Marquee | Shift+M |

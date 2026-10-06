@@ -46,6 +46,9 @@ const fn shift(key: Key) -> Chord {
 const fn ctrl_shift(key: Key) -> Chord {
     chord(CTRL.plus(SHIFT), key)
 }
+const fn alt(key: Key) -> Chord {
+    chord(ALT, key)
+}
 const fn ctrl_alt(key: Key) -> Chord {
     chord(CTRL.plus(ALT), key)
 }
@@ -359,6 +362,10 @@ fn develop_ready(app: &EditorApp) -> bool {
 }
 fn can_view(app: &EditorApp) -> bool {
     app.develop.as_ref().is_none_or(|d| d.ready())
+}
+/// The tab bar has a document or RAW tab.
+fn has_tabs(app: &EditorApp) -> bool {
+    !app.sessions.is_empty() || app.develop.is_some() || !app.inactive_develop.is_empty()
 }
 fn can_close(app: &EditorApp) -> bool {
     app.develop.is_some() || app.session().is_some()
@@ -727,6 +734,63 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("clear_guides", "Clear Guides", C::View).when(has_guides),
     // Window
     cmd("reset_panels", "Reset Panel Layout", C::Window).when(not_developing),
+    cmd("next_tab", "Next Tab", C::Window)
+        .keys(&[ctrl(Key::Tab), ctrl(Key::PageDown)])
+        .both()
+        .when(has_tabs)
+        .aliases(&["switch tab", "document"]),
+    cmd("previous_tab", "Previous Tab", C::Window)
+        .keys(&[ctrl_shift(Key::Tab), ctrl(Key::PageUp)])
+        .both()
+        .when(has_tabs),
+    // Alt+1…9 as in Firefox on Linux: Ctrl+1 is Actual Pixels.
+    cmd("tab_1", "Tab 1", C::Window)
+        .keys(&[alt(Key::Num1)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_2", "Tab 2", C::Window)
+        .keys(&[alt(Key::Num2)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_3", "Tab 3", C::Window)
+        .keys(&[alt(Key::Num3)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_4", "Tab 4", C::Window)
+        .keys(&[alt(Key::Num4)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_5", "Tab 5", C::Window)
+        .keys(&[alt(Key::Num5)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_6", "Tab 6", C::Window)
+        .keys(&[alt(Key::Num6)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_7", "Tab 7", C::Window)
+        .keys(&[alt(Key::Num7)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_8", "Tab 8", C::Window)
+        .keys(&[alt(Key::Num8)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_9", "Last Tab", C::Window)
+        .keys(&[alt(Key::Num9)])
+        .both()
+        .when(has_tabs),
+    cmd("reopen_closed_tab", "Reopen Closed Tab", C::Window)
+        .keys(&[ctrl_shift(Key::T)])
+        .both()
+        .when(always)
+        .aliases(&["undo close", "recent"]),
+    cmd("close_other_tabs", "Close Other Tabs", C::Window)
+        .both()
+        .when(has_tabs),
+    cmd("close_tabs_to_right", "Close Tabs to the Right", C::Window)
+        .both()
+        .when(has_tabs),
     // Tools
     tool(
         "tool_move",

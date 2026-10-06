@@ -45,6 +45,7 @@ mod snap;
 mod stroke_smoothing;
 mod system_theme;
 mod tablet;
+mod tabs;
 #[cfg(test)]
 mod tests;
 mod text_controls;
@@ -195,6 +196,9 @@ struct Session {
     document: Document,
     history: History,
     path: Option<PathBuf>,
+    /// The file the document was opened from, also for images (whose `path` stays empty so
+    /// Save asks where to write the project). Copy Path and Reopen Closed Tab use it.
+    source: Option<PathBuf>,
     title: String,
     zoom: f32,
     pan: Vec2,
@@ -220,6 +224,7 @@ impl Session {
         Self {
             document,
             history: History::default(),
+            source: path.clone(),
             path,
             title,
             zoom: 1.0,
@@ -522,6 +527,8 @@ pub struct EditorApp {
     status: String,
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
+    /// The tab bar's scroll position, closed-tab history and pending closes.
+    tab_strip: tabs::TabStrip,
     close_app: bool,
     drop_prompt: Option<drops::DropPrompt>,
     pending_drops: std::collections::VecDeque<Vec<PathBuf>>,
@@ -705,6 +712,7 @@ impl EditorApp {
             status: String::new(),
             rename: None,
             close_tab: None,
+            tab_strip: Default::default(),
             close_app: false,
             drop_prompt: None,
             pending_drops: Default::default(),
@@ -899,6 +907,7 @@ impl EditorApp {
                 if !project && as_layer && !self.sessions.is_empty() {
                     return;
                 }
+                let source = path;
                 let path = if path.extension().is_some_and(|e| e == "xuan") {
                     Some(path.to_path_buf())
                 } else {
@@ -914,10 +923,13 @@ impl EditorApp {
                             .first()
                             .map_or(tr("Untitled").into(), |l| l.name.clone())
                     });
-                self.sessions.push(Session::new(document, title, path));
+                let mut session = Session::new(document, title, path);
+                session.source = Some(source.to_path_buf());
+                self.sessions.push(session);
                 self.current = self.sessions.len() - 1;
                 self.mask_target = false;
                 self.dialog = None;
+
                 if let Some(summary) = report.summary() {
                     self.status = tr("Imported with changes").into();
                     self.notice = Some(summary);
@@ -1204,6 +1216,9 @@ impl EditorApp {
             return;
         }
         if self.job.is_some() {
+            return;
+        }
+        if self.tab_command(command) {
             return;
         }
         if let Some(develop) = &mut self.develop {
