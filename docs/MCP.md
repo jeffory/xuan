@@ -198,6 +198,56 @@ The requests wait until no other dialog is open, a plugin has at most one
 waiting, and a cancel is the error `-32800`, so a misbehaving client can
 neither stack up dialogs nor learn anything beyond the name of the file the user chose.
 
+## Calls that wait for the user (#57)
+
+The edit prompt, the file prompts and dialogs, and the prompt to send an
+image can keep a tool call waiting for minutes. MCP clients give up much
+sooner: Claude Code reported `The operation timed out` after about a minute,
+while the prompt stayed up in Xuan and a late answer still opened the file or
+applied the edits the client had counted as failed. Three changes keep the
+client and Xuan in step:
+
+- **Progress keeps the client waiting.** When the client sends a
+  `progressToken` in `_meta`, the server sends `notifications/progress`
+  every 5 seconds while a call runs (`progress` counts up, no `total`, a
+  `message` such as "Waiting for the user to allow edits in Xuan"). Such a
+  call waits up to 10 minutes. The first notification also opens the HTTP
+  answer: on the stateless protocol (2026-07-28) rmcp sends no headers before
+  the handler's first message, and Claude Code (2.1.29x) aborts a POST that
+  has no response headers after 60 seconds (unless the server's `timeout` or
+  `MCP_TOOL_TIMEOUT` is longer) with exactly that `The operation timed out`.
+  Claude Code always asks for progress (its `callTool` passes `onprogress`),
+  shows the messages, and resets its tool idle timeout (5 minutes for HTTP
+  servers, `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`) on each one; its wall-clock
+  limit (the per-server `timeout` or `MCP_TOOL_TIMEOUT`, about 28 hours by
+  default) is not extended by progress. The MCP specification lets a client
+  reset its timeout on progress but says it should still enforce a maximum;
+  the TypeScript SDK does so only with `resetTimeoutOnProgress`.
+- **Cancelling withdraws the request in Xuan.** On `notifications/cancelled`,
+  or when a stateless client closes its HTTP request, the server withdraws the
+  call's waiting request with the plugin protocol's `request/cancel` (see
+  "Withdrawing a request" in `docs/PLUGINS.md`). Xuan drops the request and
+  its prompt, so a late **Allow** or **Open** does nothing and the prompt does
+  not come back after another dialog. A save dialog already open cannot be
+  withdrawn: it is the system's, modal, and the save happens if the user
+  confirms it. On the legacy session protocol rmcp keeps a call running when
+  its HTTP stream drops (the client may resume it), so only the client's
+  `notifications/cancelled` or the time limit withdraw it there.
+- **The agent is told.** The descriptions of the edit and file tools say the
+  call waits for the user and that, if it fails because the user did not
+  answer, the agent should ask the user instead of retrying. Without a
+  `progressToken` nothing keeps the client waiting, so the server gives up
+  after 50 seconds, before the common 60-second client timeout, withdraws the
+  request and answers with a tool error saying the user has not answered yet
+  and nothing was changed.
+
+The server does not limit waiting calls to one per kind. Edits an agent sends
+in parallel in one turn wait behind the same prompt and apply in order once
+the user allows them, which is what the agent meant; what stacked up before
+were retries of calls the client had already given up on, and those are now
+withdrawn when the client gives up. Xuan still caps waiting edits at 64 per
+plugin and file requests at one.
+
 ## Edit permission per session
 
 Edits through `document/edit` and editing `host/run` commands are immediate,

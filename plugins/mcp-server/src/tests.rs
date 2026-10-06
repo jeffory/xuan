@@ -2,7 +2,10 @@
 //! router called as a tower service) against a fake editor.
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -18,10 +21,11 @@ use rmcp::model::{
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
+use xuan_plugin::CancelToken;
 
 use crate::{
-    editor::{CANCELLED, Editor, EditorError},
-    server::{self, Shared, Xuan},
+    editor::{CANCELLED, Editor, EditorError, WITHDRAWN},
+    server::{self, Shared, Waits, Xuan},
     tools,
 };
 
@@ -35,6 +39,12 @@ struct FakeEditor {
     log: Mutex<Vec<(Option<String>, String, Value)>>,
     /// Refuse edits as a user who said Deny.
     deny: bool,
+    /// Requests with this method wait, as for a user who has not answered,
+    /// until `answer` is set or they are withdrawn.
+    hold: Option<&'static str>,
+    answer: AtomicBool,
+    /// Methods of the requests that were withdrawn while they waited.
+    withdrawn: Mutex<Vec<String>>,
 }
 
 impl FakeEditor {
@@ -45,7 +55,32 @@ impl FakeEditor {
             dir,
             log: Mutex::default(),
             deny,
+            hold: None,
+            answer: AtomicBool::new(false),
+            withdrawn: Mutex::default(),
         })
+    }
+
+    /// An editor whose `method` requests wait for the user.
+    fn holding(method: &'static str) -> Arc<Self> {
+        let mut editor = Arc::into_inner(Self::new(false)).unwrap();
+        editor.hold = Some(method);
+        Arc::new(editor)
+    }
+
+    fn withdrawn(&self) -> Vec<String> {
+        self.withdrawn.lock().unwrap().clone()
+    }
+
+    /// Wait (in a test thread) until a request with this method arrived.
+    async fn wait_for(&self, method: &str) {
+        for _ in 0..500 {
+            if self.requests().iter().any(|(_, m, _)| m == method) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{method} never reached the editor");
     }
 
     fn requests(&self) -> Vec<(Option<String>, String, Value)> {
@@ -65,12 +100,32 @@ impl Editor for FakeEditor {
         session: Option<&str>,
         method: &str,
         params: Value,
+        cancel: &CancelToken,
     ) -> Result<Value, EditorError> {
+        if cancel.is_cancelled() {
+            return Err(EditorError {
+                code: WITHDRAWN,
+                message: format!("{method} was withdrawn"),
+            });
+        }
         self.log.lock().unwrap().push((
             session.map(str::to_owned),
             method.to_owned(),
             params.clone(),
         ));
+        if self.hold == Some(method) {
+            // Waiting for the user, as Xuan holds the request.
+            while !self.answer.load(Ordering::SeqCst) {
+                if cancel.is_cancelled() {
+                    self.withdrawn.lock().unwrap().push(method.to_owned());
+                    return Err(EditorError {
+                        code: WITHDRAWN,
+                        message: format!("{method} was withdrawn"),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
         match method {
             "document/get" => Ok(json!({
                 "id": "doc", "width": 64, "height": 48, "selection": null,
@@ -109,7 +164,13 @@ impl Editor for FakeEditor {
 }
 
 fn app(editor: Arc<FakeEditor>) -> (axum::Router, Arc<Shared>) {
-    let shared = Arc::new(Shared::new("k".repeat(64), editor.dir.clone()));
+    app_with(editor, Waits::default())
+}
+
+fn app_with(editor: Arc<FakeEditor>, waits: Waits) -> (axum::Router, Arc<Shared>) {
+    let mut shared = Shared::new("k".repeat(64), editor.dir.clone());
+    shared.waits = waits;
+    let shared = Arc::new(shared);
     let xuan = Xuan {
         editor,
         shared: shared.clone(),
@@ -570,6 +631,7 @@ fn images_from_the_client_are_written_to_the_plugins_folder_and_removed() {
         editor: editor.as_ref(),
         session: Some("s"),
         incoming: &incoming,
+        cancel: &CancelToken::new(),
     };
     let result = tools::call(
         &cx,
@@ -847,6 +909,7 @@ async fn tool_and_resource_errors_name_files_never_folders() {
         editor: editor.as_ref(),
         session: None,
         incoming: &incoming,
+        cancel: &CancelToken::new(),
     };
     let args = serde_json::from_value(json!({"png_base64": PNG})).unwrap();
     let result = tools::call(&cx, "create_image_layer", args);
@@ -889,6 +952,7 @@ async fn large_images_fit_and_larger_requests_get_a_clear_answer() {
         editor: editor.as_ref(),
         session: None,
         incoming: &editor.dir,
+        cancel: &CancelToken::new(),
     };
     let text = "x".repeat(tools::MAX_REQUEST_BYTES + 1);
     let args = serde_json::from_value(json!({"text": text})).unwrap();
@@ -931,4 +995,223 @@ async fn a_new_token_forgets_the_sessions_issued_before() {
             "MCP client 2",
         ]
     );
+}
+
+/// The messages of a server-sent event stream, read as they arrive.
+struct Events {
+    body: Body,
+    buffer: String,
+    seen: usize,
+}
+
+impl Events {
+    fn new(body: Body) -> Self {
+        Self {
+            body,
+            buffer: String::new(),
+            seen: 0,
+        }
+    }
+
+    /// The next message that `wanted` accepts; others are skipped.
+    async fn next(&mut self, wanted: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            let messages: Vec<Value> = (self.buffer.lines())
+                .filter_map(|line| line.strip_prefix("data:"))
+                .filter_map(|data| serde_json::from_str(data.trim()).ok())
+                .collect();
+            for message in messages.into_iter().skip(self.seen) {
+                self.seen += 1;
+                if wanted(&message) {
+                    return message;
+                }
+            }
+            let frame = tokio::time::timeout(Duration::from_secs(10), self.body.frame())
+                .await
+                .expect("the server sends more")
+                .expect("the stream has not ended")
+                .unwrap();
+            if let Ok(data) = frame.into_data() {
+                self.buffer.push_str(&String::from_utf8_lossy(&data));
+            }
+        }
+    }
+}
+
+fn is_progress(message: &Value) -> bool {
+    message["method"] == "notifications/progress"
+}
+
+/// Waits short enough for a test.
+fn quick() -> Waits {
+    Waits {
+        progress_every: Duration::from_millis(50),
+        with_progress: Duration::from_secs(30),
+        without_progress: Duration::from_secs(30),
+    }
+}
+
+async fn wait_until(done: impl Fn() -> bool) {
+    for _ in 0..500 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out");
+}
+
+#[tokio::test]
+async fn a_call_waiting_for_the_user_reports_progress_and_is_withdrawn_when_cancelled() {
+    let editor = FakeEditor::holding("document/edit");
+    let (app, _) = app_with(editor.clone(), quick());
+    let mut client = Client::new(app.clone());
+    client.initialize().await;
+    let call = |id: i64| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+            "name": "create_layer", "arguments": {}, "_meta": {"progressToken": format!("p{id}")},
+        }})
+    };
+
+    // While the user decides, the client hears that the call is waiting.
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.clone().oneshot(client.request(&call(7))),
+    )
+    .await
+    .expect("the answer starts before the user answers")
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut events = Events::new(response.into_body());
+    let first = events.next(is_progress).await;
+    assert_eq!(first["params"]["progressToken"], "p7");
+    assert_eq!(
+        first["params"]["message"],
+        "Waiting for the user to allow edits in Xuan"
+    );
+    let second = events.next(is_progress).await;
+    let progress = |m: &Value| m["params"]["progress"].as_f64().unwrap();
+    assert!(progress(&second) > progress(&first));
+    // The user answers: the call completes.
+    editor.answer.store(true, Ordering::SeqCst);
+    let done = events.next(|m| m["id"] == 7).await;
+    assert_eq!(done["result"]["isError"], json!(false), "{done}");
+
+    // The client cancels (notifications/cancelled): the request is withdrawn
+    // in Xuan, so its prompt closes and a late answer does nothing.
+    editor.answer.store(false, Ordering::SeqCst);
+    let response = app.clone().oneshot(client.request(&call(8))).await.unwrap();
+    let mut events = Events::new(response.into_body());
+    events.next(is_progress).await;
+    assert!(editor.withdrawn().is_empty());
+    let cancel = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                        "params": {"requestId": 8, "reason": "The operation timed out"}});
+    assert_eq!(
+        client.send(client.request(&cancel)).await.0,
+        StatusCode::ACCEPTED
+    );
+    wait_until(|| editor.withdrawn() == ["document/edit"]).await;
+}
+
+#[tokio::test]
+async fn a_stateless_call_starts_its_answer_with_progress_and_ends_with_the_connection() {
+    let editor = FakeEditor::holding("file/open");
+    let (app, _) = app_with(editor.clone(), quick());
+    let client = Client::new(app.clone());
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "open_document", "arguments": {"path": "/tmp/a.png"},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "progressToken": 5,
+        },
+    }});
+    let mut request = client.request(&body);
+    for (name, value) in [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "open_document"),
+    ] {
+        request.headers_mut().insert(name, value.parse().unwrap());
+    }
+    // rmcp sends no headers on this protocol before the first message, and
+    // clients give up on a request without headers (Claude Code after 60 s):
+    // progress opens the answer while the user decides.
+    let response = tokio::time::timeout(Duration::from_secs(5), app.clone().oneshot(request))
+        .await
+        .expect("the answer starts before the user answers")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut events = Events::new(response.into_body());
+    let progress = events.next(is_progress).await;
+    assert_eq!(progress["params"]["progressToken"], 5);
+    assert_eq!(
+        progress["params"]["message"],
+        "Waiting for the user to answer in Xuan"
+    );
+    // The client closes the request: the open prompt is withdrawn.
+    drop(events);
+    wait_until(|| editor.withdrawn() == ["file/open"]).await;
+}
+
+#[tokio::test]
+async fn without_progress_the_server_gives_up_and_says_the_user_has_not_answered() {
+    let editor = FakeEditor::holding("document/edit");
+    let waits = Waits {
+        without_progress: Duration::from_millis(200),
+        ..quick()
+    };
+    let (app, _) = app_with(editor.clone(), waits);
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let result = client.tool("create_layer", json!({})).await;
+    assert_eq!(result.is_error, Some(true));
+    let text = text_of(&result);
+    assert!(
+        text.contains("has not yet answered Xuan's prompt to allow edits")
+            && text.contains("nothing was changed")
+            && text.contains("ask the user"),
+        "{text}"
+    );
+    assert_eq!(editor.withdrawn(), ["document/edit"]);
+
+    // The same for a file dialog.
+    let editor = FakeEditor::holding("file/save_as");
+    let (app, _) = app_with(editor.clone(), waits);
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let text = text_of(&client.tool("save_document", json!({})).await);
+    assert!(text.contains("Xuan's dialog for this request"), "{text}");
+    assert_eq!(editor.withdrawn(), ["file/save_as"]);
+}
+
+#[tokio::test]
+async fn tools_that_wait_for_the_user_say_so() {
+    let (app, _) = app(FakeEditor::new(false));
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let list: ListToolsResult =
+        serde_json::from_value(client.call("tools/list", json!({})).await["result"].clone())
+            .unwrap();
+    let description = |name: &str| {
+        let tool = list.tools.iter().find(|tool| tool.name == name).unwrap();
+        tool.description.clone().unwrap_or_default().into_owned()
+    };
+    for name in ["create_layer", "fill", "run_command", "undo"] {
+        let text = description(name);
+        assert!(
+            text.contains("waits until the user answers Xuan's prompt")
+                && text.contains("instead of retrying"),
+            "{name}: {text}"
+        );
+    }
+    for name in ["open_document", "save_document", "export_document"] {
+        let text = description(name);
+        assert!(
+            text.contains("waits until the user answers in Xuan")
+                && text.contains("instead of retrying"),
+            "{name}: {text}"
+        );
+    }
+    assert!(!description("get_document").contains("waits"));
 }

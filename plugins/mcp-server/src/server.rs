@@ -18,8 +18,9 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, Implementation, ListResourcesResult,
-        ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
-        ReadResourceResult, Resource, ResourceContents, ServerCapabilities, ServerConfig,
+        ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
+        ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+        ResourceContents, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -28,6 +29,7 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
+use xuan_plugin::CancelToken;
 
 use crate::{auth, editor::Editor, tools};
 
@@ -46,6 +48,36 @@ const ACTIVITY: usize = 8;
 pub const MAX_BODY_BYTES: usize = 96 * 1024 * 1024;
 /// The answer to a larger body, which says what the limits are.
 pub const TOO_LARGE: &str = "The request is larger than 96 MiB, the most this server accepts. An image for create_image_layer may be at most 64 MiB as PNG; other tool arguments at most 16 MiB.";
+
+/// How long a call waits for the user (an edit prompt, a file dialog, the
+/// prompt to send an image) before the server withdraws its request in
+/// Xuan, and how often it tells the client that it is still waiting.
+///
+/// A client that sent a `progressToken` gets `notifications/progress` while
+/// the call waits. That opens the HTTP answer at once (on the stateless
+/// protocol rmcp sends no headers before the first message, and Claude Code
+/// gives up on a request without headers after 60 s) and resets the idle
+/// timeouts of clients that reset them on progress, so such a call may wait
+/// for `with_progress`. Without a token nothing can keep the client
+/// waiting, so the server gives up after `without_progress`, before the
+/// common 60 s client timeout, with an error that says the user has not
+/// answered yet rather than leaving a prompt up after the client failed.
+#[derive(Clone, Copy, Debug)]
+pub struct Waits {
+    pub progress_every: std::time::Duration,
+    pub with_progress: std::time::Duration,
+    pub without_progress: std::time::Duration,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Self {
+            progress_every: std::time::Duration::from_secs(5),
+            with_progress: std::time::Duration::from_secs(600),
+            without_progress: std::time::Duration::from_secs(50),
+        }
+    }
+}
 
 /// What the server is doing, for the pane.
 #[derive(Clone, Debug, PartialEq)]
@@ -81,6 +113,8 @@ pub struct Shared {
     pub changed: Mutex<Option<Box<dyn Fn() + Send>>>,
     /// MCP session ids this server issued, with the label Xuan shows.
     sessions: Mutex<Sessions>,
+    /// How long calls wait for the user.
+    pub waits: Waits,
 }
 
 /// Session ids rmcp minted in answers to `initialize`, as this server saw
@@ -113,6 +147,7 @@ impl Shared {
             restart: tokio::sync::Notify::new(),
             changed: Mutex::new(None),
             sessions: Mutex::default(),
+            waits: Waits::default(),
         }
     }
 
@@ -200,7 +235,7 @@ impl Shared {
 }
 
 /// How the server explains itself to clients.
-const INSTRUCTIONS: &str = "Xuan is an image editor running on the user's computer. Start with get_document to see the layers and get_preview to see the image. Edits apply live as one undo step each; the first edit of a session asks the user in Xuan, who may refuse. Layer ids, coordinates and sizes are in document pixels with the origin at the top-left. Saving, exporting and opening files show a dialog to the user.";
+const INSTRUCTIONS: &str = "Xuan is an image editor running on the user's computer. Start with get_document to see the layers and get_preview to see the image. Edits apply live as one undo step each; the first edit of a session asks the user in Xuan, who may refuse. Layer ids, coordinates and sizes are in document pixels with the origin at the top-left. Saving, exporting and opening files show a dialog to the user. A call that waits for the user fails if they do not answer in time; then ask the user instead of retrying.";
 
 /// The MCP side: tools and resources over the editor.
 #[derive(Clone)]
@@ -231,14 +266,56 @@ impl Xuan {
             .unwrap_or_default()
     }
 
-    /// Run blocking editor requests off the async workers.
-    async fn blocking<T: Send + 'static>(
+    /// Run blocking editor requests off the async workers, for as long as
+    /// the client waits: see [`Waits`]. When the client cancels the request
+    /// (`notifications/cancelled`, or on the stateless protocol by closing
+    /// the HTTP request) or the wait runs out, `cancel` withdraws the
+    /// requests in Xuan, so the prompt they wait on closes and a late answer
+    /// does nothing; the work then ends with their error.
+    async fn waiting<T: Send + 'static>(
         &self,
-        work: impl FnOnce(&Self) -> T + Send + 'static,
+        context: &RequestContext<RoleServer>,
+        message: &'static str,
+        work: impl FnOnce(&Self, &CancelToken) -> T + Send + 'static,
     ) -> Result<T, ErrorData> {
         let this = self.clone();
-        tokio::task::spawn_blocking(move || work(&this))
-            .await
+        let cancel = CancelToken::new();
+        let token = cancel.clone();
+        let mut task = tokio::task::spawn_blocking(move || work(&this, &token));
+        let waits = self.shared.waits;
+        let progress = context.meta.get_progress_token();
+        let limit = match progress {
+            Some(_) => waits.with_progress,
+            None => waits.without_progress,
+        };
+        let deadline = tokio::time::sleep(limit);
+        tokio::pin!(deadline);
+        let start = tokio::time::Instant::now() + waits.progress_every;
+        let mut ticks = tokio::time::interval_at(start, waits.progress_every);
+        let mut sent = 0u32;
+        loop {
+            let tick = tokio::select! {
+                done = &mut task => {
+                    return done.map_err(|error| ErrorData::internal_error(error.to_string(), None));
+                }
+                () = context.ct.cancelled() => false,
+                () = &mut deadline => false,
+                _ = ticks.tick(), if progress.is_some() => true,
+            };
+            match (tick, &progress) {
+                (true, Some(token)) => {
+                    sent += 1;
+                    let note = ProgressNotificationParam::new(token.clone(), f64::from(sent))
+                        .with_message(message);
+                    // A client that went away is noticed by rmcp.
+                    let _ = context.peer.notify_progress(note).await;
+                }
+                _ => break,
+            }
+        }
+        // Cancelled or out of time: withdraw, then the work ends at once.
+        cancel.cancel();
+        task.await
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))
     }
 }
@@ -273,13 +350,15 @@ impl ServerHandler for Xuan {
         let session = session_of(&context, &self.shared);
         let name = request.name.to_string();
         let arguments = request.arguments.unwrap_or_default();
+        let message = tools::waiting_message(&name);
         let result = self
-            .blocking(move |this| {
+            .waiting(&context, message, move |this, cancel| {
                 let incoming = this.incoming();
                 let cx = tools::Context {
                     editor: this.editor.as_ref(),
                     session: session.as_deref(),
                     incoming: &incoming,
+                    cancel,
                 };
                 let result = tools::call(&cx, &name, arguments);
                 let outcome = if result.is_error == Some(true) {
@@ -304,11 +383,13 @@ impl ServerHandler for Xuan {
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         let session = None::<String>;
         let resources = self
-            .blocking(move |this| resources(this.editor.as_ref(), session.as_deref()))
+            .waiting(&context, "Waiting for Xuan", move |this, cancel| {
+                resources(this.editor.as_ref(), session.as_deref(), cancel)
+            })
             .await?;
         Ok(ListResourcesResult::with_all_items(resources))
     }
@@ -321,7 +402,9 @@ impl ServerHandler for Xuan {
         let session = session_of(&context, &self.shared);
         let uri = request.uri;
         let contents = self
-            .blocking(move |this| read(this.editor.as_ref(), session.as_deref(), &uri))
+            .waiting(&context, "Waiting for Xuan", move |this, cancel| {
+                read(this.editor.as_ref(), session.as_deref(), &uri, cancel)
+            })
             .await??;
         Ok(ReadResourceResult::new(contents).into())
     }
@@ -329,7 +412,11 @@ impl ServerHandler for Xuan {
 
 /// The resources: the document manifest, the flattened preview, the
 /// selection mask and a thumbnail for each layer of the current document.
-pub fn resources(editor: &dyn Editor, session: Option<&str>) -> Vec<Resource> {
+pub fn resources(
+    editor: &dyn Editor,
+    session: Option<&str>,
+    cancel: &CancelToken,
+) -> Vec<Resource> {
     let mut list = vec![
         Resource::new("xuan://document", "document")
             .with_title("Current document")
@@ -344,7 +431,7 @@ pub fn resources(editor: &dyn Editor, session: Option<&str>) -> Vec<Resource> {
             .with_description("The selection cropped to its bounds; white is selected")
             .with_mime_type("image/png"),
     ];
-    if let Ok(document) = editor.request(session, "document/get", json!({})) {
+    if let Ok(document) = editor.request(session, "document/get", json!({}), cancel) {
         for layer in document["layers"].as_array().into_iter().flatten() {
             let (Some(id), Some(name)) = (layer["id"].as_str(), layer["name"].as_str()) else {
                 continue;
@@ -368,12 +455,18 @@ pub fn read(
     editor: &dyn Editor,
     session: Option<&str>,
     uri: &str,
+    cancel: &CancelToken,
 ) -> Result<Vec<ResourceContents>, ErrorData> {
     let failed = |message: String| ErrorData::internal_error(tools::redact_paths(&message), None);
     let request = |method: &str, params: Value| {
         editor
-            .request(session, method, params)
-            .map_err(|error| failed(error.message))
+            .request(session, method, params, cancel)
+            .map_err(|error| match error.code {
+                crate::editor::WITHDRAWN | crate::editor::TIMED_OUT => {
+                    failed(tools::not_answered(method))
+                }
+                _ => failed(error.message),
+            })
     };
     let png = |export: Value| -> Result<Vec<ResourceContents>, ErrorData> {
         let (data, _) = tools::read_export(&export).map_err(failed)?;

@@ -10,7 +10,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool, ToolAnnotations};
 use serde_json::{Map, Value, json};
 
-use crate::editor::{CANCELLED, Editor, EditorError};
+use xuan_plugin::CancelToken;
+
+use crate::editor::{CANCELLED, Editor, EditorError, TIMED_OUT, WITHDRAWN};
 
 /// Largest image a client may send for `create_image_layer`, decoded.
 pub const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
@@ -28,6 +30,9 @@ pub struct Context<'a> {
     /// A folder of the plugin's where images from the client are written
     /// for Xuan to read.
     pub incoming: &'a Path,
+    /// Withdraws the call's requests in Xuan when the client cancels or the
+    /// server stops waiting for the user.
+    pub cancel: &'a CancelToken,
 }
 
 type Run = fn(&Context, Map<String, Value>) -> Result<Vec<ContentBlock>, String>;
@@ -53,6 +58,10 @@ enum Kind {
     /// Goes through the user: a save dialog or an open prompt.
     File,
 }
+
+/// Said in the description of every tool that may wait for the user.
+const EDIT_WAITS: &str = "The first edit of a session waits until the user answers Xuan's prompt to allow edits from this session. If they do not answer in time, the call fails without changing anything: then ask the user to answer the prompt in Xuan instead of retrying.";
+const FILE_WAITS: &str = "The call waits until the user answers in Xuan. If they do not answer in time, it fails without doing anything: then ask the user instead of retrying.";
 
 const LAYER: &str = "A layer id from get_document";
 const MODE: &str = "How it combines with the current selection";
@@ -902,11 +911,26 @@ pub fn list() -> Vec<Tool> {
                         | "run_command"
                 ))
                 .open_world(false);
-            Tool::new(spec.name, spec.description, Arc::new(schema))
+            let description = match spec.kind {
+                Kind::Read => spec.description.to_owned(),
+                Kind::Edit => format!("{} {EDIT_WAITS}", spec.description),
+                Kind::File => format!("{} {FILE_WAITS}", spec.description),
+            };
+            Tool::new(spec.name, description, Arc::new(schema))
                 .with_title(spec.title)
                 .with_annotations(annotations)
         })
         .collect()
+}
+
+/// What the client is told while a call waits: the user sees it in clients
+/// that show progress.
+pub fn waiting_message(name: &str) -> &'static str {
+    match specs().into_iter().find(|spec| spec.name == name).map(|spec| spec.kind) {
+        Some(Kind::Edit) => "Waiting for the user to allow edits in Xuan",
+        Some(Kind::File) => "Waiting for the user to answer in Xuan",
+        _ => "Waiting for Xuan",
+    }
 }
 
 /// Run a tool. Errors from Xuan or from the arguments become a tool error
@@ -935,7 +959,7 @@ impl Context<'_> {
             ));
         }
         self.editor
-            .request(self.session, method, params)
+            .request(self.session, method, params, self.cancel)
             .map_err(|error| explain(method, &error))
     }
 
@@ -950,6 +974,9 @@ impl Context<'_> {
 
 /// What the model is told when Xuan refuses.
 fn explain(method: &str, error: &EditorError) -> String {
+    if matches!(error.code, WITHDRAWN | TIMED_OUT) {
+        return not_answered(method);
+    }
     if error.code != CANCELLED {
         return format!("Xuan: {}", error.message);
     }
@@ -959,6 +986,27 @@ fn explain(method: &str, error: &EditorError) -> String {
         _ if method.ends_with("/export") => "The user did not allow sending the image to this MCP server.".into(),
         _ => format!("Xuan: {}", error.message),
     }
+}
+
+/// What the model is told when the server stopped waiting for the user: the
+/// request was withdrawn in Xuan, its prompt closed, and nothing happened.
+/// Retrying at once would only ask the user again.
+pub fn not_answered(method: &str) -> String {
+    let what = match method {
+        "document/edit" | "host/run" => {
+            "The user has not yet answered Xuan's prompt to allow edits from this session"
+        }
+        "file/save_as" | "file/export" | "file/open" => {
+            "The user has not yet answered Xuan's dialog for this request"
+        }
+        _ if method.ends_with("/export") => {
+            "The user has not yet answered Xuan's prompt to allow sending the image to this MCP server"
+        }
+        _ => "Xuan did not answer in time",
+    };
+    format!(
+        "{what}, so the request was withdrawn and nothing was changed. Do not retry right away: ask the user whether they want this, and try again once they say so."
+    )
 }
 
 /// The arguments, refusing names the tool does not take.

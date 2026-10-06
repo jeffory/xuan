@@ -160,6 +160,14 @@ with the origin at the top-left of the canvas. Colours are `#rrggbb` or
 `#rrggbbaa`. Tools that change the document wait for the session's answer the
 first time; refusals come back as tool errors that say so.
 
+A call that waits for you (the edit prompt, a file dialog, the prompt to send
+an image) keeps the client informed with progress notifications for up to 10
+minutes, so Claude Code shows that it is waiting rather than timing out. If
+the client gives up or cancels the call, the prompt in Xuan closes and
+nothing happens; answering it late does nothing. A client that does not ask
+for progress gets an error after 50 seconds saying you have not answered
+yet, and the agent is told to ask you rather than retry.
+
 Size limits: an HTTP request body may be up to 96 MiB, room for the largest
 image `create_image_layer` takes (64 MiB of PNG, sent as base64). Everything
 else a tool sends on to Xuan must fit in Xuan's 16 MiB plugin message limit.
