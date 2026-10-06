@@ -200,6 +200,7 @@ pub fn group(document: &mut Document) {
         .map_or(document.layers.len(), |i| i + 1);
     document.layers.insert(index, group);
     document.select(id, false);
+    document.release_clipping_cycles();
 }
 
 /// Where a moved layer lands relative to its target.
@@ -244,6 +245,8 @@ pub fn move_layer(document: &mut Document, source: Uuid, target: Uuid, at: Place
             .map_or(target_index + 1, |i| i + 1),
     };
     document.layers.insert(index, layer);
+    // A folder moved inside another can bring layers clipped to that folder.
+    document.release_clipping_cycles();
 }
 
 pub fn ungroup(document: &mut Document) {
@@ -759,6 +762,69 @@ mod tests {
         merge_selected(&mut doc, false).unwrap();
         assert_eq!(render::render(&doc), before);
         doc.validate().unwrap();
+    }
+
+    /// Merging layers clipped to a folder that is not merged keeps the folder's shape, though
+    /// the merge renders with the folder's layers hidden; merging into the folder's shape,
+    /// layers clipped to merged layers clip to the result.
+    #[test]
+    fn merging_layers_clipped_to_a_folder_keeps_their_shape() {
+        let mut doc = Document::new(4, 2).unwrap();
+        doc.layers.clear();
+        let backdrop = Layer::image(
+            "Backdrop",
+            RgbaImage::from_pixel(4, 2, image::Rgba([10, 200, 10, 255])),
+        );
+        let mut folder = Layer::blank("Figure", 4, 2);
+        folder.group = true;
+        folder.opacity = 0.6;
+        let mut shape = Layer::image(
+            "Shape",
+            RgbaImage::from_fn(4, 2, |x, _| {
+                image::Rgba([200, 0, 0, if x < 2 { 255 } else { 0 }])
+            }),
+        );
+        shape.parent = Some(folder.id);
+        let mut shading = Layer::image(
+            "Shading",
+            RgbaImage::from_pixel(4, 2, image::Rgba([0, 0, 255, 255])),
+        );
+        shading.clip_to = Some(folder.id);
+        let mut invert = Layer::blank("Invert", 4, 2);
+        invert.adjustment = Some(crate::document::Adjustment::Invert);
+        invert.clip_to = Some(folder.id);
+        let ids = [backdrop.id, folder.id, shape.id, shading.id, invert.id];
+        doc.layers = vec![backdrop, shape, folder, shading, invert];
+        doc.validate().unwrap();
+        // The clipped layers merge into one layer with the folder's shape and opacity.
+        let mut merged = doc.clone();
+        merged.selected = [ids[3], ids[4]].into_iter().collect();
+        merged.active = Some(ids[4]);
+        merge_selected(&mut merged, false).unwrap();
+        merged.validate().unwrap();
+        let layer = merged.active().unwrap();
+        assert_eq!(layer.clip_to, None);
+        let pixels = layer.pixels.as_ref().unwrap();
+        for (x, _, pixel) in pixels.enumerate_pixels() {
+            assert_eq!(pixel[3], if x < 2 { 153 } else { 0 }, "{x}: {pixel:?}");
+        }
+        // Grouping the shading layer and moving that folder into the figure would make the
+        // figure's shape depend on itself: that clipping is released, the rest is kept.
+        let mut moved = doc.clone();
+        moved.select(ids[3], false);
+        group(&mut moved);
+        let wrapper = moved.active.unwrap();
+        moved.validate().unwrap();
+        move_layer(&mut moved, wrapper, ids[1], Placement::Inside);
+        moved.validate().unwrap();
+        let clip_of = |doc: &Document, id| doc.layers.iter().find(|l| l.id == id).unwrap().clip_to;
+        assert_eq!(clip_of(&moved, ids[3]), None);
+        assert_eq!(clip_of(&moved, ids[4]), Some(ids[1]));
+        // Ungrouping releases the layers clipped to the folder.
+        doc.select(ids[1], false);
+        ungroup(&mut doc);
+        doc.validate().unwrap();
+        assert!(doc.layers.iter().all(|l| l.clip_to.is_none()));
     }
 
     #[test]

@@ -405,3 +405,7 @@ fn bake(
         gpu.read(encoder, &output, bytes)
     })
 }
+
+#[cfg(test)]
+#[path = "coverage_tests.rs"]
+pub(super) mod tests;

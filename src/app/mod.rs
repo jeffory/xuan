@@ -805,6 +805,7 @@ impl EditorApp {
         {
             Ok(()) => {
                 session.document.promote_image_masks();
+                session.document.release_clipping_cycles();
                 session.history.commit();
                 session.invalidate();
                 self.status = name.into();

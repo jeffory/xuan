@@ -1038,6 +1038,103 @@ mod tests {
         }
     }
 
+    /// A layer clipped to a folder (and one clipped through it) on the GPU coverage shader,
+    /// its CPU fallback and the CPU renderer. The scene is scaled up past the size where the
+    /// coverage shader takes over from the CPU.
+    #[test]
+    #[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]
+    fn folder_clipping_bases_match_cpu_in_preview_and_export() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let processor = Processor::new(device.clone(), queue.clone());
+        let mut compositor = GpuCompositor::new(device, queue);
+        let mut original = coverage::tests::folder_base();
+        original.width *= 4;
+        original.height *= 4;
+        for layer in &mut original.layers {
+            let t = &mut layer.transform;
+            (t.x, t.y, t.width, t.height) = (t.x * 4.0, t.y * 4.0, t.width * 4.0, t.height * 4.0);
+        }
+        original.layers.insert(
+            0,
+            Layer::image(
+                "Backdrop",
+                RgbaImage::from_fn(192, 160, |x, y| {
+                    Rgba([(x + 40) as u8, (y + 60) as u8, 150, 255])
+                }),
+            ),
+        );
+        original.validate().unwrap();
+        let size = [original.width, original.height];
+        let group = 10;
+        assert!(original.layers[group].group);
+        for variant in 0..4 {
+            let mut document = original.clone();
+            match variant {
+                1 => document.layers[group].mask = None,
+                2 => document.layers[group].opacity = 0.35,
+                // The clipped layers' own mask and opacity still apply.
+                3 => document.layers[group + 1].opacity = 0.5,
+                _ => {}
+            }
+            let expected = render::render(&document);
+            let close = |actual: &[u8], premultiplied: bool, context: &str| {
+                let mut differences = 0;
+                for (pixel, actual) in expected.pixels().zip(actual.as_chunks::<4>().0) {
+                    let scale = if premultiplied {
+                        pixel[3] as f32 / 255.0
+                    } else {
+                        1.0
+                    };
+                    let expected = [
+                        (pixel[0] as f32 * scale).round() as u8,
+                        (pixel[1] as f32 * scale).round() as u8,
+                        (pixel[2] as f32 * scale).round() as u8,
+                        pixel[3],
+                    ];
+                    if actual.iter().zip(expected).any(|(a, b)| a.abs_diff(b) > 2) {
+                        differences += 1;
+                    }
+                }
+                // Nearest-pixel mask lookups may round across a mask pixel edge.
+                assert!(
+                    differences <= expected.len() / 4 / 200,
+                    "{context} variant {variant}: {differences} pixels differ"
+                );
+            };
+            for accelerated in [false, true] {
+                scope(accelerated.then(|| processor.clone()), || {
+                    compositor.render(&document, size);
+                });
+                close(&readback(&compositor), true, "Folder clipping preview");
+                let actual = scope(accelerated.then(|| processor.clone()), || {
+                    processor.compose(&document, size[0], size[1]).unwrap()
+                });
+                close(actual.as_raw(), false, "Folder clipping export");
+            }
+            // The folder's own alpha, as merges and clipping bakes read it.
+            let base = document.layers[group].clone();
+            let alpha = scope(Some(processor.clone()), || {
+                coverage_image(&document, &base, size, CoverageMode::Alpha, None)
+            })
+            .unwrap();
+            let differences = alpha
+                .enumerate_pixels()
+                .filter(|(x, y, value)| {
+                    let point = Point::new(*x as f32 + 0.5, *y as f32 + 0.5);
+                    let cpu = render::layer_alpha(&document, &base, point, 0);
+                    (value[0] as f32 / 255.0 - cpu).abs() > 2.5 / 255.0
+                })
+                .count();
+            assert!(
+                differences <= alpha.len() / 200,
+                "Folder alpha variant {variant}: {differences} pixels differ"
+            );
+        }
+    }
+
     #[test]
     fn motion_blur_preview_rejects_edits_that_need_cpu_coverage() {
         let mut document = Document::new(8, 8).unwrap();

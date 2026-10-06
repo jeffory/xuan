@@ -76,7 +76,7 @@ the document takes effect on the next frame and is drawn at once.
 | switch document | `document/activate` (new) |
 | list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
-| get/set layer properties: name, visibility, lock, opacity, blend | `document/edit` `set` |
+| get/set layer properties: name, visibility, lock, opacity, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
 | … transform | `document/edit` `transform` (new) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
 | create text / shape layer | `document/edit` `add_text_layer`, `add_shape_layer` (new) |

@@ -611,28 +611,41 @@ impl Document {
         self.selected = self.active.into_iter().collect();
     }
 
-    /// Whether some clipping shape depends on itself. A layer's clipping shape depends on its
-    /// base, and a folder's shape on its children, so a layer inside a folder (or clipped
-    /// through a chain to a layer inside it) cannot clip to that folder.
-    fn group_clipping_cycle(&self) -> bool {
+    /// A layer whose clipping is part of a cycle, where some clipping shape depends on itself.
+    /// A layer's clipping shape depends on its base, and a folder's shape on its children,
+    /// so a layer inside a folder (or clipped through a chain to a layer inside it) cannot
+    /// clip to that folder.
+    fn clipping_cycle(&self) -> Option<usize> {
         let index: HashMap<Uuid, usize> = self
             .layers
             .iter()
             .enumerate()
             .map(|(i, l)| (l.id, i))
             .collect();
-        let mut edges = vec![Vec::new(); self.layers.len()];
+        // A layer's clipping edge comes first among its edges.
+        let mut edges: Vec<Vec<usize>> = self
+            .layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .clip_to
+                    .as_ref()
+                    .and_then(|id| index.get(id))
+                    .copied()
+                    .into_iter()
+                    .collect()
+            })
+            .collect();
+        let clips: Vec<bool> = edges.iter().map(|e| !e.is_empty()).collect();
         for (i, layer) in self.layers.iter().enumerate() {
-            if let Some(&base) = layer.clip_to.as_ref().and_then(|id| index.get(id)) {
-                edges[i].push(base);
-            }
             if let Some(&parent) = layer.parent.as_ref().and_then(|id| index.get(id))
                 && self.layers[parent].group
             {
                 edges[parent].push(i);
             }
         }
-        // Iterative depth-first search: 0 unvisited, 1 on the stack, 2 done.
+        // Iterative depth-first search: 0 unvisited, 1 on the stack, 2 done. Each stack entry
+        // holds the index of its next edge, so the edge it last took is one before.
         let mut state = vec![0_u8; self.layers.len()];
         for start in 0..self.layers.len() {
             if state[start] != 0 {
@@ -648,7 +661,15 @@ impl Document {
                             state[to] = 1;
                             stack.push((to, 0));
                         }
-                        1 => return true,
+                        1 => {
+                            let from = stack.iter().position(|(n, _)| *n == to).unwrap_or(0);
+                            let cycle = &stack[from..];
+                            return cycle
+                                .iter()
+                                .find(|(n, next)| clips[*n] && *next == 1)
+                                .or_else(|| cycle.iter().find(|(n, _)| clips[*n]))
+                                .map(|(n, _)| *n);
+                        }
                         _ => {}
                     }
                 } else {
@@ -657,7 +678,33 @@ impl Document {
                 }
             }
         }
-        false
+        None
+    }
+
+    /// Whether some clipping shape depends on itself (see [`Self::release_clipping_cycles`]).
+    pub fn has_clipping_cycle(&self) -> bool {
+        self.clipping_cycle().is_some()
+    }
+
+    /// Release clipping that makes a clipping shape depend on itself, as moving a layer that
+    /// clips to a folder into that folder would. Other clipping is kept.
+    pub fn release_clipping_cycles(&mut self) {
+        let groups: HashSet<Uuid> = self
+            .layers
+            .iter()
+            .filter(|l| l.group)
+            .map(|l| l.id)
+            .collect();
+        if !self
+            .layers
+            .iter()
+            .any(|l| l.clip_to.is_some_and(|id| groups.contains(&id)))
+        {
+            return;
+        }
+        while let Some(index) = self.clipping_cycle() {
+            self.layers[index].clip_to = None;
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -806,7 +853,7 @@ impl Document {
             .any(|l| l.clip_to.is_some_and(|id| ids[&id].group))
         {
             ensure!(
-                !self.group_clipping_cycle(),
+                self.clipping_cycle().is_none(),
                 "A layer cannot clip to a folder whose shape depends on it"
             );
         }

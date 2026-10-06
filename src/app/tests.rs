@@ -3480,6 +3480,38 @@ fn standalone_mask_creation_uses_selection_and_supports_groups() {
 }
 
 #[test]
+fn clipping_mask_command_clips_to_a_folder_below() {
+    let (context, mut app) = app();
+    app.dimensions = [8, 8];
+    app.new_document();
+    let document = &mut app.session_mut().unwrap().document;
+    let mut folder = Layer::blank("Figure", 8, 8);
+    folder.group = true;
+    let mut cloak = Layer::image(
+        "Cloak",
+        RgbaImage::from_pixel(8, 8, image::Rgba([9, 9, 9, 255])),
+    );
+    cloak.parent = Some(folder.id);
+    let shading = Layer::image("Shading", RgbaImage::new(8, 8));
+    let (folder_id, shading_id) = (folder.id, shading.id);
+    document.layers.extend([cloak, folder, shading]);
+    document.select(shading_id, false);
+    app.command("clip");
+    let document = &app.session().unwrap().document;
+    document.validate().unwrap();
+    assert_eq!(document.active().unwrap().clip_to, Some(folder_id));
+    frame(&context, &mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    // Ungrouping the folder releases the layers clipped to it.
+    app.session_mut().unwrap().document.select(folder_id, false);
+    app.command("ungroup");
+    let document = &app.session().unwrap().document;
+    document.validate().unwrap();
+    let shading = document.layers.iter().find(|l| l.id == shading_id).unwrap();
+    assert_eq!(shading.clip_to, None);
+}
+
+#[test]
 fn layer_commands_and_tabs_have_independent_histories() {
     let (_, mut app) = app();
     app.dimensions = [16, 16];

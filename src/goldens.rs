@@ -78,6 +78,7 @@ const SCENES: &[&str] = &[
     "blend_modes_photoshop",
     "layer_mask",
     "clipping_mask",
+    "clipping_folder",
     "adjustment_layers",
     "black_white_color_balance",
     "layer_effects",
@@ -141,6 +142,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("blend_modes_photoshop", blend_modes_photoshop()),
         composite("layer_mask", layer_mask()),
         composite("clipping_mask", clipping_mask()),
+        composite("clipping_folder", clipping_folder()),
         composite("adjustment_layers", adjustment_layers()),
         composite("black_white_color_balance", black_white_color_balance()),
         composite("layer_effects", layer_effects()),
@@ -387,6 +389,73 @@ fn clipping_mask() -> Document {
         base,
         clipped,
         glow,
+    ])
+}
+
+/// A folder of an ellipse and a rotated rounded rectangle, at 85% opacity behind a gradient
+/// folder mask, with a mask layer fading its lower half. Multiplied stripes and a half-masked
+/// Invert are clipped to the folder, so they take the shapes' union, the masks and the opacity.
+fn clipping_folder() -> Document {
+    let mut folder = Layer::blank("Figure", SIZE, SIZE);
+    folder.group = true;
+    folder.opacity = 0.85;
+    folder.mask = Some(Mask {
+        pixels: Arc::new(GrayImage::from_fn(SIZE, 1, |x, _| {
+            Luma([(64 + x * 191 / (SIZE - 1)) as u8])
+        })),
+        ..Mask::white()
+    });
+    let mut ellipse = paint::shape(
+        Point::new(24.0, 40.0),
+        Point::new(150.0, 200.0),
+        ShapeKind::Ellipse,
+        [240, 200, 60, 255],
+        0.0,
+    )
+    .unwrap();
+    ellipse.parent = Some(folder.id);
+    let mut rectangle = paint::shape(
+        Point::new(110.0, 70.0),
+        Point::new(230.0, 170.0),
+        ShapeKind::RoundedRectangle,
+        [60, 200, 220, 200],
+        20.0,
+    )
+    .unwrap();
+    rectangle.transform.rotation = 20.0;
+    rectangle.parent = Some(folder.id);
+    let mut fade = Layer::mask("Fade", SIZE, SIZE);
+    fade.parent = Some(folder.id);
+    fade.opacity = 0.6;
+    fade.mask.as_mut().unwrap().pixels = Arc::new(GrayImage::from_fn(1, SIZE, |_, y| {
+        Luma([if y < SIZE / 2 { 255 } else { 0 }])
+    }));
+    let stripes = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if ((x + 2 * y) / 12).is_multiple_of(2) {
+            [90, 40, 160, 255]
+        } else {
+            [255, 255, 255, 255]
+        })
+    });
+    let mut shading = Layer::image("Shading", stripes);
+    shading.blend = BlendMode::Multiply;
+    shading.clip_to = Some(folder.id);
+    let mut invert = adjustment("Invert", Adjustment::Invert);
+    invert.clip_to = Some(folder.id);
+    invert.mask = Some(Mask {
+        pixels: Arc::new(GrayImage::from_fn(SIZE, 1, |x, _| {
+            Luma([if x < SIZE / 2 { 0 } else { 255 }])
+        })),
+        ..Mask::white()
+    });
+    document(vec![
+        Layer::image("Gradient", gradient()),
+        ellipse,
+        rectangle,
+        fade,
+        folder,
+        shading,
+        invert,
     ])
 }
 

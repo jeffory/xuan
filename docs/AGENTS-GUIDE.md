@@ -183,7 +183,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer) | `layer/export` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
-| `set_layer` | Name, visibility, lock, opacity, blend mode, position, size, rotation | `set`, `transform` |
+| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation | `set`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
 | `create_text_layer` | Editable text | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle | `add_shape_layer` |
@@ -233,6 +233,17 @@ is `enabled` and `linked` (moves with the image). To disable, link or delete
 it, run `disable_mask`, `link_mask` or `delete_mask` with `layers` set to the
 mask layer's id. Adjustment and filter layers attached to an image the same
 way change only that image.
+
+`set_layer` with `clip_to` clips a layer to a base below it in the same folder,
+as **Layer → Clipping Mask** does: the layer then shows only where the base
+has pixels. The base can be a pixel layer or a group. A group's shape is all
+of its visible layers together, including mask layers inside it and the
+group's own opacity and mask, so a shading layer clipped to a figure's group
+follows every later edit to the figure. The base's opacity also applies to
+the clipped layer, as in Photoshop. A base that is itself clipped passes on
+its own base. `"clip_to": null` releases the clipping. Groups, mask layers and
+filter layers cannot be clipped, and mask, adjustment and filter layers
+cannot be bases. `get_document` lists each layer's `clip_to`.
 
 `content_fill`, `remove_background` and `remove_flat_background` run in the
 background: `run_command` returns while they run, and other edits fail with

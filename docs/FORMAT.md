@@ -47,7 +47,7 @@ The file is read in memory: the header, color mode data (skipped), image resourc
 | Groups (folders) and their opacity | Editable folders. Folders always pass through; another folder blend mode is reported |
 | Layer masks: bounds, default color, disabled, linked | Editable masks on the layer's grid (a black-default mask covers only its stored area) |
 | Masks rendered from vector data, vector masks on pixel layers | Left out |
-| Clipping | Editable clipping to the nearest unclipped layer below in the same folder; clipping onto a folder or a left-out layer is released |
+| Clipping | Editable clipping to the nearest unclipped layer or folder below in the same folder; a clipped folder, and clipping onto a left-out layer, is released |
 | All 27 Photoshop blend modes (Normal through Luminosity, including Dissolve, Darker/Lighter Color, Linear Burn/Dodge, the Light modes, Hard Mix, Exclusion, Subtract, Divide) | Editable. One table (`BLEND_MODES` in `src/io/psd.rs`) maps keys to modes |
 | Unknown blend keys | Drawn as Normal and reported |
 | Levels, Curves, Exposure, Invert, Black & White (weights and an RGB tint as hue and saturation) and Color Balance adjustment layers | Editable adjustment layers (no blend mode; a non-Normal one is reported) |
@@ -182,6 +182,19 @@ follow the layer's pixels through its own mask; the result is drawn at the layer
 opacity (and its folders'), in its blend mode, and clipped like the layer itself. A
 layer clipped to one with effects is clipped to the effects too. Folders, masks,
 adjustment and filter layers cannot have effects.
+
+## Clipping to a folder (version 9)
+
+A layer's `clip_to` may name a folder (`group: true`) as well as a layer. The
+clipping shape is then the folder's composited alpha: its visible pixel layers and
+nested folders combined bottom to top as `a + below × (1 − a)`, mask layers inside it
+fading what is below them, then the folder's own opacity and mask. Adjustment and filter
+layers inside add nothing. As for a layer base, the base's opacity applies to the clipped
+layer, and the base's own visibility does not. No layer may clip to a folder whose shape
+depends on it: a layer inside the folder, or clipped through a chain to one. A document
+in which any layer clips to a folder is written as version 9, so older builds report an
+unsupported version instead of a missing clipping source; everything else keeps the lowest version its content needs
+(1-8). The reader accepts versions 1-9.
 
 ## Model provenance (version 8)
 

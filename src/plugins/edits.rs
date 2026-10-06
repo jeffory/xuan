@@ -1443,6 +1443,10 @@ fn apply_each(
                 if let Some(base) = clip_to {
                     let base = clipping_base(document, *layer, *base)?;
                     find_mut(document, *layer)?.clip_to = base;
+                    ensure!(
+                        !document.has_clipping_cycle(),
+                        "The clipping base's shape depends on this layer"
+                    );
                 }
                 let target = find_mut(document, *layer)?;
                 if let Some(name) = name {
@@ -1999,6 +2003,8 @@ fn apply_each(
             }
         }
     }
+    // Grouping and moving release clipping that would depend on itself, as in the app.
+    document.release_clipping_cycles();
     document.validate()?;
     Ok(added)
 }

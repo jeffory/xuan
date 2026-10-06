@@ -972,7 +972,15 @@ its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
 
 - `{"op": "add_layer", "image": path, "name"?, "x"?, "y"?, "mask"?, "above"?, "opacity"?, "blend"?}`
 - `{"op": "replace_pixels", "layer", "image", "x"?, "y"?}`
-- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "blend"?}`
+- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "blend"?, "clip_to"?: id | null}`:
+  `clip_to` clips the layer to a base below it in the same folder, as
+  **Layer → Clipping Mask** does, and `null` releases it (left out, it does
+  not change). The base can be a pixel layer or a group: a group's shape is
+  its visible layers together, mask layers inside it and its own opacity and
+  mask included. The base's opacity applies to the clipped layer too. A base
+  that is itself clipped passes on its own base. Groups, mask layers and
+  filter layers cannot be clipped; mask, adjustment and filter layers cannot
+  be bases.
 - `{"op": "remove_layer", "layer"}`
 - `{"op": "set_mask", "layer", "mask": path | null}`
 - `{"op": "set_selection", "mask": path | null}`
@@ -1111,7 +1119,7 @@ When a request of several edits fails, the error names the edit, counted from
 
 **Layers added earlier in the request.** A later edit can name a layer an
 earlier edit of the same request added, before it knows its id: in `layer`,
-`above`, `below`, `parent` or an item of `layers`, `"$n"` is the n-th
+`above`, `below`, `parent`, `clip_to` or an item of `layers`, `"$n"` is the n-th
 layer (from `"$1"`) the request has added so far, in the order the answer's
 `layers` lists them. Every `add_*` op adds one, and so do `merge_layers`
 (the merged layer) and `group_layers` (the group). For example
