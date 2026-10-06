@@ -339,6 +339,18 @@ box's details. The result arrives as a proposal above the canvas with
 layers remember what produced them, so **Layer → Re-run Plugin Action…** can
 repeat the action with changes.
 
+Some plugins edit for someone else, such as the **MCP Server**, which lets an
+AI agent like Claude Code work on your image (see the
+[agents guide](AGENTS-GUIDE.md)). Before such a plugin's first edit in a
+session, Xuan asks **Allow … to edit your documents for this session?**:
+**Allow** or **Deny** hold until the plugin stops or starts a new session,
+and **Always Allow** turns on auto mode, which **Edit without asking (auto
+mode)** in **Plugins → Manage Plugins…** turns off again. Each edit is still
+one undo step. A plugin can never save or open files by itself: saving or
+exporting for it opens the usual save dialog, titled with the plugin's name,
+where you choose the place, and opening a file it names asks first, showing
+the file's path.
+
 The repository ships examples under `plugins/`: a histogram pane (Python), a
 region inverter (Rust) and a Comfy Cloud client that edits or generates images
 with ComfyUI workflows. See [plugins](PLUGINS.md) for the manifest, the

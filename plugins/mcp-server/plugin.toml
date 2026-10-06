@@ -1,0 +1,31 @@
+[plugin]
+id = "mcp-server"
+name = "MCP Server"
+version = "0.1.0"
+description = "Lets LLM clients such as Claude Code see and edit your documents through the Model Context Protocol, on this computer only. Each client session asks before its first edit."
+# Built with `cargo build --release` in this folder; see README.md.
+command = ["target/release/xuan-mcp-server"]
+
+[permissions]
+# The server listens on this computer only; the address is declared so that
+# Xuan does not block the plugin's sockets, and treats it as a plugin that
+# sends data out: MCP clients usually pass what they read to a model in the
+# cloud. Xuan asks before the first image goes to it, and offline mode stops it.
+network = ["127.0.0.1"]
+document = "edit"
+# Direct edits wait until you allow them for each client session.
+edit_prompt = "session"
+
+[[settings]]
+id = "port"
+type = "integer"
+label = "Port"
+help = "The server listens on 127.0.0.1 on this port, or on the next free one. 0 lets the system choose."
+default = 8765
+min = 0
+max = 65535
+
+[[panes]]
+id = "status"
+title = "MCP Server"
+refresh = "manual"

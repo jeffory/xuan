@@ -23,6 +23,7 @@ plugins under `plugins/`:
 | `plugins/local-upscale` | Python | A local, offline job with no permissions beyond reading; a swappable model backend |
 | `plugins/select-bright` | Python | A `mask` result that becomes the selection; a placeholder for a segmentation model |
 | `plugins/extend-edges` | Python | Outpainting: an extended source, `extend_canvas` in a result, an image fitted to the new canvas; a placeholder for a generative model |
+| `plugins/mcp-server` | Rust | A background server (`on_start`), direct edits behind the session prompt (`edit_prompt = "session"`), consented saving and opening, copy buttons; lets MCP clients drive Xuan (see [AGENTS-GUIDE.md](AGENTS-GUIDE.md)) |
 
 Both SDKs read requests on the main thread and run handlers on worker threads,
 so a handler may call the editor (`host.document()`, `host.export_layer()`, …)
@@ -300,7 +301,13 @@ inherited by every process the plugin starts. In it:
   Bluetooth, VSOCK and the rest. **This includes `localhost`**: a plugin that
   talks to a server on the same machine, such as ComfyUI or Ollama, must
   declare it, for example `network = ["localhost"]`, and is then
-  treated as a network plugin.
+  treated as a network plugin. The same goes for a plugin that **listens**
+  on this computer, such as the MCP server (`network = ["127.0.0.1"]`):
+  declared hosts are not matched against the addresses a plugin uses, and a
+  socket filter cannot tell a listening loopback socket from a connection to
+  another machine, so any declared host exempts the plugin from the filter.
+  Such a plugin should still listen on `127.0.0.1` only and check who
+  connects (see `plugins/mcp-server`).
 - Unix sockets (`AF_UNIX`) keep working, for local IPC and
   `multiprocessing`; the standard input and output pipes Xuan talks to the
   plugin over are not sockets and are not affected. Netlink sockets only talk to
