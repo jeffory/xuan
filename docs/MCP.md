@@ -153,8 +153,16 @@ ask Xuan to gate those edits: `edit_prompt = "session"` in `[permissions]`.
   edit your documents for this session?** with **Allow**, **Deny** and
   **Always Allow (Auto Mode)**.
 - A session is the plugin's process lifetime, divided further by an optional
-  `session` id the plugin sends with its requests; the MCP server sends the
-  client's MCP session id, so each new client connection asks again.
+  `session` id the plugin sends with its requests. The MCP server never
+  passes on what a client claims: a client's `Mcp-Session-Id` counts only if
+  this server issued it (it watches the answers to `initialize` go out), and
+  Xuan is sent a label the server made ("MCP client 3"), never client text.
+  Each client that starts a session with `initialize` (protocol revisions
+  before 2026-07-28) is asked separately. Requests without an issued session,
+  including every client on the stateless 2026-07-28 revision, which has no
+  sessions, share **one** edit session, and the prompt says so ("every MCP
+  client without a session (they share this answer)"): allowing it allows all
+  of them until the plugin stops.
 - **Allow** and **Deny** hold for that session. **Always Allow** stores
   `edit_without_asking = true` in the plugin's grant, like "Don't ask again"
   for sending; it goes away with the grant when the plugin's folder, command or

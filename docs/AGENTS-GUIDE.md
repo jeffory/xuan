@@ -79,8 +79,14 @@ follow instructions hidden in something it read.
   in the cloud, which is why this prompt exists.
 - **Editing** asks once per client session: **Allow MCP Server (plugin
   mcp-server) to edit your documents for this session?** with **Allow**,
-  **Deny** and **Always Allow**. A session is one MCP client connection (its
-  MCP session id), and every session ends when the plugin stops. **Always
+  **Deny** and **Always Allow**. A session is an MCP session the server
+  issued to a client that called `initialize`; the prompt names it with a
+  label the server made ("MCP client 2"), never with anything the client
+  sent. Clients on the stateless protocol revision (2026-07-28 and later),
+  which has no sessions, and requests that carry no issued session all share
+  **one** session, shown as "every MCP client without a session": allowing
+  it allows every such client with the token. Every session ends when the
+  plugin stops. **Always
   Allow** turns on **auto mode**, which skips the prompt from then on; it is a
   switch in **Plugins → Manage Plugins… → MCP Server** ("Edit without asking"),
   and it is dropped if the plugin's folder, command or permissions change.

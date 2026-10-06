@@ -62,7 +62,27 @@ pub struct Shared {
     pub restart: tokio::sync::Notify,
     /// Called when the pane should be drawn again.
     pub changed: Mutex<Option<Box<dyn Fn() + Send>>>,
+    /// MCP session ids this server issued, with the label Xuan shows.
+    sessions: Mutex<Sessions>,
 }
+
+/// Session ids rmcp minted in answers to `initialize`, as this server saw
+/// them go out. Only these name an edit session; anything else a client
+/// sends in `Mcp-Session-Id` is ignored.
+#[derive(Default)]
+struct Sessions {
+    known: VecDeque<(String, u32)>,
+    next: u32,
+}
+
+/// Session ids remembered; the oldest are forgotten first.
+const SESSIONS: usize = 256;
+
+/// The edit session of every request that has no session this server
+/// issued: clients on the stateless protocol (2026-07-28 and later) or
+/// without a session header. They all share one answer, and Xuan's prompt
+/// says so.
+pub const STATELESS_SESSION: &str = "every MCP client without a session (they share this answer)";
 
 impl Shared {
     pub fn new(token: String, data_dir: PathBuf) -> Self {
@@ -74,7 +94,37 @@ impl Shared {
             activity: Mutex::new(VecDeque::new()),
             restart: tokio::sync::Notify::new(),
             changed: Mutex::new(None),
+            sessions: Mutex::default(),
         }
+    }
+
+    /// Remember a session id the server just issued.
+    fn remember(&self, id: &str) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            if sessions.known.iter().any(|(known, _)| known == id) {
+                return;
+            }
+            sessions.next += 1;
+            let label = sessions.next;
+            sessions.known.push_back((id.to_owned(), label));
+            while sessions.known.len() > SESSIONS {
+                sessions.known.pop_front();
+            }
+        }
+    }
+
+    /// The edit session for a client's `Mcp-Session-Id`: a label the server
+    /// made, never the client's own text.
+    pub fn edit_session(&self, header: Option<&str>) -> String {
+        let label = header.and_then(|id| {
+            let sessions = self.sessions.lock().ok()?;
+            sessions
+                .known
+                .iter()
+                .find(|(known, _)| known == id)
+                .map(|(_, label)| format!("MCP client {label}"))
+        });
+        label.unwrap_or_else(|| STATELESS_SESSION.to_owned())
     }
 
     pub fn token(&self) -> String {
@@ -128,15 +178,18 @@ pub struct Xuan {
     pub shared: Arc<Shared>,
 }
 
-/// The client's MCP session id, which names its edit session in Xuan.
-fn session_of(context: &RequestContext<RoleServer>) -> Option<String> {
-    context
+/// The edit session of a request: the label of the MCP session this server
+/// issued to the client, or the one session every other client shares.
+fn session_of(context: &RequestContext<RoleServer>, shared: &Shared) -> Option<String> {
+    let header = context
         .extensions
         .get::<axum::http::request::Parts>()
-        .and_then(|parts| parts.headers.get("mcp-session-id"))
-        .and_then(|value| value.to_str().ok())
-        .map(|id| id.chars().take(128).collect())
+        .and_then(|parts| parts.headers.get(SESSION_HEADER))
+        .and_then(|value| value.to_str().ok());
+    Some(shared.edit_session(header))
 }
+
+const SESSION_HEADER: &str = "mcp-session-id";
 
 impl Xuan {
     fn incoming(&self) -> PathBuf {
@@ -186,7 +239,7 @@ impl ServerHandler for Xuan {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let session = session_of(&context);
+        let session = session_of(&context, &self.shared);
         let name = request.name.to_string();
         let arguments = request.arguments.unwrap_or_default();
         let result = self
@@ -227,7 +280,7 @@ impl ServerHandler for Xuan {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        let session = session_of(&context);
+        let session = session_of(&context, &self.shared);
         let uri = request.uri;
         let contents = self
             .blocking(move |this| read(this.editor.as_ref(), session.as_deref(), &uri))
@@ -356,7 +409,19 @@ async fn guard(
         }
         return response;
     }
-    next.run(request).await
+    // A session id in the answer to a request that had none was issued by
+    // rmcp just now (to `initialize`): that is the only way one is trusted.
+    let issued_here = !request.headers().contains_key(SESSION_HEADER);
+    let response = next.run(request).await;
+    if issued_here
+        && let Some(id) = response
+            .headers()
+            .get(SESSION_HEADER)
+            .and_then(|value| value.to_str().ok())
+    {
+        shared.remember(id);
+    }
+    response
 }
 
 /// Listen on 127.0.0.1, only: the chosen port, the next few if it is taken,

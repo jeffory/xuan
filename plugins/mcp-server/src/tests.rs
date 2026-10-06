@@ -273,7 +273,7 @@ async fn the_server_speaks_mcp_initialize_tools_and_resources() {
     assert!(info.capabilities.resources.is_some());
     assert_eq!(info.server_info.name, "xuan");
     assert!(info.instructions.unwrap().contains("undo step"));
-    let session = client.session.clone().expect("a session id");
+    assert!(client.session.is_some(), "a session id");
 
     let tools: ListToolsResult =
         serde_json::from_value(client.call("tools/list", json!({})).await["result"].clone())
@@ -352,8 +352,9 @@ async fn the_server_speaks_mcp_initialize_tools_and_resources() {
         .iter()
         .find(|(_, method, _)| method == "document/edit")
         .unwrap();
-    // The edit names the client's session, so Xuan asks once per client.
-    assert_eq!(edit_session.as_deref(), Some(session.as_str()));
+    // The edit names a label for the session the server issued, so Xuan
+    // asks once per client and never shows the client's own text.
+    assert_eq!(edit_session.as_deref(), Some("MCP client 1"));
     assert_eq!(edit["name"], "Set Layer");
     assert_eq!(
         edit["edits"],
@@ -504,4 +505,68 @@ async fn the_server_listens_on_loopback_only_and_falls_back_to_another_port() {
     stream.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 401"), "{response}");
     drop(first);
+}
+
+#[tokio::test]
+async fn edit_sessions_are_only_the_ones_the_server_issued() {
+    let editor = FakeEditor::new(false);
+    let (app, _) = app(editor.clone());
+    // The stateless protocol (2026-07-28) has no initialize and carries its
+    // version in every request.
+    let stateless = json!({
+        "name": "fill", "arguments": {"color": "#ff0000"},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+        },
+    });
+    for session in [Some("forged-session-123"), None] {
+        let mut client = Client::new(app.clone());
+        client.session = session.map(str::to_owned);
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": stateless});
+        let mut request = client.request(&body);
+        request
+            .headers_mut()
+            .insert("mcp-protocol-version", "2026-07-28".parse().unwrap());
+        request
+            .headers_mut()
+            .insert("mcp-method", "tools/call".parse().unwrap());
+        request
+            .headers_mut()
+            .insert("mcp-name", "fill".parse().unwrap());
+        let (status, _, text) = client.send(request).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+    }
+    // On the legacy protocol rmcp itself refuses a session it did not issue.
+    let mut forged = Client::new(app.clone());
+    forged.session = Some("forged-session-123".into());
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "fill", "arguments": {"color": "#ff0000"}}});
+    assert_eq!(
+        forged.send(forged.request(&body)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // Two clients that did initialize get their own sessions.
+    let mut first = Client::new(app.clone());
+    first.initialize().await;
+    first.tool("fill", json!({"color": "#0000ff"})).await;
+    let mut second = Client::new(app.clone());
+    second.initialize().await;
+    second.tool("fill", json!({"color": "#0000ff"})).await;
+
+    let sessions: Vec<String> = editor
+        .requests()
+        .into_iter()
+        .filter(|(_, method, _)| method == "document/edit")
+        .map(|(session, ..)| session.unwrap())
+        .collect();
+    assert!(
+        !sessions.iter().any(|s| s.contains("forged")),
+        "{sessions:?}"
+    );
+    let (issued, shared): (Vec<&String>, Vec<&String>) =
+        sessions.iter().partition(|s| s.starts_with("MCP client "));
+    assert_eq!(issued, ["MCP client 1", "MCP client 2"], "{sessions:?}");
+    assert!(!shared.is_empty());
+    assert!(shared.iter().all(|s| *s == server::STATELESS_SESSION));
 }
