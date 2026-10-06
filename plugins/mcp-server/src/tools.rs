@@ -644,6 +644,42 @@ fn specs() -> Vec<Spec> {
             },
         },
         Spec {
+            name: "fill_gradient",
+            title: "Fill with a gradient",
+            description: "Fill the selection (or the whole layer without one) of a pixel layer with a gradient from `start` to `end` (document pixels): linear, or with `radial` a circle around `start` reaching `end`. `stops` are two or more colours, each at a `position` from 0 (at start) to 1 (at end); beyond the ends the first and last colours continue. Colours with an alpha part let the layer show through. `opacity` 0–1 (default 1); with `mask` the gradient's brightness paints the layer's mask instead of its pixels (white shows, black hides).",
+            properties: json!({
+                "layer": optional_layer(),
+                "start": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] where position 0 is"},
+                "end": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[x, y] where position 1 is; for a radial gradient, a point on its outer edge"},
+                "stops": {
+                    "type": "array", "minItems": 2, "maxItems": 64,
+                    "items": {
+                        "type": "object",
+                        "properties": {"position": number("0–1"), "color": color("Stop colour")},
+                        "required": ["position", "color"],
+                        "additionalProperties": false,
+                    },
+                    "description": "Colour stops, in any order",
+                },
+                "radial": {"type": "boolean", "description": "Circular instead of linear"},
+                "opacity": number("0–1"),
+                "mask": {"type": "boolean", "description": "Paint the layer's mask instead of its pixels"},
+            }),
+            required: &["start", "end", "stops"],
+            kind: Kind::Edit,
+            run: |cx, args| {
+                let keys = [
+                    "layer", "start", "end", "stops", "radial", "opacity", "mask",
+                ];
+                let args = pick(args, &keys)?;
+                cx.edit(
+                    "Gradient",
+                    vec![Value::Object(op("gradient", &args, &keys))],
+                )?;
+                text(json!({"ok": true}))
+            },
+        },
+        Spec {
             name: "apply_filter",
             title: "Apply a filter",
             description: "Apply a filter to a pixel layer inside the selection, or with `as_layer` add it as a non-destructive filter layer (masked by the selection).",

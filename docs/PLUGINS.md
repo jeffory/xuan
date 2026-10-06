@@ -997,6 +997,14 @@ becomes the active layer, or the active layer; it must be an unlocked pixel
 layer, so text and shape layers become pixel layers):
 
 - `{"op": "fill", "layer"?, "color"}`.
+- `{"op": "gradient", "layer"?, "start": [x, y], "end": [x, y], "stops":
+  [{"position", "color"}, …], "radial"?, "opacity"?, "mask"?}`: the Gradient
+  tool, with two to 64 colour stops (`position` 0 at `start` to 1 at `end`,
+  in any order; before the first and after the last stop the end colours
+  continue). Linear runs from `start` to `end`; `radial` is a circle around
+  `start` whose edge passes through `end`. `opacity` is 0–1 (default 1), and
+  `mask` paints the layer's mask with the gradient's brightness instead of its
+  pixels. `start` and `end` must differ.
 - `{"op": "stroke", "layer"?, "points": [[x, y], …], "color"?, "size"?,
   "hardness"?, "opacity"?, "erase"?}`: one brush stroke through the points (at
   most 10,000) in document coordinates; `size` is the brush diameter (1–2000,

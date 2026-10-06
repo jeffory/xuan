@@ -670,6 +670,23 @@ pub enum Edit {
         layer: Option<Uuid>,
         color: Color,
     },
+    /// Fill the selection (or the whole layer) with a gradient from `start`
+    /// to `end` in document coordinates: linear, or radial around `start`
+    /// with `end` on the rim.
+    Gradient {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        start: [f32; 2],
+        end: [f32; 2],
+        stops: Vec<GradientStop>,
+        #[serde(default)]
+        radial: bool,
+        #[serde(default = "one")]
+        opacity: f32,
+        /// Paint the layer's mask (as luminance) instead of its pixels.
+        #[serde(default)]
+        mask: bool,
+    },
     /// Paint a brush stroke through the points, in document coordinates.
     Stroke {
         #[serde(default)]
@@ -789,6 +806,16 @@ pub enum Edit {
     },
 }
 
+/// One colour of a gradient, at `position` 0 (the start) to 1 (the end).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    pub position: f32,
+    pub color: Color,
+}
+
+/// Most colour stops one gradient may have.
+const MAX_GRADIENT_STOPS: usize = 64;
+
 /// A colour written `#rrggbb` or `#rrggbbaa`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Color(pub [u8; 4]);
@@ -901,7 +928,9 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 0,
             ),
             Edit::FeatherSelection { .. } => (canvas.saturating_mul(4), 0),
-            Edit::Fill { layer, .. } | Edit::ApplyAdjustment { layer, .. } => {
+            Edit::Fill { layer, .. }
+            | Edit::Gradient { layer, .. }
+            | Edit::ApplyAdjustment { layer, .. } => {
                 (layer_area(layer, canvas).saturating_mul(2), 0)
             }
             Edit::ApplyFilter { layer, filter } => {
@@ -1382,6 +1411,50 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
             Edit::Fill { layer, color } => {
                 activate(document, *layer)?;
                 crate::paint::fill(document, color.0, false, false)?;
+            }
+            Edit::Gradient {
+                layer,
+                start,
+                end,
+                stops,
+                radial,
+                opacity,
+                mask,
+            } => {
+                let ends = valid_points(&[*start, *end])?;
+                ensure!(
+                    start != end,
+                    "A gradient's start and end must be different points"
+                );
+                ensure!(
+                    (2..=MAX_GRADIENT_STOPS).contains(&stops.len()),
+                    "A gradient needs between 2 and {MAX_GRADIENT_STOPS} colour stops"
+                );
+                ensure!(
+                    stops
+                        .iter()
+                        .all(|stop| stop.position.is_finite()
+                            && (0.0..=1.0).contains(&stop.position)),
+                    "Colour stop positions must be between 0 and 1"
+                );
+                valid_opacity(*opacity)?;
+                let mut stops: Vec<(f32, [u8; 4])> = stops
+                    .iter()
+                    .map(|stop| (stop.position, stop.color.0))
+                    .collect();
+                stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+                activate(document, *layer)?;
+                crate::paint::gradient_stops(
+                    document,
+                    ends[0],
+                    ends[1],
+                    &stops,
+                    crate::paint::GradientShape {
+                        radial: *radial,
+                        opacity: *opacity,
+                        mask_target: *mask,
+                    },
+                )?;
             }
             Edit::Stroke {
                 layer,
@@ -2421,6 +2494,158 @@ mod tests {
             let error = run(&mut document.clone(), &[edit(locked.clone())]).unwrap_err();
             assert!(error.to_string().contains("lock"), "{locked}: {error}");
         }
+    }
+
+    fn near(actual: [u8; 4], expected: [u8; 4], tolerance: u8) {
+        for i in 0..4 {
+            assert!(
+                actual[i].abs_diff(expected[i]) <= tolerance,
+                "{actual:?} is not near {expected:?}"
+            );
+        }
+    }
+
+    fn gradient(extra: Value) -> Edit {
+        let mut op = json!({
+            "op": "gradient", "start": [0, 0], "end": [40, 0],
+            "stops": [
+                {"position": 0, "color": "#000000"},
+                {"position": 1, "color": "#ffffff"},
+            ],
+        });
+        op.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        edit(op)
+    }
+
+    #[test]
+    fn a_two_stop_linear_gradient_runs_from_start_to_end() {
+        let (mut document, base) = grey_document();
+        run(&mut document, &[gradient(json!({"layer": base}))]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(0, 10).0, [0, 0, 0, 255], 4);
+        near(pixels.get_pixel(20, 10).0, [131, 131, 131, 255], 4);
+        near(pixels.get_pixel(39, 10).0, [250, 250, 250, 255], 4);
+        // Constant down each column.
+        assert_eq!(pixels.get_pixel(20, 0), pixels.get_pixel(20, 29));
+
+        // Opacity blends with what is there.
+        let (mut document, _) = grey_document();
+        run(&mut document, &[gradient(json!({"opacity": 0.5}))]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(0, 10).0, [50, 50, 50, 255], 4);
+    }
+
+    #[test]
+    fn a_multi_stop_gradient_passes_through_each_stop_and_ignores_input_order() {
+        let (mut document, _) = grey_document();
+        let stops = json!([
+            {"position": 1, "color": "#0000ff"},
+            {"position": 0, "color": "#ff0000"},
+            {"position": 0.5, "color": "#00ff00"},
+        ]);
+        run(&mut document, &[gradient(json!({"stops": stops}))]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(0, 5).0, [250, 5, 0, 255], 8);
+        near(pixels.get_pixel(20, 5).0, [5, 250, 5, 255], 12);
+        near(pixels.get_pixel(39, 5).0, [0, 5, 250, 255], 8);
+        // Halfway between the first two stops.
+        near(pixels.get_pixel(10, 5).0, [128, 128, 0, 255], 8);
+    }
+
+    #[test]
+    fn a_radial_gradient_spreads_from_the_start_to_the_end_radius() {
+        let (mut document, _) = grey_document();
+        let radial = gradient(json!({"start": [20, 15], "end": [30, 15], "radial": true}));
+        run(&mut document, &[radial]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(20, 15).0, [0, 0, 0, 255], 12);
+        near(pixels.get_pixel(25, 15).0, [128, 128, 128, 255], 12);
+        near(pixels.get_pixel(20, 25).0, [255, 255, 255, 255], 0);
+        assert_eq!(pixels.get_pixel(35, 15).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_gradient_stays_inside_the_selection() {
+        let (mut document, _) = grey_document();
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 0, "y": 0, "width": 20, "height": 30})),
+                gradient(json!({})),
+            ],
+        )
+        .unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(10, 5).0, [66, 66, 66, 255], 4);
+        assert_eq!(pixels.get_pixel(30, 5).0, [100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn a_gradient_can_paint_the_mask_and_leaves_the_pixels() {
+        let (mut document, _) = grey_document();
+        let before = document.layers[0].pixels.clone().unwrap();
+        run(&mut document, &[gradient(json!({"mask": true}))]).unwrap();
+        let layer = &document.layers[0];
+        assert_eq!(layer.pixels.as_ref().unwrap(), &before);
+        let mask = &layer.mask.as_ref().unwrap().pixels;
+        assert_eq!(mask.dimensions(), (40, 30));
+        assert!(mask.get_pixel(0, 5)[0] <= 4);
+        assert!(mask.get_pixel(20, 5)[0].abs_diff(131) <= 4);
+        assert!(mask.get_pixel(39, 5)[0] >= 250);
+    }
+
+    #[test]
+    fn invalid_gradients_are_refused_and_locked_layers_are_left_alone() {
+        let (mut document, _) = grey_document();
+        let one = json!([{"position": 0, "color": "#000000"}]);
+        let many: Vec<Value> = (0..65)
+            .map(|i| json!({"position": i as f32 / 64.0, "color": "#000000"}))
+            .collect();
+        let bad = [
+            json!({"stops": []}),
+            json!({"stops": one}),
+            json!({"stops": many}),
+            json!({"stops": [
+                {"position": -0.1, "color": "#000000"}, {"position": 1, "color": "#ffffff"}]}),
+            json!({"stops": [
+                {"position": 0, "color": "#000000"}, {"position": 1.5, "color": "#ffffff"}]}),
+            json!({"opacity": 2}),
+            json!({"opacity": -1}),
+            json!({"start": [5, 5], "end": [5, 5]}),
+            json!({"end": [1.0e12, 0]}),
+            json!({"layer": Uuid::new_v4()}),
+        ];
+        for extra in bad {
+            let mut op = json!({
+                "op": "gradient", "start": [0, 0], "end": [40, 0],
+                "stops": [
+                    {"position": 0, "color": "#000000"},
+                    {"position": 1, "color": "#ffffff"},
+                ],
+            });
+            op.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let parsed = serde_json::from_value::<Edit>(op);
+            let mut scratch = document.clone();
+            assert!(
+                parsed.is_err() || run(&mut scratch, &[parsed.unwrap()]).is_err(),
+                "{extra}"
+            );
+        }
+        // A colour that isn't #rrggbb is refused when parsing.
+        assert!(
+            serde_json::from_value::<Edit>(json!({
+                "op": "gradient", "start": [0, 0], "end": [1, 0],
+                "stops": [{"position": 0, "color": "red"}, {"position": 1, "color": "#fff"}],
+            }))
+            .is_err()
+        );
+        document.layers[0].locked = true;
+        let error = run(&mut document, &[gradient(json!({}))]).unwrap_err();
+        assert!(error.to_string().contains("lock"), "{error}");
     }
 
     #[test]

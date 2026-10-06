@@ -81,7 +81,7 @@ the document takes effect on the next frame and is drawn at once.
 | create text / shape layer | `document/edit` `add_text_layer`, `add_shape_layer` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
-| paint via strokes | `document/edit` `stroke`, `fill` (new) |
+| paint via strokes, fills and gradients | `document/edit` `stroke`, `fill`, `gradient` (new) |
 | selections: rect, ellipse, polygon, by colour | `document/edit` `select_rect`, `select_polygon`, `select_color`, `select_color_range`, `grow_selection`, `feather_selection` (new); `host/run` `select_all`, `deselect`, `invert_selection`, `select_subject`, `select_layer_pixels` |
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
@@ -109,7 +109,9 @@ like the existing ones, rather than anything specific to MCP:
 - **Transforms.** `transform` sets a layer's (or a group's) box like Free
   Transform.
 - **Painting.** `stroke` paints or erases one brush stroke through a list of
-  points, with the Brush tool's coverage rules; `fill` fills the selection.
+  points, with the Brush tool's coverage rules; `fill` fills the selection;
+  `gradient` fills it with a linear or radial gradient through any number of
+  colour stops, or paints the mask with one.
 - **Selections.** `select_rect` (with `ellipse`), `select_polygon`,
   `select_color` (the Magic Wand) and `select_color_range` (#5's Color Range
   engine) combine with the selection by `mode`; `grow_selection` and

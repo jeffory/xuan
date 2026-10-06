@@ -543,6 +543,45 @@ pub fn gradient(
         opacity,
         mask_target,
     } = options;
+    gradient_stops(
+        document,
+        start,
+        end,
+        &[(0.0, foreground), (1.0, background)],
+        GradientShape {
+            radial,
+            opacity,
+            mask_target,
+        },
+    )
+}
+
+/// How a multi-stop gradient is laid out and where it is painted.
+pub struct GradientShape {
+    pub radial: bool,
+    pub opacity: f32,
+    pub mask_target: bool,
+}
+
+/// A gradient through colour `stops`, each a position from 0 (at `start`) to 1
+/// (at `end`) and a colour, sorted by position. Two stops at 0 and 1 are the
+/// Gradient tool's foreground-to-background fill.
+pub fn gradient_stops(
+    document: &mut Document,
+    start: Point,
+    end: Point,
+    stops: &[(f32, [u8; 4])],
+    shape: GradientShape,
+) -> Result<()> {
+    let GradientShape {
+        radial,
+        opacity,
+        mask_target,
+    } = shape;
+    anyhow::ensure!(
+        stops.len() >= 2,
+        "A gradient needs at least two colour stops"
+    );
     let selection = document.selection.clone();
     let layer = document
         .active_mut()
@@ -558,19 +597,36 @@ pub fn gradient(
         ensure_pixels(layer)?;
         (layer.transform, layer.pixels.as_ref().unwrap().dimensions())
     };
-    if crate::gpu::paint(
-        layer,
-        selection.as_deref(),
-        mask_target,
-        &crate::gpu::Paint {
-            mode: if radial { 3 } else { 2 },
-            opacity,
-            colors: [foreground, background],
-            points: [start, end],
-        },
-    ) {
+    // The GPU shader blends two colours; more stops take the CPU path.
+    if let [(a, foreground), (b, background)] = *stops
+        && a == 0.0
+        && b == 1.0
+        && crate::gpu::paint(
+            layer,
+            selection.as_deref(),
+            mask_target,
+            &crate::gpu::Paint {
+                mode: if radial { 3 } else { 2 },
+                opacity,
+                colors: [foreground, background],
+                points: [start, end],
+            },
+        )
+    {
         return Ok(());
     }
+    let stop_color = |t: f32| -> [f32; 4] {
+        let next = stops.partition_point(|(position, _)| *position <= t);
+        let (low, high) = match (next.checked_sub(1), stops.get(next)) {
+            (None, _) => return stops[0].1.map(|v| v as f32 / 255.0),
+            (Some(last), None) => return stops[last].1.map(|v| v as f32 / 255.0),
+            (Some(low), Some(high)) => (&stops[low], high),
+        };
+        let amount = (t - low.0) / (high.0 - low.0);
+        std::array::from_fn(|i| {
+            (low.1[i] as f32 * (1.0 - amount) + high.1[i] as f32 * amount) / 255.0
+        })
+    };
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let length_sq = (dx * dx + dy * dy).max(0.01);
@@ -585,9 +641,7 @@ pub fn gradient(
             ((point.x - start.x) * dx + (point.y - start.y) * dy) / length_sq
         };
         let t = t.clamp(0.0, 1.0);
-        let mut color: [f32; 4] = std::array::from_fn(|i| {
-            (foreground[i] as f32 * (1.0 - t) + background[i] as f32 * t) / 255.0
-        });
+        let mut color = stop_color(t);
         color[3] *= opacity * selection::coverage(selection.as_deref(), point);
         color
     };

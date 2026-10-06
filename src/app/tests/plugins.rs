@@ -2057,6 +2057,35 @@ fn new_edit_ops_need_edit_access_and_make_one_undo_step() {
 }
 
 #[test]
+fn a_gradient_edit_is_one_undo_step() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    let before = app.session().unwrap().document.layers[0].pixels.clone();
+    let steps = app.session().unwrap().history.names().count();
+    let edits = json!({"name": "Gradient", "edits": [
+        {"op": "select_rect", "x": 0, "y": 0, "width": 16, "height": 24},
+        {"op": "gradient", "start": [0, 0], "end": [32, 0], "stops": [
+            {"position": 0, "color": "#ff0000"},
+            {"position": 0.5, "color": "#00ff00"},
+            {"position": 1, "color": "#0000ff"},
+        ]},
+    ]});
+    plugin_request(&mut app, "document/edit", edits).unwrap();
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    assert_eq!(session.history.undo_name(), Some("Gradient"));
+    let pixels = session.document.layers[0].pixels.clone().unwrap();
+    assert_ne!(pixels.get_pixel(2, 2).0, pixels.get_pixel(30, 2).0);
+    app.command("undo");
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+    assert_eq!(app.session().unwrap().document.layers[0].pixels, before);
+}
+
+#[test]
 fn canvas_ops_are_refused_in_results_but_selection_ops_are_proposed() {
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();

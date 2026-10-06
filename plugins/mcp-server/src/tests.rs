@@ -295,6 +295,7 @@ async fn the_server_speaks_mcp_initialize_tools_and_resources() {
         "select_shape",
         "select_color",
         "paint_stroke",
+        "fill_gradient",
         "apply_filter",
         "apply_adjustment",
         "merge_layers",
@@ -410,6 +411,61 @@ async fn the_server_speaks_mcp_initialize_tools_and_resources() {
         .await;
     assert!(missing["error"].is_object(), "{missing}");
     assert!(shared.activity.lock().unwrap().len() >= 3);
+}
+
+#[tokio::test]
+async fn fill_gradient_sends_a_gradient_edit_with_its_stops() {
+    let editor = FakeEditor::new(false);
+    let (app, _shared) = app(editor.clone());
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let stops = json!([
+        {"position": 0, "color": "#ff8800"},
+        {"position": 0.5, "color": "#ffcc0080"},
+        {"position": 1, "color": "#001133"},
+    ]);
+    let result = client
+        .tool(
+            "fill_gradient",
+            json!({
+                "layer": "base", "start": [0, 0], "end": [0, 600], "stops": stops,
+                "radial": true, "opacity": 0.8, "mask": false,
+            }),
+        )
+        .await;
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let requests = editor.requests();
+    let (_, method, params) = requests.last().unwrap();
+    assert_eq!(method, "document/edit");
+    assert_eq!(params["name"], "Gradient");
+    assert_eq!(
+        params["edits"],
+        json!([{
+            "op": "gradient", "layer": "base", "start": [0, 0], "end": [0, 600],
+            "stops": stops, "radial": true, "opacity": 0.8, "mask": false,
+        }])
+    );
+    let listed: ListToolsResult =
+        serde_json::from_value(client.call("tools/list", json!({})).await["result"].clone())
+            .unwrap();
+    let tool = listed
+        .tools
+        .iter()
+        .find(|t| t.name == "fill_gradient")
+        .unwrap();
+    assert_eq!(
+        tool.input_schema["required"],
+        json!(["start", "end", "stops"])
+    );
+    assert_eq!(tool.input_schema["properties"]["stops"]["minItems"], 2);
+
+    let unknown = client
+        .tool(
+            "fill_gradient",
+            json!({"start": [0, 0], "end": [1, 0], "stops": stops, "angle": 3}),
+        )
+        .await;
+    assert!(text_of(&unknown).contains("Unknown argument `angle`"));
 }
 
 #[tokio::test]
