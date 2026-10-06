@@ -161,6 +161,17 @@ impl EditorApp {
 
     /// Queue a file request from a plugin; it is answered once the user chose.
     pub(super) fn queue_file_request(&mut self, plugin: &str, request: Request) {
+        // After the user cancelled, the plugin may not ask again for a while.
+        let cooling = (self.plugins.file_refused_at.get(plugin))
+            .is_some_and(|at| at.elapsed() < super::plugin_sessions::COOLDOWN);
+        if cooling {
+            let error = RpcError::new(
+                protocol::CANCELLED,
+                "The user cancelled this plugin's last file request just now; it may ask again later",
+            );
+            self.respond_to_plugin(plugin, request.id, Err(error));
+            return;
+        }
         let action = self.file_action(&request).and_then(|action| {
             // One at a time per plugin, so a plugin cannot stack up dialogs.
             let waiting = (self.plugins.file_requests.iter())
@@ -260,6 +271,7 @@ impl EditorApp {
                 .save_file(),
         };
         let Some(mut path) = chosen else {
+            (self.plugins.file_refused_at).insert(plugin.to_owned(), std::time::Instant::now());
             return Err(RpcError::new(
                 protocol::CANCELLED,
                 "The user cancelled the save dialog",
@@ -310,6 +322,10 @@ impl EditorApp {
         let FileAction::Open { path } = &request.action else {
             return;
         };
+        if !open {
+            (self.plugins.file_refused_at)
+                .insert(request.plugin.clone(), std::time::Instant::now());
+        }
         let result = if !open {
             Err(RpcError::new(
                 protocol::CANCELLED,

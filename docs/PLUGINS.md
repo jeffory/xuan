@@ -195,7 +195,12 @@ edit wait, unanswered, until the user answers **Allow *Plugin (plugin id)* to
 edit your documents for this session?**, which names the first edit:
 
 - **Allow** applies it and every later direct edit of the session.
-- **Deny** refuses them with `-32800` for the rest of the session.
+- **Deny** refuses them with `-32800` for the rest of the session. For 30
+  seconds after a Deny the plugin cannot ask again: edits of its other
+  sessions are refused at once, without a prompt, so a client cannot wear the
+  user down by starting new sessions. With **With Deny: refuse every session
+  until the plugin stops** checked, Deny refuses all of its sessions, those
+  already allowed included, until its process stops.
 - **Always Allow** turns on **auto mode**: stored as `edit_without_asking =
   true` in the plugin's grant in `config.toml`, it skips the prompt from then
   on. Like "Don't ask again" for sending, it belongs to the grant and goes
@@ -1045,7 +1050,9 @@ answer:
   be absolute and name a regular file or a project folder. It opens as a new
   document, as **File → Open…** would.
 
-Each answers with the path, or fails with `-32800` when the user cancels.
+Each answers with the path, or fails with `-32800` when the user cancels;
+for 30 seconds after a cancel, the plugin's file requests fail at once
+without a dialog.
 Requests wait until no other dialog is open; a plugin has at most one waiting,
 and a second fails at once. They need no `document = "edit"`, as they do not
 change the open document, and the plugin learns nothing more than the path the

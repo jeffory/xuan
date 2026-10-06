@@ -963,3 +963,4 @@ Always Allow turns on auto mode: the plugin edits without asking until you turn 
 Edit without asking (auto mode)	不经询问直接编辑（自动模式）
 Off: the plugin asks before its first edit in each session. On: it edits your documents without asking; every edit is still one step you can undo.	关闭：插件在每个会话的首次编辑前询问。开启：插件不经询问直接编辑你的文档；每次编辑仍是可撤销的一步。
 Asks you before its first edit in each session, unless you turn on auto mode.	在每个会话的首次编辑前询问你，除非你开启自动模式。
+With Deny: refuse every session until the plugin stops	选择“拒绝”时：在插件停止前拒绝所有会话

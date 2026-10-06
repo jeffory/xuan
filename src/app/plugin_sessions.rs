@@ -32,6 +32,10 @@ use super::{
 const MAX_HELD: usize = 64;
 /// The longest session id kept; a longer one is cut.
 const MAX_SESSION: usize = 128;
+/// After the user refuses, how long a plugin may not ask again: its new
+/// sessions' edits are refused without a prompt meanwhile, so a client
+/// cannot wear the user down by starting session after session.
+pub(super) const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The open prompt: the first edit of a session waiting for an answer.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +44,8 @@ pub(super) struct EditSessionRequest {
     pub session: String,
     /// The name of the edit that asked, as its undo step will show it.
     pub edit: String,
+    /// "Refuse every session until the plugin stops", with Deny.
+    pub deny_all: bool,
 }
 
 /// The user's answer to the prompt.
@@ -106,6 +112,9 @@ impl EditorApp {
         if !self.asks_before_edits(plugin) || self.edits_without_asking(plugin) {
             return Some(true);
         }
+        if self.plugins.edits_refused.contains(plugin) {
+            return Some(false);
+        }
         self.plugins
             .edit_answers
             .get(&(plugin.to_owned(), session.to_owned()))
@@ -125,6 +134,12 @@ impl EditorApp {
         })
     }
 
+    /// Whether the user refused this plugin's edits too recently for it to
+    /// ask again.
+    pub(super) fn edit_cooling_down(&self, plugin: &str) -> bool {
+        (self.plugins.edit_refused_at.get(plugin)).is_some_and(|at| at.elapsed() < COOLDOWN)
+    }
+
     /// Hold a direct edit until the user answered for its session. Returns
     /// the request when it need not wait.
     pub(super) fn hold_edit(&mut self, plugin: &str, request: Request) -> Option<Request> {
@@ -134,6 +149,11 @@ impl EditorApp {
                 .is_some()
         {
             return Some(request);
+        }
+        if self.edit_cooling_down(plugin) {
+            // Refused without asking: see `COOLDOWN`.
+            self.refuse_edit(plugin, request);
+            return None;
         }
         let held = (self.plugins.edit_held.iter())
             .filter(|(id, _)| id == plugin)
@@ -154,6 +174,18 @@ impl EditorApp {
         None
     }
 
+    fn refuse_edit(&mut self, plugin: &str, request: Request) {
+        if let Some(process) = self.plugins.process_mut(plugin) {
+            let _ = process.respond(
+                request.id,
+                Err(RpcError::new(
+                    protocol::CANCELLED,
+                    "The user refused this plugin's edits just now; it may ask again later",
+                )),
+            );
+        }
+    }
+
     /// Apply the edits whose session was answered, and ask about the next
     /// session when nothing else is open.
     pub(super) fn release_held_edits(&mut self) {
@@ -167,7 +199,11 @@ impl EditorApp {
                 .edit_answer(&plugin, &request_session(&request))
                 .is_none()
             {
-                waiting.push((plugin, request));
+                if self.edit_cooling_down(&plugin) {
+                    self.refuse_edit(&plugin, request);
+                } else {
+                    waiting.push((plugin, request));
+                }
                 continue;
             }
             let result = self.service_request(&plugin, &request);
@@ -197,6 +233,7 @@ impl EditorApp {
                 plugin: plugin.clone(),
                 session: request_session(request),
                 edit,
+                deny_all: false,
             });
             self.dialog = Some(Dialog::PluginEditSession);
         }
@@ -212,6 +249,13 @@ impl EditorApp {
         }
         if answer == EditAnswer::Always {
             self.set_edit_auto_mode(&request.plugin, true);
+        }
+        if answer == EditAnswer::Deny {
+            (self.plugins.edit_refused_at)
+                .insert(request.plugin.clone(), std::time::Instant::now());
+            if request.deny_all {
+                self.plugins.edits_refused.insert(request.plugin.clone());
+            }
         }
         self.plugins.edit_answers.insert(
             (request.plugin, request.session),
@@ -266,6 +310,7 @@ impl EditorApp {
         let source = self.plugins.source(&request.plugin);
         let mut open = true;
         let mut answer = None;
+        let mut deny_all = request.deny_all;
         widgets::Window::new(format!(
             "{} {source} {}",
             tr("Allow"),
@@ -315,6 +360,11 @@ impl EditorApp {
                 .wrap(),
             );
             ui.add_space(4.0);
+            widgets::checkbox(
+                ui,
+                &mut deny_all,
+                tr("With Deny: refuse every session until the plugin stops"),
+            );
             ui.separator();
             ui.horizontal(|ui| {
                 if widgets::button(ui, tr("Always Allow")).clicked() {
@@ -330,6 +380,9 @@ impl EditorApp {
                 });
             });
         });
+        if let Some(prompt) = &mut self.plugins.edit_prompt {
+            prompt.deny_all = deny_all;
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) || !open {
             answer = Some(EditAnswer::Deny);
         }

@@ -114,6 +114,12 @@ pub(super) struct PluginState {
     pub edit_held: Vec<(String, Request)>,
     /// The prompt asking for it, while it is open.
     pub edit_prompt: Option<super::plugin_sessions::EditSessionRequest>,
+    /// Plugins whose every session the user refused until they stop.
+    pub edits_refused: std::collections::HashSet<String>,
+    /// When the user last refused a plugin's edits; see `COOLDOWN`.
+    pub edit_refused_at: HashMap<String, std::time::Instant>,
+    /// When the user last cancelled a plugin's file request.
+    pub file_refused_at: HashMap<String, std::time::Instant>,
 }
 
 enum Pending {
@@ -285,6 +291,7 @@ impl PluginState {
             .retain(|request| request.plugin != plugin);
         self.edit_answers.retain(|(id, _), _| id != plugin);
         self.edit_held.retain(|(id, _)| id != plugin);
+        self.edits_refused.remove(plugin);
         if (self.edit_prompt.as_ref()).is_some_and(|prompt| prompt.plugin == plugin) {
             self.edit_prompt = None;
         }

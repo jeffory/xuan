@@ -2223,6 +2223,7 @@ fn edit_sessions_gate_direct_edits_until_the_user_allows_them() {
         plugin: "mock".into(),
         session: session.into(),
         edit: "Agent".into(),
+        deny_all: false,
     };
     app.plugins.edit_prompt = Some(prompt("a"));
     app.answer_edit_session(EditAnswer::Allow);
@@ -3927,6 +3928,13 @@ done
         );
         assert!(app.session().unwrap().path.is_none());
 
+        // Right after a cancel, the plugin may not ask again.
+        app.queue_file_request("mock", file_request(110, "file/save_as", json!({})));
+        assert_eq!(wait(&context, &mut app, 110)["error"]["code"], CANCELLED);
+        assert_eq!(shown.lock().unwrap().len(), 1, "no second dialog");
+        let past = std::time::Instant::now() - crate::app::plugin_sessions::COOLDOWN;
+        app.plugins.file_refused_at.insert("mock".into(), past);
+
         // Saving where the user chose: the project now lives there.
         let project = out.path().join("agent");
         *choice.lock().unwrap() = Some(project.clone());
@@ -4001,6 +4009,7 @@ done
         app.answer_file_prompt(false);
         assert_eq!(wait(&context, &mut app, 105)["error"]["code"], CANCELLED);
         assert_eq!(app.sessions.len(), sessions);
+        app.plugins.file_refused_at.insert("mock".into(), past);
         app.queue_file_request(
             "mock",
             file_request(107, "file/open", json!({"path": image})),
@@ -4084,6 +4093,31 @@ done
         assert_eq!(answer(dir.path(), 204).unwrap()["error"]["code"], CANCELLED);
         // The allowed session goes on without asking.
         assert!(app.hold_edit("mock", edit(205, "Fourth", "s1")).is_some());
+        // Right after Deny, a new session is refused without a prompt.
+        assert!(app.hold_edit("mock", edit(207, "Sneaky", "s9")).is_none());
+        run_until(&context, &mut app, |_| answer(dir.path(), 207).is_some());
+        assert_eq!(answer(dir.path(), 207).unwrap()["error"]["code"], CANCELLED);
+        assert!(app.plugins.edit_prompt.is_none() && app.plugins.edit_held.is_empty());
+        // Later it may ask again; "refuse every session" then holds until
+        // the plugin stops.
+        let past = std::time::Instant::now() - crate::app::plugin_sessions::COOLDOWN;
+        app.plugins.edit_refused_at.insert("mock".into(), past);
+        assert!(app.hold_edit("mock", edit(208, "Again", "s8")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.plugins.edit_prompt.as_mut().unwrap().deny_all = true;
+        app.answer_edit_session(EditAnswer::Deny);
+        run_until(&context, &mut app, |_| answer(dir.path(), 208).is_some());
+        app.plugins.edit_refused_at.insert("mock".into(), past);
+        assert!(
+            app.hold_edit("mock", edit(209, "More", "s7")).is_some(),
+            "answered: refused"
+        );
+        assert_eq!(app.edit_answer("mock", "s7"), Some(false));
+        // The allowed session is refused too.
+        assert_eq!(app.edit_answer("mock", "s1"), Some(false));
+        app.plugins.edits_refused.clear();
         // Stopping the plugin drops what waits and closes its prompt.
         assert!(app.hold_edit("mock", edit(206, "Fifth", "s3")).is_none());
         run_until(&context, &mut app, |app| {
