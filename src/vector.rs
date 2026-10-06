@@ -270,6 +270,23 @@ impl VectorPath {
         coverage
     }
 
+    /// About how many edge crossings filling the rows from `top` to `bottom` visits: each
+    /// flattened edge is met once per sample row it spans there. Paths with many tall edges
+    /// cost more than their area.
+    pub fn fill_work(&self, top: f64, bottom: f64) -> u64 {
+        let mut work = 0.0;
+        for line in self.flatten(FILL_TOLERANCE) {
+            let points = &line.points;
+            for (i, a) in points.iter().enumerate() {
+                let b = points[(i + 1) % points.len()];
+                let (y0, y1) = (f64::from(a.y.min(b.y)), f64::from(a.y.max(b.y)));
+                let span = (y1.min(bottom) - y0.max(top)).max(0.0);
+                work += span * SAMPLES as f64 + 1.0;
+            }
+        }
+        work.min(1e15) as u64
+    }
+
     /// A selection mask of a `width` × `height` canvas from the inside of the path, given in
     /// document pixels, with antialiased edges.
     pub fn mask(&self, rule: FillRule, width: u32, height: u32) -> GrayImage {

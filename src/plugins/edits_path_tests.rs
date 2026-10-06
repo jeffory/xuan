@@ -219,6 +219,28 @@ fn a_stroke_follows_a_path() {
 }
 
 #[test]
+fn filling_many_tall_edges_counts_against_the_work_budget() {
+    // A comb of 5,000 teeth as tall as the canvas: small in area, slow to fill.
+    let comb: String = (0..5000)
+        .map(|i| format!(" L {i} 30000 L {i}.5 0"))
+        .collect();
+    let tall = Document::new(100, 30_000).unwrap();
+    let path = format!("M 0 0{comb} Z");
+    for op in [
+        json!({"op": "select_path", "path": path}),
+        json!({"op": "fill_path", "path": path, "color": "#000000"}),
+        json!({"op": "add_shape_layer", "shape": "Path", "path": path}),
+    ] {
+        let edits = parse_edits(json!([op])).unwrap();
+        assert!(cost(&tall, &edits).work > MAX_WORK, "{op}");
+        // On a short canvas only the rows filled count; a shape layer is as tall as its path.
+        if op["op"] != "add_shape_layer" {
+            assert!(cost(&canvas(), &edits).work < MAX_WORK / 10, "{op}");
+        }
+    }
+}
+
+#[test]
 fn fill_path_fills_the_inside_within_the_selection() {
     let mut document = canvas();
     run(

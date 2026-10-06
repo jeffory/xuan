@@ -1180,13 +1180,19 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
         let canvas = width * height;
         let (work, bytes) = match edit {
             Edit::SetSelection { .. } => (canvas, 0),
-            Edit::SelectRect { feather, .. }
-            | Edit::SelectPolygon { feather, .. }
-            | Edit::SelectPath { feather, .. } => {
+            Edit::SelectRect { feather, .. } | Edit::SelectPolygon { feather, .. } => {
                 (canvas.saturating_mul(if *feather > 0.0 { 6 } else { 2 }), 0)
             }
-            Edit::FillPath { layer, .. } => (
-                canvas.saturating_add(layer_area(layer, canvas).saturating_mul(2)),
+            Edit::SelectPath { feather, path, .. } => (
+                canvas
+                    .saturating_mul(if *feather > 0.0 { 6 } else { 2 })
+                    .saturating_add(path_work(path, height)),
+                0,
+            ),
+            Edit::FillPath { layer, path, .. } => (
+                canvas
+                    .saturating_add(layer_area(layer, canvas).saturating_mul(2))
+                    .saturating_add(path_work(path, height)),
                 0,
             ),
             // A render of every layer, then the mask.
@@ -1305,11 +1311,9 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 };
                 let area =
                     (f64::from(w.max(1.0) + 2.0) * f64::from(h.max(1.0) + 2.0)).min(1e15) as u64;
-                // A path is filled with 16 sample rows per pixel row.
-                let work = if path.is_some() {
-                    area.saturating_mul(4)
-                } else {
-                    area
+                let work = match path {
+                    Some(path) => area.saturating_add(path_work(path, u64::from(MAX_SIDE))),
+                    None => area,
                 };
                 (work, area.saturating_mul(4))
             }
@@ -2406,6 +2410,16 @@ fn valid_points(points: &[[f32; 2]]) -> Result<Vec<Point>> {
         "Points must be finite"
     );
     Ok(points.iter().map(|[x, y]| Point::new(*x, *y)).collect())
+}
+
+/// What filling a path over `rows` pixel rows (from its top, or the canvas's) costs beyond
+/// its area, as [`cost`] counts it; nothing for a path that does not parse, which is refused
+/// when it runs.
+fn path_work(path: &str, rows: u64) -> u64 {
+    VectorPath::parse(path).map_or(0, |path| {
+        let top = path.bounds().map_or(0.0, |b| b.y0.max(0.0));
+        path.fill_work(top, top + rows as f64)
+    })
 }
 
 /// A stroke's points: those given, or its `path` flattened.
