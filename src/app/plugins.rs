@@ -1233,6 +1233,13 @@ impl EditorApp {
                     process.note(message.to_owned());
                 }
             }
+            "request/cancel" => {
+                if let Some(id) = (params.get("id").cloned())
+                    .and_then(|id| serde_json::from_value::<Id>(id).ok())
+                {
+                    self.withdraw_request(plugin, &id);
+                }
+            }
             "host/status" => {
                 if let Some(message) = params.get("message").and_then(Value::as_str) {
                     self.status = self.plugins.status_from(plugin, message);

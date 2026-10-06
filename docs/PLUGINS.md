@@ -1123,8 +1123,9 @@ user chose. To hand the user a file without a dialog, write it into the
 plugin's own folders (for example with `document/export`) and show it in a
 pane.
 
-Notifications from the plugin: `host/log` `{level, message}` and `host/status`
-`{message}`. The status bar shows a plugin's message, like the `text` output of
+Notifications from the plugin: `host/log` `{level, message}`, `host/status`
+`{message}` and `request/cancel` `{id}` (see [Withdrawing a
+request](#withdrawing-a-request)). The status bar shows a plugin's message, like the `text` output of
 a job, on one line after the plugin's name and id, as in `Mock (plugin mock):
 message`, so it cannot pass for Xuan's own. Notifications from the host: `document/changed` `{id, revision}`, sent to
 every running plugin after each edit of the current document (any plugin may
@@ -1132,6 +1133,30 @@ read the document with `document/get`, so this reveals nothing more),
 `settings/changed` `{settings, secrets}`, and `models/changed` `{models: {id:
 path}}`, sent to a running plugin after one of its models was downloaded,
 verified or deleted, with the same map as `initialize`.
+
+### Withdrawing a request
+
+A request that waits for the user (a direct edit held by the [edit
+session](#edit-sessions) prompt, an export held by the [send
+prompt](#network), or a [file request](#files-the-user-chooses)) can wait
+for minutes. A plugin that no longer wants the answer, because the client it
+serves gave up, sends the notification `request/cancel` with the request's
+`id`:
+
+```json
+{"jsonrpc":"2.0","method":"request/cancel","params":{"id":12}}
+```
+
+Xuan drops the request and answers it with `-32800`. Its prompt is closed,
+not just hidden, so it does not come back after another dialog and a late
+**Allow**, **Send** or **Open** does nothing; if other requests still wait,
+Xuan asks about the first of them instead. Withdrawing is not a refusal: no
+answer is recorded for the session and the plugin may ask again at once. A
+request Xuan already answered, an unknown id, and a save dialog that is
+already open (the system's dialog cannot be closed from outside) are not
+affected. The SDKs withdraw a request when it runs out of time (the error is
+`-32004`), and the Rust SDK's `CancelToken` (`host.with_cancel(&token)`)
+withdraws a host's waiting requests from another thread (`-32005`).
 
 ### Panes
 
@@ -1195,6 +1220,9 @@ format always wins over a plugin's.
 Standard JSON-RPC error objects. Reserved codes: `-32800` cancelled (also the answer to an export the user refused),
 `-32001` needs setup (the message is shown with a button that opens the
 plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.retry_after` in seconds).
+The SDKs use two more for requests that end in the plugin, never sent by
+Xuan: `-32004` timed out and `-32005` withdrawn (see [Withdrawing a
+request](#withdrawing-a-request)).
 
 ## Hosting rules
 

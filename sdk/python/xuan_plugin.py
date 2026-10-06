@@ -49,6 +49,9 @@ CANCELLED = -32800
 NEEDS_SETUP = -32001
 INSUFFICIENT_CREDITS = -32002
 RATE_LIMITED = -32003
+# Never sent by the editor: a request it did not answer in time, which was
+# withdrawn with ``request/cancel``.
+TIMED_OUT = -32004
 
 
 class RpcError(Exception):
@@ -103,8 +106,12 @@ class _Transport:
         self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         if not waiter.event.wait(timeout):
             with self._lock:
-                self._pending.pop(request_id, None)
-            raise RpcError(INTERNAL_ERROR, f"the editor did not answer {method}")
+                waiting = self._pending.pop(request_id, None)
+            if waiting is not None:
+                # Withdraw it, so a prompt the editor shows for it closes and
+                # a late answer does nothing.
+                self.send({"jsonrpc": "2.0", "method": "request/cancel", "params": {"id": request_id}})
+            raise RpcError(TIMED_OUT, f"the editor did not answer {method} in time")
         if waiter.error is not None:
             raise RpcError(
                 waiter.error.get("code", INTERNAL_ERROR),

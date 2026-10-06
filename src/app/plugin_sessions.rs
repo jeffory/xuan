@@ -17,7 +17,7 @@ use xuan::{
     i18n::tr,
     plugins::{
         manifest::{DocumentAccess, EditPrompt},
-        protocol::{self, Request, RpcError},
+        protocol::{self, Id, Request, RpcError},
     },
 };
 
@@ -247,6 +247,75 @@ impl EditorApp {
                 deny_all: false,
             });
             self.dialog = Some(Dialog::PluginEditSession);
+        }
+    }
+
+    /// `request/cancel`: the plugin no longer waits for the answer to its
+    /// request `id` (its client gave up, say). A request still held for the
+    /// user is dropped and answered with `-32800`, and the prompt it waits
+    /// on is dropped, not just hidden, so a late answer does nothing and it
+    /// does not come back. When other requests still wait, the next frame
+    /// asks about the first of them. A request already answered, or a save
+    /// dialog already open, is not affected.
+    pub(super) fn withdraw_request(&mut self, plugin: &str, id: &Id) {
+        let mut withdrawn = Vec::new();
+        // A direct edit waiting for its session's answer.
+        if let Some(index) = (self.plugins.edit_held.iter())
+            .position(|(owner, request)| owner == plugin && &request.id == id)
+        {
+            let (_, request) = self.plugins.edit_held.remove(index);
+            let session = request_session(&request);
+            let asking = (self.plugins.edit_prompt.as_ref())
+                .is_some_and(|prompt| prompt.plugin == plugin && prompt.session == session);
+            if asking {
+                self.plugins.edit_prompt = None;
+                if self.dialog == Some(Dialog::PluginEditSession) {
+                    self.dialog = None;
+                }
+            }
+            withdrawn.push(request.id);
+        }
+        // An export waiting for the send prompt.
+        if let Some(index) = (self.plugins.held.iter())
+            .position(|(owner, request)| owner == plugin && &request.id == id)
+        {
+            let (_, request) = self.plugins.held.remove(index);
+            let asking = (self.plugins.consent.as_ref())
+                .is_some_and(|consent| consent.plugin == plugin && consent.action.is_none());
+            if asking {
+                self.plugins.consent = None;
+                if self.dialog == Some(Dialog::PluginConsent) {
+                    self.dialog = None;
+                }
+            }
+            withdrawn.push(request.id);
+        }
+        // A file request waiting for its turn, or showing its prompt.
+        if let Some(index) = (self.plugins.file_requests.iter())
+            .position(|request| request.plugin == plugin && &request.id == id)
+            && let Some(request) = self.plugins.file_requests.remove(index)
+        {
+            withdrawn.push(request.id);
+        }
+        if (self.plugins.file_prompt.as_ref())
+            .is_some_and(|request| request.plugin == plugin && &request.id == id)
+            && let Some(request) = self.plugins.file_prompt.take()
+        {
+            if self.dialog == Some(Dialog::PluginFile) {
+                self.dialog = None;
+            }
+            withdrawn.push(request.id);
+        }
+        for id in withdrawn {
+            if let Some(process) = self.plugins.process_mut(plugin) {
+                let _ = process.respond(
+                    id,
+                    Err(RpcError::new(
+                        protocol::CANCELLED,
+                        "The plugin withdrew this request",
+                    )),
+                );
+            }
         }
     }
 

@@ -64,6 +64,20 @@ class FakeTransport:
 
 
 class HostRequests(unittest.TestCase):
+    def test_a_request_that_times_out_is_withdrawn(self):
+        import io
+        import json
+        import xuan_plugin
+
+        transport = xuan_plugin._Transport()
+        transport._out = io.BytesIO()
+        with self.assertRaises(xuan_plugin.RpcError) as raised:
+            transport.request("file/open", {"path": "/x.png"}, 0.01)
+        self.assertEqual(raised.exception.code, xuan_plugin.TIMED_OUT)
+        sent = [json.loads(line) for line in transport._out.getvalue().decode().splitlines()]
+        self.assertEqual(sent[0]["method"], "file/open")
+        self.assertEqual(sent[1], {"jsonrpc": "2.0", "method": "request/cancel", "params": {"id": sent[0]["id"]}})
+
     def test_edits_documents_and_files_use_the_documented_methods(self):
         from xuan_plugin import Host
 

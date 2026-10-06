@@ -4610,4 +4610,191 @@ done
         assert_eq!(answered["result"]["ok"], true);
         ui.app_mut().stop_plugin("mock");
     }
+
+    /// The plugin's `request/cancel` for request `id`.
+    fn withdraw(app: &mut EditorApp, id: i64) {
+        app.handle_notification(
+            "mock",
+            xuan::plugins::protocol::Notification {
+                jsonrpc: "2.0".into(),
+                method: "request/cancel".into(),
+                params: serde_json::json!({"id": id}),
+            },
+        );
+    }
+
+    #[test]
+    fn a_withdrawn_request_closes_its_prompt_and_a_late_answer_does_nothing() {
+        use crate::app::plugin_sessions::EditAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_session_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        let steps = app.session().unwrap().history.names().count();
+        let edit = |id: i64, name: &str, session: &str| {
+            file_request(
+                id,
+                "document/edit",
+                json!({"name": name, "session": session, "edits": [{"op": "add_empty_layer", "name": name}]}),
+            )
+        };
+
+        // A held edit whose client gave up: its prompt closes, and Allow
+        // clicked late applies nothing.
+        assert!(app.hold_edit("mock", edit(501, "Late", "s1")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        withdraw(&mut app, 501);
+        assert!(app.plugins.edit_held.is_empty());
+        assert!(app.plugins.edit_prompt.is_none());
+        assert_eq!(app.dialog, None);
+        run_until(&context, &mut app, |_| answer(dir.path(), 501).is_some());
+        assert_eq!(answer(dir.path(), 501).unwrap()["error"]["code"], CANCELLED);
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the prompt came back");
+        app.answer_edit_session(EditAnswer::Allow);
+        assert_eq!(app.session().unwrap().history.names().count(), steps);
+        // Nothing was answered for the session: its next edit asks again.
+        assert_eq!(app.edit_answer("mock", "s1"), None);
+        // Withdrawing is not a refusal: there is no cooldown.
+        assert!(!app.edit_cooling_down("mock"));
+
+        // While another edit of the session waits, the prompt asks about it.
+        assert!(app.hold_edit("mock", edit(502, "One", "s2")).is_none());
+        assert!(app.hold_edit("mock", edit(503, "Two", "s2")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        withdraw(&mut app, 502);
+        assert_eq!(app.plugins.edit_held.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        assert_eq!(app.plugins.edit_prompt.as_ref().unwrap().edit, "Two");
+        app.answer_edit_session(EditAnswer::Allow);
+        run_until(&context, &mut app, |_| answer(dir.path(), 503).is_some());
+        assert!(answer(dir.path(), 503).unwrap()["result"]["layers"].is_array());
+        let session = app.session().unwrap();
+        assert_eq!(session.history.names().count(), steps + 1);
+        assert_eq!(session.history.undo_name(), Some("Two"));
+
+        // A prompt that another dialog replaced does not come back once its
+        // request was withdrawn.
+        assert!(app.hold_edit("mock", edit(504, "Hidden", "s3")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.dialog = Some(Dialog::About);
+        withdraw(&mut app, 504);
+        assert_eq!(app.dialog, Some(Dialog::About));
+        app.dialog = None;
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the withdrawn prompt came back");
+        assert!(app.plugins.edit_prompt.is_none());
+
+        // The same for "Open a file?": Open clicked late opens nothing, and
+        // the plugin may ask again at once.
+        let image = out.path().join("asked.png");
+        RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 200, 255]))
+            .save(&image)
+            .unwrap();
+        let sessions = app.sessions.len();
+        app.queue_file_request(
+            "mock",
+            file_request(505, "file/open", json!({"path": image})),
+        );
+        run_until(&context, &mut app, |app| app.dialog == Some(Dialog::PluginFile));
+        withdraw(&mut app, 505);
+        assert!(app.plugins.file_prompt.is_none());
+        assert_eq!(app.dialog, None);
+        run_until(&context, &mut app, |_| answer(dir.path(), 505).is_some());
+        assert_eq!(answer(dir.path(), 505).unwrap()["error"]["code"], CANCELLED);
+        app.answer_file_prompt(true);
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.sessions.len(), sessions);
+        assert_eq!(app.dialog, None);
+        assert!(!app.plugins.file_refused_at.contains_key("mock"));
+        // A queued one is dropped before its prompt shows.
+        app.dialog = Some(Dialog::About);
+        app.queue_file_request(
+            "mock",
+            file_request(506, "file/open", json!({"path": image})),
+        );
+        assert_eq!(app.plugins.file_requests.len(), 1);
+        withdraw(&mut app, 506);
+        assert!(app.plugins.file_requests.is_empty());
+        app.dialog = None;
+        run_until(&context, &mut app, |_| answer(dir.path(), 506).is_some());
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.sessions.len(), sessions);
+
+        // A withdrawn request that was answered already is left alone, and
+        // an unknown id does nothing.
+        withdraw(&mut app, 503);
+        withdraw(&mut app, 9999);
+        let answers = received(dir.path())
+            .lines()
+            .filter(|line| line.contains("\"id\":503"))
+            .count();
+        assert_eq!(answers, 1);
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn a_withdrawn_export_closes_the_send_prompt() {
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_network_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        for id in [601, 602] {
+            let request = file_request(id, "document/export", json!({}));
+            app.plugins.held.push(("mock".into(), request));
+        }
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginConsent)
+        });
+        // The prompt comes back while another export waits on it.
+        withdraw(&mut app, 601);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginConsent)
+        });
+        assert_eq!(app.plugins.held.len(), 1);
+        withdraw(&mut app, 602);
+        assert!(app.plugins.held.is_empty() && app.plugins.consent.is_none());
+        assert_eq!(app.dialog, None);
+        for id in [601, 602] {
+            run_until(&context, &mut app, |_| answer(dir.path(), id).is_some());
+            assert_eq!(answer(dir.path(), id).unwrap()["error"]["code"], CANCELLED);
+        }
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the withdrawn prompt came back");
+        // Send clicked late sends nothing and records no answer.
+        app.answer_consent(true);
+        assert_eq!(app.export_answer("mock"), None);
+        app.stop_plugin("mock");
+    }
 }
