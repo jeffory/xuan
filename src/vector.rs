@@ -354,6 +354,113 @@ pub fn transform_paths(paths: &mut [NamedPath], affine: Affine) {
     }
 }
 
+/// How far an arc-length polyline may stray from the curve it measures.
+const MEASURE_TOLERANCE: f64 = 0.05;
+
+/// One subpath measured by distance along it (arc length), to place things such as the
+/// letters of text on a path at a distance from its start, turned to its direction there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArcLength {
+    /// The flattened points, a closed subpath ending back at its start, without repeats.
+    points: Vec<kurbo::Point>,
+    /// The distance from the start to each point.
+    distances: Vec<f64>,
+    closed: bool,
+}
+
+impl ArcLength {
+    /// The first subpath of `path`, flattened finely; `None` for a path with no points.
+    pub fn first(path: &VectorPath) -> Option<Self> {
+        let line = path.flatten(MEASURE_TOLERANCE).into_iter().next()?;
+        Some(Self::new(&line))
+    }
+
+    /// Measure a flattened subpath.
+    pub fn new(line: &Polyline) -> Self {
+        let mut points: Vec<kurbo::Point> = Vec::with_capacity(line.points.len() + 1);
+        let ends = line
+            .points
+            .iter()
+            .chain(line.closed.then(|| &line.points[0]));
+        for p in ends {
+            let p = kurbo::Point::new(f64::from(p.x), f64::from(p.y));
+            if points.last() != Some(&p) {
+                points.push(p);
+            }
+        }
+        let mut distances = Vec::with_capacity(points.len());
+        let mut total = 0.0;
+        for (i, p) in points.iter().enumerate() {
+            if i > 0 {
+                total += p.distance(points[i - 1]);
+            }
+            distances.push(total);
+        }
+        Self {
+            points,
+            distances,
+            closed: line.closed,
+        }
+    }
+
+    /// The same subpath run the other way.
+    pub fn reversed(&self) -> Self {
+        let points: Vec<_> = self.points.iter().rev().copied().collect();
+        let length = self.length();
+        let distances = self.distances.iter().rev().map(|d| length - d).collect();
+        Self {
+            points,
+            distances,
+            closed: self.closed,
+        }
+    }
+
+    /// The total length.
+    pub fn length(&self) -> f64 {
+        self.distances.last().copied().unwrap_or(0.0)
+    }
+
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
+    /// The point `distance` along the subpath and the unit direction of travel there. A
+    /// closed subpath wraps around; an open one has nothing before its start or past its end
+    /// (`None`). A subpath of one point has no direction, and points along +x.
+    pub fn sample(&self, distance: f64) -> Option<(kurbo::Point, kurbo::Vec2)> {
+        let length = self.length();
+        if !distance.is_finite() || self.points.is_empty() {
+            return None;
+        }
+        let distance = if self.closed && length > 0.0 {
+            distance.rem_euclid(length)
+        } else {
+            const SLACK: f64 = 1e-6;
+            if distance < -SLACK || distance > length + SLACK {
+                return None;
+            }
+            distance.clamp(0.0, length)
+        };
+        if self.points.len() < 2 {
+            return Some((self.points[0], kurbo::Vec2::new(1.0, 0.0)));
+        }
+        // The segment that holds the distance: the last one starting at or before it.
+        let i = self
+            .distances
+            .partition_point(|d| *d <= distance)
+            .clamp(1, self.points.len() - 1);
+        let (a, b) = (self.points[i - 1], self.points[i]);
+        let span = self.distances[i] - self.distances[i - 1];
+        let t = if span > 0.0 {
+            (distance - self.distances[i - 1]) / span
+        } else {
+            0.0
+        };
+        let direction = (b - a).normalize();
+        Some((a.lerp(b, t), direction))
+    }
+}
+
 fn point(p: kurbo::Point) -> Point {
     Point::new(p.x as f32, p.y as f32)
 }
@@ -960,5 +1067,41 @@ mod tests {
         assert_eq!((bounds.x0, bounds.x1, bounds.y1), (0.0, 100.0, 100.0));
         assert!((bounds.y0 - 25.0).abs() < 1e-9, "{bounds:?}");
         assert!(VectorPath::default().bounds().is_none());
+    }
+
+    #[test]
+    fn arc_length_samples_by_distance_and_wraps_closed_paths() {
+        let open = ArcLength::first(&VectorPath::parse("M 0 0 H 30 V 40").unwrap()).unwrap();
+        assert_eq!(open.length(), 70.0);
+        let (p, d) = open.sample(10.0).unwrap();
+        assert_eq!((p.x, p.y, d.x, d.y), (10.0, 0.0, 1.0, 0.0));
+        let (p, d) = open.sample(50.0).unwrap();
+        assert_eq!((p.x, p.y, d.x, d.y), (30.0, 20.0, 0.0, 1.0));
+        assert!(open.sample(-1.0).is_none() && open.sample(71.0).is_none());
+        assert!(open.sample(70.0).is_some());
+        // Reversed, it starts at the old end and runs back.
+        let back = open.reversed();
+        let (p, d) = back.sample(10.0).unwrap();
+        assert_eq!((p.x, p.y, d.x, d.y), (30.0, 30.0, 0.0, -1.0));
+
+        let square = ArcLength::first(&VectorPath::parse("M 0 0 H 10 V 10 H 0 Z").unwrap())
+            .unwrap();
+        assert!(square.closed());
+        assert_eq!(square.length(), 40.0);
+        let (p, _) = square.sample(45.0).unwrap();
+        assert_eq!((p.x, p.y), (5.0, 0.0));
+        let (p, d) = square.sample(-5.0).unwrap();
+        assert_eq!((p.x, p.y, d.y), (0.0, 5.0, -1.0));
+
+        // A circle measures 2πr, and its direction is the tangent.
+        let circle = ArcLength::first(
+            &VectorPath::parse("M 150 100 A 50 50 0 1 1 50 100 A 50 50 0 1 1 150 100 Z").unwrap(),
+        )
+        .unwrap();
+        assert!((circle.length() - std::f64::consts::TAU * 50.0).abs() < 0.5);
+        let (p, d) = circle.sample(circle.length() / 4.0).unwrap();
+        assert!((p.x - 100.0).abs() < 0.2 && (p.y - 150.0).abs() < 0.2, "{p:?}");
+        assert!((d.x + 1.0).abs() < 0.01, "{d:?}");
+        assert!(ArcLength::first(&VectorPath::default()).is_none());
     }
 }

@@ -157,13 +157,20 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 10;
+const LATEST_VERSION: u32 = 11;
 
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    // Older readers would drop a text layer's path and set its text in a box when edited.
+    if document
+        .layers
+        .iter()
+        .any(|l| l.text.as_ref().is_some_and(|t| t.path.is_some()))
+    {
+        11
     // Older readers would drop the paths, and cannot draw a path shape.
-    if !document.paths.is_empty()
+    } else if !document.paths.is_empty()
         || document
             .layers
             .iter()
