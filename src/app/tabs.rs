@@ -578,7 +578,7 @@ impl EditorApp {
         if background.double_clicked() || empty.double_clicked() {
             actions.command = Some("new");
         }
-        if overflow && background.hovered() {
+        if overflow && ui.rect_contains_pointer(viewport) {
             let delta = ui.input(|i| i.smooth_scroll_delta);
             let delta = if delta.x != 0.0 { delta.x } else { delta.y };
             offset = strip.clamp_scroll(offset - delta, visible);
