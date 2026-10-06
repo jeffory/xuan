@@ -1345,8 +1345,8 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                                 continue;
                             }
                             length += dx.hypot(dy);
-                            work = work
-                                .saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
+                            work =
+                                work.saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
                         }
                     }
                     // A taper paints its stretch in short pieces of their own.
@@ -2183,7 +2183,9 @@ fn apply_each(
                     seed: *seed,
                 };
                 dynamics.validate().map_err(anyhow::Error::msg)?;
-                let symmetry = symmetry.map(|symmetry| symmetry.paint()).unwrap_or_default();
+                let symmetry = symmetry
+                    .map(|symmetry| symmetry.paint())
+                    .unwrap_or_default();
                 symmetry
                     .validate(document.width, document.height)
                     .map_err(anyhow::Error::msg)?;
@@ -4437,7 +4439,8 @@ mod tests {
             }
         );
         // Without symmetry the edit writes no `symmetry` at all.
-        let plain = serde_json::to_value(edit(json!({"op": "stroke", "points": [[1, 1]]}))).unwrap();
+        let plain =
+            serde_json::to_value(edit(json!({"op": "stroke", "points": [[1, 1]]}))).unwrap();
         assert!(plain.get("symmetry").is_none(), "{plain}");
 
         // A vertical axis through the middle of the canvas by default: the
@@ -4498,7 +4501,10 @@ mod tests {
         };
         let plain = stroke(json!({}));
         let radial = stroke(json!({"symmetry": {"mode": "radial", "segments": 8}}));
-        assert!((radial.stroke - plain.stroke * 8.0).abs() < 0.1, "{radial:?}");
+        assert!(
+            (radial.stroke - plain.stroke * 8.0).abs() < 0.1,
+            "{radial:?}"
+        );
         assert!(radial.work >= plain.work * 8, "{radial:?} {plain:?}");
         let mirrored = stroke(json!({"symmetry": {"mode": "horizontal"}}));
         assert_eq!(mirrored.stroke, plain.stroke * 2.0);
@@ -4510,7 +4516,10 @@ mod tests {
         let mut symmetric = dabs;
         symmetric["symmetry"] = json!({"mode": "radial", "segments": 32});
         let symmetric = stroke(symmetric);
-        assert!(symmetric.work >= dabbed.work * 31, "{symmetric:?} {dabbed:?}");
+        assert!(
+            symmetric.work >= dabbed.work * 31,
+            "{symmetric:?} {dabbed:?}"
+        );
         // Long enough strokes go over the length limit only with their copies.
         let long = json!({"op": "stroke", "points": [[0, 0], [10_000, 0]]});
         let mut copies = long.clone();

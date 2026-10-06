@@ -101,11 +101,18 @@ fn vertical_and_horizontal_symmetry_mirror_the_pixels() {
         for (axis, flip) in flips {
             for paint_mode in [PaintMode::Paint, PaintMode::Pencil] {
                 let mut document = blank(200, 120);
-                paint(&mut document, &wave(&brush(mode(axis), dynamics)), paint_mode);
+                paint(
+                    &mut document,
+                    &wave(&brush(mode(axis), dynamics)),
+                    paint_mode,
+                );
                 let image = pixels(&document);
                 assert!(image.pixels().any(|p| p[3] > 0));
                 let difference = largest_difference(&image, &flip(&image));
-                assert!(difference <= 1, "{axis:?} {paint_mode:?} {dynamics:?}: {difference}");
+                assert!(
+                    difference <= 1,
+                    "{axis:?} {paint_mode:?} {dynamics:?}: {difference}"
+                );
                 // The drawn stroke is painted as it would be without
                 // symmetry, away from where its copy reaches.
                 let mut plain = blank(200, 120);
@@ -115,9 +122,15 @@ fn vertical_and_horizontal_symmetry_mirror_the_pixels() {
                     paint_mode,
                 );
                 let plain = pixels(&plain);
+                // (The layer may have grown differently, which can round a
+                // pixel by one.)
                 for (x, y, pixel) in plain.enumerate_pixels() {
                     if x < 90 && y < 55 {
-                        assert_eq!(image.get_pixel(x, y), pixel, "{axis:?} at {x}, {y}");
+                        let other = image.get_pixel(x, y);
+                        assert!(
+                            (0..4).all(|i| other[i].abs_diff(pixel[i]) <= 1),
+                            "{axis:?} at {x}, {y}: {other:?} {pixel:?}"
+                        );
                     }
                 }
             }

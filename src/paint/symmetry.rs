@@ -148,6 +148,17 @@ impl Reflection {
         self.matrix == IDENTITY
     }
 
+    /// Whether this copy mirrors x and y: a mirror, or a half turn (both).
+    /// Other turns are neither.
+    pub fn flips(&self) -> [bool; 2] {
+        let [a, b, c, d] = self.matrix;
+        if b.abs() < 1e-6 && c.abs() < 1e-6 {
+            [a < 0.0, d < 0.0]
+        } else {
+            [false; 2]
+        }
+    }
+
     fn vector(&self, [x, y]: [f32; 2]) -> [f32; 2] {
         let [a, b, c, d] = self.matrix;
         [a * x + b * y, c * x + d * y]
@@ -184,8 +195,14 @@ mod tests {
         };
         let copies = mirror.copies(100, 60);
         assert_eq!(copies.len(), 2);
-        assert_eq!(copies[0].point(Point::new(10.0, 7.0)), Point::new(10.0, 7.0));
-        assert_eq!(copies[1].point(Point::new(10.0, 7.0)), Point::new(90.0, 7.0));
+        assert_eq!(
+            copies[0].point(Point::new(10.0, 7.0)),
+            Point::new(10.0, 7.0)
+        );
+        assert_eq!(
+            copies[1].point(Point::new(10.0, 7.0)),
+            Point::new(90.0, 7.0)
+        );
         let flip = Symmetry {
             mode: SymmetryMode::Horizontal,
             center: Some(Point::new(0.0, 20.0)),
@@ -204,7 +221,10 @@ mod tests {
             .map(|copy| copy.point(Point::new(80.0, 50.0)))
             .map(|p| (p.x.round(), p.y.round()))
             .collect();
-        assert_eq!(points, [(80.0, 50.0), (50.0, 80.0), (20.0, 50.0), (50.0, 20.0)]);
+        assert_eq!(
+            points,
+            [(80.0, 50.0), (50.0, 80.0), (20.0, 50.0), (50.0, 20.0)]
+        );
         // A tilted brush turns with its copy.
         let brush = Brush {
             tilt: [30.0, 0.0],
@@ -223,12 +243,28 @@ mod tests {
             center,
         };
         assert!(radial(2, None).validate(10, 10).is_ok());
-        assert!(radial(32, Some(Point::new(10.0, 0.0))).validate(10, 10).is_ok());
+        assert!(
+            radial(32, Some(Point::new(10.0, 0.0)))
+                .validate(10, 10)
+                .is_ok()
+        );
         assert!(radial(1, None).validate(10, 10).is_err());
         assert!(radial(33, None).validate(10, 10).is_err());
-        assert!(radial(6, Some(Point::new(10.5, 5.0))).validate(10, 10).is_err());
-        assert!(radial(6, Some(Point::new(5.0, -1.0))).validate(10, 10).is_err());
-        assert!(radial(6, Some(Point::new(f32::NAN, 5.0))).validate(10, 10).is_err());
+        assert!(
+            radial(6, Some(Point::new(10.5, 5.0)))
+                .validate(10, 10)
+                .is_err()
+        );
+        assert!(
+            radial(6, Some(Point::new(5.0, -1.0)))
+                .validate(10, 10)
+                .is_err()
+        );
+        assert!(
+            radial(6, Some(Point::new(f32::NAN, 5.0)))
+                .validate(10, 10)
+                .is_err()
+        );
         assert_eq!(radial(12, None).count(), 12);
         assert_eq!(Symmetry::default().count(), 1);
         assert_eq!(Symmetry::default().copies(4, 4).len(), 1);

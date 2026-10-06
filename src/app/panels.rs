@@ -593,7 +593,10 @@ impl EditorApp {
                 ui.add_enabled(
                     symmetry.mode == SymmetryMode::Radial,
                     widgets::Number::new(&mut symmetry.segments)
-                        .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
+                        .size(egui::vec2(
+                            DEFAULT_PERCENT_VALUE_WIDTH,
+                            DEFAULT_VALUE_HEIGHT,
+                        ))
                         .range(symmetry::MIN_SEGMENTS..=symmetry::MAX_SEGMENTS),
                 )
                 .on_hover_text(tr("Copies of the stroke around the centre."));

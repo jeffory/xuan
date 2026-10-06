@@ -20,6 +20,9 @@ pub struct Stroke {
     /// The symmetric copies every piece is painted as, fixed when the
     /// stroke starts; empty without symmetry.
     copies: Option<Vec<Reflection>>,
+    /// Whether the copy being painted is mirrored in x and y, for the
+    /// pencil's whole-pixel dabs.
+    pub(super) flip: [bool; 2],
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -139,7 +142,9 @@ impl Stroke {
     }
 
     fn symmetric(&self) -> bool {
-        self.copies.as_ref().is_some_and(|copies| !copies.is_empty())
+        self.copies
+            .as_ref()
+            .is_some_and(|copies| !copies.is_empty())
     }
 
     /// Paint the pieces, each once for every symmetric copy. All copies
@@ -180,7 +185,8 @@ impl Stroke {
                 (from, to)
             };
             for reflection in &copies {
-                super::stroke_segment(
+                self.flip = reflection.flips();
+                let result = super::stroke_segment(
                     document,
                     reflection.point(from),
                     reflection.point(to),
@@ -188,7 +194,9 @@ impl Stroke {
                     &reflection.brush(brush),
                     copy(options),
                     Some(self),
-                )?;
+                );
+                self.flip = [false; 2];
+                result?;
             }
         }
         Ok(())

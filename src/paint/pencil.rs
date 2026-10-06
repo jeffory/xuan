@@ -127,7 +127,18 @@ pub(super) fn segment(
         let size = size_of(lerp(from_brush.diameter, brush.diameter, t));
         let opacity = lerp(from_brush.opacity, brush.opacity, t);
         let shift = if size % 2 == 1 { 0.5 } else { 0.0 };
-        let centre = Point::new(ax as f32 + shift, ay as f32 + shift);
+        // A mirrored symmetric copy puts a dab whose size parity differs
+        // from the lattice's on the mirrored side of its anchor, so it
+        // lands where the drawn dab's mirror image does.
+        let place = |anchor: i32, flipped: bool| {
+            if flipped {
+                anchor as f32 + if odd_lattice { 1.0 } else { 0.0 } - shift
+            } else {
+                anchor as f32 + shift
+            }
+        };
+        let flip = coverage.flip;
+        let centre = Point::new(place(ax, flip[0]), place(ay, flip[1]));
         let half = size as f32 * 0.5;
         let corners = [(-half, -half), (half, -half), (half, half), (-half, half)]
             .map(|(x, y)| transform.inverse(Point::new(centre.x + x, centre.y + y)));

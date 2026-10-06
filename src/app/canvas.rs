@@ -103,7 +103,12 @@ fn paint_brush_outline(painter: &egui::Painter, outline: Vec<Pos2>, light: Color
 
 /// The paint symmetry's axis, or its radial spokes, and its centre, in
 /// screen space over a `size` canvas, clipped to the canvas.
-fn symmetry_guides(symmetry: &paint::Symmetry, size: [u32; 2], origin: Pos2, zoom: f32) -> Vec<[Pos2; 2]> {
+fn symmetry_guides(
+    symmetry: &paint::Symmetry,
+    size: [u32; 2],
+    origin: Pos2,
+    zoom: f32,
+) -> Vec<[Pos2; 2]> {
     let [width, height] = size;
     let center = symmetry.center_in(width, height);
     let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
@@ -125,8 +130,8 @@ fn symmetry_guides(symmetry: &paint::Symmetry, size: [u32; 2], origin: Pos2, zoo
             let n = symmetry.count();
             (0..n)
                 .map(|k| {
-                    let angle = std::f32::consts::TAU * k as f32 / n as f32
-                        - std::f32::consts::FRAC_PI_2;
+                    let angle =
+                        std::f32::consts::TAU * k as f32 / n as f32 - std::f32::consts::FRAC_PI_2;
                     let end = Point::new(
                         center.x + angle.cos() * reach,
                         center.y + angle.sin() * reach,
@@ -584,7 +589,10 @@ impl EditorApp {
                     let guides = painter.with_clip_rect(visible);
                     let accent = ui.palette().accent;
                     for line in symmetry_guides(&self.brush.symmetry, size, origin, zoom) {
-                        guides.line_segment(line, Stroke::new(2.5_f32, Color32::from_black_alpha(70)));
+                        guides.line_segment(
+                            line,
+                            Stroke::new(2.5_f32, Color32::from_black_alpha(70)),
+                        );
                         guides.add(egui::Shape::dashed_line(
                             &line,
                             Stroke::new(1.0_f32, accent),
