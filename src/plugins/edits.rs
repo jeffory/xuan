@@ -2194,13 +2194,19 @@ mod tests {
             shape["shape"],
             json!({"shape": "RoundedRectangle", "color": "#ff000080", "corner_radius": 3.0})
         );
-        assert_eq!((&shape["flip_x"], &shape["flip_y"]), (&json!(false), &json!(false)));
+        assert_eq!(
+            (&shape["flip_x"], &shape["flip_y"]),
+            (&json!(false), &json!(false))
+        );
         let base = document.layers[0].id;
         assert_eq!(described(&document, base)["kind"], "image");
         assert!(described(&document, base)["shape"].is_null());
         document.layers[0].transform.flip_x = true;
         let flipped = described(&document, base);
-        assert_eq!((&flipped["flip_x"], &flipped["flip_y"]), (&json!(true), &json!(false)));
+        assert_eq!(
+            (&flipped["flip_x"], &flipped["flip_y"]),
+            (&json!(true), &json!(false))
+        );
     }
 
     #[test]
@@ -2232,8 +2238,7 @@ mod tests {
         assert_eq!(value["attached_to"], json!(image));
         assert_eq!(value["masks"][0]["layer"], json!(mask_id));
         // The image's mask is read from the mask layer, which is named.
-        let export =
-            export_layer(&document, image, What::Mask, None, dir.path(), "m.png").unwrap();
+        let export = export_layer(&document, image, What::Mask, None, dir.path(), "m.png").unwrap();
         assert_eq!(export.mask_layer, Some(mask_id));
         assert_eq!(read_gray_png(&export.path).unwrap().dimensions(), (1, 1));
         let own = export_layer(&document, mask_id, What::Mask, None, dir.path(), "o.png").unwrap();
@@ -2250,7 +2255,13 @@ mod tests {
             error.contains(&mask_id.to_string()) && error.contains(&second_id.to_string()),
             "{error}"
         );
-        assert_eq!(described(&document, image)["masks"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            described(&document, image)["masks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         // A mask outside any image's stack is not attached.
         let loose = Layer::mask("Loose", 40, 30);
         let loose_id = loose.id;
@@ -2290,7 +2301,9 @@ mod tests {
             let error = format!("{:#}", run(&mut document, &edits).unwrap_err());
             assert!(error.contains(expected), "{error}");
         }
-        let filter = edit(json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 500}}}));
+        let filter = edit(
+            json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 500}}}),
+        );
         let error = run(&mut Document::new(8, 8).unwrap(), &[filter]).unwrap_err();
         assert!(
             format!("{error:#}").contains("`GaussianBlur.radius` must be between 0 and 100"),
@@ -2308,7 +2321,10 @@ mod tests {
             let error = serde_json::from_value::<T>(json!({"NoSuchVariant": {}}))
                 .unwrap_err()
                 .to_string();
-            let listed = error.split("expected one of").nth(1).expect("variants listed");
+            let listed = error
+                .split("expected one of")
+                .nth(1)
+                .expect("variants listed");
             listed
                 .split('`')
                 .skip(1)

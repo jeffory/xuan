@@ -2412,11 +2412,18 @@ fn host_run_picks_its_layers_and_reports_what_it_added_and_started() {
     )
     .unwrap();
     let flipped = describe(&mut app, base);
-    assert_eq!((&flipped["flip_x"], &flipped["flip_y"]), (&json!(true), &json!(false)));
+    assert_eq!(
+        (&flipped["flip_x"], &flipped["flip_y"]),
+        (&json!(true), &json!(false))
+    );
 
     // A mask attached to the image is reported on it and exported through it.
-    let answer =
-        plugin_request(&mut app, "host/run", json!({"action": "mask", "layers": [base]})).unwrap();
+    let answer = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "mask", "layers": [base]}),
+    )
+    .unwrap();
     let mask = ids(&answer);
     assert_eq!(mask.len(), 1);
     let image = describe(&mut app, base);

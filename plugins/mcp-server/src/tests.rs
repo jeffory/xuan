@@ -721,10 +721,7 @@ fn adjustments_and_filters_are_typed_and_quoted_json_is_read() {
         "FilmGrain",
         "Invert",
     ] {
-        assert!(
-            adjustments.as_str().unwrap().contains(variant),
-            "{variant}"
-        );
+        assert!(adjustments.as_str().unwrap().contains(variant), "{variant}");
     }
     assert!(schema("run_command", "layers").is_object());
 

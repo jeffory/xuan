@@ -76,8 +76,18 @@ impl HueSettings {
         );
         for [hue, saturation, lightness] in self.adjustments {
             within("HueRanges.settings.adjustments hue", hue, -360.0, 360.0)?;
-            within("HueRanges.settings.adjustments saturation", saturation, -100.0, 100.0)?;
-            within("HueRanges.settings.adjustments lightness", lightness, -100.0, 100.0)?;
+            within(
+                "HueRanges.settings.adjustments saturation",
+                saturation,
+                -100.0,
+                100.0,
+            )?;
+            within(
+                "HueRanges.settings.adjustments lightness",
+                lightness,
+                -100.0,
+                100.0,
+            )?;
         }
         anyhow::ensure!(
             self.bands.iter().flatten().all(|v| v.is_finite()),
