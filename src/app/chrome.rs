@@ -351,7 +351,15 @@ impl EditorApp {
             return false;
         };
         let (asset, highlight, dim) = (pick.asset.clone(), pick.highlight, pick.dim);
+        // A monochrome close icon without a hover image of its own is drawn as Breeze does:
+        // a circle in the scheme's negative colour with the glyph in the title bar colour.
+        let close_fill = (kind == Kind::Close && asset.symbolic)
+            .then(|| resolved.tints.close_fill(highlight, theme::TITLEBAR))
+            .flatten();
         let tint = asset.symbolic.then(|| {
+            if let Some((_, glyph)) = close_fill {
+                return glyph;
+            }
             let fallback = if state == State::Backdrop {
                 theme::MUTED
             } else {
@@ -365,7 +373,10 @@ impl EditorApp {
             return false;
         };
         let painter = ui.painter();
-        if highlight != Highlight::None {
+        if let Some((fill, _)) = close_fill {
+            let radius = (rect.width().min(rect.height()) / 2.0 - 1.0).max(6.0);
+            painter.circle_filled(rect.center(), radius, fill);
+        } else if highlight != Highlight::None {
             let alpha = if highlight == Highlight::Pressed {
                 36
             } else {

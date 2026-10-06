@@ -352,7 +352,11 @@ On Linux, **Window buttons** (shown for Compact) chooses the artwork:
   `window-close-symbolic`, `window-minimize-symbolic`, `window-maximize-symbolic` and
   `window-restore-symbolic` icons of the current icon theme, coloured like the title
   bar text. The file names are read from the theme's CSS, not assumed. A state a theme
-  has no image for is shown with the normal image and a light highlight. Changing the
+  has no image for is shown with the normal image and a light highlight. A theme's
+  own hover and pressed images, including the close button's, are drawn as they are.
+  When the close button comes from the icon theme, hovering or pressing it draws a
+  circle in your colour scheme's negative (red) colour, read from `kdeglobals`
+  (`ForegroundNegative`), as Breeze does. Changing the
   decoration, colour scheme, or icon theme updates the buttons within a few seconds,
   without restarting Xuan.
 - **Built-in** always draws the monochrome buttons that come with Xuan. They are

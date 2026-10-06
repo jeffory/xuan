@@ -354,7 +354,12 @@ pub(super) fn parse_color(value: &str) -> Option<[u8; 3]> {
 pub(super) struct Tints {
     pub active: Option<[u8; 3]>,
     pub inactive: Option<[u8; 3]>,
+    /// The colour scheme's negative colour, the fill of a hovered close button.
+    pub negative: Option<[u8; 3]>,
 }
+
+/// The negative colour used when the colour scheme names none (Breeze's default red).
+const FALLBACK_NEGATIVE: Color32 = Color32::from_rgb(218, 68, 83);
 
 impl Tints {
     pub(super) fn from_kdeglobals(text: &str) -> Self {
@@ -365,6 +370,30 @@ impl Tints {
                 .or_else(|| color("WM", "activeForeground")),
             inactive: color("Colors:Header", "ForegroundInactive")
                 .or_else(|| color("WM", "inactiveForeground")),
+            negative: color("Colors:Window", "ForegroundNegative")
+                .or_else(|| color("Colors:Header", "ForegroundNegative")),
+        }
+    }
+
+    /// The scheme's negative colour, or a red when it names none.
+    pub(super) fn negative_color(&self) -> Color32 {
+        self.negative
+            .map_or(FALLBACK_NEGATIVE, |[r, g, b]| Color32::from_rgb(r, g, b))
+    }
+
+    /// How a hovered or pressed close button drawn from a monochrome icon looks, as
+    /// Breeze does: a circle in the negative colour with the glyph in the title bar
+    /// colour `bg`. Returns `(circle, glyph)`; `None` when there is no highlight.
+    pub(super) fn close_fill(
+        &self,
+        highlight: Highlight,
+        bg: Color32,
+    ) -> Option<(Color32, Color32)> {
+        let negative = self.negative_color();
+        match highlight {
+            Highlight::None => None,
+            Highlight::Hover => Some((negative, bg)),
+            Highlight::Pressed => Some((negative.gamma_multiply(0.8), bg)),
         }
     }
 
@@ -914,10 +943,19 @@ impl Resolved {
                 plain,
             ),
             State::Active => self.candidate(kind, State::Active, ppp).map_or_else(
-                || Pick {
-                    asset: self.candidate(kind, State::Hover, ppp).unwrap_or(normal),
-                    highlight: Highlight::Pressed,
-                    dim: false,
+                || {
+                    let hover = self.candidate(kind, State::Hover, ppp);
+                    Pick {
+                        asset: hover.unwrap_or(normal),
+                        // The close button's own hover image carries the theme's colour;
+                        // nothing is drawn over it.
+                        highlight: if kind == Kind::Close && hover.is_some() {
+                            Highlight::None
+                        } else {
+                            Highlight::Pressed
+                        },
+                        dim: false,
+                    }
                 },
                 plain,
             ),

@@ -181,7 +181,8 @@ fn kde_gtk_config_css_resolves_every_button_and_state() {
         resolved.tints,
         Tints {
             active: Some([252, 252, 252]),
-            inactive: Some([161, 169, 177])
+            inactive: Some([161, 169, 177]),
+            ..Tints::default()
         }
     );
 }
@@ -669,7 +670,8 @@ fn colours_parse_from_kdeglobals() {
         Tints::from_kdeglobals(sample),
         Tints {
             active: Some([35, 38, 41]),
-            inactive: Some([127, 140, 141])
+            inactive: Some([127, 140, 141]),
+            ..Tints::default()
         }
     );
     // Without a header group, [WM] is used.
@@ -679,7 +681,8 @@ fn colours_parse_from_kdeglobals() {
         ),
         Tints {
             active: Some([71, 80, 87]),
-            inactive: Some([189, 195, 199])
+            inactive: Some([189, 195, 199]),
+            ..Tints::default()
         }
     );
     assert_eq!(
@@ -695,6 +698,7 @@ fn colours_parse_from_kdeglobals() {
     let tints = Tints {
         active: Some([35, 38, 41]),
         inactive: Some([250, 250, 250]),
+        ..Tints::default()
     };
     let bg = Color32::from_gray(30);
     let fallback = Color32::from_gray(200);
@@ -843,4 +847,101 @@ fn textures_are_cached_per_asset_and_a_broken_asset_is_remembered() {
     assert_eq!(theme.texture(&ctx, &assets[0], ppp, None).unwrap().0, id);
     assert!(theme.texture(&ctx, &assets[1], ppp, None).is_none());
     assert_eq!(theme.loaded_textures(), 1);
+}
+
+#[test]
+fn negative_colour_comes_from_the_window_group_then_the_header_group() {
+    let both = "[Colors:Header]\nForegroundNegative=1,2,3\n[Colors:Window]\nForegroundNegative=218,68,83\n";
+    assert_eq!(Tints::from_kdeglobals(both).negative, Some([218, 68, 83]));
+    let header = "[Colors:Header]\r\nForegroundNegative=1,2,3\r\n";
+    assert_eq!(Tints::from_kdeglobals(header).negative, Some([1, 2, 3]));
+    assert_eq!(
+        Tints::from_kdeglobals("[Colors:Window]\nForegroundNegative=x\n").negative,
+        None
+    );
+    assert_eq!(Tints::from_kdeglobals("").negative, None);
+    // Absent: a fallback red, not a transparent or white fill.
+    assert_eq!(Tints::default().negative_color(), FALLBACK_NEGATIVE);
+}
+
+#[test]
+fn close_fill_uses_the_negative_colour_for_hover_and_a_darker_one_pressed() {
+    let bg = Color32::from_gray(30);
+    let tints = Tints {
+        negative: Some([200, 20, 40]),
+        ..Tints::default()
+    };
+    let red = Color32::from_rgb(200, 20, 40);
+    assert_eq!(tints.close_fill(Highlight::Hover, bg), Some((red, bg)));
+    let (pressed, glyph) = tints.close_fill(Highlight::Pressed, bg).unwrap();
+    assert_eq!(glyph, bg);
+    assert!(pressed.r() < red.r() && pressed.r() > 0);
+    assert_eq!(tints.close_fill(Highlight::None, bg), None);
+    assert_eq!(
+        Tints::default().close_fill(Highlight::Hover, bg),
+        Some((FALLBACK_NEGATIVE, bg))
+    );
+}
+
+#[test]
+fn kde_icon_theme_close_hover_takes_the_negative_colour_from_kdeglobals() {
+    let (fx, env) = Fixture::new(true);
+    fx.write(
+        "home/.config/kdeglobals",
+        "[Icons]\nTheme=breeze\n[Colors:Window]\nForegroundNegative=218,68,83\n",
+    );
+    icon_theme(
+        &fx,
+        "breeze",
+        "[Icon Theme]\nDirectories=actions\n[actions]\nSize=16\nType=Fixed\n",
+    );
+    for name in ["minimize", "maximize", "restore", "close"] {
+        fx.svg(
+            &format!("usr/share/icons/breeze/actions/window-{name}-symbolic.svg"),
+            "#000",
+        );
+    }
+    let resolved = resolve_env(&env).unwrap();
+    assert_eq!(resolved.source, Source::IconTheme);
+    let hover = resolved.pick(Kind::Close, State::Hover, 1.0).unwrap();
+    assert!(hover.asset.symbolic);
+    let bg = Color32::from_gray(30);
+    assert_eq!(
+        resolved.tints.close_fill(hover.highlight, bg),
+        Some((Color32::from_rgb(218, 68, 83), bg))
+    );
+    let pressed = resolved.pick(Kind::Close, State::Active, 1.0).unwrap();
+    assert_eq!(pressed.highlight, Highlight::Pressed);
+    // The normal state is drawn with the foreground, not the negative colour.
+    let normal = resolved.pick(Kind::Close, State::Normal, 1.0).unwrap();
+    assert_eq!(normal.highlight, Highlight::None);
+    assert_eq!(resolved.tints.close_fill(normal.highlight, bg), None);
+}
+
+#[test]
+fn gtk_assets_for_close_hover_and_pressed_are_drawn_unmodified() {
+    let (fx, env) = Fixture::new(true);
+    kde_gtk_config(&fx, "gtk-3.0");
+    let resolved = resolve_env(&env).unwrap();
+    let hover = resolved.pick(Kind::Close, State::Hover, 1.0).unwrap();
+    let pressed = resolved.pick(Kind::Close, State::Active, 1.0).unwrap();
+    assert!(pressed.asset.path.ends_with("titlebutton-close-active.png"));
+    assert!(!hover.asset.symbolic);
+    assert_eq!(
+        (hover.highlight, pressed.highlight),
+        (Highlight::None, Highlight::None)
+    );
+    // Only a hover image: it is reused for pressed, still with nothing drawn over it.
+    let (fx2, env2) = Fixture::new(true);
+    fx2.png("home/.config/gtk-3.0/a.png", [255, 255, 255, 255], 4);
+    fx2.png("home/.config/gtk-3.0/h.png", [200, 0, 0, 255], 4);
+    fx2.write(
+        "home/.config/gtk-3.0/window_decorations.css",
+        ".titlebar button.close, .titlebar button.minimize, .titlebar button.maximize { background-image: url(a.png) }\n\
+         .titlebar button.close:hover { background-image: url(h.png) }",
+    );
+    let only_hover = resolve_env(&env2).unwrap();
+    let pressed = only_hover.pick(Kind::Close, State::Active, 1.0).unwrap();
+    assert!(pressed.asset.path.ends_with("h.png"));
+    assert_eq!(pressed.highlight, Highlight::None);
 }
