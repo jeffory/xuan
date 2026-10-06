@@ -98,7 +98,7 @@ fn feather_softens_only_the_new_shape() {
             &[json!({"op": "select_rect", "x": 0, "y": 0, "width": 8, "height": 30})],
         )
         .unwrap();
-        run(&mut document, &[op.clone()]).unwrap();
+        run(&mut document, std::slice::from_ref(&op)).unwrap();
         let mask = selection(&document);
         assert_eq!(mask.get_pixel(7, 15)[0], 255, "{op}");
         assert_eq!(mask.get_pixel(8, 15)[0], 0, "{op}");
