@@ -120,15 +120,28 @@ follow instructions hidden in something it read.
   their pixels and placement, and the MCP server can lock a layer but never
   unlock one (the plugin protocol itself lets a plugin with `document =
   "edit"` unlock a layer, as the Layers panel does).
-- **Files go through you.** Saving and exporting open Xuan's save dialog with
-  a suggested name, and you choose where (or cancel); opening a file shows its
-  full path and opens it only if you agree. The client cannot pick where a
-  file goes, replace one without the save dialog asking you to confirm, or
-  open something silently. The file is written exactly where you confirmed:
-  if the name you typed lacks the extension, the dialog asks again with it
-  added rather than writing next to the file you saw. Suggested names are
-  cleaned of folders, invisible and right-to-left control characters and
-  Windows device names (`CON`, `NUL`, …). The client learns only file names,
+- **Files go through you.** Without a `path`, saving and exporting open
+  Xuan's save dialog with a suggested name, and you choose where (or cancel).
+  The file is written exactly where you confirmed: if the name you typed
+  lacks the extension, the dialog asks again with it added rather than
+  writing next to the file you saw. Suggested names are cleaned of folders,
+  invisible and right-to-left control characters and Windows device names
+  (`CON`, `NUL`, …). Opening a file shows its full path and opens it only if
+  you agree.
+- **Saving to a path the client names** (`save_document` or
+  `export_document` with `path`, or `save_document` with `in_place`) shows
+  Xuan's own prompt instead, because a client cannot operate the system
+  dialog: it names the client, the file, its folder, and whether it replaces
+  a file, with **Save**, **Always Allow** and **Cancel**. **Always Allow**
+  lets the client save and export to paths without asking from then on; each
+  such write shows in the status bar, the plugin's log and the MCP Server
+  pane's recent tool calls, with the file name. It is a switch in **Plugins →
+  Manage Plugins… → MCP Server** ("Save and export without asking"), and it
+  is dropped if the plugin's folder, command or permissions change. The path
+  must be absolute, in a folder that exists, with the format's extension and
+  a plain file name. An existing file is replaced only when the call says
+  `overwrite: true`; even with Always Allow, replacing a file Xuan did not
+  write since it started asks you again. The client learns only file names,
   never folders, in answers and in error messages. Xuan's other file
   commands, the clipboard, settings and other plugins are out of reach.
 - **Switching documents** is limited to once a second, so a client cannot
@@ -206,8 +219,8 @@ larger tool arguments with a tool error saying the request is too large.
 | `batch` | Several edit tools' steps as one undo step, all or nothing | one `document/edit` |
 | `run_command` | Flatten, duplicate, flip, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
-| `save_document` | Save as a `.xuan` project, through the save dialog | `file/save_as` |
-| `export_document` | Export PNG, JPEG, TIFF or WebP, through the save dialog | `file/export` |
+| `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
+| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/export` |
 | `open_document` | Open an image or project, after the user agrees | `file/open` |
 
 Filters and adjustments use the shapes `.xuan` files store, for example
@@ -347,7 +360,10 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
   `scatter_count` and the jitters replaces many dabs; a wide `spacing` (e.g.
   1.5) makes a dotted trail. Keep `seed` to repeat a stroke exactly, change it
   for a different pattern.
-- Ask the user before saving; the save dialog is theirs to answer.
+- Ask the user before saving; the save dialog and the save prompt are theirs
+  to answer. To save without the dialog, pass `path` (absolute, in a folder
+  that exists); the first such save waits for the user's answer in Xuan.
+  Pass `overwrite: true` only when you mean to replace that file.
 
 ## The `.xuan` format for agents
 

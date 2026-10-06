@@ -72,7 +72,7 @@ the document takes effect on the next frame and is drawn at once.
 | --- | --- |
 | list documents | `document/list` (new) |
 | open a document | `file/open` (new): the user confirms the file |
-| save / export a document | `file/save_as`, `file/export` (new): the system save dialog |
+| save / export a document | `file/save_as`, `file/export` (new): the system save dialog, or with `path` Xuan's own prompt (#54); `file/save` saves in place |
 | switch document | `document/activate` (new) |
 | list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
@@ -217,10 +217,11 @@ or nothing.
 
 ## Opening, saving and exporting
 
-The rule from #33 (F2) stands: a plugin can never save or overwrite a file
-silently, and `host/run` keeps refusing `save`, `save_as`, `export`, `open` and
-`close`. A plugin that drives the editor still needs to deliver its work, so
-three requests route the decision through the user:
+#33 (F2) ruled that a plugin can never save or overwrite a file silently;
+#54 relaxed that into an opt-in the user grants per plugin (below).
+`host/run` keeps refusing `save`, `save_as`, `export`, `open` and `close`. A
+plugin that drives the editor still needs to deliver its work, so the file
+requests route the decision through the user:
 
 - **`file/save_as` and `file/export` open the system's save dialog**, titled
   with the plugin's name and id and prefilled with a suggested name. The user
@@ -262,8 +263,58 @@ Alternatives considered: an export confined to the plugin's own folders already
 exists (`document/export` writes a PNG into its folders) and is enough for
 previews, but it does not put a file where the user wants it, and a plugin
 handing such a file back for the user to accept would just be a second save
-dialog. A per-plugin allow-list of folders was rejected: it is a standing
-permission for silent writes, which is exactly what F2 rules out.
+dialog. A per-plugin allow-list of folders was rejected for #33 as a standing
+permission for silent writes; #54 below adds such a permission, without the
+folder list, because agent workflows need it.
+
+### Saving without the dialog (#54)
+
+The save dialog kept every write in the user's hands, but an MCP client
+cannot operate it, so a batch of edits and exports, or a save at the end of a
+long task, needed someone at the computer for each file. The maintainer's
+decision: ask the user the first time, and offer to always allow.
+
+- **`path`.** `file/save_as` and `file/export` take an optional absolute
+  `path` (and `overwrite`); `file/save` saves a document back to its own
+  `.xuan` file, as Ctrl+S. Without `path`, the save dialog is unchanged.
+- **Xuan's own prompt.** In place of the system dialog Xuan shows **Save a
+  file?** (or **Export an image?**, **Save the project?**), naming the plugin,
+  the document, the file name, its folder (resolved), and whether it writes a
+  new file or replaces one: **Save**, **Always Allow** or **Cancel**. It is a
+  plugin prompt like **Open a file?**: it comes back after another dialog
+  replaced it (#56), `request/cancel` closes it and a late answer does
+  nothing (#57), and the MCP server keeps the client waiting with progress
+  notifications meanwhile.
+- **Always Allow** is `save_without_asking` in the plugin's grant, next to
+  `edit_without_asking`. It shows as **Save and export without asking** in
+  **Plugins → Manage Plugins…**, where it can be turned off, and is dropped
+  when the plugin's folder, command or permissions change. The issue
+  proposed limiting it to folders the user lists; that was not done, because
+  the prompt already names the folder each time it asks, the parent must
+  exist, and a folder list would be a second setting to explain. Writes are
+  visible instead.
+- **Overwrites.** Replacing a file always needs `overwrite: true`, prompt or
+  not; without it the request fails before any prompt, so a client cannot
+  replace a file by accident. With Always Allow, a write replaces a file
+  without asking only if Xuan wrote that file since it started (saved or
+  exported by anyone in this run), or for `file/save`, the document's own
+  project; replacing any other file shows the prompt again, which says it
+  replaces the file. So the grant covers new files and Xuan's own output,
+  never the user's other files. Folders and symbolic links at the path are
+  never replaced, and a file that appears at a path the prompt called new is
+  not replaced.
+- **Path rules.** The path must be absolute and its folder must exist; the
+  file name must already be plain (no control, bidi or invisible characters,
+  reserved characters, leading dot or Windows device name), and is refused
+  rather than cleaned so the prompt names the file written; the extension
+  must match the format (`.xuan`, or the image extension, which picks the
+  format; a `format` that disagrees is refused). Errors name files, never
+  folders, as before.
+- **Visibility.** Each write made without asking is shown in the status bar
+  ("Exported without asking: …"), in the plugin's log, and in the MCP Server
+  pane's recent tool calls ("export_document: exported out.png without
+  asking"); the pane also says when Always Allow is on. Answers carry
+  `asked: false` for such writes.
 
 The requests wait until no other dialog is open, a plugin has at most one
 waiting, and a cancel is the error `-32800`, so a misbehaving client can
@@ -298,7 +349,7 @@ client and Xuan in step:
   or when a stateless client closes its HTTP request, the server withdraws the
   call's waiting request with the plugin protocol's `request/cancel` (see
   "Withdrawing a request" in `docs/PLUGINS.md`). Xuan drops the request and
-  its prompt, so a late **Allow** or **Open** does nothing and the prompt does
+  its prompt, so a late **Allow**, **Open** or **Save** does nothing and the prompt does
   not come back after another dialog. A save dialog already open cannot be
   withdrawn: it is the system's, modal, and the save happens if the user
   confirms it. On the legacy session protocol rmcp keeps a call running when

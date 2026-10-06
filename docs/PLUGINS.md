@@ -938,12 +938,13 @@ wait for the user's answer (see [Network](#network)).
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
-| `session/status` | `{session?}` | `{edit_prompt, edits, auto}`: how direct edits are handled in the session; see [Edit sessions](#edit-sessions) |
+| `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), and whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)) |
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does; a plugin may switch at most once a second (`-32003` with `retry_after` otherwise; naming the current document always succeeds) |
 | `host/run` | `{action, inputs?, layers?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
-| `file/save_as` | `{document?, suggested_name?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; see [Files the user chooses](#files-the-user-chooses) |
-| `file/export` | `{document?, format?, suggested_name?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`) |
+| `file/save_as` | `{document?, suggested_name?}` or `{document?, path, overwrite?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; with `path`, `{name, asked}` once it was saved there after Xuan's prompt (`asked: true`) or without asking (`asked: false`); see [Files the user chooses](#files-the-user-chooses) |
+| `file/export` | `{document?, format?, suggested_name?}` or `{document?, format?, path, overwrite?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`); with `path`, `{name, asked}` as for `file/save_as` |
+| `file/save` | `{document?}` | `{name, asked}` once the document was saved back to its own `.xuan` file, as **File → Save**, after Xuan's prompt or without asking |
 | `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
 
 ### Layer descriptions
@@ -1200,10 +1201,10 @@ text that starts with `$` in other fields is just text.
 
 ### Files the user chooses
 
-A plugin cannot save, export or overwrite a file on its own, and cannot open
-one behind the user's back: `host/run` refuses `save`, `save_as`, `export`,
-`open` and `close`. Three requests ask the user instead, and wait for the
-answer:
+A plugin cannot save, export or overwrite a file unless the user agreed, and
+cannot open one behind the user's back: `host/run` refuses `save`, `save_as`,
+`export`, `open` and `close`. These requests ask the user instead, and wait
+for the answer:
 
 - `file/save_as` shows the system's save dialog for the document (the
   current one, or `document`), titled with the plugin's name and id and
@@ -1220,13 +1221,22 @@ answer:
   or `webp`); the document itself is not changed. The name the user confirms
   must end in `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff` or `.webp` (which picks
   the format written), with the same second dialog otherwise.
+- With a `path`, `file/save_as` and `file/export` write there instead of
+  showing the system dialog (which an LLM behind a plugin cannot operate),
+  once the user agreed in Xuan's own prompt, **Save a file?** or **Export an
+  image?**. It names the plugin, the document, the file name and its folder,
+  and says whether the file is new or replaces an existing one, with
+  **Save**, **Always Allow** and **Cancel**. `file/save` (no params but
+  `document`) saves the document back to its own `.xuan` file, as **File →
+  Save**, with the same prompt (**Save the project?**); a document without a
+  project file is refused. See [Saving without the dialog](#saving-without-the-dialog).
 - `file/open` shows **Open a file?**, naming the plugin and the file's full
   path (symbolic links resolved), with **Open** and **Cancel**. The path must
   be absolute and name a regular file or a project folder. It opens as a new
   document, as **File → Open…** would.
 
-`file/save_as` and `file/export` answer with the file's name only, never
-the folder the user chose; `file/open` with the new document's id. Their
+`file/save_as`, `file/export` and `file/save` answer with the file's name
+only, never the folder; `file/open` with the new document's id. Their
 error messages name files the same way, without folders (a symbolic link's
 target folder included). Each fails with `-32800` when the user cancels;
 for 30 seconds after a cancel, the plugin's file requests fail at once
@@ -1237,6 +1247,43 @@ change the open document, and the plugin learns nothing more than the name of th
 user chose. To hand the user a file without a dialog, write it into the
 plugin's own folders (for example with `document/export`) and show it in a
 pane.
+
+#### Saving without the dialog
+
+The rules for a `path` in `file/save_as` and `file/export`:
+
+- It must be absolute, and its folder must exist (Xuan does not create
+  folders). The folder is resolved, symbolic links followed, and the prompt
+  shows the result.
+- Its file name is written as given, so it must already be plain: no control,
+  bidi or invisible characters, none of `\ / : * ? " < > |`, no leading dot or
+  trailing dot or space, and not a name Windows reserves for a device (`CON`,
+  `NUL`, `COM1`, …). Xuan refuses such a name rather than cleaning it, so the
+  file written is the one the prompt named.
+- `file/save_as` needs `.xuan`. For `file/export` the extension (`.png`,
+  `.jpg`, `.jpeg`, `.tif`, `.tiff` or `.webp`, any case) picks the format; a
+  `format` that disagrees is refused.
+- An existing file is replaced only with `overwrite: true`; without it the
+  request fails at once (`-32602`). A folder or a symbolic link at the path is
+  never replaced. If a file appears at a path the prompt called new before the
+  user answers, nothing is written.
+- Errors name the file, never its folder; a bad path fails before any prompt.
+
+**Always Allow** stores `save_without_asking` in the plugin's grant, like
+the edit prompt's auto mode: from then on its writes to a path, and
+`file/save`, happen without the prompt. The exception is replacing a file
+Xuan did not write since it started (a project or image saved or exported by
+anyone, the user included, in this run of Xuan; the document's own file for
+`file/save` counts too): that still shows the prompt, even with
+`overwrite: true`, so a plugin cannot silently replace the user's other files.
+Each write made without asking is shown in the status bar ("Exported without
+asking: …", with the whole path) and in the plugin's log in **Plugins →
+Manage Plugins…**, and the answer says `asked: false`. The setting shows as
+**Save and export without asking** in **Plugins → Manage Plugins…** (for
+plugins that ask before edits, and for any plugin while it is on), where it
+can be turned off. Like auto mode, it is dropped when the plugin's folder,
+command or permissions change. **Cancel** fails the request with `-32800` and
+starts the same 30-second cooldown as cancelling the save dialog.
 
 Notifications from the plugin: `host/log` `{level, message}`, `host/status`
 `{message}` and `request/cancel` `{id}` (see [Withdrawing a
@@ -1264,7 +1311,7 @@ serves gave up, sends the notification `request/cancel` with the request's
 
 Xuan drops the request and answers it with `-32800`. Its prompt is closed,
 not just hidden, so it does not come back after another dialog and a late
-**Allow**, **Send** or **Open** does nothing; if other requests still wait,
+**Allow**, **Send**, **Open** or **Save** does nothing; if other requests still wait,
 Xuan asks about the first of them instead. Withdrawing is not a refusal: no
 answer is recorded for the session and the plugin may ask again at once. A
 request Xuan already answered, an unknown id, and a save dialog that is

@@ -4970,4 +4970,404 @@ done
         assert_eq!(app.export_answer("mock"), None);
         app.stop_plugin("mock");
     }
+
+    /// The mock started, with a document and a save dialog that must not
+    /// show: a write to a path never opens the system dialog.
+    fn path_save_mock(
+        dir: &Path,
+        config: &Path,
+    ) -> (egui::Context, EditorApp, std::sync::Arc<std::sync::Mutex<usize>>) {
+        use crate::app::plugin_files::SaveDialog;
+        use std::sync::{Arc, Mutex};
+        let (context, mut app) = app();
+        app.config_path = Some(config.join("config.toml"));
+        install_read_mock(&mut app, dir);
+        app.dimensions = [16, 12];
+        app.new_document();
+        app.command("fill_fg");
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        let dialogs: Arc<Mutex<usize>> = Arc::default();
+        let count = dialogs.clone();
+        app.plugins.save_dialog = Some(Arc::new(move |_: &SaveDialog| {
+            *count.lock().unwrap() += 1;
+            None
+        }));
+        (context, app, dialogs)
+    }
+
+    /// The write the open file prompt asks about.
+    fn prompted_write(app: &EditorApp) -> Option<crate::app::plugin_files::Write> {
+        match &app.plugins.file_prompt.as_ref()?.action {
+            crate::app::plugin_files::FileAction::Write(write) => Some(write.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn saving_to_a_named_path_asks_in_xuans_prompt_and_always_allow_stops_asking() {
+        use crate::app::plugin_files::FileAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::{CANCELLED, INVALID_PARAMS};
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(out.path()).unwrap();
+        let (context, mut app, dialogs) = path_save_mock(dir.path(), config.path());
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        let ask = |context: &egui::Context, app: &mut EditorApp, id: i64, method: &str, params| {
+            app.queue_file_request("mock", file_request(id, method, params));
+            run_until(context, app, |app| {
+                app.dialog == Some(Dialog::PluginFile) || answer(dir.path(), id).is_some()
+            });
+        };
+        let project = out.path().join("agent.xuan");
+
+        // Xuan's prompt, not the system dialog, names the file and folder;
+        // Cancel writes nothing.
+        ask(&context, &mut app, 701, "file/save_as", json!({"path": project}));
+        let write = prompted_write(&app).expect("the save prompt is open");
+        assert_eq!(write.path, folder.join("agent.xuan"));
+        assert!(!write.replaces && !write.in_place && write.export.is_none());
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 701)["error"]["code"], CANCELLED);
+        assert!(!project.exists());
+        assert_eq!(app.dialog, None);
+        // Cancelling starts the usual cooldown.
+        app.queue_file_request(
+            "mock",
+            file_request(702, "file/save_as", json!({"path": project})),
+        );
+        assert_eq!(wait(&context, &mut app, 702)["error"]["code"], CANCELLED);
+        app.plugins.file_refused_at.clear();
+
+        // Save writes the project there, which then lives there.
+        ask(&context, &mut app, 703, "file/save_as", json!({"path": project}));
+        assert!(prompted_write(&app).is_some());
+        app.answer_file(FileAnswer::Accept);
+        let saved = wait(&context, &mut app, 703);
+        assert_eq!(
+            saved["result"],
+            json!({"name": "agent.xuan", "asked": true}),
+            "{saved}"
+        );
+        assert!(project.is_file());
+        let session = app.session().unwrap();
+        assert_eq!(session.path.as_deref(), Some(folder.join("agent.xuan").as_path()));
+        assert!(!session.history.dirty());
+        assert!(!app.saves_without_asking("mock"));
+
+        // Always Allow saves, and turns on saving without asking in the grant.
+        let shot = out.path().join("shot.png");
+        ask(&context, &mut app, 704, "file/export", json!({"path": shot}));
+        assert_eq!(prompted_write(&app).unwrap().export.as_deref(), Some("png"));
+        app.answer_file(FileAnswer::Always);
+        let exported = wait(&context, &mut app, 704);
+        assert_eq!(exported["result"], json!({"name": "shot.png", "asked": true}));
+        assert!(shot.is_file());
+        assert!(app.saves_without_asking("mock"));
+        let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+        assert!(saved.contains("save_without_asking = true"), "{saved}");
+
+        // The next write needs no prompt, and the status bar names the file.
+        let second = out.path().join("second.JPEG");
+        ask(&context, &mut app, 705, "file/export", json!({"path": second}));
+        let quiet = wait(&context, &mut app, 705);
+        assert_eq!(quiet["result"], json!({"name": "second.JPEG", "asked": false}));
+        assert_eq!(app.dialog, None, "no prompt with Always Allow");
+        assert_eq!(
+            xuan::io::import_image(&second).unwrap().dimensions(),
+            (16, 12)
+        );
+        assert!(
+            app.status.contains("without asking") && app.status.contains("second.JPEG"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.plugins.log("mock").iter().any(|line| line.contains("second.JPEG")),
+            "the plugin's log shows the write"
+        );
+
+        // Replacing needs `overwrite`, asked or not, and the error names no
+        // folder.
+        app.queue_file_request(
+            "mock",
+            file_request(706, "file/export", json!({"path": shot})),
+        );
+        let refused = wait(&context, &mut app, 706);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS);
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(message.contains("overwrite"), "{message}");
+        assert!(!message.contains(out.path().to_str().unwrap()), "{message}");
+        // A file Xuan wrote in this run is replaced without asking.
+        let before = std::fs::metadata(&shot).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        ask(
+            &context,
+            &mut app,
+            707,
+            "file/export",
+            json!({"path": shot, "overwrite": true}),
+        );
+        assert_eq!(wait(&context, &mut app, 707)["result"]["asked"], false);
+        assert_ne!(std::fs::metadata(&shot).unwrap().modified().unwrap(), before);
+        // Another file is not, even with Always Allow: the prompt asks and
+        // says it replaces the file.
+        let theirs = out.path().join("theirs.png");
+        std::fs::write(&theirs, b"the user's own file").unwrap();
+        ask(
+            &context,
+            &mut app,
+            708,
+            "file/export",
+            json!({"path": theirs, "overwrite": true}),
+        );
+        assert!(prompted_write(&app).expect("asked again").replaces);
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 708)["error"]["code"], CANCELLED);
+        assert_eq!(std::fs::read(&theirs).unwrap(), b"the user's own file");
+        app.plugins.file_refused_at.clear();
+        // With the user's Save it is replaced, and is then Xuan's.
+        ask(
+            &context,
+            &mut app,
+            709,
+            "file/export",
+            json!({"path": theirs, "overwrite": true}),
+        );
+        app.answer_file(FileAnswer::Accept);
+        assert_eq!(wait(&context, &mut app, 709)["result"]["asked"], true);
+        assert!(xuan::io::import_image(&theirs).is_ok());
+
+        // `file/save` writes the document back to its own project.
+        app.command("fill_fg");
+        assert!(app.session().unwrap().history.dirty());
+        ask(&context, &mut app, 710, "file/save", json!({}));
+        assert_eq!(
+            wait(&context, &mut app, 710)["result"],
+            json!({"name": "agent.xuan", "asked": false})
+        );
+        assert!(!app.session().unwrap().history.dirty());
+        app.queue_file_request(
+            "mock",
+            file_request(711, "file/save", json!({"path": project})),
+        );
+        assert_eq!(wait(&context, &mut app, 711)["error"]["code"], INVALID_PARAMS);
+        // A document without a project file has nothing to save in place.
+        app.new_document();
+        app.queue_file_request("mock", file_request(712, "file/save", json!({})));
+        let refused = wait(&context, &mut app, 712);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS);
+        assert!(app.session().unwrap().path.is_none());
+
+        // Without `path`, the system dialog is used as before, even with
+        // Always Allow.
+        app.queue_file_request("mock", file_request(713, "file/save_as", json!({})));
+        assert_eq!(wait(&context, &mut app, 713)["error"]["code"], CANCELLED);
+        assert_eq!(*dialogs.lock().unwrap(), 1, "only this request showed it");
+        app.plugins.file_refused_at.clear();
+
+        // Turned off in Manage Plugins, the prompt asks again.
+        app.set_save_without_asking("mock", false);
+        assert!(!app.saves_without_asking("mock"));
+        ask(
+            &context,
+            &mut app,
+            714,
+            "file/export",
+            json!({"path": out.path().join("third.webp")}),
+        );
+        assert!(prompted_write(&app).is_some());
+        app.answer_file(FileAnswer::Always);
+        assert_eq!(wait(&context, &mut app, 714)["result"]["asked"], true);
+        assert!(app.saves_without_asking("mock"));
+
+        // Reviewed again with other permissions, the grant starts without
+        // it; unchanged permissions keep it.
+        app.grant_plugin("mock", true);
+        assert!(app.saves_without_asking("mock"));
+        let mut changed = app.plugins.manifest("mock").unwrap().clone();
+        changed.permissions.secrets = vec!["token".into()];
+        app.install_plugins(vec![changed], vec![]);
+        assert!(!app.plugin_granted("mock"));
+        app.grant_plugin("mock", true);
+        assert!(!app.stored_grant("mock").unwrap().save_without_asking);
+        assert!(!app.saves_without_asking("mock"));
+        app.stop_plugin("mock");
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
+
+    #[test]
+    fn bad_save_paths_are_refused_before_any_prompt_and_name_no_folders() {
+        use serde_json::json;
+        use xuan::plugins::protocol::INVALID_PARAMS;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, dialogs) = path_save_mock(dir.path(), config.path());
+        let private = out.path().join("private folder");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::create_dir(private.join("taken.png")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("fixture.png"), private.join("link.png"))
+            .unwrap();
+        let cases = [
+            ("file/export", json!({"path": "relative.png"}), "absolute"),
+            (
+                "file/export",
+                json!({"path": private.join("missing").join("x.png")}),
+                "does not exist",
+            ),
+            ("file/export", json!({"path": private.join("x.bmp")}), "x.bmp"),
+            ("file/save_as", json!({"path": private.join("x.png")}), ".xuan"),
+            (
+                "file/export",
+                json!({"path": private.join("x.png"), "format": "jpg"}),
+                "format",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("photo\u{202E}gnp.exe.png")}),
+                "plain name",
+            ),
+            ("file/export", json!({"path": private.join("CON.png")}), "plain name"),
+            ("file/export", json!({"path": private.join(".hidden.png")}), "plain name"),
+            ("file/export", json!({"path": private.join("x.png.")}), "plain name"),
+            (
+                "file/export",
+                json!({"path": private.join("taken.png"), "overwrite": true}),
+                "not a file",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("link.png"), "overwrite": true}),
+                "not a file",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("x.png"), "overwrite": "yes"}),
+                "overwrite",
+            ),
+            ("file/save_as", json!({"path": 7}), "string"),
+        ];
+        for (index, (method, params, expected)) in cases.into_iter().enumerate() {
+            let id = 800 + index as i64;
+            app.queue_file_request("mock", file_request(id, method, params.clone()));
+            run_until(&context, &mut app, |_| answer(dir.path(), id).is_some());
+            let refused = answer(dir.path(), id).unwrap();
+            assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{params}: {refused}");
+            let message = refused["error"]["message"].as_str().unwrap();
+            assert!(message.contains(expected), "{params}: {message}");
+            assert!(!message.contains("private folder"), "{params}: {message}");
+            assert!(!message.contains(out.path().to_str().unwrap()), "{params}: {message}");
+            assert_eq!(app.dialog, None, "{params}: no prompt");
+        }
+        assert_eq!(*dialogs.lock().unwrap(), 0);
+        let mut left: Vec<_> = std::fs::read_dir(&private)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["link.png", "taken.png"], "nothing was written");
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn a_withdrawn_save_closes_its_prompt_and_a_late_save_writes_nothing() {
+        use crate::app::plugin_files::FileAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, _) = path_save_mock(dir.path(), config.path());
+        let shot = out.path().join("late.png");
+        app.queue_file_request(
+            "mock",
+            file_request(901, "file/export", json!({"path": shot})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        withdraw(&mut app, 901);
+        assert!(app.plugins.file_prompt.is_none());
+        assert_eq!(app.dialog, None);
+        run_until(&context, &mut app, |_| answer(dir.path(), 901).is_some());
+        assert_eq!(answer(dir.path(), 901).unwrap()["error"]["code"], CANCELLED);
+        // Always Allow clicked late writes nothing and grants nothing.
+        app.answer_file(FileAnswer::Always);
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the withdrawn prompt came back");
+        assert!(!shot.exists());
+        assert!(!app.saves_without_asking("mock"));
+        // Withdrawing is not a refusal: the plugin may ask again at once.
+        assert!(!app.plugins.file_refused_at.contains_key("mock"));
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn the_save_prompt_comes_back_after_another_dialog_and_manage_plugins_turns_it_off() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_read_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let wait = |ui: &mut UiTest, id: i64| {
+            for _ in 0..200 {
+                if answer(dir.path(), id).is_some() {
+                    break;
+                }
+                ui.settle();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            answer(dir.path(), id).expect("the save was never answered")
+        };
+        let shot = out.path().join("asked.png");
+        ui.app_mut().queue_file_request(
+            "mock",
+            file_request(951, "file/export", json!({"path": shot})),
+        );
+        ui.settle();
+        let title = "Export an image?";
+        assert!(ui.has(title));
+        assert!(ui.has("asked.png"));
+        assert!(ui.has("This writes a new file."));
+        open_and_close_about(&mut ui);
+        assert!(ui.app().plugins.file_prompt.is_some());
+        assert!(ui.has(title), "the save prompt never came back");
+        ui.click_role(Role::Button, "Save");
+        assert_eq!(wait(&mut ui, 951)["result"]["asked"], true);
+        assert!(shot.is_file());
+
+        // Always Allow from the prompt, then the switch in Manage Plugins.
+        let project = out.path().join("asked.xuan");
+        ui.app_mut().queue_file_request(
+            "mock",
+            file_request(952, "file/save_as", json!({"path": project})),
+        );
+        ui.settle();
+        assert!(ui.has("Save a file?"));
+        ui.click_role(Role::Button, "Always Allow");
+        assert_eq!(wait(&mut ui, 952)["result"]["asked"], true);
+        assert!(project.is_file());
+        assert!(ui.app().saves_without_asking("mock"));
+        ui.app_mut().command("plugins");
+        ui.app_mut().plugins.manager_selected = Some("mock".into());
+        ui.settle();
+        ui.click_role(Role::CheckBox, "Save and export without asking");
+        assert!(!ui.app().saves_without_asking("mock"));
+        ui.app_mut().stop_plugin("mock");
+    }
 }

@@ -1002,3 +1002,18 @@ Even-odd fill (inner subpaths cut holes)	奇偶填充（内部子路径形成镂
 New	新建
 New path from SVG path data, e.g. M 0 70 C 12 64 38 64 51 70 Z	从 SVG 路径数据新建路径，例如 M 0 70 C 12 64 38 64 51 70 Z
 Add Path	添加路径
+Saved	已保存
+Saved without asking:	已不经询问保存：
+Exported without asking:	已不经询问导出：
+Export an image?	导出图像？
+Save the project?	保存项目？
+Save a file?	保存文件？
+asks Xuan to export	请求 Xuan 导出
+asks Xuan to save	请求 Xuan 保存
+asks Xuan to save, to its project file,	请求 Xuan 保存到其项目文件：
+in	位于
+This replaces the existing file.	这将替换现有文件。
+This writes a new file.	这将写入一个新文件。
+Always Allow lets this plugin save and export without asking until you turn it off in Plugins → Manage Plugins…. It still asks before replacing a file Xuan did not write since it started.	“始终允许”让此插件不经询问直接保存和导出，直到你在“插件 → 管理插件…”中将其关闭。替换 Xuan 自启动以来未写入过的文件时仍会询问。
+Save and export without asking	不经询问直接保存和导出
+Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files Xuan wrote since it started, without asking; the status bar shows each one. Replacing any other file still asks.	关闭：插件指定要保存或导出的文件时，Xuan 会先询问。开启：插件不经询问直接写入新文件以及 Xuan 自启动以来写入过的文件，状态栏会显示每一个文件。替换其他文件时仍会询问。

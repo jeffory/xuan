@@ -161,5 +161,15 @@ mod tests {
             Some(&json!({"edit_prompt": "session", "auto": true})),
         );
         assert!(auto.to_string().contains("Auto mode"));
+        assert!(!auto.to_string().contains("without asking. Turn"));
+        let saves = tree(
+            &shared,
+            Some(&json!({"edit_prompt": "session", "auto": false, "save_auto": true})),
+        );
+        assert!(
+            saves
+                .to_string()
+                .contains("Clients save and export to the paths they name without asking")
+        );
     }
 }

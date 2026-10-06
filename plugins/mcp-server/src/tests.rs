@@ -170,10 +170,17 @@ impl Editor for FakeEditor {
                 code: -32603,
                 message: "Could not open /home/someone/Secret Plans/broken.png\n\nformat error at \"/home/someone/Secret Plans/broken.png\"".into(),
             }),
+            // With a path the user may have allowed it before; the dialog
+            // below is cancelled.
+            "file/save_as" if params.get("path").is_some() => {
+                Ok(json!({"name": "agent.xuan", "asked": true}))
+            }
             "file/save_as" => Err(EditorError {
                 code: CANCELLED,
                 message: "The user cancelled the save dialog".into(),
             }),
+            "file/export" => Ok(json!({"name": "out\u{202E}gnp.png", "asked": false})),
+            "file/save" => Ok(json!({"name": "agent.xuan", "asked": true})),
             other => Err(EditorError {
                 code: -32601,
                 message: format!("Unknown method `{other}`"),
@@ -1952,4 +1959,100 @@ fn svg_paths_are_sent_to_selections_strokes_fills_shapes_and_saved_paths() {
     assert_eq!(schema("fill")["properties"]["path"]["type"], "string");
     assert_eq!(schema("create_shape_layer")["required"], json!(["shape"]));
     assert_eq!(schema("save_path")["required"], json!(["path"]));
+}
+
+#[tokio::test]
+async fn save_and_export_forward_a_path_and_overwrite_and_name_the_file_in_the_pane() {
+    let editor = FakeEditor::new(false);
+    let (app, shared) = app(editor.clone());
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let last = |editor: &FakeEditor| {
+        let (_, method, params) = editor.requests().last().cloned().unwrap();
+        (method, params)
+    };
+
+    let exported = client
+        .tool(
+            "export_document",
+            json!({"path": "/home/someone/out.png", "overwrite": true, "format": "png"}),
+        )
+        .await;
+    assert_ne!(exported.is_error, Some(true), "{}", text_of(&exported));
+    assert_eq!(
+        last(&editor),
+        (
+            "file/export".to_owned(),
+            json!({"path": "/home/someone/out.png", "overwrite": true, "format": "png"})
+        )
+    );
+    let saved = client
+        .tool(
+            "save_document",
+            json!({"path": "/home/someone/agent.xuan", "overwrite": false, "in_place": false}),
+        )
+        .await;
+    assert_ne!(saved.is_error, Some(true), "{}", text_of(&saved));
+    assert_eq!(
+        last(&editor),
+        (
+            "file/save_as".to_owned(),
+            json!({"path": "/home/someone/agent.xuan", "overwrite": false})
+        )
+    );
+    let in_place = client.tool("save_document", json!({"in_place": true})).await;
+    assert_ne!(in_place.is_error, Some(true), "{}", text_of(&in_place));
+    assert_eq!(last(&editor), ("file/save".to_owned(), json!({})));
+    // `in_place` with a path or a name is refused, and nothing is sent.
+    let requests = editor.requests().len();
+    for extra in ["path", "suggested_name", "overwrite"] {
+        let mut arguments = json!({"in_place": true});
+        arguments[extra] = json!("x");
+        let mixed = client.tool("save_document", arguments).await;
+        assert_eq!(mixed.is_error, Some(true));
+        assert!(text_of(&mixed).contains(extra), "{}", text_of(&mixed));
+    }
+    let bad = client.tool("save_document", json!({"in_place": "yes"})).await;
+    assert_eq!(bad.is_error, Some(true));
+    assert_eq!(editor.requests().len(), requests);
+
+    // The pane names the file each save or export wrote, and says when it
+    // was written without asking, without bidi controls.
+    let activity: Vec<String> = shared.activity.lock().unwrap().iter().cloned().collect();
+    assert!(
+        activity.contains(&"export_document: exported outgnp.png without asking".to_owned()),
+        "{activity:?}"
+    );
+    assert!(
+        activity.contains(&"save_document: saved agent.xuan".to_owned()),
+        "{activity:?}"
+    );
+
+    // The schemas offer `path` and `overwrite`, and the descriptions say the
+    // first save asks the user and waits.
+    let listed: ListToolsResult =
+        serde_json::from_value(client.call("tools/list", json!({})).await["result"].clone())
+            .unwrap();
+    for (name, keys) in [
+        ("save_document", &["path", "overwrite", "in_place"][..]),
+        ("export_document", &["path", "overwrite"][..]),
+    ] {
+        let tool = listed.tools.iter().find(|t| t.name == name).unwrap();
+        let properties = &tool.input_schema["properties"];
+        for key in keys {
+            assert!(properties.get(*key).is_some(), "{name}: {key}");
+        }
+        assert_eq!(properties["overwrite"]["type"], "boolean");
+        assert_eq!(properties["path"]["type"], "string");
+        assert!(tool.input_schema.get("required").is_none(), "{name}");
+        let description = tool.description.as_deref().unwrap_or_default();
+        for phrase in [
+            "asks the user",
+            "Always Allow",
+            "`overwrite: true`",
+            "waits until the user answers in Xuan",
+        ] {
+            assert!(description.contains(phrase), "{name}: {phrase}: {description}");
+        }
+    }
 }
