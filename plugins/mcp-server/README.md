@@ -54,6 +54,9 @@ cargo test           # HTTP checks, MCP conformance and tools against a fake edi
 cargo clippy --all-targets -- -D warnings
 ```
 
+CI runs both, with `cargo fmt --check`, on Linux and Windows (the
+`mcp-server` job in `.github/workflows`).
+
 Xuan's own test suite runs this plugin against a real headless editor when the
 release binary exists (or `XUAN_MCP_SERVER` names it):
 `the_mcp_server_plugin_drives_the_editor_over_http`.
