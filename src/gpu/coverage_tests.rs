@@ -196,6 +196,7 @@ pub(crate) fn folder_base() -> Document {
     doc.layers = vec![
         cloak, hood, hood_shade, hidden, invert, inner, hand, fade, book, group, shading, rim,
     ];
+    doc.active = doc.layers.last().map(|l| l.id);
     doc.validate().unwrap();
     doc
 }

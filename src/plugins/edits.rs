@@ -3096,6 +3096,7 @@ mod tests {
         // Bottom to top: the folder, a base with a clipped layer, the shading layer and an
         // adjustment.
         document.layers = vec![inside, group, base, clipped, shading, invert];
+        document.select(shading_id, false);
         document.validate().unwrap();
         let set = |document: &mut Document, layer: Uuid, clip_to: Value| {
             let edits =

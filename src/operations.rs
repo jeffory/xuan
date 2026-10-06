@@ -795,6 +795,7 @@ mod tests {
         invert.clip_to = Some(folder.id);
         let ids = [backdrop.id, folder.id, shape.id, shading.id, invert.id];
         doc.layers = vec![backdrop, shape, folder, shading, invert];
+        doc.select(ids[0], false);
         doc.validate().unwrap();
         // The clipped layers merge into one layer with the folder's shape and opacity.
         let mut merged = doc.clone();

@@ -708,6 +708,7 @@ mod tests {
         );
         clipped.clip_to = Some(group.id);
         doc.layers = vec![a, b, group, clipped];
+        doc.active = doc.layers.last().map(|l| l.id);
         doc.validate().unwrap();
         doc
     }
