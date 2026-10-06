@@ -83,6 +83,9 @@ fn largest_difference(a: &RgbaImage, b: &RgbaImage) -> u8 {
         .unwrap_or(0)
 }
 
+/// Mirrors an image, as `image::imageops::flip_horizontal` does.
+type Flip = fn(&RgbaImage) -> RgbaImage;
+
 #[test]
 fn vertical_and_horizontal_symmetry_mirror_the_pixels() {
     for dynamics in [
@@ -94,7 +97,7 @@ fn vertical_and_horizontal_symmetry_mirror_the_pixels() {
             ..Dynamics::default()
         },
     ] {
-        let flips: [(SymmetryMode, fn(&RgbaImage) -> RgbaImage); 2] = [
+        let flips: [(SymmetryMode, Flip); 2] = [
             (SymmetryMode::Vertical, image::imageops::flip_horizontal),
             (SymmetryMode::Horizontal, image::imageops::flip_vertical),
         ];
