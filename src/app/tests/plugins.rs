@@ -4004,7 +4004,7 @@ done
         let canonical = std::fs::canonicalize(&image).unwrap();
         assert!(matches!(
             &app.plugins.file_prompt.as_ref().unwrap().action,
-            crate::app::plugin_files::FileAction::Open { path } if *path == canonical
+            crate::app::plugin_files::FileAction::Open { path, .. } if *path == canonical
         ));
         app.answer_file_prompt(false);
         assert_eq!(wait(&context, &mut app, 105)["error"]["code"], CANCELLED);
@@ -4025,6 +4025,26 @@ done
             opened["result"]["document"],
             json!(app.session().unwrap().document.id)
         );
+        // A file swapped while the prompt is open is not opened.
+        let decoy = out.path().join("decoy.png");
+        std::fs::copy(&image, &decoy).unwrap();
+        let link = out.path().join("link.png");
+        std::os::unix::fs::symlink(&image, &link).unwrap();
+        app.plugins.file_refused_at.clear();
+        app.queue_file_request(
+            "mock",
+            file_request(111, "file/open", json!({"path": link})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&decoy, &link).unwrap();
+        let sessions = app.sessions.len();
+        app.answer_file_prompt(true);
+        let refused = wait(&context, &mut app, 111);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{refused}");
+        assert_eq!(app.sessions.len(), sessions);
         for (id, path) in [
             (108, json!("relative.png")),
             (109, json!(out.path().join("missing.png"))),

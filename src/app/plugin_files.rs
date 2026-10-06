@@ -41,7 +41,12 @@ pub(super) enum FileAction {
         name: String,
     },
     /// Open this file as a document once the user confirms it.
-    Open { path: PathBuf },
+    Open {
+        /// The path as the plugin gave it.
+        requested: PathBuf,
+        /// What it resolved to when the prompt was shown: what the user saw.
+        path: PathBuf,
+    },
 }
 
 /// A file request waiting for its turn, or for the user's answer.
@@ -91,6 +96,14 @@ fn suggested_name(suggested: Option<&str>, fallback: &str) -> String {
     }
 }
 
+/// Whether the requested path still resolves to the file the prompt showed,
+/// and that is still a regular file or a project folder.
+fn still_the_shown_file(requested: &Path, shown: &Path) -> bool {
+    std::fs::canonicalize(requested).is_ok_and(|now| now == shown)
+        && std::fs::canonicalize(shown).is_ok_and(|now| now == shown)
+        && std::fs::metadata(shown).is_ok_and(|m| m.is_file() || m.is_dir())
+}
+
 impl EditorApp {
     /// Check a file request's params before it waits for the user.
     fn file_action(&self, request: &Request) -> Result<FileAction, RpcError> {
@@ -114,7 +127,10 @@ impl EditorApp {
                         resolved.display()
                     )));
                 }
-                Ok(FileAction::Open { path: resolved })
+                Ok(FileAction::Open {
+                    requested: path.to_path_buf(),
+                    path: resolved,
+                })
             }
             method => {
                 let index = match string("document") {
@@ -319,7 +335,7 @@ impl EditorApp {
         let Some(request) = self.plugins.file_prompt.take() else {
             return;
         };
-        let FileAction::Open { path } = &request.action else {
+        let FileAction::Open { requested, path } = &request.action else {
             return;
         };
         if !open {
@@ -331,11 +347,12 @@ impl EditorApp {
                 protocol::CANCELLED,
                 "The user did not open the file",
             ))
-        } else if !std::fs::metadata(path).is_ok_and(|m| m.is_file() || m.is_dir()) {
-            Err(RpcError::invalid_params(format!(
-                "{} is no longer there",
-                path.display()
-            )))
+        } else if !still_the_shown_file(requested, path) {
+            // Swapped (or a link in its path retargeted) while the prompt
+            // was open: not what the user agreed to open.
+            Err(RpcError::invalid_params(
+                "The file changed while the user was asked; nothing was opened",
+            ))
         } else {
             let before = self.sessions.len();
             let error = self.error.take();
@@ -368,7 +385,7 @@ impl EditorApp {
             self.dialog = None;
             return;
         }
-        let FileAction::Open { path } = &request.action else {
+        let FileAction::Open { path, .. } = &request.action else {
             self.answer_file_prompt(false);
             return;
         };
