@@ -2147,6 +2147,143 @@ fn plugins_list_and_switch_documents_and_greyed_out_commands_are_refused() {
     assert!(error.message.contains("user"), "{}", error.message);
 }
 
+/// The mock plugin with `document = "edit"` and `edit_prompt = "session"`.
+fn install_session_mock(app: &mut EditorApp, dir: &Path) {
+    install_mock(app, dir);
+    let mut manifest = app.plugins.manifest("mock").unwrap().clone();
+    manifest.permissions.edit_prompt = xuan::plugins::manifest::EditPrompt::Session;
+    app.install_plugins(vec![manifest], vec![]);
+    app.grant_plugin("mock", true);
+}
+
+fn session_request(method: &str, params: serde_json::Value) -> xuan::plugins::protocol::Request {
+    xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(1),
+        method: method.into(),
+        params,
+    }
+}
+
+#[test]
+fn edit_sessions_gate_direct_edits_until_the_user_allows_them() {
+    use crate::app::plugin_sessions::{EditAnswer, EditSessionRequest};
+    use serde_json::json;
+    use xuan::plugins::protocol::CANCELLED;
+    let dir = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = Some(config.path().join("config.toml"));
+    // Without the manifest's edit_prompt, nothing changes.
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    app.new_document();
+    let edit = |session: &str| {
+        session_request(
+            "document/edit",
+            json!({"name": "Agent", "session": session, "edits": [{"op": "add_empty_layer"}]}),
+        )
+    };
+    assert!(app.service_request("mock", &edit("")).is_ok());
+    assert!(!app.gated_edit("mock", &edit("")));
+
+    install_session_mock(&mut app, dir.path());
+    let layers = |app: &EditorApp| app.session().unwrap().document.layers.len();
+    let before = layers(&app);
+    // Direct edits are refused until the session is answered; reading and
+    // moving the view are not held.
+    for request in [
+        edit(""),
+        session_request("host/run", json!({"action": "new_layer"})),
+        session_request("host/run", json!({"action": "undo"})),
+    ] {
+        assert!(app.gated_edit("mock", &request), "{}", request.method);
+        assert_eq!(
+            app.service_request("mock", &request).unwrap_err().code,
+            CANCELLED
+        );
+    }
+    assert_eq!(layers(&app), before);
+    for request in [
+        session_request("document/get", json!({})),
+        session_request("host/run", json!({"action": "zoom_in"})),
+        session_request("document/list", json!({})),
+    ] {
+        assert!(!app.gated_edit("mock", &request));
+        assert!(app.service_request("mock", &request).is_ok());
+    }
+    assert_eq!(
+        app.service_request("mock", &session_request("session/status", json!({})))
+            .unwrap(),
+        json!({"edit_prompt": "session", "edits": "ask", "auto": false})
+    );
+
+    // Allow holds for its session only; Deny refuses the session.
+    let prompt = |session: &str| EditSessionRequest {
+        plugin: "mock".into(),
+        session: session.into(),
+        edit: "Agent".into(),
+    };
+    app.plugins.edit_prompt = Some(prompt("a"));
+    app.answer_edit_session(EditAnswer::Allow);
+    assert!(app.service_request("mock", &edit("a")).is_ok());
+    assert_eq!(layers(&app), before + 1);
+    assert!(app.service_request("mock", &edit("b")).is_err());
+    app.plugins.edit_prompt = Some(prompt("b"));
+    app.answer_edit_session(EditAnswer::Deny);
+    assert_eq!(
+        app.service_request("mock", &edit("b")).unwrap_err().code,
+        CANCELLED
+    );
+    assert_eq!(
+        app.service_request(
+            "mock",
+            &session_request("session/status", json!({"session": "b"}))
+        )
+        .unwrap()["edits"],
+        "denied"
+    );
+    // The answers last until the process stops.
+    app.stop_plugin("mock");
+    assert!(app.service_request("mock", &edit("a")).is_err());
+
+    // Always Allow is auto mode, stored in the grant and saved.
+    app.plugins.edit_prompt = Some(prompt("c"));
+    app.answer_edit_session(EditAnswer::Always);
+    assert!(app.stored_grant("mock").unwrap().edit_without_asking);
+    let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(saved.contains("edit_without_asking = true"), "{saved}");
+    for session in ["", "c", "d"] {
+        assert!(
+            app.service_request("mock", &edit(session)).is_ok(),
+            "{session}"
+        );
+    }
+    assert_eq!(
+        app.service_request("mock", &session_request("session/status", json!({})))
+            .unwrap(),
+        json!({"edit_prompt": "session", "edits": "allowed", "auto": true})
+    );
+    // Turning it off in Manage Plugins asks again, even in allowed sessions.
+    app.set_edit_auto_mode("mock", false);
+    assert!(!app.stored_grant("mock").unwrap().edit_without_asking);
+    assert!(app.service_request("mock", &edit("c")).is_err());
+    app.set_edit_auto_mode("mock", true);
+    assert!(app.service_request("mock", &edit("c")).is_ok());
+    // Reviewed again with other permissions, the grant starts without it.
+    let mut changed = app.plugins.manifest("mock").unwrap().clone();
+    changed.permissions.secrets = vec!["token".into()];
+    app.install_plugins(vec![changed], vec![]);
+    assert!(!app.plugin_granted("mock"));
+    app.grant_plugin("mock", true);
+    assert!(!app.stored_grant("mock").unwrap().edit_without_asking);
+    assert!(app.service_request("mock", &edit("c")).is_err());
+    // Unchanged permissions keep it.
+    app.set_edit_auto_mode("mock", true);
+    app.grant_plugin("mock", true);
+    assert!(app.stored_grant("mock").unwrap().edit_without_asking);
+}
+
 #[cfg(unix)]
 mod unix {
     use super::*;
@@ -3891,5 +4028,116 @@ done
         }
         assert!(app.dialog.is_none());
         app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn held_edits_wait_for_the_session_prompt_and_apply_in_order() {
+        use crate::app::plugin_sessions::EditAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_session_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        let steps = app.session().unwrap().history.names().count();
+        let edit = |id: i64, name: &str, session: &str| {
+            file_request(
+                id,
+                "document/edit",
+                json!({"name": name, "session": session, "edits": [{"op": "add_empty_layer", "name": name}]}),
+            )
+        };
+        // Two edits of one session wait behind a single prompt.
+        assert!(app.hold_edit("mock", edit(201, "First", "s1")).is_none());
+        assert!(app.hold_edit("mock", edit(202, "Second", "s1")).is_none());
+        // Reading is never held.
+        let read = file_request(203, "document/get", json!({"session": "s1"}));
+        assert!(app.hold_edit("mock", read).is_some());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        let prompt = app.plugins.edit_prompt.clone().unwrap();
+        assert_eq!(
+            (prompt.session.as_str(), prompt.edit.as_str()),
+            ("s1", "First")
+        );
+        assert_eq!(app.session().unwrap().history.names().count(), steps);
+        app.answer_edit_session(EditAnswer::Allow);
+        run_until(&context, &mut app, |_| answer(dir.path(), 202).is_some());
+        assert!(answer(dir.path(), 201).unwrap()["result"]["layers"].is_array());
+        let session = app.session().unwrap();
+        // Each edit is its own undo step, in order.
+        assert_eq!(session.history.names().count(), steps + 2);
+        assert_eq!(session.history.undo_name(), Some("Second"));
+        // A new session asks again; Deny refuses it.
+        assert!(app.hold_edit("mock", edit(204, "Third", "s2")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.answer_edit_session(EditAnswer::Deny);
+        run_until(&context, &mut app, |_| answer(dir.path(), 204).is_some());
+        assert_eq!(answer(dir.path(), 204).unwrap()["error"]["code"], CANCELLED);
+        // The allowed session goes on without asking.
+        assert!(app.hold_edit("mock", edit(205, "Fourth", "s1")).is_some());
+        // Stopping the plugin drops what waits and closes its prompt.
+        assert!(app.hold_edit("mock", edit(206, "Fifth", "s3")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.stop_plugin("mock");
+        frame(&context, &mut app);
+        assert!(app.plugins.edit_held.is_empty());
+        assert!(app.plugins.edit_prompt.is_none());
+        assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn the_session_prompt_names_the_plugin_and_always_allow_turns_on_auto_mode() {
+        use crate::app::tests::ui::UiTest;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_session_mock(ui.app_mut(), dir.path());
+        ui.app_mut().render_pane("plugin:mock/info", "open", None);
+        for _ in 0..200 {
+            ui.settle();
+            if ui.app().plugins.running("mock") && !ui.app().plugins.starting("mock") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let request = file_request(
+            301,
+            "document/edit",
+            json!({"name": "Agent paint", "edits": [{"op": "add_empty_layer"}]}),
+        );
+        assert!(ui.app_mut().hold_edit("mock", request).is_none());
+        ui.settle();
+        assert!(ui.has("Allow Mock (plugin mock) to edit your documents for this session?"));
+        assert!(ui.has("“Agent paint”"));
+        ui.click("Always Allow");
+        assert!(ui.app().edits_without_asking("mock"));
+        assert!(ui.app().plugins.edit_prompt.is_none());
+        assert_eq!(
+            ui.app().session().unwrap().history.undo_name(),
+            Some("Agent paint")
+        );
+        // Manage Plugins shows the switch, which turns auto mode off.
+        ui.app_mut().command("plugins");
+        ui.app_mut().plugins.manager_selected = Some("mock".into());
+        ui.settle();
+        ui.click_role(
+            egui::accesskit::Role::CheckBox,
+            "Edit without asking (auto mode)",
+        );
+        assert!(!ui.app().edits_without_asking("mock"));
+        ui.app_mut().stop_plugin("mock");
     }
 }

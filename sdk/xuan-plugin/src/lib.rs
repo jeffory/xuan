@@ -164,6 +164,8 @@ pub struct Host {
     pub timeout: Duration,
     /// The verified model files, by id, as the editor last sent them.
     models: Arc<Mutex<BTreeMap<String, PathBuf>>>,
+    /// Sent as `session` with every request; see [`Host::with_session`].
+    session: Option<String>,
 }
 
 /// The verified models in `initialize` or `models/changed` params.
@@ -194,7 +196,33 @@ impl Host {
     }
 
     pub fn request(&self, method: &str, params: Value) -> Result<Value> {
+        let params = match (&self.session, params) {
+            (Some(session), Value::Object(mut map)) => {
+                map.insert("session".into(), Value::String(session.clone()));
+                Value::Object(map)
+            }
+            (Some(session), Value::Null) => json!({"session": session}),
+            (_, params) => params,
+        };
         self.transport.request(method, params, self.timeout)
+    }
+
+    /// A copy whose requests belong to the session `id`. For a plugin with
+    /// `edit_prompt = "session"`, the user allows its direct edits once per
+    /// session, so a plugin serving several clients names each one's
+    /// session. Requests without a session share the plugin process's.
+    pub fn with_session(&self, id: &str) -> Self {
+        Self {
+            session: Some(id.to_owned()),
+            ..self.clone()
+        }
+    }
+
+    /// How this session's direct edits are handled: `{"edit_prompt":
+    /// "session" | "none", "edits": "allowed" | "denied" | "ask", "auto":
+    /// bool}`, where `auto` is the user's auto mode.
+    pub fn session_status(&self) -> Result<Value> {
+        self.request("session/status", json!({}))
     }
 
     pub fn notify(&self, method: &str, params: Value) {
@@ -916,6 +944,7 @@ impl Plugin {
             transport: transport.clone(),
             timeout: Duration::from_secs(120),
             models: Arc::default(),
+            session: None,
         };
         let runtime = Arc::new(Runtime {
             plugin: self,
@@ -1396,6 +1425,7 @@ mod tests {
                 }),
                 timeout: Duration::from_secs(1),
                 models: Arc::default(),
+                session: None,
             },
             cancelled: Arc::new(AtomicBool::new(false)),
         };

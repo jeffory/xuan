@@ -107,6 +107,13 @@ pub(super) struct PluginState {
     pub file_prompt: Option<super::plugin_files::FileRequest>,
     /// Shows the save dialog for plugins: the system's, or a fake in tests.
     pub save_dialog: Option<super::plugin_files::SaveDialogHook>,
+    /// Whether the user allowed a plugin's direct edits, by plugin and
+    /// session, until its process stops; see `plugin_sessions.rs`.
+    pub edit_answers: HashMap<(String, String), bool>,
+    /// Direct edits waiting for that answer.
+    pub edit_held: Vec<(String, Request)>,
+    /// The prompt asking for it, while it is open.
+    pub edit_prompt: Option<super::plugin_sessions::EditSessionRequest>,
 }
 
 enum Pending {
@@ -276,6 +283,11 @@ impl PluginState {
         self.held.retain(|(id, _)| id != plugin);
         self.file_requests
             .retain(|request| request.plugin != plugin);
+        self.edit_answers.retain(|(id, _), _| id != plugin);
+        self.edit_held.retain(|(id, _)| id != plugin);
+        if (self.edit_prompt.as_ref()).is_some_and(|prompt| prompt.plugin == plugin) {
+            self.edit_prompt = None;
+        }
     }
 
     pub fn log(&self, plugin: &str) -> Vec<String> {
@@ -529,6 +541,7 @@ impl EditorApp {
             && old.covers(new)
         {
             new.send_without_asking = old.send_without_asking;
+            new.edit_without_asking = old.edit_without_asking;
         } else {
             self.plugins.forget_session(plugin);
         }
@@ -738,6 +751,7 @@ impl EditorApp {
             self.dispatch_plugin_message(&plugin, message);
         }
         self.release_held_requests();
+        self.release_held_edits();
         self.release_file_requests();
         self.check_starting_plugins();
         self.check_format_jobs();
@@ -768,6 +782,11 @@ impl EditorApp {
                     self.queue_file_request(plugin, request);
                     return;
                 }
+                // Direct edits wait for the session's answer when the plugin
+                // asked for the prompt.
+                let Some(request) = self.hold_edit(plugin, request) else {
+                    return;
+                };
                 // Exports wait while the user is asked whether to send them.
                 if super::plugin_consent::EXPORT_METHODS.contains(&request.method.as_str())
                     && self.export_answer(plugin).is_none()
@@ -907,7 +926,12 @@ impl EditorApp {
             .map(|v| v.clamp(16, 30_000) as u32);
         let internal =
             |error: anyhow::Error| RpcError::new(protocol::INTERNAL_ERROR, format!("{error:#}"));
+        // A direct edit of a plugin that asks per session needs that answer.
+        if let Some(error) = self.edit_refused(plugin, request) {
+            return Err(error);
+        }
         match request.method.as_str() {
+            "session/status" => Ok(self.edit_session_status(plugin, request)),
             "document/get" => Ok(self
                 .session()
                 .map_or(Value::Null, |session| edits::describe(&session.document))),
@@ -2702,6 +2726,7 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
         command: manifest.plugin.command.clone(),
         permissions: manifest.permissions.clone(),
         send_without_asking: false,
+        edit_without_asking: false,
     }
 }
 
@@ -2854,7 +2879,12 @@ mod tests {
     fn the_protocol_docs_cover_every_method_the_host_speaks() {
         let source = include_str!("plugins.rs");
         let source = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
-        let source = format!("{source}{}", include_str!("plugin_models.rs"));
+        let source = format!(
+            "{source}{}{}{}",
+            include_str!("plugin_models.rs"),
+            include_str!("plugin_files.rs"),
+            include_str!("plugin_sessions.rs")
+        );
         let source = source.as_str();
         let docs = include_str!("../../docs/PLUGINS.md");
         let mut methods = Vec::new();

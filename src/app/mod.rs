@@ -36,6 +36,7 @@ mod plugin_files;
 mod plugin_install;
 mod plugin_models;
 mod plugin_panes;
+mod plugin_sessions;
 mod plugins;
 mod providers;
 mod rulers;
@@ -341,6 +342,8 @@ enum Dialog {
     PluginConsent,
     /// Confirm opening a file a plugin names.
     PluginFile,
+    /// Allow a plugin's direct edits for its session.
+    PluginEditSession,
     Plugins,
     /// Plugins → Install from Folder or Zip…: choose, review and install.
     PluginInstall,

@@ -184,6 +184,37 @@ other `edit` op, `extend_canvas`) needs `"edit"`: Xuan refuses the whole
 result with an error that names the permission, and nothing is proposed.
 Changing the selection directly with `document/edit` still needs `"edit"`.
 
+### Edit sessions
+
+A plugin that edits on someone else's behalf, such as the MCP server whose
+edits come from an LLM client, can ask Xuan to check with the user before
+its direct edits: `edit_prompt = "session"` under `[permissions]` (it needs
+`document = "edit"`). Then `document/edit` and the `host/run` commands that
+edit wait, unanswered, until the user answers **Allow *Plugin (plugin id)* to
+edit your documents for this session?**, which names the first edit:
+
+- **Allow** applies it and every later direct edit of the session.
+- **Deny** refuses them with `-32800` for the rest of the session.
+- **Always Allow** turns on **auto mode**: stored as `edit_without_asking =
+  true` in the plugin's grant in `config.toml`, it skips the prompt from then
+  on. Like "Don't ask again" for sending, it belongs to the grant and goes
+  away when the plugin's folder, command or permissions change or the grant
+  is revoked. **Plugins → Manage Plugins…** shows it as **Edit without asking
+  (auto mode)**, a switch the user can turn off at any time (which forgets the
+  sessions already allowed).
+
+A session is the plugin's process: every answer is forgotten when it stops. A
+plugin serving several clients names each one's session with a `session`
+string (at most 128 characters) in its requests, so each client is asked
+separately; requests without one share the process's session. The SDKs add
+it for you: `host.with_session(id)` in both. `session/status` (with the same
+`session`) answers `{edit_prompt, edits: "allowed" | "denied" | "ask",
+auto}`, so a pane can show the state. At most 64 edits of a plugin wait for
+the answer; more fail with `-32003`. Edits that wait keep their order and are
+applied, each as its own undo step, once the user allowed them. Action
+results are not affected: they stay proposals the user accepts or discards,
+and reading the document is never held by this prompt.
+
 The manifest is checked too: with `document = "read"`, an action that writes
 `result.into = "layer"`, `"replace"` or `"ask"` is rejected when the plugin is
 loaded. Leave `result` out for an action that returns only masks, or use
@@ -318,6 +349,7 @@ network = ["cloud.comfy.org"]     # hosts it says it connects to (not enforced);
 secrets = ["api_key"]             # settings of type "secret" it receives
 document = "edit"                 # "read" (default) or "edit"
 filesystem = "none"               # "none" (default), "read" or "write": where the host reads and writes for it
+edit_prompt = "none"              # "none" (default) or "session": see "Edit sessions"
 
 [[settings]]
 id = "api_key"
@@ -856,6 +888,7 @@ wait for the user's answer (see [Network](#network)).
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
+| `session/status` | `{session?}` | `{edit_prompt, edits, auto}`: how direct edits are handled in the session; see [Edit sessions](#edit-sessions) |
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does |
 | `host/run` | `{action, inputs?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |

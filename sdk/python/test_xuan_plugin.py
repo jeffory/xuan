@@ -87,6 +87,17 @@ class HostRequests(unittest.TestCase):
             ["document/edit", "document/list", "document/activate", "file/save_as", "file/export", "file/open"],
         )
         self.assertEqual(transport.sent[4][1]["format"], "png")
+        self.assertNotIn("session", transport.sent[0][1])
+
+    def test_a_session_host_names_its_session(self):
+        from xuan_plugin import Host
+
+        transport = FakeTransport({"session/status": {"edits": "ask"}})
+        host = Host(transport).with_session("client-1")
+        self.assertEqual(host.session_status(), {"edits": "ask"})
+        host.edit("x", [])
+        host.request("document/get")
+        self.assertEqual([params["session"] for _, params in transport.sent], ["client-1"] * 3)
 
 
 if __name__ == "__main__":

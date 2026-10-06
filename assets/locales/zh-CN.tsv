@@ -952,3 +952,14 @@ It opens as a new document. Open it only if you expected this.	它将作为新�
 Open	打开
 Export Image	导出图像
 Save Project	保存项目
+Allow	允许
+Deny	拒绝
+Always Allow	始终允许
+Session:	会话：
+to edit your documents for this session?	在本次会话中编辑你的文档吗？
+asks to change your documents directly, starting with:	请求直接修改你的文档，首先是：
+Each change is one step you can undo, and shows at once. Your answer holds until the plugin stops or starts a new session.	每次修改都是可撤销的一步，并会立即显示。你的回答在插件停止或开始新会话之前一直有效。
+Always Allow turns on auto mode: the plugin edits without asking until you turn it off in Plugins → Manage Plugins….	“始终允许”会开启自动模式：插件将不经询问直接编辑，直到你在“插件 → 管理插件…”中将其关闭。
+Edit without asking (auto mode)	不经询问直接编辑（自动模式）
+Off: the plugin asks before its first edit in each session. On: it edits your documents without asking; every edit is still one step you can undo.	关闭：插件在每个会话的首次编辑前询问。开启：插件不经询问直接编辑你的文档；每次编辑仍是可撤销的一步。
+Asks you before its first edit in each session, unless you turn on auto mode.	在每个会话的首次编辑前询问你，除非你开启自动模式。

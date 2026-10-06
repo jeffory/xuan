@@ -468,6 +468,7 @@ impl EditorApp {
         let mut enable: Option<(String, bool)> = None;
         let mut setting_changed: Option<(String, String, Value)> = None;
         let mut ask_again: Option<String> = None;
+        let mut auto_mode: Option<(String, bool)> = None;
         let mut offline = self.config.disable_network_plugins;
         let mut block = self.config.block_undeclared_network();
         let plugin_dir = self
@@ -597,6 +598,15 @@ impl EditorApp {
                                     }
                                 });
                             }
+                            if self.plugin_granted(&id) && self.asks_before_edits(&id) {
+                                let mut auto = self.edits_without_asking(&id);
+                                if widgets::checkbox(ui, &mut auto, tr("Edit without asking (auto mode)"))
+                                    .on_hover_text(tr("Off: the plugin asks before its first edit in each session. On: it edits your documents without asking; every edit is still one step you can undo."))
+                                    .changed()
+                                {
+                                    auto_mode = Some((id.clone(), auto));
+                                }
+                            }
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
@@ -704,6 +714,9 @@ impl EditorApp {
         }
         if let Some(id) = ask_again {
             self.ask_before_sending_again(&id);
+        }
+        if let Some((id, on)) = auto_mode {
+            self.set_edit_auto_mode(&id, on);
         }
         if offline != self.config.disable_network_plugins {
             self.set_network_plugins_disabled(offline);
@@ -958,6 +971,19 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
             "• {}",
             tr("Edits documents directly (as undoable steps)")
         ));
+        if permissions.edit_prompt == xuan::plugins::manifest::EditPrompt::Session {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "  {}",
+                        tr("Asks you before its first edit in each session, unless you turn on auto mode.")
+                    ))
+                    .small()
+                    .color(theme::MUTED),
+                )
+                .wrap(),
+            );
+        }
     } else {
         ui.label(format!(
             "• {}",

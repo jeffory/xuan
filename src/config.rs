@@ -303,6 +303,11 @@ pub struct PluginGrant {
     /// reviewed again and starts without it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub send_without_asking: bool,
+    /// Auto mode for a plugin that declares `edit_prompt = "session"`: its
+    /// direct edits no longer wait for the user to allow each session. It
+    /// belongs to this grant like `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub edit_without_asking: bool,
 }
 
 impl PluginGrant {
@@ -689,6 +694,11 @@ mod tests {
         assert!(!config.disable_network_plugins);
         let grant = config.plugins["comfy"].grant.clone().unwrap();
         assert!(!grant.send_without_asking);
+        assert!(!grant.edit_without_asking);
+        assert_eq!(
+            grant.permissions.edit_prompt,
+            crate::plugins::manifest::EditPrompt::None
+        );
         assert_eq!(grant.permissions.network, ["example.com"]);
 
         let dir = tempfile::tempdir().unwrap();

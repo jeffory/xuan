@@ -68,6 +68,12 @@ pub struct Permissions {
     pub secrets: Vec<String>,
     pub document: DocumentAccess,
     pub filesystem: FilesystemAccess,
+    /// `"session"`: the plugin's direct edits (`document/edit` and editing
+    /// `host/run` commands) wait until the user allows them for the session.
+    /// Left out of stored grants while it has its default, so grants made
+    /// before it existed still cover their plugins.
+    #[serde(skip_serializing_if = "EditPrompt::is_none")]
+    pub edit_prompt: EditPrompt,
 }
 
 impl Permissions {
@@ -76,6 +82,24 @@ impl Permissions {
             && self.secrets.is_empty()
             && self.document == DocumentAccess::Read
             && self.filesystem == FilesystemAccess::None
+    }
+}
+
+/// When the user is asked before a plugin edits documents directly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EditPrompt {
+    /// Never: the grant's `document = "edit"` is enough.
+    #[default]
+    None,
+    /// Once per session of the plugin (its process, or a session id it
+    /// names), unless the user chose auto mode for it.
+    Session,
+}
+
+impl EditPrompt {
+    pub fn is_none(&self) -> bool {
+        *self == Self::None
     }
 }
 
@@ -944,6 +968,11 @@ impl Manifest {
             "plugin speaks protocol {} but this Xuan speaks {PROTOCOL}",
             self.plugin.protocol
         );
+        ensure!(
+            self.permissions.edit_prompt == EditPrompt::None
+                || self.permissions.document == DocumentAccess::Edit,
+            "edit_prompt = \"session\" needs document = \"edit\""
+        );
         if let Some(range) = &self.plugin.requires_xuan {
             check_xuan_version(range, XUAN_VERSION)?;
         }
@@ -1257,6 +1286,31 @@ import = true
         assert_eq!(Shortcut::parse("f5").unwrap().key, "F5");
         assert!(Shortcut::parse("E").is_err());
         assert!(Shortcut::parse("Meta+E").is_err());
+    }
+
+    #[test]
+    fn the_edit_prompt_needs_edit_access_and_stays_out_of_old_grants() {
+        let base = "[plugin]\nid = \"p\"\nname = \"P\"\nversion = \"1\"\ncommand = [\"x\"]\n";
+        let manifest = Manifest::parse(base, Path::new("/p")).unwrap();
+        assert_eq!(manifest.permissions.edit_prompt, EditPrompt::None);
+        let asking =
+            format!("{base}[permissions]\ndocument = \"edit\"\nedit_prompt = \"session\"\n");
+        let manifest = Manifest::parse(&asking, Path::new("/p")).unwrap();
+        assert_eq!(manifest.permissions.edit_prompt, EditPrompt::Session);
+        let reading = format!("{base}[permissions]\nedit_prompt = \"session\"\n");
+        let error = format!(
+            "{:#}",
+            Manifest::parse(&reading, Path::new("/p")).unwrap_err()
+        );
+        assert!(error.contains("edit_prompt"), "{error}");
+        let unknown =
+            format!("{base}[permissions]\ndocument = \"edit\"\nedit_prompt = \"always\"\n");
+        assert!(Manifest::parse(&unknown, Path::new("/p")).is_err());
+        // The default is left out when a grant stores the permissions.
+        let stored = toml::to_string(&Permissions::default()).unwrap();
+        assert!(!stored.contains("edit_prompt"), "{stored}");
+        let stored = toml::to_string(&manifest.permissions).unwrap();
+        assert!(stored.contains("edit_prompt = \"session\""), "{stored}");
     }
 
     #[test]

@@ -143,12 +143,29 @@ class _Waiter:
 class Host:
     """Requests a plugin can make of the editor."""
 
-    def __init__(self, transport: _Transport):
+    def __init__(self, transport: _Transport, session: Optional[str] = None):
         self._transport = transport
         self.timeout: Optional[float] = 120.0
+        # Sent as ``session`` with every request; see ``with_session``.
+        self.session = session
 
     def request(self, method: str, params: Any = None) -> Any:
+        if self.session is not None and (params is None or isinstance(params, dict)):
+            params = dict(params or {}, session=self.session)
         return self._transport.request(method, params, self.timeout)
+
+    def with_session(self, id: str) -> "Host":
+        """A host whose requests belong to the session ``id``.
+
+        A plugin with ``edit_prompt = "session"`` is allowed to edit once per session.
+        """
+        host = Host(self._transport, session=id)
+        host.timeout = self.timeout
+        return host
+
+    def session_status(self) -> Dict[str, Any]:
+        """``{"edit_prompt", "edits": "allowed" | "denied" | "ask", "auto"}`` for this session."""
+        return self.request("session/status", {})
 
     def notify(self, method: str, params: Any = None) -> None:
         self._transport.send({"jsonrpc": "2.0", "method": method, "params": params})
