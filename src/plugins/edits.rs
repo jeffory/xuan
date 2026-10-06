@@ -842,6 +842,9 @@ pub enum Edit {
         /// The random sequence for scatter and jitter.
         #[serde(default)]
         seed: u64,
+        /// Paint the stroke again mirrored or turned around a centre.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        symmetry: Option<StrokeSymmetry>,
     },
     /// A filter applied to a layer's pixels inside the selection, written as
     /// in `.xuan` files, e.g. `{"GaussianBlur": {"radius": 4}}`.
@@ -1005,6 +1008,49 @@ fn one_u32() -> u32 {
     1
 }
 
+/// Paint symmetry for a stroke, written `{"mode": "vertical" | "horizontal"
+/// | "radial", "segments": 2–32, "center": [x, y]}`. A vertical axis
+/// mirrors left and right, a horizontal one top and bottom; radial turns the
+/// stroke into `segments` copies (6 when left out). The centre, which the
+/// axis goes through, is in document pixels on the canvas and defaults to
+/// its middle.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrokeSymmetry {
+    pub mode: StrokeSymmetryMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f32; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeSymmetryMode {
+    Off,
+    Vertical,
+    Horizontal,
+    Radial,
+}
+
+impl StrokeSymmetry {
+    /// The brush's symmetry, unchecked.
+    pub fn paint(&self) -> crate::paint::Symmetry {
+        use crate::paint::SymmetryMode;
+        let defaults = crate::paint::Symmetry::default();
+        crate::paint::Symmetry {
+            mode: match self.mode {
+                StrokeSymmetryMode::Off => SymmetryMode::Off,
+                StrokeSymmetryMode::Vertical => SymmetryMode::Vertical,
+                StrokeSymmetryMode::Horizontal => SymmetryMode::Horizontal,
+                StrokeSymmetryMode::Radial => SymmetryMode::Radial,
+            },
+            segments: self.segments.unwrap_or(defaults.segments),
+            center: self.center.map(|[x, y]| Point::new(x, y)),
+        }
+    }
+}
+
 /// A stroke point in document coordinates, written `[x, y]` or
 /// `[x, y, pressure]` with the pen pressure from 0 to 1 (1 when left out).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1157,12 +1203,19 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 hue_jitter,
                 taper_in,
                 taper_out,
+                symmetry,
                 ..
             } => {
                 let reach = f64::from(size.max(1.0)) + 2.0;
                 let mut work = 0u64;
                 let mut length = 0.0;
                 let points: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
+                // Every symmetric copy is painted in full.
+                let side = |n: u64| n.min(u64::from(u32::MAX)) as u32;
+                let copies = symmetry
+                    .map(|symmetry| symmetry.paint())
+                    .unwrap_or_default()
+                    .copies(side(width), side(height));
                 let pairs = points
                     .windows(2)
                     .map(|pair| (pair[0], pair[1]))
@@ -1194,23 +1247,36 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                     let small = (step_min / spacing).min(size);
                     let per_pixel = per_step(size).max(per_step(small)) + 256.0 / step_min;
                     let count = f64::from((*scatter_count).clamp(1, 16));
-                    total.stroke += length;
-                    (((length + 1.0) * per_pixel * count).min(1e15) as u64, 0)
+                    let copies = copies.len() as f64;
+                    total.stroke += length * copies;
+                    (
+                        ((length + 1.0) * per_pixel * count * copies).min(1e15) as u64,
+                        0,
+                    )
                 } else {
-                    for (a, b) in pairs {
-                        let dx = f64::from((b[0] - a[0]).abs());
-                        let dy = f64::from((b[1] - a[1]).abs());
-                        if !(dx.is_finite() && dy.is_finite()) {
-                            // Refused when the stroke is checked.
-                            continue;
+                    for copy in &copies {
+                        for (a, b) in pairs.clone() {
+                            let [a, b] = [a, b].map(|[x, y]| {
+                                let point = copy.point(Point::new(x, y));
+                                [point.x, point.y]
+                            });
+                            let dx = f64::from((b[0] - a[0]).abs());
+                            let dy = f64::from((b[1] - a[1]).abs());
+                            if !(dx.is_finite() && dy.is_finite()) {
+                                // Refused when the stroke is checked.
+                                continue;
+                            }
+                            length += dx.hypot(dy);
+                            work = work
+                                .saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
                         }
-                        length += dx.hypot(dy);
-                        work = work.saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
                     }
                     // A taper paints its stretch in short pieces of their own.
                     if *taper_in > 0.0 || *taper_out > 0.0 {
-                        let tapered = f64::from(taper_in + taper_out).min(length);
-                        let pieces = tapered / f64::from(crate::paint::dynamics::TAPER_PIECE) + 2.0;
+                        let copies = copies.len() as f64;
+                        let tapered = f64::from(taper_in + taper_out).min(length / copies) * copies;
+                        let pieces =
+                            tapered / f64::from(crate::paint::dynamics::TAPER_PIECE) + 2.0 * copies;
                         work = work.saturating_add((pieces * reach * reach).min(1e15) as u64);
                     }
                     total.stroke += length;
@@ -1937,6 +2003,7 @@ fn apply_each(
                 opacity_jitter,
                 hue_jitter,
                 seed,
+                symmetry,
             } => {
                 let xy: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
                 let positions = valid_points(&xy)?;
@@ -1970,6 +2037,10 @@ fn apply_each(
                     seed: *seed,
                 };
                 dynamics.validate().map_err(anyhow::Error::msg)?;
+                let symmetry = symmetry.map(|symmetry| symmetry.paint()).unwrap_or_default();
+                symmetry
+                    .validate(document.width, document.height)
+                    .map_err(anyhow::Error::msg)?;
                 activate(document, *layer)?;
                 let brush = crate::paint::Brush {
                     diameter: *size,
@@ -1977,6 +2048,7 @@ fn apply_each(
                     opacity: *opacity,
                     color: color.0,
                     dynamics,
+                    symmetry,
                     ..crate::paint::Brush::default()
                 };
                 let mode = if *erase {
@@ -4103,5 +4175,118 @@ mod tests {
             }))],
         );
         assert!(tapered.work > plain.work * 2, "{tapered:?} {plain:?}");
+    }
+
+    #[test]
+    fn stroke_symmetry_is_checked_and_mirrors_the_stroke() {
+        let mut document = clear_document();
+        for (symmetry, says) in [
+            (json!({"mode": "radial", "segments": 1}), "segments"),
+            (json!({"mode": "radial", "segments": 33}), "segments"),
+            (json!({"mode": "vertical", "center": [201, 10]}), "centre"),
+            (json!({"mode": "horizontal", "center": [10, -1]}), "centre"),
+        ] {
+            let stroke = json!({"op": "stroke", "points": [[1, 1]], "symmetry": symmetry});
+            let error = run(&mut document, &[edit(stroke.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{stroke}: {error}");
+        }
+        for symmetry in [
+            json!({"mode": "diagonal"}),
+            json!({"mode": "radial", "count": 4}),
+            json!({"segments": 4}),
+        ] {
+            assert!(
+                serde_json::from_value::<Edit>(
+                    json!({"op": "stroke", "points": [[1, 1]], "symmetry": symmetry})
+                )
+                .is_err(),
+                "{symmetry}"
+            );
+        }
+        let symmetric = edit(json!({
+            "op": "stroke", "points": [[1, 1]],
+            "symmetry": {"mode": "radial", "segments": 12, "center": [100, 30]},
+        }));
+        let Edit::Stroke { symmetry, .. } = &symmetric else {
+            unreachable!()
+        };
+        assert_eq!(
+            symmetry.unwrap().paint(),
+            crate::paint::Symmetry {
+                mode: crate::paint::SymmetryMode::Radial,
+                segments: 12,
+                center: Some(Point::new(100.0, 30.0)),
+            }
+        );
+        // Without symmetry the edit writes no `symmetry` at all.
+        let plain = serde_json::to_value(edit(json!({"op": "stroke", "points": [[1, 1]]}))).unwrap();
+        assert!(plain.get("symmetry").is_none(), "{plain}");
+
+        // A vertical axis through the middle of the canvas by default: the
+        // dab at x = 20 is also painted at x = 180.
+        let mut mirrored = clear_document();
+        run(
+            &mut mirrored,
+            &[edit(json!({
+                "op": "stroke", "size": 10, "hardness": 1, "points": [[20, 20], [40, 30]],
+                "symmetry": {"mode": "vertical"},
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&mirrored);
+        assert_eq!(image.get_pixel(20, 20)[3], 255);
+        assert_eq!(image.get_pixel(179, 20)[3], 255);
+        assert_eq!(image.get_pixel(159, 30)[3], 255);
+        assert_eq!(image.get_pixel(100, 25)[3], 0);
+        assert_eq!(image, image::imageops::flip_horizontal(&image));
+        // Four turns around a centre of choice.
+        let mut radial = clear_document();
+        run(
+            &mut radial,
+            &[edit(json!({
+                "op": "stroke", "size": 6, "hardness": 1, "points": [[120, 30]],
+                "symmetry": {"mode": "radial", "segments": 4, "center": [100, 30]},
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&radial);
+        for [x, y] in [[120, 30], [100, 50], [80, 30], [100, 10]] {
+            assert_eq!(image.get_pixel(x, y)[3], 255, "{x}, {y}");
+        }
+        assert_eq!(image.get_pixel(100, 30)[3], 0);
+    }
+
+    #[test]
+    fn stroke_symmetry_counts_every_copy_against_the_budget() {
+        let document = clear_document();
+        let stroke = |extra: Value| {
+            let mut value = json!({"op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            cost(&document, &[edit(value)])
+        };
+        let plain = stroke(json!({}));
+        let radial = stroke(json!({"symmetry": {"mode": "radial", "segments": 8}}));
+        assert!((radial.stroke - plain.stroke * 8.0).abs() < 0.1, "{radial:?}");
+        assert!(radial.work >= plain.work * 8, "{radial:?} {plain:?}");
+        let mirrored = stroke(json!({"symmetry": {"mode": "horizontal"}}));
+        assert_eq!(mirrored.stroke, plain.stroke * 2.0);
+        assert_eq!(mirrored.work, plain.work * 2);
+        let off = stroke(json!({"symmetry": {"mode": "off", "segments": 30}}));
+        assert_eq!(off, plain);
+        let dabs = json!({"spacing": 0.5, "scatter": 1});
+        let dabbed = stroke(dabs.clone());
+        let mut symmetric = dabs;
+        symmetric["symmetry"] = json!({"mode": "radial", "segments": 32});
+        let symmetric = stroke(symmetric);
+        assert!(symmetric.work >= dabbed.work * 31, "{symmetric:?} {dabbed:?}");
+        // Long enough strokes go over the length limit only with their copies.
+        let long = json!({"op": "stroke", "points": [[0, 0], [10_000, 0]]});
+        let mut copies = long.clone();
+        copies["symmetry"] = json!({"mode": "radial", "segments": 32});
+        assert!(cost(&document, &[edit(long)]).stroke <= MAX_STROKE_LENGTH);
+        assert!(cost(&document, &[edit(copies)]).stroke > MAX_STROKE_LENGTH);
     }
 }

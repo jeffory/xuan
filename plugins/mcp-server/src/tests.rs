@@ -1537,6 +1537,67 @@ fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
 }
 
 #[test]
+fn paint_stroke_passes_symmetry_at_the_top_and_per_stroke() {
+    let editor = FakeEditor::new(false);
+    let radial = json!({"mode": "radial", "segments": 12, "center": [256, 256]});
+    let result = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"points": [[256, 200], [256, 40]], "size": 6, "symmetry": radial}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    assert_eq!(
+        edit_requests(&editor)[0]["edits"],
+        json!([{
+            "op": "stroke", "points": [[256, 200], [256, 40]], "size": 6, "symmetry": radial,
+        }])
+    );
+    // Each stroke takes the top-level symmetry unless it gives its own.
+    let mirror = json!({"mode": "vertical"});
+    let result = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({
+            "symmetry": mirror,
+            "strokes": [
+                {"points": [[100, 100], [140, 180]]},
+                {"points": [[256, 300]], "symmetry": {"mode": "off"}},
+                {"points": [[10, 10]], "symmetry": null},
+            ],
+        }),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    assert_eq!(
+        edit_requests(&editor)[1]["edits"],
+        json!([
+            {"op": "stroke", "symmetry": mirror, "points": [[100, 100], [140, 180]]},
+            {"op": "stroke", "symmetry": {"mode": "off"}, "points": [[256, 300]]},
+            {"op": "stroke", "symmetry": mirror, "points": [[10, 10]]},
+        ])
+    );
+    // The schema: the same symmetry object at the top and in each stroke.
+    let tool = (tools::list().into_iter())
+        .find(|t| t.name == "paint_stroke")
+        .unwrap();
+    let schema = &tool.input_schema;
+    let symmetry = &schema["properties"]["symmetry"];
+    assert_eq!(
+        symmetry["properties"]["mode"]["enum"],
+        json!(["off", "vertical", "horizontal", "radial"])
+    );
+    assert_eq!(symmetry["properties"]["segments"]["maximum"], json!(32));
+    assert_eq!(symmetry["required"], json!(["mode"]));
+    assert_eq!(
+        schema["properties"]["strokes"]["items"]["properties"]["symmetry"],
+        *symmetry
+    );
+    assert!(
+        (tool.description.unwrap_or_default()).contains("\"segments\": 12"),
+        "the description shows a radial example"
+    );
+}
+
+#[test]
 fn paint_stroke_sends_several_strokes_or_dabs_as_one_edit_request() {
     let editor = FakeEditor::new(false);
     // One stroke, as before; a single point is a dab.

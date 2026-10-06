@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::{
     Brush, Document, Layer, PaintMode, Point, Result, StrokeOptions,
     dynamics::{Piece, Walker},
+    symmetry::Reflection,
 };
 
 /// Coverage and original pixels for one pointer-down/up gesture. Overlapping
@@ -16,6 +17,9 @@ pub struct Stroke {
     /// The samples so far, to paint the stroke again once its length is
     /// known (for the taper at its end).
     samples: Vec<(Point, Brush)>,
+    /// The symmetric copies every piece is painted as, fixed when the
+    /// stroke starts; empty without symmetry.
+    copies: Option<Vec<Reflection>>,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -37,6 +41,7 @@ impl Stroke {
         brush: &Brush,
         options: StrokeOptions<'_>,
     ) -> Result<()> {
+        self.start(document, from_brush, options.mode);
         if self.walker.is_some() || (dynamic(options.mode) && from_brush.dynamics.active()) {
             if self.samples.is_empty() {
                 self.samples.push((from, from_brush.clone()));
@@ -48,6 +53,10 @@ impl Stroke {
             let mut pieces = Vec::new();
             walker.walk([from, to], [from_brush, brush], &mut pieces);
             return self.draw(document, pieces, &options);
+        }
+        if self.symmetric() {
+            let piece = Piece::Segment([from, to], [from_brush.clone(), brush.clone()]);
+            return self.draw(document, vec![piece], &options);
         }
         let accumulate = options.mask_target
             || matches!(
@@ -78,6 +87,7 @@ impl Stroke {
         let Some((_, first_brush)) = samples.first() else {
             return Ok(());
         };
+        self.start(document, first_brush, options.mode);
         let pairs = samples
             .windows(2)
             .map(|pair| (&pair[0], &pair[1]))
@@ -115,26 +125,61 @@ impl Stroke {
         self.path(document, &samples, options)
     }
 
+    /// Fix the stroke's symmetric copies at its first piece, from the
+    /// brush's symmetry on this canvas. Only the Brush, Pencil and Eraser
+    /// paint symmetrically.
+    fn start(&mut self, document: &Document, brush: &Brush, mode: PaintMode) {
+        if self.copies.is_none() {
+            self.copies = Some(if dynamic(mode) && brush.symmetry.active() {
+                brush.symmetry.copies(document.width, document.height)
+            } else {
+                Vec::new()
+            });
+        }
+    }
+
+    fn symmetric(&self) -> bool {
+        self.copies.as_ref().is_some_and(|copies| !copies.is_empty())
+    }
+
+    /// Paint the pieces, each once for every symmetric copy. All copies
+    /// share this stroke's coverage, so where they cross a pixel takes the
+    /// strongest of them instead of being painted twice.
     fn draw(
         &mut self,
         document: &mut Document,
         pieces: Vec<Piece>,
         options: &StrokeOptions<'_>,
     ) -> Result<()> {
+        let copies = self.copies.clone().unwrap_or_default();
         for piece in pieces {
             let (from, to, from_brush, brush) = match &piece {
                 Piece::Segment([from, to], [from_brush, brush]) => (*from, *to, from_brush, brush),
                 Piece::Dab(point, brush) => (*point, *point, brush, brush),
             };
-            super::stroke_segment(
-                document,
-                from,
-                to,
-                from_brush,
-                brush,
-                copy(options),
-                Some(self),
-            )?;
+            if copies.is_empty() {
+                super::stroke_segment(
+                    document,
+                    from,
+                    to,
+                    from_brush,
+                    brush,
+                    copy(options),
+                    Some(self),
+                )?;
+                continue;
+            }
+            for reflection in &copies {
+                super::stroke_segment(
+                    document,
+                    reflection.point(from),
+                    reflection.point(to),
+                    &reflection.brush(from_brush),
+                    &reflection.brush(brush),
+                    copy(options),
+                    Some(self),
+                )?;
+            }
         }
         Ok(())
     }

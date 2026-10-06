@@ -101,6 +101,43 @@ fn paint_brush_outline(painter: &egui::Painter, outline: Vec<Pos2>, light: Color
     ));
 }
 
+/// The paint symmetry's axis, or its radial spokes, and its centre, in
+/// screen space over a `size` canvas, clipped to the canvas.
+fn symmetry_guides(symmetry: &paint::Symmetry, size: [u32; 2], origin: Pos2, zoom: f32) -> Vec<[Pos2; 2]> {
+    let [width, height] = size;
+    let center = symmetry.center_in(width, height);
+    let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
+    let (w, h) = (width as f32, height as f32);
+    match symmetry.mode {
+        paint::SymmetryMode::Off => Vec::new(),
+        paint::SymmetryMode::Vertical => {
+            vec![[map(Point::new(center.x, 0.0)), map(Point::new(center.x, h))]]
+        }
+        paint::SymmetryMode::Horizontal => {
+            vec![[map(Point::new(0.0, center.y)), map(Point::new(w, center.y))]]
+        }
+        paint::SymmetryMode::Radial => {
+            // Long enough to reach the farthest corner; the canvas clips them.
+            let reach = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+                .into_iter()
+                .map(|(x, y)| center.distance(Point::new(x, y)))
+                .fold(1.0, f32::max);
+            let n = symmetry.count();
+            (0..n)
+                .map(|k| {
+                    let angle = std::f32::consts::TAU * k as f32 / n as f32
+                        - std::f32::consts::FRAC_PI_2;
+                    let end = Point::new(
+                        center.x + angle.cos() * reach,
+                        center.y + angle.sin() * reach,
+                    );
+                    [map(center), map(end)]
+                })
+                .collect()
+        }
+    }
+}
+
 impl EditorApp {
     /// Tilt axis, tilt aspect and pressure scale of the brush tip right now.
     fn brush_shape(&self) -> (Point, f32, f32) {
@@ -538,6 +575,31 @@ impl EditorApp {
                     };
                     painter
                         .line_segment(line, Stroke::new(1.0_f32, Color32::from_rgb(219, 115, 213)));
+                }
+                // Paint symmetry: the mirror axis or radial spokes and their centre.
+                if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase)
+                    && self.brush.symmetry.active()
+                {
+                    let size = [session.document.width, session.document.height];
+                    let guides = painter.with_clip_rect(visible);
+                    let accent = ui.palette().accent;
+                    for line in symmetry_guides(&self.brush.symmetry, size, origin, zoom) {
+                        guides.line_segment(line, Stroke::new(2.5_f32, Color32::from_black_alpha(70)));
+                        guides.add(egui::Shape::dashed_line(
+                            &line,
+                            Stroke::new(1.0_f32, accent),
+                            6.0,
+                            4.0,
+                        ));
+                    }
+                    let center = self.brush.symmetry.center_in(size[0], size[1]);
+                    let center = map(center);
+                    guides.circle(
+                        center,
+                        4.0,
+                        Color32::from_black_alpha(70),
+                        Stroke::new(1.5_f32, accent),
+                    );
                 }
                 if let Some(layout) = &rulers {
                     super::rulers::paint(ui.painter(), layout, origin, zoom);

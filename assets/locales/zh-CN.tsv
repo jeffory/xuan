@@ -985,3 +985,11 @@ Opacity jitter	不透明度抖动
 How much more transparent each dab may randomly be.	每个笔迹随机变透明的程度。
 Hue jitter	色相抖动
 How far each dab's hue may randomly turn. 100% reaches the opposite hue.	每个笔迹色相随机旋转的幅度。100% 可达到相反色相。
+Symmetry	对称
+Off	关闭
+Vertical mirrors left and right across the axis, Horizontal mirrors top and bottom, Radial turns the stroke around the centre.	垂直沿轴左右镜像，水平上下镜像，径向绕中心旋转笔画。
+Segments	分段
+Copies of the stroke around the centre.	笔画绕中心的副本数。
+Centre X	中心 X
+Centre Y	中心 Y
+Centre on canvas	居中于画布

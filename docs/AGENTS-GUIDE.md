@@ -195,7 +195,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `select_shape` | Rectangle, ellipse or polygon selection with a `mode` | `select_rect`, `select_polygon` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
 | `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels (of `layer`) | `host/run`, `grow_selection`, `feather_selection` |
-| `paint_stroke` | Brush strokes (or eraser) through points: one with `points`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`) | `stroke` |
+| `paint_stroke` | Brush strokes (or eraser) through points: one with `points`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`), and mirror or radial `symmetry` | `stroke` |
 | `fill` | Fill the selection with a colour | `fill` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
@@ -315,6 +315,11 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
   `scatter_count` and the jitters replaces many dabs; a wide `spacing` (e.g.
   1.5) makes a dotted trail. Keep `seed` to repeat a stroke exactly, change it
   for a different pattern.
+- Let symmetry repeat a stroke instead of computing mirrored coordinates:
+  `"symmetry": {"mode": "vertical"}` mirrors a figure's left half onto its
+  right across the canvas centre (or `"center": [x, y]`), and `{"mode":
+  "radial", "segments": 12, "center": [x, y]}` turns one ray into a
+  starburst's twelve. Copies don't darken each other where they cross.
 - Ask the user before saving; the save dialog is theirs to answer.
 
 ## The `.xuan` format for agents

@@ -3073,6 +3073,55 @@ fn pointer_brush_tapers_its_end_on_release_as_one_undo_step() {
 }
 
 #[test]
+fn pointer_brush_paints_symmetric_copies_as_one_undo_step() {
+    let (context, mut app) = app();
+    app.dimensions = [120, 60];
+    app.new_document();
+    app.brush.diameter = 8.0;
+    app.brush.hardness = 1.0;
+    app.brush.color = [255, 0, 0, 255];
+    app.brush.symmetry.mode = xuan::paint::SymmetryMode::Vertical;
+    app.set_tool(Tool::Brush);
+    // The axis and its centre are drawn over the canvas while painting.
+    frame(&context, &mut app);
+    let before = render::render(&app.session().unwrap().document);
+    drag(
+        &context,
+        &mut app,
+        Point::new(10.0, 20.0),
+        Point::new(40.0, 20.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let image = render::render(&app.session().unwrap().document);
+    for x in [12, 25, 38] {
+        assert_eq!(image.get_pixel(x, 20)[3], 255, "{x}");
+        assert_eq!(image.get_pixel(119 - x, 20)[3], 255, "mirror of {x}");
+    }
+    assert_eq!(image.get_pixel(60, 20)[3], 0);
+    // Radial copies around a centre of choice, then other tools ignore it.
+    app.brush.symmetry.mode = xuan::paint::SymmetryMode::Radial;
+    app.brush.symmetry.segments = 4;
+    app.brush.symmetry.center = Some(Point::new(60.0, 30.0));
+    frame(&context, &mut app);
+    app.command("undo");
+    assert_eq!(render::render(&app.session().unwrap().document), before);
+    drag(
+        &context,
+        &mut app,
+        Point::new(80.0, 30.0),
+        Point::new(90.0, 30.0),
+        egui::Modifiers::NONE,
+    );
+    let image = render::render(&app.session().unwrap().document);
+    for [x, y] in [[85, 30], [60, 55], [34, 30], [60, 4]] {
+        assert_eq!(image.get_pixel(x, y)[3], 255, "{x}, {y}");
+    }
+    app.command("undo");
+    assert_eq!(render::render(&app.session().unwrap().document), before);
+}
+
+#[test]
 fn transform_handles_and_control_drag_distortion_change_geometry() {
     let (context, mut app) = app();
     app.dimensions = [64, 48];
