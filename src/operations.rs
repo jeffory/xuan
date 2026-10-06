@@ -199,6 +199,50 @@ pub fn group(document: &mut Document) {
     document.select(id, false);
 }
 
+/// Where a moved layer lands relative to its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// Directly above the target in the stack, in the target's group.
+    Above,
+    /// Directly below the target in the stack, in the target's group.
+    Below,
+    /// At the top of the target group.
+    Inside,
+}
+
+/// Move `source` next to or into `target`, as dragging in the Layers panel does.
+/// Does nothing when either layer is missing or `target` is inside `source`.
+pub fn move_layer(document: &mut Document, source: Uuid, target: Uuid, at: Placement) {
+    if document.descendants(source).contains(&target) {
+        return;
+    }
+    let Some(destination) = document.layers.iter().find(|l| l.id == target).cloned() else {
+        return;
+    };
+    let Some(index) = document.layers.iter().position(|l| l.id == source) else {
+        return;
+    };
+    let mut layer = document.layers.remove(index);
+    layer.parent = if at == Placement::Inside {
+        Some(target)
+    } else {
+        destination.parent
+    };
+    layer.clip_to = None;
+    // The panel lists siblings from top to bottom, opposite their paint order.
+    let target_index = document.layers.iter().position(|l| l.id == target).unwrap();
+    let index = match at {
+        Placement::Above => target_index + 1,
+        Placement::Below => target_index,
+        Placement::Inside => document
+            .layers
+            .iter()
+            .rposition(|l| l.parent == Some(target))
+            .map_or(target_index + 1, |i| i + 1),
+    };
+    document.layers.insert(index, layer);
+}
+
 pub fn ungroup(document: &mut Document) {
     let Some(group) = document.active().filter(|l| l.group).cloned() else {
         return;

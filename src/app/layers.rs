@@ -948,9 +948,6 @@ impl EditorApp {
             return;
         }
         self.edit(tr("Reorder Layer"), |doc| {
-            let Some(destination) = doc.layers.iter().find(|l| l.id == target).cloned() else {
-                return Ok(());
-            };
             if duplicate {
                 doc.select(source, false);
                 xuan::operations::duplicate(doc);
@@ -960,28 +957,12 @@ impl EditorApp {
             } else {
                 source
             };
-            let Some(index) = doc.layers.iter().position(|l| l.id == source) else {
-                return Ok(());
+            let at = match position {
+                DropPosition::Above => xuan::operations::Placement::Above,
+                DropPosition::Below => xuan::operations::Placement::Below,
+                DropPosition::Inside => xuan::operations::Placement::Inside,
             };
-            let mut layer = doc.layers.remove(index);
-            layer.parent = if matches!(position, DropPosition::Inside) {
-                Some(target)
-            } else {
-                destination.parent
-            };
-            layer.clip_to = None;
-            // The panel lists siblings from top to bottom, opposite their paint order.
-            let target_index = doc.layers.iter().position(|l| l.id == target).unwrap();
-            let index = match position {
-                DropPosition::Above => target_index + 1,
-                DropPosition::Below => target_index,
-                DropPosition::Inside => doc
-                    .layers
-                    .iter()
-                    .rposition(|l| l.parent == Some(target))
-                    .map_or(target_index + 1, |i| i + 1),
-            };
-            doc.layers.insert(index, layer);
+            xuan::operations::move_layer(doc, source, target, at);
             doc.select(source, false);
             doc.validate()
         });

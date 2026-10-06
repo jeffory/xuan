@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use image::{GrayImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -600,6 +600,19 @@ pub enum Edit {
     /// Layer → Ungroup: the group's layers move to its parent.
     UngroupLayers {
         layer: Uuid,
+    },
+    /// Move a layer in the stack, as dragging it in the Layers panel does:
+    /// directly `above` or `below` another layer (joining that layer's group),
+    /// or, with only `parent`, to the top of that group. When `parent` is given
+    /// together with `above` or `below`, it must be the target's group.
+    MoveLayer {
+        layer: Uuid,
+        #[serde(default)]
+        above: Option<Uuid>,
+        #[serde(default)]
+        below: Option<Uuid>,
+        #[serde(default)]
+        parent: Option<Uuid>,
     },
     /// Move, scale or rotate a layer (with its children, for a group) to
     /// this box, in document units; missing fields keep their value.
@@ -1283,6 +1296,43 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
                 ensure!(find(document, *layer)?.group, "The layer is not a group");
                 document.select(*layer, false);
                 crate::operations::ungroup(document);
+            }
+            Edit::MoveLayer {
+                layer,
+                above,
+                below,
+                parent,
+            } => {
+                ensure!(
+                    above.is_none() || below.is_none(),
+                    "Give either above or below, not both"
+                );
+                find(document, *layer)?;
+                let family = document.descendants(*layer);
+                let (target, at) = match (above, below, parent) {
+                    (Some(target), _, _) => (*target, crate::operations::Placement::Above),
+                    (_, Some(target), _) => (*target, crate::operations::Placement::Below),
+                    (None, None, Some(group)) => {
+                        ensure!(find(document, *group)?.group, "The parent is not a group");
+                        (*group, crate::operations::Placement::Inside)
+                    }
+                    (None, None, None) => bail!("Give above, below or parent"),
+                };
+                let destination = find(document, target)?;
+                ensure!(
+                    !family.contains(&target),
+                    "A layer cannot be moved into or next to itself"
+                );
+                if at != crate::operations::Placement::Inside
+                    && let Some(parent) = parent
+                {
+                    ensure!(
+                        destination.parent == Some(*parent),
+                        "The parent must be the group of the layer it is moved next to"
+                    );
+                }
+                crate::operations::move_layer(document, *layer, target, at);
+                document.select(*layer, false);
             }
             Edit::Transform {
                 layer,
@@ -2904,6 +2954,58 @@ mod tests {
         let fine = vec![stroke; 50];
         run(&mut document, &fine).unwrap();
         assert!(cost(&document, &fine).work < MAX_WORK / 100);
+    }
+
+    #[test]
+    fn move_layer_places_layers_and_rejects_bad_targets() {
+        let (mut document, base) = grey_document();
+        let add = |document: &mut Document| {
+            run(document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0]
+        };
+        let (a, b, c) = (add(&mut document), add(&mut document), add(&mut document));
+        let order =
+            |document: &Document| -> Vec<Uuid> { document.layers.iter().map(|l| l.id).collect() };
+        let mv = |document: &mut Document, value: serde_json::Value| run(document, &[edit(value)]);
+        assert_eq!(order(&document), [base, a, b, c]);
+        // Above and below.
+        mv(&mut document, json!({"op": "move_layer", "layer": base, "above": c})).unwrap();
+        assert_eq!(order(&document), [a, b, c, base]);
+        mv(&mut document, json!({"op": "move_layer", "layer": base, "below": b})).unwrap();
+        assert_eq!(order(&document), [a, base, b, c]);
+        assert_eq!(document.active, Some(base));
+        // Into a group, then back out next to a root layer.
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [b, c]}))],
+        )
+        .unwrap()[0];
+        mv(&mut document, json!({"op": "move_layer", "layer": a, "parent": group})).unwrap();
+        let parent = |document: &Document, id: Uuid| {
+            document.layers.iter().find(|l| l.id == id).unwrap().parent
+        };
+        assert_eq!(parent(&document, a), Some(group));
+        assert_eq!(*order(&document).last().unwrap(), a);
+        mv(&mut document, json!({"op": "move_layer", "layer": a, "above": b, "parent": group})).unwrap();
+        assert_eq!(parent(&document, a), Some(group));
+        mv(&mut document, json!({"op": "move_layer", "layer": a, "below": base})).unwrap();
+        assert_eq!(parent(&document, a), None);
+        for bad in [
+            json!({"op": "move_layer", "layer": Uuid::new_v4(), "above": base}),
+            json!({"op": "move_layer", "layer": base, "above": Uuid::new_v4()}),
+            json!({"op": "move_layer", "layer": base, "parent": Uuid::new_v4()}),
+            json!({"op": "move_layer", "layer": base}),
+            json!({"op": "move_layer", "layer": base, "above": a, "below": a}),
+            // Not a group.
+            json!({"op": "move_layer", "layer": a, "parent": base}),
+            // A group into itself or its own child, or next to itself.
+            json!({"op": "move_layer", "layer": group, "parent": group}),
+            json!({"op": "move_layer", "layer": group, "above": c}),
+            json!({"op": "move_layer", "layer": base, "above": base}),
+            // The parent is not the target's group.
+            json!({"op": "move_layer", "layer": a, "above": base, "parent": group}),
+        ] {
+            assert!(mv(&mut document.clone(), bad.clone()).is_err(), "{bad}");
+        }
     }
 
     #[test]

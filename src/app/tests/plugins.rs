@@ -2086,6 +2086,38 @@ fn a_gradient_edit_is_one_undo_step() {
 }
 
 #[test]
+fn move_layer_is_one_undo_step() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    app.new_document();
+    let answer = plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"edits": [{"op": "add_empty_layer"}, {"op": "add_empty_layer"}]}),
+    )
+    .unwrap();
+    let added: Vec<uuid::Uuid> = serde_json::from_value(answer["layers"].clone()).unwrap();
+    let order = |app: &EditorApp| -> Vec<uuid::Uuid> {
+        app.session().unwrap().document.layers.iter().map(|l| l.id).collect()
+    };
+    let before = order(&app);
+    let steps = app.session().unwrap().history.names().count();
+    plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"name": "Move", "edits": [{"op": "move_layer", "layer": added[1], "below": before[0]}]}),
+    )
+    .unwrap();
+    assert_eq!(order(&app), [added[1], before[0], added[0]]);
+    assert_eq!(app.session().unwrap().history.names().count(), steps + 1);
+    app.command("undo");
+    assert_eq!(order(&app), before);
+}
+
+#[test]
 fn canvas_ops_are_refused_in_results_but_selection_ops_are_proposed() {
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();
