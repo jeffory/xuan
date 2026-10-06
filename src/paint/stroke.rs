@@ -169,6 +169,16 @@ impl Stroke {
                 )?;
                 continue;
             }
+            // The pencil snaps to whole pixels; snapping before mirroring
+            // keeps ties (x.5) from rounding to different sides in the copies.
+            let (from, to) = if options.mode == PaintMode::Pencil {
+                (
+                    super::pencil::snapped(from, brush.diameter),
+                    super::pencil::snapped(to, brush.diameter),
+                )
+            } else {
+                (from, to)
+            };
             for reflection in &copies {
                 super::stroke_segment(
                     document,

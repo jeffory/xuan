@@ -94,11 +94,11 @@ fn vertical_and_horizontal_symmetry_mirror_the_pixels() {
             ..Dynamics::default()
         },
     ] {
-        for (axis, flip) in [
+        let flips: [(SymmetryMode, fn(&RgbaImage) -> RgbaImage); 2] = [
             (SymmetryMode::Vertical, image::imageops::flip_horizontal),
-            (SymmetryMode::Horizontal, image::imageops::flip_vertical)
-                as (SymmetryMode, fn(&RgbaImage) -> RgbaImage),
-        ] {
+            (SymmetryMode::Horizontal, image::imageops::flip_vertical),
+        ];
+        for (axis, flip) in flips {
             for paint_mode in [PaintMode::Paint, PaintMode::Pencil] {
                 let mut document = blank(200, 120);
                 paint(&mut document, &wave(&brush(mode(axis), dynamics)), paint_mode);

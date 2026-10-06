@@ -26,6 +26,18 @@ fn size_of(diameter: f32) -> u32 {
     diameter.round().max(1.0) as u32
 }
 
+/// The point on the lattice a pencil of this diameter snaps it to: a pixel
+/// centre for odd sizes, a pixel corner for even ones. Snapping a snapped
+/// point again keeps it, so symmetric copies snap before they are mirrored
+/// and mirror onto whole pixels exactly.
+pub(super) fn snapped(point: Point, diameter: f32) -> Point {
+    if size_of(diameter) % 2 == 1 {
+        Point::new(point.x.floor() + 0.5, point.y.floor() + 0.5)
+    } else {
+        Point::new(point.x.round(), point.y.round())
+    }
+}
+
 /// Whether a pixel whose centre is `offset` from the dab centre lies inside the tip.
 fn in_tip(offset: Point, size: u32, square: bool) -> bool {
     let half = size as f32 * 0.5;
