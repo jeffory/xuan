@@ -591,6 +591,9 @@ impl EditorApp {
                 pane.pending = false;
                 pane.dirty = false;
                 pane.queued = None;
+                // The old page describes a process that is gone: drop it so the
+                // next draw opens the pane again, or shows why it cannot.
+                pane.tree = None;
             }
         }
     }

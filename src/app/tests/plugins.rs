@@ -2594,6 +2594,39 @@ done
     }
 
     #[test]
+    fn a_stopped_plugin_pane_drops_its_old_page_and_reopens_or_explains() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        frame(&context, &mut app);
+        let key = "plugin:mock/info";
+        run_until(&context, &mut app, |app| {
+            app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        assert!(app.plugins.running("mock"));
+        // A deliberate stop leaves no stale page behind.
+        app.stop_plugin("mock");
+        assert!(!app.plugins.running("mock"));
+        assert!(app.plugins.panes[key].tree.is_none());
+        // Drawing the pane again starts the plugin and shows a fresh page.
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock")
+                && app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        // While not granted, a stop leaves no page and drawing does not restart it.
+        app.stop_plugin("mock");
+        app.grant_plugin("mock", false);
+        for _ in 0..10 {
+            frame(&context, &mut app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.plugins.panes[key].tree.is_none());
+        assert!(!app.plugins.running("mock"));
+    }
+
+    #[test]
     fn plugin_formats_import_documents_and_layers() {
         let dir = tempfile::tempdir().unwrap();
         let (context, mut app) = app();
