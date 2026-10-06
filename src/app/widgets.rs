@@ -816,7 +816,7 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
             id,
             Sense::click(),
         );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
         ui.painter().circle_filled(
             center,
             5.0,
@@ -846,7 +846,7 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
         BUTTON_SIZE,
     );
     let response = ui.interact(rect, id, Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
     let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
     paint_window_button(
         ui,
@@ -947,7 +947,7 @@ impl<'a> Window<'a> {
                         (self.width - 48.0 - SLIDER_FIELD_WIDTH).max(90.0);
                     ui.set_width(self.width - 48.0);
                     egui::ScrollArea::vertical()
-                        .max_height((ctx.content_rect().height() - 98.0).max(120.0))
+                        .max_height((ctx.content_rect().height() - 100.0).max(120.0))
                         .auto_shrink([false, true])
                         .show(ui, content)
                 });
