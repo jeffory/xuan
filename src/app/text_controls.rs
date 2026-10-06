@@ -10,13 +10,9 @@ use xuan::{
 
 /// The Text window's path section: attach one of the document's paths for the text to
 /// follow, or detach it, and how the text follows it. Text on a path is edited here; the
-/// canvas shows it along the path.
-/// Returns the path picked from the menu, `Some(None)` for none.
-fn path_options(
-    ui: &mut egui::Ui,
-    edit: &mut TextEdit,
-    paths: &[String],
-) -> Option<Option<usize>> {
+/// canvas shows it along the path. Returns the document path picked from the menu, or
+/// `Some(None)` when "none" was picked.
+fn path_options(ui: &mut egui::Ui, edit: &mut TextEdit, paths: &[String]) -> Option<Option<usize>> {
     const DETACH: usize = usize::MAX;
     let mut pick = None;
     ui.horizontal(|ui| {
@@ -40,11 +36,9 @@ fn path_options(
     let Some(path) = &mut edit.style.path else {
         if paths.is_empty() {
             ui.label(
-                RichText::new(tr(
-                    "Save a path with Select → Paths… to set text along it.",
-                ))
-                .small()
-                .color(ui.palette().muted),
+                RichText::new(tr("Save a path with Select → Paths… to set text along it."))
+                    .small()
+                    .color(ui.palette().muted),
             );
         }
         return pick;
@@ -354,13 +348,7 @@ impl EditorApp {
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter));
         let paths: Vec<String> = self
             .session()
-            .map(|s| {
-                s.document
-                    .paths
-                    .iter()
-                    .map(|p| p.name.clone())
-                    .collect()
-            })
+            .map(|s| s.document.paths.iter().map(|p| p.name.clone()).collect())
             .unwrap_or_default();
         let Some(edit) = &mut self.text_edit else {
             return;

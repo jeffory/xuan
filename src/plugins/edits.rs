@@ -2318,10 +2318,7 @@ fn apply_each(
                         path_options.clone().unwrap_or_default(),
                     )?
                 } else {
-                    ensure!(
-                        path_options.is_none(),
-                        "`path_options` go only with `path`"
-                    );
+                    ensure!(path_options.is_none(), "`path_options` go only with `path`");
                     let pixels = renderer.render(&style)?;
                     let mut layer = Layer::image(style.layer_name(), pixels);
                     layer.text = Some(style);

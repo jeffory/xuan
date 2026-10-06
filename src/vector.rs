@@ -456,8 +456,33 @@ impl ArcLength {
         } else {
             0.0
         };
+        // The flattened curve turns a little at each point. Blending the directions of the
+        // segments meeting there follows the true tangent closely; a real corner is kept.
         let direction = (b - a).normalize();
+        let start = self.vertex_direction(i - 1).unwrap_or(direction);
+        let end = self.vertex_direction(i).unwrap_or(direction);
+        let blended = start.lerp(end, t);
+        let direction = if blended.hypot2() > 1e-12 {
+            blended.normalize()
+        } else {
+            direction
+        };
         Some((a.lerp(b, t), direction))
+    }
+
+    /// The direction at point `i` where the segments either side of it turn by less than a
+    /// few degrees (a flattened curve), or `None` at a corner or an open end.
+    fn vertex_direction(&self, i: usize) -> Option<kurbo::Vec2> {
+        let last = self.points.len() - 1;
+        let segment = |j: usize| (self.points[j + 1] - self.points[j]).normalize();
+        let (before, after) = match i {
+            0 if self.closed && last >= 2 => (segment(last - 1), segment(0)),
+            i if i == last && self.closed && last >= 2 => (segment(last - 1), segment(0)),
+            i if i > 0 && i < last => (segment(i - 1), segment(i)),
+            _ => return None,
+        };
+        // cos 8°: flattening at 0.05 px turns more only on curves a few pixels across.
+        (before.dot(after) > 0.99).then(|| (before + after).normalize())
     }
 }
 
@@ -1084,8 +1109,8 @@ mod tests {
         let (p, d) = back.sample(10.0).unwrap();
         assert_eq!((p.x, p.y, d.x, d.y), (30.0, 30.0, 0.0, -1.0));
 
-        let square = ArcLength::first(&VectorPath::parse("M 0 0 H 10 V 10 H 0 Z").unwrap())
-            .unwrap();
+        let square =
+            ArcLength::first(&VectorPath::parse("M 0 0 H 10 V 10 H 0 Z").unwrap()).unwrap();
         assert!(square.closed());
         assert_eq!(square.length(), 40.0);
         let (p, _) = square.sample(45.0).unwrap();
@@ -1100,7 +1125,10 @@ mod tests {
         .unwrap();
         assert!((circle.length() - std::f64::consts::TAU * 50.0).abs() < 0.5);
         let (p, d) = circle.sample(circle.length() / 4.0).unwrap();
-        assert!((p.x - 100.0).abs() < 0.2 && (p.y - 150.0).abs() < 0.2, "{p:?}");
+        assert!(
+            (p.x - 100.0).abs() < 0.2 && (p.y - 150.0).abs() < 0.2,
+            "{p:?}"
+        );
         assert!((d.x + 1.0).abs() < 0.01, "{d:?}");
         assert!(ArcLength::first(&VectorPath::default()).is_none());
     }

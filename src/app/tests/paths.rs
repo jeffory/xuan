@@ -113,7 +113,10 @@ fn text_is_set_along_a_document_path_in_the_text_window() {
     app.start_text(None, Point::new(20.0, 20.0));
     let output = frame(&context, &mut app);
     let texts = shown_text(&output);
-    assert!(texts.iter().any(|t| t.contains("Select → Paths…")), "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("Select → Paths…")),
+        "{texts:?}"
+    );
     app.finish_text(false);
 
     let d = "M 20 150 C 80 40 240 40 300 150";
@@ -134,7 +137,9 @@ fn text_is_set_along_a_document_path_in_the_text_window() {
     assert!(app.text_edit.as_ref().unwrap().error.is_none());
     let texts = shown_text(&output);
     assert!(
-        texts.iter().any(|t| t.contains("Turn letters with the path")),
+        texts
+            .iter()
+            .any(|t| t.contains("Turn letters with the path")),
         "{texts:?}"
     );
     app.finish_text(true);
@@ -150,7 +155,11 @@ fn text_is_set_along_a_document_path_in_the_text_window() {
     };
     let placed = layer(&app);
     let path = placed.text.as_ref().unwrap().path.clone().unwrap();
-    let bounds = path.in_document(placed.transform).unwrap().bounds().unwrap();
+    let bounds = path
+        .in_document(placed.transform)
+        .unwrap()
+        .bounds()
+        .unwrap();
     let expected = xuan::vector::VectorPath::parse(d)
         .unwrap()
         .bounds()

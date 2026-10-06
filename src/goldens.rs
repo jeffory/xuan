@@ -843,7 +843,13 @@ fn text_on_path() -> Document {
             color,
             ..Default::default()
         };
-        path_layer(&mut renderer, style, &VectorPath::parse(d).unwrap(), options).unwrap()
+        path_layer(
+            &mut renderer,
+            style,
+            &VectorPath::parse(d).unwrap(),
+            options,
+        )
+        .unwrap()
     };
     let arch = on(
         "Type on a path",
@@ -860,7 +866,7 @@ fn text_on_path() -> Document {
         "around and around · ",
         15.0,
         [170, 50, 40, 255],
-        "M 200 150 A 40 40 0 1 1 120 150 A 40 40 0 1 1 200 150 Z",
+        "M 215 135 A 35 35 0 1 1 145 135 A 35 35 0 1 1 215 135 Z",
         PathTextOptions {
             start_offset: 80.0,
             ..Default::default()
@@ -893,7 +899,7 @@ fn text_on_path() -> Document {
         "upright wave",
         14.0,
         [200, 120, 20, 255],
-        "M 120 205 Q 150 185 180 205 T 240 205",
+        "M 120 215 Q 150 200 180 215 T 240 215",
         PathTextOptions {
             rotate: false,
             baseline_shift: 2.0,

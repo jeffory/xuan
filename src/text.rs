@@ -261,8 +261,8 @@ pub struct PathGlyph {
     /// The glyph's own coordinates (pen origin on the baseline, y down) to the drawing's.
     pub transform: Affine,
     glyph: cosmic_text::LayoutGlyph,
-    /// Underline and strikethrough as (top, thickness) in the glyph's coordinates.
-    rules: Vec<(f32, f32)>,
+    /// Underline and strikethrough rectangles in the glyph's coordinates.
+    rules: Vec<kurbo::Rect>,
     /// Pixels of synthetic bold and whether italic is synthesised.
     embolden: i32,
     italic: bool,
@@ -596,30 +596,29 @@ impl TextRenderer {
                 cosmic_text::CacheKeyFlags::empty(),
             );
             let mut ink = Ink {
-                outline: None,
+                outlines: Vec::new(),
                 bitmap: None,
                 rules: BezPath::new(),
                 opacity: placed.opacity,
             };
             if let Some(commands) = cache.get_outline_commands(&mut self.fonts, key) {
                 let outline = outline_path(commands);
-                // Synthetic italic leans 14° as cosmic-text's does; synthetic bold overlaps
-                // copies a pixel apart, which fill as one shape.
+                // Synthetic italic leans 14° as cosmic-text's does; synthetic bold draws
+                // copies a pixel apart.
                 let lean = if placed.italic {
                     Affine::new([1.0, 0.0, -(14.0_f64.to_radians().tan()), 1.0, 0.0, 0.0])
                 } else {
                     Affine::IDENTITY
                 };
-                let mut path = BezPath::new();
-                for copy in 0..=placed.embolden {
-                    let shifted = placed.transform
-                        * Affine::translate((f64::from(copy), 0.0))
-                        * lean
-                        * &outline;
-                    path.extend(shifted.elements().iter().copied());
-                }
-                if !path.elements().is_empty() {
-                    ink.outline = Some(path);
+                if !outline.elements().is_empty() {
+                    for copy in 0..=placed.embolden {
+                        ink.outlines.push(
+                            placed.transform
+                                * Affine::translate((f64::from(copy), 0.0))
+                                * lean
+                                * &outline,
+                        );
+                    }
                 }
             } else if let Some(image) = cache.get_image(&mut self.fonts, key).clone()
                 && image.placement.width > 0
@@ -634,8 +633,12 @@ impl TextRenderer {
                 ink.bitmap = Some((image, to_drawing));
             }
             for rule in &placed.rules {
-                ink.rules
-                    .extend((placed.transform * rule.to_path(0.1)).elements().iter().copied());
+                ink.rules.extend(
+                    (placed.transform * rule.to_path(0.1))
+                        .elements()
+                        .iter()
+                        .copied(),
+                );
             }
             if let Some(area) = ink.bounds() {
                 bounds = Some(bounds.map_or(area, |b| b.union(area)));
@@ -668,10 +671,10 @@ impl TextRenderer {
     }
 }
 
-/// A glyph's ink on a path: its outline or, for a colour glyph, its bitmap mapped into the
-/// drawing; and its underline and strikethrough.
+/// A glyph's ink on a path: its outline (with copies for synthetic bold) or, for a colour
+/// glyph, its bitmap mapped into the drawing; and its underline and strikethrough.
 struct Ink {
-    outline: Option<BezPath>,
+    outlines: Vec<BezPath>,
     bitmap: Option<(cosmic_text::SwashImage, Affine)>,
     rules: BezPath,
     opacity: f32,
@@ -680,7 +683,7 @@ struct Ink {
 impl Ink {
     fn bounds(&self) -> Option<kurbo::Rect> {
         let mut parts = Vec::new();
-        if let Some(outline) = &self.outline {
+        for outline in &self.outlines {
             parts.push(outline.bounding_box());
         }
         if let Some((image, to_drawing)) = &self.bitmap {
@@ -688,10 +691,10 @@ impl Ink {
                 f64::from(image.placement.width),
                 f64::from(image.placement.height),
             );
-            parts.push(to_drawing.transform_rect_bbox(kurbo::Rect::from_origin_size(
-                kurbo::Point::ZERO,
-                size,
-            )));
+            parts.push(
+                to_drawing
+                    .transform_rect_bbox(kurbo::Rect::from_origin_size(kurbo::Point::ZERO, size)),
+            );
         }
         if !self.rules.elements().is_empty() {
             parts.push(self.rules.bounding_box());
@@ -723,11 +726,12 @@ impl Ink {
         let (w, h) = (x1 - x0, y1 - y0);
         let to_grid = Affine::translate((-(origin.0 + f64::from(x0)), -(origin.1 + f64::from(y0))));
         let mut coverage = vec![0.0_f32; (w * h) as usize];
-        for path in [self.outline.as_ref(), Some(&self.rules)].into_iter().flatten() {
+        for path in self.outlines.iter().chain([&self.rules]) {
             if path.elements().is_empty() {
                 continue;
             }
-            let part = VectorPath::from_bez(path.clone())?.coverage(FillRule::Nonzero, to_grid, w, h);
+            let part =
+                VectorPath::from_bez(path.clone())?.coverage(FillRule::Nonzero, to_grid, w, h);
             for (value, part) in coverage.iter_mut().zip(part) {
                 *value = value.max(part);
             }
@@ -768,10 +772,7 @@ impl Ink {
 /// A glyph bitmap's colour at `at`, in its pixels, interpolated bilinearly; a mask bitmap
 /// gives white with its coverage as alpha.
 fn sample_bitmap(image: &cosmic_text::SwashImage, at: kurbo::Point) -> Option<[u8; 4]> {
-    let (w, h) = (
-        image.placement.width as i64,
-        image.placement.height as i64,
-    );
+    let (w, h) = (image.placement.width as i64, image.placement.height as i64);
     let (fx, fy) = (at.x - 0.5, at.y - 0.5);
     if fx < -1.0 || fy < -1.0 || fx > w as f64 || fy > h as f64 {
         return None;
@@ -787,7 +788,12 @@ fn sample_bitmap(image: &cosmic_text::SwashImage, at: kurbo::Point) -> Option<[u
         if color {
             let p = &image.data[i * 4..i * 4 + 4];
             let a = f64::from(p[3]);
-            [f64::from(p[0]) * a, f64::from(p[1]) * a, f64::from(p[2]) * a, a]
+            [
+                f64::from(p[0]) * a,
+                f64::from(p[1]) * a,
+                f64::from(p[2]) * a,
+                a,
+            ]
         } else {
             let a = f64::from(image.data[i]);
             [255.0 * a, 255.0 * a, 255.0 * a, a]
@@ -840,7 +846,11 @@ fn outline_path(commands: &[cosmic_text::Command]) -> BezPath {
 
 /// Redraw a text layer for `style`: in a box, keeping the layer's top-left corner, scale
 /// and rotation; or along its path, which stays where it is in the document.
-pub fn restyle_layer(renderer: &mut TextRenderer, layer: &mut Layer, style: TextStyle) -> Result<()> {
+pub fn restyle_layer(
+    renderer: &mut TextRenderer,
+    layer: &mut Layer,
+    style: TextStyle,
+) -> Result<()> {
     let Some(path) = style.path.as_ref() else {
         let pixels = renderer.render(&style)?;
         return update_layer(layer, style, pixels);
@@ -908,7 +918,12 @@ pub fn update_layer(layer: &mut Layer, style: TextStyle, pixels: RgbaImage) -> R
 
 /// Replace the text and pixels, keeping the layer's scale and rotation, with the new pixels'
 /// top-left corner where the point `anchor` (in the old pixels, 0–1) was.
-fn place_layer(layer: &mut Layer, style: TextStyle, pixels: RgbaImage, anchor: Point) -> Result<()> {
+fn place_layer(
+    layer: &mut Layer,
+    style: TextStyle,
+    pixels: RgbaImage,
+    anchor: Point,
+) -> Result<()> {
     style.validate()?;
     ensure!(
         !layer.locked && layer.text.is_some(),

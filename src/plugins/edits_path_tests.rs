@@ -445,9 +445,11 @@ fn text_layers_follow_paths_and_change_their_options() {
     let arch = "M 20 150 C 80 40 220 40 280 150";
     let added = run(
         &mut document,
-        &[json!({"op": "add_text_layer", "text": "Up and over", "size": 24, "path": arch,
+        &[
+            json!({"op": "add_text_layer", "text": "Up and over", "size": 24, "path": arch,
                  "path_options": {"start_offset": 50, "align": "center", "letter_spacing": 2,
-                                  "size_end": 12, "opacity_start": 0.95, "opacity_end": 0.55}})],
+                                  "size_end": 12, "opacity_start": 0.95, "opacity_end": 0.55}}),
+        ],
     )
     .unwrap();
     let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
@@ -474,7 +476,10 @@ fn text_layers_follow_paths_and_change_their_options() {
     let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
     let options = &layer.text.as_ref().unwrap().path.as_ref().unwrap().options;
     assert_eq!(options.side, crate::text::PathSide::Right);
-    assert_eq!((options.letter_spacing, options.size_end), (2.0, Some(12.0)));
+    assert_eq!(
+        (options.letter_spacing, options.size_end),
+        (2.0, Some(12.0))
+    );
     assert_ne!(layer.pixels.as_ref().unwrap(), &first);
     assert!(same_bounds(
         &described(&document, added[0])["text"]["path"],
