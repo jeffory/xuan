@@ -263,6 +263,27 @@ impl EditorApp {
                 })
                 .wrap(),
             );
+            if config.window_buttons == xuan::config::WindowButtons::Theme {
+                let found = self
+                    .window_theme
+                    .as_ref()
+                    .and_then(|theme| theme.resolved())
+                    .map(|resolved| resolved.describe());
+                let text = match found {
+                    Some((source, Some(hover))) => format!(
+                        "{} {}. {} {}",
+                        tr("Images from"),
+                        tr(source),
+                        tr("Hovered close button:"),
+                        hover.display()
+                    ),
+                    Some((source, None)) => format!("{} {}.", tr("Images from"), tr(source)),
+                    None => tr("No theme images were found, so the built-in buttons are drawn.")
+                        .to_string(),
+                };
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(egui::RichText::new(text).color(theme::MUTED)).wrap());
+            }
         }
         ui.add_space(8.0);
         let note = if config.title_bar.client_side() && !self.transparent_window {

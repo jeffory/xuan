@@ -909,14 +909,29 @@ pub(super) struct Pick<'a> {
 
 #[derive(Debug)]
 pub(super) struct Resolved {
-    /// Which lookup step found the images (checked by the tests).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Which lookup step found the images.
     pub source: Source,
     images: BTreeMap<(Kind, State), Vec<Asset>>,
     pub tints: Tints,
 }
 
 impl Resolved {
+    /// Where the images come from and which file draws the hovered close button, for
+    /// the Settings page. Translated by the caller.
+    pub(super) fn describe(&self) -> (&'static str, Option<&Path>) {
+        let source = match self.source {
+            Source::KdeGtkConfig => "KDE's window decoration images for GTK apps",
+            Source::GtkTheme => "the GTK theme",
+            Source::IconTheme => "the icon theme",
+        };
+        let hover = self
+            .images
+            .get(&(Kind::Close, State::Hover))
+            .and_then(|l| l.first())
+            .map(|a| a.path.as_path());
+        (source, hover)
+    }
+
     fn candidate(&self, kind: Kind, state: State, ppp: f32) -> Option<&Asset> {
         let list = self.images.get(&(kind, state))?;
         let wanted = ppp.ceil().max(1.0) as u32;

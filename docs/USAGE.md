@@ -358,7 +358,8 @@ On Linux, **Window buttons** (shown for Compact) chooses the artwork:
   circle in your colour scheme's negative (red) colour, read from `kdeglobals`
   (`ForegroundNegative`), as Breeze does. Changing the
   decoration, colour scheme, or icon theme updates the buttons within a few seconds,
-  without restarting Xuan.
+  without restarting Xuan. A line under the option says which of these sources is in
+  use and which file draws the hovered close button.
 - **Built-in** always draws the monochrome buttons that come with Xuan. They are
   also used when the theme provides no usable images, and on Windows.
 
