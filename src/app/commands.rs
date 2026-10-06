@@ -688,6 +688,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .when(has_selection)
         .aliases(&["shrink", "erode"]),
     cmd("feather", "Feather 3 px", C::Select).host(Edit),
+    cmd("paths", "Paths…", C::Select)
+        .when(editing)
+        .aliases(&["pen", "bezier", "svg", "vector"]),
     // Filter
     cmd("remove_background", "Remove Background", C::Filter)
         .when(image_layer)

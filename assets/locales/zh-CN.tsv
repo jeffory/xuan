@@ -985,3 +985,20 @@ Opacity jitter	不透明度抖动
 How much more transparent each dab may randomly be.	每个笔迹随机变透明的程度。
 Hue jitter	色相抖动
 How far each dab's hue may randomly turn. 100% reaches the opposite hue.	每个笔迹色相随机旋转的幅度。100% 可达到相反色相。
+Paths…	路径…
+Paths	路径
+New Path	新建路径
+Fill Path	填充路径
+Stroke Path	描边路径
+Make Selection	建立选区
+Shape Layer from Path	从路径创建形状图层
+Rename Path	重命名路径
+Delete Path	删除路径
+This document has no paths yet.	此文档还没有路径。
+Name	名称
+Rename	重命名
+Shape Layer	形状图层
+Even-odd fill (inner subpaths cut holes)	奇偶填充（内部子路径形成镂空）
+New	新建
+New path from SVG path data, e.g. M 0 70 C 12 64 38 64 51 70 Z	从 SVG 路径数据新建路径，例如 M 0 70 C 12 64 38 64 51 70 Z
+Add Path	添加路径

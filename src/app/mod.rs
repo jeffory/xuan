@@ -28,6 +28,7 @@ mod navigator;
 mod palette;
 mod panels;
 mod panes;
+mod paths_dialog;
 mod photoshop;
 mod pixel_grid;
 mod plugin_consent;
@@ -355,6 +356,8 @@ enum Dialog {
     LayerEffects,
     /// Select → Expand… / Contract….
     SelectionAmount,
+    /// Select → Paths….
+    Paths,
 }
 
 struct EffectEdit {
@@ -480,6 +483,8 @@ pub struct EditorApp {
     tolerance: u8,
     /// Select → Expand… / Contract…: the open dialog and the amounts it remembers.
     selection_amount: Option<selection_dialogs::AmountEdit>,
+    /// Select → Paths…, while it is open.
+    paths_edit: Option<paths_dialog::PathsEdit>,
     expand_amount: u32,
     contract_amount: u32,
     /// Select → Color Range…, while open; and the Fuzziness it remembers.
@@ -674,6 +679,7 @@ impl EditorApp {
             selection_mode: SelectionMode::Replace,
             tolerance: 32,
             selection_amount: None,
+            paths_edit: None,
             expand_amount: 2,
             contract_amount: 2,
             color_range: None,
@@ -1542,6 +1548,7 @@ impl EditorApp {
                 operations::selection_from_mask_black(doc);
             }),
             "color_range" => self.open_color_range(),
+            "paths" => self.open_paths(),
             "expand_selection" => {
                 self.open_selection_amount(selection_dialogs::AmountOperation::Expand)
             }

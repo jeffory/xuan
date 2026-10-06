@@ -118,6 +118,7 @@ impl EditorApp {
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),
                 Dialog::SelectionAmount => self.selection_amount_dialog(ctx),
+                Dialog::Paths => self.paths_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {
                     let mut open = true;
