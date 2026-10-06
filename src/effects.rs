@@ -404,20 +404,23 @@ pub enum Filter {
 }
 
 impl Filter {
+    /// Check the settings are in range; the error names the field and its range.
     pub fn validate(&self) -> Result<()> {
-        let valid = match *self {
-            Self::GaussianBlur { radius } => (0.0..=100.0).contains(&radius),
+        match *self {
+            Self::GaussianBlur { radius } => within("GaussianBlur.radius", radius, 0.0, 100.0),
             Self::MotionBlur { distance, angle } => {
-                (0.0..=200.0).contains(&distance) && (-180.0..=180.0).contains(&angle)
+                within("MotionBlur.distance", distance, 0.0, 200.0)?;
+                within("MotionBlur.angle", angle, -180.0, 180.0)
             }
-            Self::Noise { amount, .. } => (0.0..=100.0).contains(&amount),
+            Self::Noise { amount, .. } => within("Noise.amount", amount, 0.0, 100.0),
             Self::LensCorrection {
                 distortion,
                 vignette,
-            } => (-50.0..=50.0).contains(&distortion) && (-100.0..=100.0).contains(&vignette),
-        };
-        ensure!(valid, "Invalid filter settings");
-        Ok(())
+            } => {
+                within("LensCorrection.distortion", distortion, -50.0, 50.0)?;
+                within("LensCorrection.vignette", vignette, -100.0, 100.0)
+            }
+        }
     }
 
     pub fn scaled(&self, scale: f32) -> Self {
@@ -920,37 +923,40 @@ pub fn auto_levels(image: &RgbaImage) -> Adjustment {
     }
 }
 
+/// A setting that must lie in `min..=max`; the error names it and its range.
+pub fn within(field: &str, value: f32, min: f32, max: f32) -> Result<()> {
+    ensure!(
+        value.is_finite() && (min..=max).contains(&value),
+        "`{field}` must be between {min} and {max}, not {value}"
+    );
+    Ok(())
+}
+
+/// Check an adjustment's settings are in range; the error names the field
+/// and its range, so a plugin or a file's author can tell what to change.
 pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
-    let valid = match adjustment {
-        Adjustment::HueRanges { settings } => settings.valid(),
-        Adjustment::LevelsChannels { ranges } => ranges.iter().all(|r| {
-            validate_adjustment(&Adjustment::Levels {
-                black: r[0],
-                gamma: r[1],
-                white: r[2],
-                output_black: r[3],
-                output_white: r[4],
-            })
-            .is_ok()
-        }),
-        Adjustment::CurvesChannels { channels } => channels.iter().all(|points| {
-            validate_adjustment(&Adjustment::Curves {
-                points: points.clone(),
-            })
-            .is_ok()
-        }),
+    const CHANNELS: [&str; 4] = ["master", "red", "green", "blue"];
+    match adjustment {
+        Adjustment::HueRanges { settings } => settings.validate()?,
+        Adjustment::LevelsChannels { ranges } => {
+            for (channel, levels) in CHANNELS.iter().zip(ranges) {
+                validate_levels(&format!("LevelsChannels.ranges ({channel})"), levels)?;
+            }
+        }
+        Adjustment::CurvesChannels { channels } => {
+            for (channel, points) in CHANNELS.iter().zip(channels) {
+                validate_curve(&format!("CurvesChannels.channels ({channel})"), points)?;
+            }
+        }
         Adjustment::HueSaturation {
             hue,
             saturation,
             lightness,
             ..
         } => {
-            hue.is_finite()
-                && hue.abs() <= 360.0
-                && saturation.is_finite()
-                && saturation.abs() <= 100.0
-                && lightness.is_finite()
-                && lightness.abs() <= 100.0
+            within("HueSaturation.hue", *hue, -360.0, 360.0)?;
+            within("HueSaturation.saturation", *saturation, -100.0, 100.0)?;
+            within("HueSaturation.lightness", *lightness, -100.0, 100.0)?;
         }
         Adjustment::Levels {
             black,
@@ -958,37 +964,19 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
             white,
             output_black,
             output_white,
-        } => {
-            [black, gamma, white, output_black, output_white]
-                .iter()
-                .all(|v| v.is_finite())
-                && *white > *black
-                && *black >= 0.0
-                && *white <= 255.0
-                && (0.01..=10.0).contains(gamma)
-                && (0.0..=255.0).contains(output_black)
-                && (0.0..=255.0).contains(output_white)
-        }
-        Adjustment::Curves { points } => {
-            (2..=32).contains(&points.len())
-                && points.first().is_some_and(|p| p.x == 0.0)
-                && points.last().is_some_and(|p| p.x == 1.0)
-                && points
-                    .iter()
-                    .all(|p| p.x.is_finite() && p.y.is_finite() && (0.0..=1.0).contains(&p.y))
-                && points.windows(2).all(|p| p[0].x < p[1].x)
-        }
+        } => validate_levels(
+            "Levels",
+            &[*black, *gamma, *white, *output_black, *output_white],
+        )?,
+        Adjustment::Curves { points } => validate_curve("Curves.points", points)?,
         Adjustment::Exposure {
             exposure,
             offset,
             gamma,
         } => {
-            exposure.is_finite()
-                && exposure.abs() <= 20.0
-                && offset.is_finite()
-                && offset.abs() <= 1.0
-                && gamma.is_finite()
-                && (0.01..=10.0).contains(gamma)
+            within("Exposure.exposure", *exposure, -20.0, 20.0)?;
+            within("Exposure.offset", *offset, -1.0, 1.0)?;
+            within("Exposure.gamma", *gamma, 0.01, 10.0)?;
         }
         Adjustment::FilmGrain {
             amount,
@@ -996,15 +984,12 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
             roughness,
             ..
         } => {
-            amount.is_finite()
-                && (0.0..=100.0).contains(amount)
-                && size.is_finite()
-                && (0.1..=100.0).contains(size)
-                && roughness.is_finite()
-                && (0.0..=100.0).contains(roughness)
+            within("FilmGrain.amount", *amount, 0.0, 100.0)?;
+            within("FilmGrain.size", *size, 0.1, 100.0)?;
+            within("FilmGrain.roughness", *roughness, 0.0, 100.0)?;
         }
-        Adjustment::Grain { amount, .. } => amount.is_finite() && (0.0..=100.0).contains(amount),
-        Adjustment::GradientMap { .. } | Adjustment::Invert => true,
+        Adjustment::Grain { amount, .. } => within("Grain.amount", *amount, 0.0, 100.0)?,
+        Adjustment::GradientMap { .. } | Adjustment::Invert => {}
         // Upstream's ranges (BlackWhiteSettings and ColorBalanceSettings in
         // Document/ImageAdjustments.swift).
         Adjustment::BlackWhite {
@@ -1013,26 +998,65 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
             tint_saturation,
             ..
         } => {
-            weights
-                .iter()
-                .all(|w| w.is_finite() && (-200.0..=300.0).contains(w))
-                && tint_hue.is_finite()
-                && (0.0..=360.0).contains(tint_hue)
-                && tint_saturation.is_finite()
-                && (0.0..=100.0).contains(tint_saturation)
+            for weight in weights {
+                within("BlackWhite.weights", *weight, -200.0, 300.0)?;
+            }
+            within("BlackWhite.tint_hue", *tint_hue, 0.0, 360.0)?;
+            within("BlackWhite.tint_saturation", *tint_saturation, 0.0, 100.0)?;
         }
         Adjustment::ColorBalance {
             shadows,
             midtones,
             highlights,
             ..
-        } => shadows
-            .iter()
-            .chain(midtones)
-            .chain(highlights)
-            .all(|v| v.is_finite() && (-100.0..=100.0).contains(v)),
-    };
-    ensure!(valid, "Invalid adjustment settings");
+        } => {
+            for (name, values) in [
+                ("ColorBalance.shadows", shadows),
+                ("ColorBalance.midtones", midtones),
+                ("ColorBalance.highlights", highlights),
+            ] {
+                for value in values {
+                    within(name, *value, -100.0, 100.0)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Levels as `[black, gamma, white, output_black, output_white]`.
+fn validate_levels(name: &str, levels: &[f32; 5]) -> Result<()> {
+    let [black, gamma, white, output_black, output_white] = *levels;
+    within(&format!("{name} black"), black, 0.0, 255.0)?;
+    within(&format!("{name} white"), white, 0.0, 255.0)?;
+    ensure!(
+        white > black,
+        "`{name} white` ({white}) must be above `black` ({black})"
+    );
+    within(&format!("{name} gamma"), gamma, 0.01, 10.0)?;
+    within(&format!("{name} output_black"), output_black, 0.0, 255.0)?;
+    within(&format!("{name} output_white"), output_white, 0.0, 255.0)
+}
+
+/// Curve points from x 0 to x 1, in increasing order of x.
+fn validate_curve(name: &str, points: &[Point]) -> Result<()> {
+    ensure!(
+        (2..=32).contains(&points.len()),
+        "`{name}` must have 2 to 32 points, not {}",
+        points.len()
+    );
+    ensure!(
+        points.first().is_some_and(|p| p.x == 0.0) && points.last().is_some_and(|p| p.x == 1.0),
+        "`{name}` must start at x 0 and end at x 1"
+    );
+    for point in points {
+        ensure!(point.x.is_finite(), "`{name} x` must be a number");
+        within(&format!("{name} y"), point.y, 0.0, 1.0)?;
+    }
+    ensure!(
+        points.windows(2).all(|p| p[0].x < p[1].x),
+        "`{name}` must be in increasing order of x"
+    );
     Ok(())
 }
 

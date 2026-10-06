@@ -354,6 +354,7 @@ pub fn prepare(
         x: origin.x,
         y: origin.y,
         scale,
+        mask_layer: None,
     });
     for (index, (region, bounds)) in regions.iter().zip(&boxes).enumerate() {
         let x = (bounds.0 - crop.0) * scale;

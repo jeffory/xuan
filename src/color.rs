@@ -66,17 +66,24 @@ impl HueSettings {
         response
     }
 
-    pub fn valid(&self) -> bool {
-        self.range < 7
-            && self.adjustments.iter().all(|a| {
-                a[0].is_finite()
-                    && a[0].abs() <= 360.0
-                    && a[1].is_finite()
-                    && a[1].abs() <= 100.0
-                    && a[2].is_finite()
-                    && a[2].abs() <= 100.0
-            })
-            && self.bands.iter().flatten().all(|v| v.is_finite())
+    /// Check the settings are in range; the error names the field and its range.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        use crate::effects::within;
+        anyhow::ensure!(
+            self.range < 7,
+            "`HueRanges.settings.range` must be between 0 and 6, not {}",
+            self.range
+        );
+        for [hue, saturation, lightness] in self.adjustments {
+            within("HueRanges.settings.adjustments hue", hue, -360.0, 360.0)?;
+            within("HueRanges.settings.adjustments saturation", saturation, -100.0, 100.0)?;
+            within("HueRanges.settings.adjustments lightness", lightness, -100.0, 100.0)?;
+        }
+        anyhow::ensure!(
+            self.bands.iter().flatten().all(|v| v.is_finite()),
+            "`HueRanges.settings.bands` must be numbers"
+        );
+        Ok(())
     }
 }
 

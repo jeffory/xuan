@@ -2365,6 +2365,116 @@ fn edit_sessions_gate_direct_edits_until_the_user_allows_them() {
     assert!(app.stored_grant("mock").unwrap().edit_without_asking);
 }
 
+#[test]
+fn host_run_picks_its_layers_and_reports_what_it_added_and_started() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("fill_fg");
+    let base = app.session().unwrap().document.layers[0].id;
+    let ids = |answer: &serde_json::Value| -> Vec<uuid::Uuid> {
+        serde_json::from_value(answer["layers"].clone()).unwrap()
+    };
+    let describe = |app: &mut EditorApp, id: uuid::Uuid| {
+        let document = plugin_request(app, "document/get", json!({})).unwrap();
+        (document["layers"].as_array().unwrap().iter())
+            .find(|layer| layer["id"] == json!(id))
+            .cloned()
+            .unwrap()
+    };
+
+    // New layers come back with their ids.
+    let answer = plugin_request(&mut app, "host/run", json!({"action": "new_layer"})).unwrap();
+    let new = ids(&answer);
+    assert_eq!(new.len(), 1);
+    assert_eq!(app.session().unwrap().document.active, Some(new[0]));
+    assert_eq!(answer["running"], false);
+
+    // `layers` chooses what the command acts on.
+    let answer = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "duplicate", "layers": [base]}),
+    )
+    .unwrap();
+    let copies = ids(&answer);
+    assert_eq!(copies.len(), 1);
+    let document = &app.session().unwrap().document;
+    let copy = document.layers.iter().find(|l| l.id == copies[0]).unwrap();
+    assert_eq!(copy.pixels, document.layers[0].pixels, "a copy of the base");
+    plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "flip_h", "layers": [base]}),
+    )
+    .unwrap();
+    let flipped = describe(&mut app, base);
+    assert_eq!((&flipped["flip_x"], &flipped["flip_y"]), (&json!(true), &json!(false)));
+
+    // A mask attached to the image is reported on it and exported through it.
+    let answer =
+        plugin_request(&mut app, "host/run", json!({"action": "mask", "layers": [base]})).unwrap();
+    let mask = ids(&answer);
+    assert_eq!(mask.len(), 1);
+    let image = describe(&mut app, base);
+    assert_eq!(image["has_mask"], true);
+    assert_eq!(
+        image["masks"],
+        json!([{"layer": mask[0], "enabled": true, "linked": true}])
+    );
+    assert_eq!(describe(&mut app, mask[0])["attached_to"], json!(base));
+    plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "disable_mask", "layers": [mask[0]]}),
+    )
+    .unwrap();
+    assert_eq!(describe(&mut app, base)["masks"][0]["enabled"], false);
+    let export = plugin_request(
+        &mut app,
+        "layer/export",
+        json!({"layer": base, "what": "mask"}),
+    )
+    .unwrap();
+    assert_eq!(export["mask_layer"], json!(mask[0]));
+    let _ = std::fs::remove_file(export["path"].as_str().unwrap());
+
+    // Bad layers, or layers with a command that does not edit, change nothing.
+    let steps = app.session().unwrap().history.names().count();
+    let active = app.session().unwrap().document.active;
+    for params in [
+        json!({"action": "invert", "layers": [uuid::Uuid::new_v4()]}),
+        json!({"action": "invert", "layers": "nope"}),
+        json!({"action": "zoom_in", "layers": [base]}),
+        json!({"action": "mock/echo", "layers": [base]}),
+    ] {
+        assert!(plugin_request(&mut app, "host/run", params).is_err());
+    }
+    // A command greyed out for the chosen layer leaves the old one active.
+    let error = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "select_mask_black", "layers": [copies[0]]}),
+    )
+    .unwrap_err();
+    assert!(error.message.contains("not available"), "{}", error.message);
+    assert_eq!(app.session().unwrap().document.active, active);
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+
+    // A command that starts a job says it is still running.
+    let answer = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "remove_flat_background", "layers": [base]}),
+    )
+    .unwrap();
+    assert_eq!(answer["running"], true);
+    assert!(app.job.is_some());
+}
+
 #[cfg(unix)]
 mod unix {
     use super::*;
