@@ -6,13 +6,17 @@ use xuan::{
     document::{Layer, Point},
     render,
     text::{self, PathAlign, PathSide, TextPath, TextRenderer, TextStyle},
-    vector::VectorPath,
 };
 
 /// The Text window's path section: attach one of the document's paths for the text to
 /// follow, or detach it, and how the text follows it. Text on a path is edited here; the
 /// canvas shows it along the path.
-fn path_options(ui: &mut egui::Ui, edit: &mut TextEdit, paths: &[(String, VectorPath)]) {
+/// Returns the path picked from the menu, `Some(None)` for none.
+fn path_options(
+    ui: &mut egui::Ui,
+    edit: &mut TextEdit,
+    paths: &[String],
+) -> Option<Option<usize>> {
     const DETACH: usize = usize::MAX;
     let mut pick = None;
     ui.horizontal(|ui| {
@@ -27,33 +31,12 @@ fn path_options(ui: &mut egui::Ui, edit: &mut TextEdit, paths: &[(String, Vector
             .width(220.0)
             .show_ui(ui, |ui| {
                 widgets::menu_choice(ui, &mut pick, Some(DETACH), tr("None (text box)"));
-                for (index, (name, _)) in paths.iter().enumerate() {
+                for (index, name) in paths.iter().enumerate() {
                     widgets::menu_choice(ui, &mut pick, Some(index), name);
                 }
             });
     });
-    match pick {
-        Some(DETACH) => edit.style.path = None,
-        Some(index) => {
-            let options = edit
-                .style
-                .path
-                .as_ref()
-                .map(|p| p.options.clone())
-                .unwrap_or_default();
-            let size = edit
-                .original
-                .pixels
-                .as_ref()
-                .map_or((1, 1), |p| p.dimensions());
-            match TextPath::from_document(&paths[index].1, edit.original.transform, size, options)
-            {
-                Ok(path) => edit.style.path = Some(path),
-                Err(error) => edit.error = Some(error.to_string()),
-            }
-        }
-        None => {}
-    }
+    let pick = pick.map(|index| (index != DETACH).then_some(index));
     let Some(path) = &mut edit.style.path else {
         if paths.is_empty() {
             ui.label(
@@ -64,7 +47,7 @@ fn path_options(ui: &mut egui::Ui, edit: &mut TextEdit, paths: &[(String, Vector
                 .color(ui.palette().muted),
             );
         }
-        return;
+        return pick;
     };
     let options = &mut path.options;
     ui.horizontal(|ui| {
@@ -158,18 +141,19 @@ fn path_options(ui: &mut egui::Ui, edit: &mut TextEdit, paths: &[(String, Vector
         .small()
         .color(ui.palette().muted),
     );
+    pick
 }
 
 use super::{Dialog, EditorApp, Tool, font_picker::FontPicker, widgets};
 
 pub(super) struct TextEdit {
-    target: Uuid,
+    pub(super) target: Uuid,
     original: Layer,
     pub(super) style: TextStyle,
     fonts: FontPicker,
     focus: bool,
     changed: bool,
-    error: Option<String>,
+    pub(super) error: Option<String>,
 }
 
 impl EditorApp {
@@ -368,13 +352,13 @@ impl EditorApp {
     pub(super) fn text_dialog(&mut self, ctx: &egui::Context) {
         let apply_shortcut =
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter));
-        let paths: Vec<(String, VectorPath)> = self
+        let paths: Vec<String> = self
             .session()
             .map(|s| {
                 s.document
                     .paths
                     .iter()
-                    .map(|p| (p.name.clone(), p.d.clone()))
+                    .map(|p| p.name.clone())
                     .collect()
             })
             .unwrap_or_default();
@@ -387,6 +371,7 @@ impl EditorApp {
             .handle_keys(ctx, renderer.families(), &mut edit.style.family);
         let mut open = true;
         let mut apply = false;
+        let mut picked = None;
         let mut cancel = false;
         widgets::Window::new(tr("Text"))
             .default_width(440.0)
@@ -451,7 +436,7 @@ impl EditorApp {
                     widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
                 });
                 ui.separator();
-                path_options(ui, edit, &paths);
+                picked = path_options(ui, edit, &paths);
                 if let Some(error) = &edit.error {
                     ui.colored_label(ui.palette().error, error);
                 }
@@ -476,11 +461,51 @@ impl EditorApp {
             self.finish_text(false);
             return;
         }
-        if edit.style != before {
+        if let Some(pick) = picked {
+            self.attach_text_path(pick);
+        }
+        if self
+            .text_edit
+            .as_ref()
+            .is_some_and(|edit| edit.style != before)
+        {
             self.preview_text();
         }
         if apply || apply_shortcut {
             self.finish_text(true);
+        }
+    }
+
+    /// Set the edited text along the document path `index`, keeping its path options, or
+    /// with `None` back in a box. The path is kept in the layer's own box, so it moves with
+    /// the layer from now on.
+    pub(super) fn attach_text_path(&mut self, index: Option<usize>) {
+        let path = index.and_then(|index| {
+            self.session()
+                .and_then(|s| s.document.paths.get(index))
+                .map(|p| p.d.clone())
+        });
+        let Some(edit) = &mut self.text_edit else {
+            return;
+        };
+        let Some(path) = path else {
+            edit.style.path = None;
+            return;
+        };
+        let options = edit
+            .style
+            .path
+            .as_ref()
+            .map(|p| p.options.clone())
+            .unwrap_or_default();
+        let size = edit
+            .original
+            .pixels
+            .as_ref()
+            .map_or((1, 1), |p| p.dimensions());
+        match TextPath::from_document(&path, edit.original.transform, size, options) {
+            Ok(path) => edit.style.path = Some(path),
+            Err(error) => edit.error = Some(error.to_string()),
         }
     }
 }

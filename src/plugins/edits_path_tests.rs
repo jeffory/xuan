@@ -415,3 +415,150 @@ fn paths_are_saved_with_the_document_and_described() {
     crate::operations::flip_canvas(&mut document, true);
     assert_eq!(document.paths[0].d.to_svg(), "M42,-1 L22,9");
 }
+
+/// The layer `id` as `describe` reports it.
+fn described(document: &Document, id: Uuid) -> Value {
+    describe(document)["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == json!(id))
+        .cloned()
+        .unwrap()
+}
+
+/// Whether the SVG path data `a` and `b` bound the same area, within a hundredth of a pixel.
+fn same_bounds(a: &Value, b: &str) -> bool {
+    let a = VectorPath::parse(a.as_str().unwrap())
+        .unwrap()
+        .bounds()
+        .unwrap();
+    let b = VectorPath::parse(b).unwrap().bounds().unwrap();
+    [(a.x0, b.x0), (a.y0, b.y0), (a.x1, b.x1), (a.y1, b.y1)]
+        .iter()
+        .all(|(x, y)| (x - y).abs() < 0.01)
+}
+
+#[test]
+fn text_layers_follow_paths_and_change_their_options() {
+    let mut document = Document::new(300, 200).unwrap();
+    let arch = "M 20 150 C 80 40 220 40 280 150";
+    let added = run(
+        &mut document,
+        &[json!({"op": "add_text_layer", "text": "Up and over", "size": 24, "path": arch,
+                 "path_options": {"start_offset": 50, "align": "center", "letter_spacing": 2,
+                                  "size_end": 12, "opacity_start": 0.95, "opacity_end": 0.55}})],
+    )
+    .unwrap();
+    let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+    let stored = layer.text.as_ref().unwrap().path.as_ref().unwrap();
+    assert_eq!(stored.options.align, crate::text::PathAlign::Center);
+    assert_eq!(stored.options.size_end, Some(12.0));
+    assert!(stored.options.rotate, "defaults fill the options left out");
+    assert_eq!(layer.name, "Up and over");
+    let text = &described(&document, added[0])["text"];
+    assert_eq!(described(&document, added[0])["kind"], "text");
+    assert_eq!(text["text"], "Up and over");
+    assert_eq!(text["size"], 24.0);
+    assert!(same_bounds(&text["path"], arch), "{}", text["path"]);
+    assert_eq!(text["path_options"]["letter_spacing"], 2.0);
+    assert_eq!(text["path_options"]["side"], "left");
+    let first = layer.pixels.clone().unwrap();
+
+    // Partial options keep the rest; the path stays where it was.
+    run(
+        &mut document,
+        &[json!({"op": "set_text", "layer": added[0], "path_options": {"side": "right"}})],
+    )
+    .unwrap();
+    let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+    let options = &layer.text.as_ref().unwrap().path.as_ref().unwrap().options;
+    assert_eq!(options.side, crate::text::PathSide::Right);
+    assert_eq!((options.letter_spacing, options.size_end), (2.0, Some(12.0)));
+    assert_ne!(layer.pixels.as_ref().unwrap(), &first);
+    assert!(same_bounds(
+        &described(&document, added[0])["text"]["path"],
+        arch
+    ));
+
+    // A new path and text move the text; `null` puts it back in a box.
+    let line = "M 10 180 L 290 180";
+    run(
+        &mut document,
+        &[json!({"op": "set_text", "layer": added[0], "path": line, "text": "Flat"})],
+    )
+    .unwrap();
+    let text = &described(&document, added[0])["text"];
+    assert!(same_bounds(&text["path"], line), "{}", text["path"]);
+    assert_eq!(text["text"], "Flat");
+    assert_eq!(text["path_options"]["side"], "right", "options carry over");
+    run(
+        &mut document,
+        &[json!({"op": "set_text", "layer": added[0], "path": null})],
+    )
+    .unwrap();
+    let text = &described(&document, added[0])["text"];
+    assert!(text.get("path").is_none() && text["text"] == "Flat");
+
+    // Box text can be put on a path, with options of its own.
+    let boxed = run(
+        &mut document,
+        &[json!({"op": "add_text_layer", "text": "Boxed", "x": 40, "y": 20})],
+    )
+    .unwrap()[0];
+    run(
+        &mut document,
+        &[json!({"op": "set_text", "layer": boxed, "path": arch, "path_options": {"rotate": false}})],
+    )
+    .unwrap();
+    let text = &described(&document, boxed)["text"];
+    assert!(same_bounds(&text["path"], arch));
+    assert_eq!(text["path_options"]["rotate"], false);
+    assert_eq!(text["path_options"]["align"], "start");
+
+    let image = document.layers[0].id;
+    for (bad, says) in [
+        (
+            json!({"op": "add_text_layer", "text": "x", "path": arch, "x": 3}),
+            "leave out x and y",
+        ),
+        (
+            json!({"op": "add_text_layer", "text": "x", "path_options": {"align": "end"}}),
+            "only with `path`",
+        ),
+        (
+            json!({"op": "add_text_layer", "text": "x", "path": "M 0 0 L"}),
+            "SVG path",
+        ),
+        (
+            json!({"op": "add_text_layer", "text": "x", "path": arch, "path_options": {"opacity_end": 2}}),
+            "Opacity",
+        ),
+        (
+            json!({"op": "set_text", "layer": added[0], "path_options": {"align": "end"}}),
+            "not on a path",
+        ),
+        (
+            json!({"op": "set_text", "layer": boxed, "path_options": {"align": "middle"}}),
+            "Invalid `path_options`",
+        ),
+        (
+            json!({"op": "set_text", "layer": image, "text": "x"}),
+            "not a text layer",
+        ),
+    ] {
+        let error = error(&document, bad.clone());
+        assert!(error.contains(says), "{bad}: {error}");
+    }
+    document
+        .layers
+        .iter_mut()
+        .find(|l| l.id == boxed)
+        .unwrap()
+        .locked = true;
+    let error = error(
+        &document,
+        json!({"op": "set_text", "layer": boxed, "text": "y"}),
+    );
+    assert!(error.contains("locked"), "{error}");
+}

@@ -1089,3 +1089,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "text_path_tests.rs"]
+mod path_tests;

@@ -101,3 +101,100 @@ fn paths_are_added_and_filled_stroked_selected_and_shaped() {
     );
     assert_eq!(app.dialog, None);
 }
+
+/// The Text window sets text along a document path, edits how it follows it and puts it
+/// back in a box, each applied as one undo step.
+#[test]
+fn text_is_set_along_a_document_path_in_the_text_window() {
+    let (context, mut app) = app();
+    app.dimensions = [320, 200];
+    app.new_document();
+    // Without paths, the window says where to make one.
+    app.start_text(None, Point::new(20.0, 20.0));
+    let output = frame(&context, &mut app);
+    let texts = shown_text(&output);
+    assert!(texts.iter().any(|t| t.contains("Select → Paths…")), "{texts:?}");
+    app.finish_text(false);
+
+    let d = "M 20 150 C 80 40 240 40 300 150";
+    app.add_path(d).unwrap();
+    app.start_text(None, Point::new(20.0, 20.0));
+    let id = app.text_edit.as_ref().unwrap().target;
+    app.attach_text_path(Some(0));
+    {
+        let style = &mut app.text_edit.as_mut().unwrap().style;
+        style.content = "Over the hill".into();
+        let options = &mut style.path.as_mut().unwrap().options;
+        options.start_offset = 50.0;
+        options.align = xuan::text::PathAlign::Center;
+        options.size_end = Some(20.0);
+    }
+    app.preview_text();
+    let output = frame(&context, &mut app);
+    assert!(app.text_edit.as_ref().unwrap().error.is_none());
+    let texts = shown_text(&output);
+    assert!(
+        texts.iter().any(|t| t.contains("Turn letters with the path")),
+        "{texts:?}"
+    );
+    app.finish_text(true);
+    let layer = |app: &EditorApp| {
+        app.session()
+            .unwrap()
+            .document
+            .layers
+            .iter()
+            .find(|l| l.id == id)
+            .unwrap()
+            .clone()
+    };
+    let placed = layer(&app);
+    let path = placed.text.as_ref().unwrap().path.clone().unwrap();
+    let bounds = path.in_document(placed.transform).unwrap().bounds().unwrap();
+    let expected = xuan::vector::VectorPath::parse(d)
+        .unwrap()
+        .bounds()
+        .unwrap();
+    assert!((bounds.x0 - expected.x0).abs() < 0.01 && (bounds.y1 - expected.y1).abs() < 0.01);
+    assert_eq!(path.options.size_end, Some(20.0));
+    // New text still starts in a box.
+    assert!(app.text_style.path.is_none());
+    assert_eq!(app.session().unwrap().history.names().count(), 2);
+
+    // Editing it again keeps the path; detaching puts the text in a box.
+    app.start_text(Some(id), Point::default());
+    app.text_edit
+        .as_mut()
+        .unwrap()
+        .style
+        .path
+        .as_mut()
+        .unwrap()
+        .options
+        .side = xuan::text::PathSide::Right;
+    app.preview_text();
+    app.finish_text(true);
+    let flipped = layer(&app);
+    assert_ne!(flipped.pixels, placed.pixels);
+    app.start_text(Some(id), Point::default());
+    app.attach_text_path(None);
+    app.preview_text();
+    app.finish_text(true);
+    assert!(layer(&app).text.as_ref().unwrap().path.is_none());
+    app.command("undo");
+    assert_eq!(layer(&app).pixels, flipped.pixels);
+    app.command("undo");
+    assert_eq!(layer(&app).pixels, placed.pixels);
+    assert_eq!(layer(&app).text, placed.text);
+}
+
+fn shown_text(output: &egui::FullOutput) -> Vec<String> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
