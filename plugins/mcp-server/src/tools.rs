@@ -1156,10 +1156,19 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             run: Action::Run(|cx, args| {
                 let mut args = pick(
                     args,
-                    &["document", "suggested_name", "path", "overwrite", "in_place"],
+                    &[
+                        "document",
+                        "suggested_name",
+                        "path",
+                        "overwrite",
+                        "in_place",
+                    ],
                 )?;
                 let in_place = args.remove("in_place");
-                if in_place.as_ref().is_some_and(|value| !value.is_null() && !value.is_boolean()) {
+                if in_place
+                    .as_ref()
+                    .is_some_and(|value| !value.is_null() && !value.is_boolean())
+                {
                     return Err("`in_place` must be true or false".into());
                 }
                 if in_place == Some(json!(true)) {

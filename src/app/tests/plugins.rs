@@ -4289,7 +4289,7 @@ done
             &app.plugins.file_prompt.as_ref().unwrap().action,
             crate::app::plugin_files::FileAction::Open { path, .. } if *path == canonical
         ));
-        app.answer_file_prompt(false);
+        app.answer_file(crate::app::plugin_files::FileAnswer::Cancel);
         assert_eq!(wait(&context, &mut app, 105)["error"]["code"], CANCELLED);
         assert_eq!(app.sessions.len(), sessions);
         app.plugins.file_refused_at.insert("mock".into(), past);
@@ -4300,7 +4300,7 @@ done
         run_until(&context, &mut app, |app| {
             app.dialog == Some(Dialog::PluginFile)
         });
-        app.answer_file_prompt(true);
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
         let opened = wait(&context, &mut app, 107);
         assert_eq!(opened["result"]["ok"], true);
         assert_eq!(app.sessions.len(), sessions + 1);
@@ -4324,7 +4324,7 @@ done
         std::fs::remove_file(&link).unwrap();
         std::os::unix::fs::symlink(&decoy, &link).unwrap();
         let sessions = app.sessions.len();
-        app.answer_file_prompt(true);
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
         let refused = wait(&context, &mut app, 111);
         assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{refused}");
         assert_eq!(app.sessions.len(), sessions);
@@ -4483,7 +4483,7 @@ done
         run_until(&context, &mut app, |app| {
             app.dialog == Some(Dialog::PluginFile)
         });
-        app.answer_file_prompt(true);
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
         let opened = wait(&context, &mut app, 306);
         let message = opened["error"]["message"].as_str().unwrap();
         assert!(message.contains("broken.png"), "{message}");
@@ -4895,7 +4895,7 @@ done
         assert_eq!(app.dialog, None);
         run_until(&context, &mut app, |_| answer(dir.path(), 505).is_some());
         assert_eq!(answer(dir.path(), 505).unwrap()["error"]["code"], CANCELLED);
-        app.answer_file_prompt(true);
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
         for _ in 0..5 {
             frame(&context, &mut app);
         }
@@ -4976,7 +4976,11 @@ done
     fn path_save_mock(
         dir: &Path,
         config: &Path,
-    ) -> (egui::Context, EditorApp, std::sync::Arc<std::sync::Mutex<usize>>) {
+    ) -> (
+        egui::Context,
+        EditorApp,
+        std::sync::Arc<std::sync::Mutex<usize>>,
+    ) {
         use crate::app::plugin_files::SaveDialog;
         use std::sync::{Arc, Mutex};
         let (context, mut app) = app();
@@ -5030,7 +5034,13 @@ done
 
         // Xuan's prompt, not the system dialog, names the file and folder;
         // Cancel writes nothing.
-        ask(&context, &mut app, 701, "file/save_as", json!({"path": project}));
+        ask(
+            &context,
+            &mut app,
+            701,
+            "file/save_as",
+            json!({"path": project}),
+        );
         let write = prompted_write(&app).expect("the save prompt is open");
         assert_eq!(write.path, folder.join("agent.xuan"));
         assert!(!write.replaces && !write.in_place && write.export.is_none());
@@ -5047,7 +5057,13 @@ done
         app.plugins.file_refused_at.clear();
 
         // Save writes the project there, which then lives there.
-        ask(&context, &mut app, 703, "file/save_as", json!({"path": project}));
+        ask(
+            &context,
+            &mut app,
+            703,
+            "file/save_as",
+            json!({"path": project}),
+        );
         assert!(prompted_write(&app).is_some());
         app.answer_file(FileAnswer::Accept);
         let saved = wait(&context, &mut app, 703);
@@ -5058,17 +5074,29 @@ done
         );
         assert!(project.is_file());
         let session = app.session().unwrap();
-        assert_eq!(session.path.as_deref(), Some(folder.join("agent.xuan").as_path()));
+        assert_eq!(
+            session.path.as_deref(),
+            Some(folder.join("agent.xuan").as_path())
+        );
         assert!(!session.history.dirty());
         assert!(!app.saves_without_asking("mock"));
 
         // Always Allow saves, and turns on saving without asking in the grant.
         let shot = out.path().join("shot.png");
-        ask(&context, &mut app, 704, "file/export", json!({"path": shot}));
+        ask(
+            &context,
+            &mut app,
+            704,
+            "file/export",
+            json!({"path": shot}),
+        );
         assert_eq!(prompted_write(&app).unwrap().export.as_deref(), Some("png"));
         app.answer_file(FileAnswer::Always);
         let exported = wait(&context, &mut app, 704);
-        assert_eq!(exported["result"], json!({"name": "shot.png", "asked": true}));
+        assert_eq!(
+            exported["result"],
+            json!({"name": "shot.png", "asked": true})
+        );
         assert!(shot.is_file());
         assert!(app.saves_without_asking("mock"));
         let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
@@ -5076,9 +5104,18 @@ done
 
         // The next write needs no prompt, and the status bar names the file.
         let second = out.path().join("second.JPEG");
-        ask(&context, &mut app, 705, "file/export", json!({"path": second}));
+        ask(
+            &context,
+            &mut app,
+            705,
+            "file/export",
+            json!({"path": second}),
+        );
         let quiet = wait(&context, &mut app, 705);
-        assert_eq!(quiet["result"], json!({"name": "second.JPEG", "asked": false}));
+        assert_eq!(
+            quiet["result"],
+            json!({"name": "second.JPEG", "asked": false})
+        );
         assert_eq!(app.dialog, None, "no prompt with Always Allow");
         assert_eq!(
             xuan::io::import_image(&second).unwrap().dimensions(),
@@ -5090,7 +5127,10 @@ done
             app.status
         );
         assert!(
-            app.plugins.log("mock").iter().any(|line| line.contains("second.JPEG")),
+            app.plugins
+                .log("mock")
+                .iter()
+                .any(|line| line.contains("second.JPEG")),
             "the plugin's log shows the write"
         );
 
@@ -5116,7 +5156,10 @@ done
             json!({"path": shot, "overwrite": true}),
         );
         assert_eq!(wait(&context, &mut app, 707)["result"]["asked"], false);
-        assert_ne!(std::fs::metadata(&shot).unwrap().modified().unwrap(), before);
+        assert_ne!(
+            std::fs::metadata(&shot).unwrap().modified().unwrap(),
+            before
+        );
         // Another file is not, even with Always Allow: the prompt asks and
         // says it replaces the file.
         let theirs = out.path().join("theirs.png");
@@ -5158,7 +5201,10 @@ done
             "mock",
             file_request(711, "file/save", json!({"path": project})),
         );
-        assert_eq!(wait(&context, &mut app, 711)["error"]["code"], INVALID_PARAMS);
+        assert_eq!(
+            wait(&context, &mut app, 711)["error"]["code"],
+            INVALID_PARAMS
+        );
         // A document without a project file has nothing to save in place.
         app.new_document();
         app.queue_file_request("mock", file_request(712, "file/save", json!({})));
@@ -5223,8 +5269,16 @@ done
                 json!({"path": private.join("missing").join("x.png")}),
                 "does not exist",
             ),
-            ("file/export", json!({"path": private.join("x.bmp")}), "x.bmp"),
-            ("file/save_as", json!({"path": private.join("x.png")}), ".xuan"),
+            (
+                "file/export",
+                json!({"path": private.join("x.bmp")}),
+                "x.bmp",
+            ),
+            (
+                "file/save_as",
+                json!({"path": private.join("x.png")}),
+                ".xuan",
+            ),
             (
                 "file/export",
                 json!({"path": private.join("x.png"), "format": "jpg"}),
@@ -5235,9 +5289,21 @@ done
                 json!({"path": private.join("photo\u{202E}gnp.exe.png")}),
                 "plain name",
             ),
-            ("file/export", json!({"path": private.join("CON.png")}), "plain name"),
-            ("file/export", json!({"path": private.join(".hidden.png")}), "plain name"),
-            ("file/export", json!({"path": private.join("x.png.")}), "plain name"),
+            (
+                "file/export",
+                json!({"path": private.join("CON.png")}),
+                "plain name",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join(".hidden.png")}),
+                "plain name",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("x.png.")}),
+                "plain name",
+            ),
             (
                 "file/export",
                 json!({"path": private.join("taken.png"), "overwrite": true}),
@@ -5260,11 +5326,17 @@ done
             app.queue_file_request("mock", file_request(id, method, params.clone()));
             run_until(&context, &mut app, |_| answer(dir.path(), id).is_some());
             let refused = answer(dir.path(), id).unwrap();
-            assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{params}: {refused}");
+            assert_eq!(
+                refused["error"]["code"], INVALID_PARAMS,
+                "{params}: {refused}"
+            );
             let message = refused["error"]["message"].as_str().unwrap();
             assert!(message.contains(expected), "{params}: {message}");
             assert!(!message.contains("private folder"), "{params}: {message}");
-            assert!(!message.contains(out.path().to_str().unwrap()), "{params}: {message}");
+            assert!(
+                !message.contains(out.path().to_str().unwrap()),
+                "{params}: {message}"
+            );
             assert_eq!(app.dialog, None, "{params}: no prompt");
         }
         assert_eq!(*dialogs.lock().unwrap(), 0);

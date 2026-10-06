@@ -293,15 +293,15 @@ fn write_target(
     export: Option<Option<&str>>,
     overwrite: bool,
 ) -> Result<(PathBuf, Option<String>, bool), RpcError> {
-    let invalid = RpcError::invalid_params;
+    let invalid = |message: String| RpcError::invalid_params(message);
     if !path.is_absolute() {
-        return Err(invalid("`path` must be absolute"));
+        return Err(invalid("`path` must be absolute".into()));
     }
     // Written as given, so a name is refused rather than cleaned: what the
     // prompt shows and what is written are the plugin's own name.
     let name = (path.file_name().and_then(|name| name.to_str()))
         .filter(|name| plain_file_name(name).as_deref() == Some(*name))
-        .ok_or_else(|| invalid(UNPLAIN_NAME))?;
+        .ok_or_else(|| invalid(UNPLAIN_NAME.into()))?;
     let extension = (Path::new(name).extension())
         .and_then(|extension| extension.to_str())
         .unwrap_or_default();
@@ -787,15 +787,6 @@ impl EditorApp {
             process.note(format!("{done} {}", path.display()));
         }
         Ok(json!({"name": name, "asked": asked}))
-    }
-
-    /// Apply the answer to the open `file/open` prompt.
-    pub(super) fn answer_file_prompt(&mut self, open: bool) {
-        self.answer_file(if open {
-            FileAnswer::Accept
-        } else {
-            FileAnswer::Cancel
-        });
     }
 
     /// Apply the answer to the open file prompt: `file/open`, or a write to

@@ -2000,7 +2000,9 @@ async fn save_and_export_forward_a_path_and_overwrite_and_name_the_file_in_the_p
             json!({"path": "/home/someone/agent.xuan", "overwrite": false})
         )
     );
-    let in_place = client.tool("save_document", json!({"in_place": true})).await;
+    let in_place = client
+        .tool("save_document", json!({"in_place": true}))
+        .await;
     assert_ne!(in_place.is_error, Some(true), "{}", text_of(&in_place));
     assert_eq!(last(&editor), ("file/save".to_owned(), json!({})));
     // `in_place` with a path or a name is refused, and nothing is sent.
@@ -2012,7 +2014,9 @@ async fn save_and_export_forward_a_path_and_overwrite_and_name_the_file_in_the_p
         assert_eq!(mixed.is_error, Some(true));
         assert!(text_of(&mixed).contains(extra), "{}", text_of(&mixed));
     }
-    let bad = client.tool("save_document", json!({"in_place": "yes"})).await;
+    let bad = client
+        .tool("save_document", json!({"in_place": "yes"}))
+        .await;
     assert_eq!(bad.is_error, Some(true));
     assert_eq!(editor.requests().len(), requests);
 
@@ -2052,7 +2056,10 @@ async fn save_and_export_forward_a_path_and_overwrite_and_name_the_file_in_the_p
             "`overwrite: true`",
             "waits until the user answers in Xuan",
         ] {
-            assert!(description.contains(phrase), "{name}: {phrase}: {description}");
+            assert!(
+                description.contains(phrase),
+                "{name}: {phrase}: {description}"
+            );
         }
     }
 }
