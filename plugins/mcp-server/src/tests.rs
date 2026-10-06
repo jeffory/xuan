@@ -600,6 +600,7 @@ fn move_layer_sends_one_move_edit() {
         editor: editor.as_ref(),
         session: Some("s"),
         incoming: &incoming,
+        cancel: &CancelToken::new(),
     };
     let (layer, target) = (
         "11111111-1111-1111-1111-111111111111",
