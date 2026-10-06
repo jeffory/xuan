@@ -74,7 +74,8 @@ the document takes effect on the next frame and is drawn at once.
 | open a document | `file/open` (new): the user confirms the file |
 | save / export a document | `file/save_as`, `file/export` (new): the system save dialog |
 | switch document | `document/activate` (new) |
-| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, mask, provenance) |
+| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, provenance) |
+| choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
 | get/set layer properties: name, visibility, lock, opacity, blend | `document/edit` `set` |
 | … transform | `document/edit` `transform` (new) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
@@ -105,6 +106,11 @@ like the existing ones, rather than anything specific to MCP:
   `host/run` cannot use them. New `document/edit` ops `apply_filter`,
   `apply_adjustment` and `add_adjustment_layer` take the filter or adjustment
   as `.xuan` files store it, checked against the same ranges as the dialogs.
+  An out-of-range setting is refused with the field and its range. The MCP
+  tools declare them as a string or an object, accept the same JSON sent as
+  a string (`"\"Invert\""`), and list every variant Xuan accepts; a test in
+  `src/plugins/edits.rs` reads serde's list of variants and fails when the
+  tool descriptions miss one.
 - **Layer creation.** `add_text_layer`, `add_shape_layer`, `add_empty_layer`
   and `add_mask_layer` make editable layers like the tools do; text is drawn
   with the editor's own renderer and counts against the pixel budget.
@@ -136,7 +142,26 @@ like the existing ones, rather than anything specific to MCP:
   `content_fill`, `remove_background` and `remove_flat_background`. `host/run`
   now refuses commands that are greyed out in their menu.
 - **Knowing what was added.** `document/edit` answers with the ids of the
-  layers it added.
+  layers it added, and so does `host/run` for built-in commands (`duplicate`,
+  `new_layer`, `mask`, …), with `running` true when the command started a
+  job that is still running (`content_fill`, `remove_background`,
+  `remove_flat_background`). The MCP tool then says so: until the job ends,
+  other edits fail with "The editor is busy".
+- **Choosing the layer.** The `host/run` commands act on the selected layers,
+  the last one active. `host/run` takes `layers`, which it selects first as
+  clicking them would, so `run_command` and `modify_selection layer_pixels`
+  can name their layers in one call instead of depending on whatever is
+  active; a refused command leaves the selection as it was. The MCP tool
+  `select_layers` (over the `select_layers` edit op) selects layers on their
+  own, for the user's view or before several commands.
+- **State a client could not see.** `document/get` reports shape layers as
+  `"kind": "shape"` with their style, each layer's `flip_x` and `flip_y`, and
+  masks: an image's mask is a child layer of kind `mask` (made by the `mask`
+  command), so the image lists its mask layers under `masks` with their
+  `enabled` and `linked` state, and each effect layer attached to an image
+  (mask, adjustment or filter) names it in `attached_to`. `layer/export`
+  with `what = "mask"` on an image reads its attached mask layer and says
+  which in `mask_layer`.
 - **Batching** (#61). Painting detail one tool call at a time took hundreds
   of round trips and undo steps. `paint_stroke` takes `strokes`, sent as one
   `stroke` edit each in one request (a one-point stroke already painted a

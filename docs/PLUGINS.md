@@ -932,19 +932,41 @@ wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
-| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, layers: [{id, name, kind, visible, locked, opacity, blend, parent, x, y, width, height, rotation, generated?, provenance?}]}` |
-| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale}` |
+| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, layers: [{id, name, kind, visible, locked, opacity, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
+| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips; an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
 | `session/status` | `{session?}` | `{edit_prompt, edits, auto}`: how direct edits are handled in the session; see [Edit sessions](#edit-sessions) |
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does; a plugin may switch at most once a second (`-32003` with `retry_after` otherwise; naming the current document always succeeds) |
-| `host/run` | `{action, inputs?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled |
+| `host/run` | `{action, inputs?, layers?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
 | `file/save_as` | `{document?, suggested_name?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; see [Files the user chooses](#files-the-user-chooses) |
 | `file/export` | `{document?, format?, suggested_name?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`) |
 | `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
+
+### Layer descriptions
+
+`kind` is `image`, `text`, `shape` (with `shape: {shape: "Rectangle" |
+"Ellipse" | "RoundedRectangle", color: "#rrggbbaa", corner_radius}`; `null`
+for other kinds), `raw`, `group`, `mask`, `adjustment` or `filter`. `flip_x`
+and `flip_y` are the layer's flips, which **Flip Horizontal** and **Flip
+Vertical** toggle.
+
+Masks are layers. **Add Mask from Selection** on an image adds a child layer
+of kind `mask` whose `parent` is the image; adjustment and filter layers can
+be attached to an image the same way and then change only that image, while
+outside an image they change everything below them. Such an effect layer
+names its image in `attached_to` (`null` otherwise). `masks` lists the masks
+that apply to a layer, as `{layer, enabled, linked}`: its own (on a mask,
+adjustment or filter layer) and, for an image, its attached mask layers
+bottom to top. `layer` is the layer that holds the mask: select it to run
+`disable_mask`, `link_mask` or `delete_mask` on it. `has_mask` is true when
+`masks` is not empty.
+
+Out-of-range filter and adjustment settings are refused with the field and
+its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
 
 `document/edit` edits, applied together as one undo step named `name`:
 

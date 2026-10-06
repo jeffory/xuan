@@ -1105,6 +1105,16 @@ impl EditorApp {
                 session.document.promote_image_masks();
                 session.history.commit();
                 session.invalidate();
+                // As clicking a layer's thumbnail does: commands then act on
+                // its pixels, not its mask.
+                if edits.iter().any(|edit| {
+                    matches!(
+                        edit,
+                        edits::Edit::Select { .. } | edits::Edit::SelectLayers { .. }
+                    )
+                }) {
+                    self.mask_target = false;
+                }
                 Ok(json!({"ok": true, "layers": added}))
             }
             "host/run" => {
@@ -1120,6 +1130,24 @@ impl EditorApp {
                     .plugins
                     .manifest(plugin)
                     .is_some_and(|m| m.permissions.document == DocumentAccess::Edit);
+                // The layers to select first, as clicking them would, so
+                // the command acts on them.
+                let layers = match params.get("layers") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(
+                        serde_json::from_value::<Vec<Uuid>>(value.clone()).map_err(|_| {
+                            RpcError::invalid_params("`layers` must be a list of layer ids")
+                        })?,
+                    ),
+                };
+                if layers.is_some()
+                    && (action.contains('/') || commands::host_run(&action) != HostRun::Edit)
+                {
+                    return Err(RpcError::invalid_params(
+                        "`layers` goes only with built-in commands that edit",
+                    ));
+                }
+                let mut answer = json!({"ok": true});
                 match action.split_once('/') {
                     // A plugin may start its own actions, never another plugin's.
                     Some((owner, id)) if owner == plugin => {
@@ -1135,8 +1163,26 @@ impl EditorApp {
                     None if commands::host_run(&action) == HostRun::View
                         || (edit && commands::host_run(&action) == HostRun::Edit) =>
                     {
+                        let selected = self
+                            .session()
+                            .map(|s| (s.document.active, s.document.selected.clone()));
+                        if let Some(layers) = &layers {
+                            let session = self.session_mut().ok_or_else(|| {
+                                RpcError::new(protocol::INVALID_PARAMS, "No document is open")
+                            })?;
+                            edits::select_layers(&mut session.document, layers)
+                                .map_err(|e| RpcError::invalid_params(format!("{e:#}")))?;
+                            self.mask_target = false;
+                        }
                         // As its menu item would be: greyed out commands do nothing.
                         if !self.command_enabled(&action) {
+                            // The selection stays as it was.
+                            if let (Some(session), Some((active, selected))) =
+                                (self.session_mut(), selected)
+                            {
+                                session.document.active = active;
+                                session.document.selected = selected;
+                            }
                             return Err(RpcError::new(
                                 protocol::INVALID_REQUEST,
                                 format!(
@@ -1145,7 +1191,30 @@ impl EditorApp {
                                 ),
                             ));
                         }
-                        self.command(&action)
+                        let before: std::collections::HashSet<Uuid> = self
+                            .session()
+                            .map(|s| s.document.layers.iter().map(|l| l.id).collect())
+                            .unwrap_or_default();
+                        let jobs = self.plugins.jobs.len();
+                        let pending = self.plugins.provider_pending.is_some();
+                        self.command(&action);
+                        // The layers the command added, bottom to top, as
+                        // `document/edit` reports them.
+                        let added: Vec<Uuid> = self
+                            .session()
+                            .map(|s| {
+                                (s.document.layers.iter())
+                                    .map(|l| l.id)
+                                    .filter(|id| !before.contains(id))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        // A command that starts a job returns before it ends.
+                        let running = self.job.is_some()
+                            || self.plugins.jobs.len() > jobs
+                            || (!pending && self.plugins.provider_pending.is_some());
+                        answer["layers"] = json!(added);
+                        answer["running"] = json!(running);
                     }
                     None if commands::host_run(&action) == HostRun::Edit => {
                         return Err(RpcError::new(
@@ -1160,7 +1229,7 @@ impl EditorApp {
                         ));
                     }
                 }
-                Ok(json!({"ok": true}))
+                Ok(answer)
             }
             "host/open" => {
                 if let Some(path) = string("path") {

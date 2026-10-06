@@ -84,6 +84,8 @@ enum Reply {
     Ok,
     /// `{"ok": true, "layer": …}`.
     Layer(Value),
+    /// `{"ok": true, "active": …}`.
+    Active(Value),
     /// The ids of the layers the request added.
     Added,
     /// The selection after the edit.
@@ -164,9 +166,21 @@ fn name() -> Value {
 fn above() -> Value {
     json!({"type": "string", "description": "Put it above this layer id (default: above the active layer)"})
 }
+/// An adjustment or filter: a name for those without settings, else an
+/// object.
+fn effect(description: &str) -> Value {
+    json!({"oneOf": [{"type": "string"}, {"type": "object"}], "description": description})
+}
 
-const FILTERS: &str = "A filter as Xuan's .xuan files store it: {\"GaussianBlur\": {\"radius\": 0–100}}, {\"MotionBlur\": {\"distance\": 0–200, \"angle\": -180–180}}, {\"Noise\": {\"amount\": 0–100, \"monochrome\": bool}} or {\"LensCorrection\": {\"distortion\": -50–50, \"vignette\": -100–100}}.";
-const ADJUSTMENTS: &str = "An adjustment as Xuan's .xuan files store it, every field given: \"Invert\", {\"HueSaturation\": {\"hue\": -180–180, \"saturation\": -100–100, \"lightness\": -100–100, \"colorize\": bool}}, {\"Levels\": {\"black\": 0–255, \"gamma\": 0.1–10, \"white\": 0–255, \"output_black\": 0–255, \"output_white\": 0–255}}, {\"Curves\": {\"points\": [{\"x\": 0–1, \"y\": 0–1}, …]}}, {\"Exposure\": {\"exposure\": -20–20, \"offset\": -0.5–0.5, \"gamma\": 0.01–9.99}}, {\"GradientMap\": {\"shadows\": [r,g,b,a], \"highlights\": [r,g,b,a]}}, {\"Grain\": {\"amount\", \"monochrome\", \"seed\"}}, {\"BlackWhite\": {\"weights\": [6 numbers, -200–300], \"tint\": bool, \"tint_hue\": 0–360, \"tint_saturation\": 0–100}} or {\"ColorBalance\": {\"shadows\": [3 numbers, -100–100], \"midtones\": […], \"highlights\": […], \"preserve_luminosity\": bool}}.";
+const FILTERS: &str = "A filter as Xuan's .xuan files store it, an object with one key: {\"GaussianBlur\": {\"radius\": 0–100}}, {\"MotionBlur\": {\"distance\": 0–200, \"angle\": -180–180}}, {\"Noise\": {\"amount\": 0–100, \"monochrome\": bool}} or {\"LensCorrection\": {\"distortion\": -50–50, \"vignette\": -100–100}} (a positive vignette darkens the corners, a negative one brightens them). The same JSON sent as a string is accepted too.";
+const ADJUSTMENTS: &str = r#"An adjustment as Xuan's .xuan files store it, every field given: the string "Invert", or an object with one key: {"HueSaturation": {"hue": -360–360, "saturation": -100–100, "lightness": -100–100, "colorize": bool}}; {"HueRanges": {"settings": {"range": 0–6, "colorize": bool, "invert_range": bool, "adjustments": 7 × [hue -360–360, saturation -100–100, lightness -100–100] for master, reds, yellows, greens, cyans, blues and magentas, "bands": 7 × [4 hue degrees where each range ramps in, is full, is full until, ramps out]}}}; {"Levels": {"black": 0–255, "gamma": 0.01–10, "white": 0–255 and above black, "output_black": 0–255, "output_white": 0–255}}; {"LevelsChannels": {"ranges": 4 × [black, gamma, white, output_black, output_white] for master, red, green and blue}}; {"Curves": {"points": [{"x": 0–1, "y": 0–1}, …] (2–32 points, x rising from 0 to 1)}}; {"CurvesChannels": {"channels": 4 point lists for master, red, green and blue}}; {"Exposure": {"exposure": -20–20, "offset": -1–1, "gamma": 0.01–10}}; {"GradientMap": {"shadows": [r,g,b,a], "highlights": [r,g,b,a]}} (0–255); {"Grain": {"amount": 0–100 (2 is visible, 8 is heavy), "monochrome": bool, "seed": integer}}; {"FilmGrain": {"amount": 0–100, "size": 0.1–100, "roughness": 0–100, "seed": integer}}; {"BlackWhite": {"weights": [6 numbers, -200–300], "tint": bool, "tint_hue": 0–360, "tint_saturation": 0–100}}; or {"ColorBalance": {"shadows": [3 numbers, -100–100], "midtones": […], "highlights": […], "preserve_luminosity": bool}}. The same JSON sent as a string is accepted too."#;
+
+/// `run_command` commands that start a job and return before it ends.
+const BACKGROUND: [&str; 3] = [
+    "content_fill",
+    "remove_background",
+    "remove_flat_background",
+];
 
 /// `host/run` commands the `run_command` tool offers. Xuan decides what is
 /// allowed: saving, opening, the clipboard and settings never are.
@@ -214,7 +228,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_document",
             title: "Describe the document",
-            description: "The current document: size, resolution, the selection's bounds and every layer (id, name, kind, visibility, lock, opacity, blend mode, parent group, position and size, rotation, mask, and for generated layers their provenance). Layers are listed bottom to top. With `document`, that document is made current first.",
+            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, and for generated layers their provenance). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
             properties: json!({"document": {"type": "string", "description": "A document id from list_documents"}}),
             required: &[],
             kind: Kind::Read,
@@ -261,7 +275,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_layer_image",
             title: "See a layer",
-            description: "A layer's own pixels (`what` = \"pixels\", the default) or its mask (\"mask\") as a PNG, with where it sits in the document. `max_side` is the longest side (default 512).",
+            description: "A layer's own pixels (`what` = \"pixels\", the default) or its mask (\"mask\") as a PNG, with where it sits in the document. Pixels are as stored, before the layer's flip_x and flip_y. For an image, the mask is read from its attached mask layer (`mask_layer` says which); with several, ask for one of them. `max_side` is the longest side (default 512).",
             properties: json!({"layer": layer(), "what": {"type": "string", "enum": ["pixels", "mask"]}, "max_side": integer("Longest side in pixels")}),
             required: &["layer"],
             kind: Kind::Read,
@@ -587,6 +601,23 @@ fn specs() -> Vec<Spec> {
                 ))
             }),
         },
+        Spec {
+            name: "select_layers",
+            title: "Select layers",
+            description: "Select layers in the Layers panel, as clicking them does; the last one becomes the active layer, which run_command and modify_selection act on. To act on a mask, select the mask layer (see get_document).",
+            properties: json!({"layers": layers()}),
+            required: &["layers"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let args = pick(args, &["layers"])?;
+                let active = args["layers"].as_array().and_then(|l| l.last()).cloned();
+                Ok(Plan::new(
+                    "Select Layers",
+                    vec![Value::Object(op("select_layers", &args, &["layers"]))],
+                    Reply::Active(active.unwrap_or(Value::Null)),
+                ))
+            }),
+        },
         // Selections.
         Spec {
             name: "select_shape",
@@ -674,16 +705,18 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "modify_selection",
             title: "Change the selection",
-            description: "`all`, `none` or `invert` the selection; `grow` or `shrink` it by `amount` pixels; `feather` its edge by `amount`; select the `subject` (runs in the background); or select the active layer's opaque pixels (`layer_pixels`).",
+            description: "`all`, `none` or `invert` the selection; `grow` or `shrink` it by `amount` pixels; `feather` its edge by `amount`; select the `subject` (runs in the background); or select a layer's opaque pixels (`layer_pixels`: `layer`, or the active layer; this makes it the active layer).",
             properties: json!({
                 "action": {"type": "string", "enum": ["all", "none", "invert", "grow", "shrink", "feather", "subject", "layer_pixels"]},
                 "amount": number("Pixels, for grow, shrink and feather (at most 256)"),
+                "layer": {"type": "string", "description": "For layer_pixels: a layer id; the active layer when left out"},
             }),
             required: &["action"],
             kind: Kind::Edit,
             run: Action::Mixed(
                 |cx, args| {
-                    let args = pick(args, &["action", "amount"])?;
+                    let args = selection_args(args)?;
+                    let layer = args.get("layer").filter(|v| !v.is_null());
                     let command = match args.get("action").and_then(Value::as_str) {
                         Some("all") => "select_all",
                         Some("none") => "deselect",
@@ -692,7 +725,7 @@ fn specs() -> Vec<Spec> {
                         Some("layer_pixels") => "select_layer_pixels",
                         _ => return perform(cx, selection_edit(&args)?),
                     };
-                    cx.run(command)?;
+                    cx.run_on(command, layer.map(|layer| json!([layer])))?;
                     if command == "select_subject" {
                         return Ok(vec![ContentBlock::text(
                             "Select Subject is running in Xuan; the selection changes when it finishes. Check with get_document.",
@@ -703,7 +736,7 @@ fn specs() -> Vec<Spec> {
                 // In a batch, `none` clears the selection with an edit; the
                 // other commands cannot be part of one.
                 |_, args| {
-                    let args = pick(args, &["action", "amount"])?;
+                    let args = selection_args(args)?;
                     match args.get("action").and_then(Value::as_str) {
                         Some("none") => Ok(Plan::new(
                             "Deselect",
@@ -806,11 +839,11 @@ fn specs() -> Vec<Spec> {
             name: "apply_filter",
             title: "Apply a filter",
             description: "Apply a filter to a pixel layer inside the selection, or with `as_layer` add it as a non-destructive filter layer (masked by the selection).",
-            properties: json!({"filter": {"description": FILTERS}, "layer": optional_layer(), "as_layer": {"type": "boolean", "description": "Add a non-destructive filter layer instead"}}),
+            properties: json!({"filter": effect(FILTERS), "layer": optional_layer(), "as_layer": {"type": "boolean", "description": "Add a non-destructive filter layer instead"}}),
             required: &["filter"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = pick(args, &["filter", "layer", "as_layer"])?;
+                let args = unquote(pick(args, &["filter", "layer", "as_layer"])?, "filter");
                 let edit = if args.get("as_layer") == Some(&json!(true)) {
                     op("add_adjustment_layer", &args, &["filter"])
                 } else {
@@ -827,11 +860,14 @@ fn specs() -> Vec<Spec> {
             name: "apply_adjustment",
             title: "Apply an adjustment",
             description: "Apply an adjustment to a pixel layer inside the selection, or with `as_layer` add it as a non-destructive adjustment layer (masked by the selection).",
-            properties: json!({"adjustment": {"description": ADJUSTMENTS}, "layer": optional_layer(), "as_layer": {"type": "boolean"}}),
+            properties: json!({"adjustment": effect(ADJUSTMENTS), "layer": optional_layer(), "as_layer": {"type": "boolean"}}),
             required: &["adjustment"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = pick(args, &["adjustment", "layer", "as_layer"])?;
+                let args = unquote(
+                    pick(args, &["adjustment", "layer", "as_layer"])?,
+                    "adjustment",
+                );
                 let edit = if args.get("as_layer") == Some(&json!(true)) {
                     op("add_adjustment_layer", &args, &["adjustment"])
                 } else {
@@ -918,26 +954,39 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "run_command",
             title: "Run an editor command",
-            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (add a mask from the selection), new_mask_layer, delete_mask, disable_mask, link_mask, clip (clipping mask), flip_h, flip_v (the layer), flip_canvas_h, flip_canvas_v, invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out.",
-            properties: json!({"command": {"type": "string", "enum": COMMANDS}}),
+            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (attach a mask layer made from the selection to the image), new_mask_layer, delete_mask, disable_mask, link_mask (these three on a mask layer), clip (clipping mask), flip_h, flip_v (the layer), flip_canvas_h, flip_canvas_v, invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out. Commands act on the selected layers, the last one active: give `layers` to select them first, as select_layers does. Returns the ids of the layers the command added. content_fill, remove_background and remove_flat_background run in the background: other edits fail with \"The editor is busy\" until they finish.",
+            properties: json!({
+                "command": {"type": "string", "enum": COMMANDS},
+                "layers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Layer ids to select first, the last one active (default: the layers selected now); only for commands that edit"},
+            }),
             required: &["command"],
             kind: Kind::Edit,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["command"])?;
+                let args = pick(args, &["command", "layers"])?;
                 let command = string(&args, "command")?;
                 if !COMMANDS.contains(&command) {
                     return Err(format!(
                         "`{command}` is not one of the commands this tool runs"
                     ));
                 }
-                cx.run(command)?;
-                text(json!({"ok": true}))
+                let answer = cx.run_on(command, args.get("layers").cloned())?;
+                // An older Xuan does not say; these always start a job.
+                let running = (answer.get("running").and_then(Value::as_bool))
+                    .unwrap_or(BACKGROUND.contains(&command));
+                if running {
+                    return Ok(vec![ContentBlock::text(format!(
+                        "`{command}` is running in Xuan; the document changes when it finishes, and until then other edits fail with \"The editor is busy\". Check with get_document or get_preview."
+                    ))]);
+                }
+                text(
+                    json!({"ok": true, "layers": answer.get("layers").cloned().unwrap_or(json!([]))}),
+                )
             }),
         },
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1106,7 +1155,16 @@ impl Context<'_> {
     }
 
     fn run(&self, action: &str) -> Result<Value, String> {
-        self.call("host/run", json!({"action": action}))
+        self.run_on(action, None)
+    }
+
+    /// Run a command on `layers`, selected first, or on the selected layers.
+    fn run_on(&self, action: &str, layers: Option<Value>) -> Result<Value, String> {
+        let mut params = json!({"action": action});
+        if let Some(layers) = layers.filter(|layers| !layers.is_null()) {
+            params["layers"] = layers;
+        }
+        self.call("host/run", params)
     }
 }
 
@@ -1125,6 +1183,7 @@ fn perform(cx: &Context, plan: Plan) -> Result<Vec<ContentBlock>, String> {
     match plan.reply {
         Reply::Ok => text(json!({"ok": true})),
         Reply::Layer(layer) => text(json!({"ok": true, "layer": layer})),
+        Reply::Active(active) => text(json!({"ok": true, "active": active})),
         Reply::Added => added(answer),
         Reply::Selection => selection_summary(cx),
         Reply::Size => size_summary(cx),
@@ -1251,6 +1310,16 @@ fn blame(error: String, owners: &[usize], plans: &[(&str, Plan)]) -> String {
     }
 }
 
+/// `modify_selection`'s arguments; `layer` goes only with `layer_pixels`.
+fn selection_args(args: Map<String, Value>) -> Result<Map<String, Value>, String> {
+    let args = pick(args, &["action", "amount", "layer"])?;
+    let layer = args.get("layer").filter(|v| !v.is_null());
+    if layer.is_some() && args.get("action") != Some(&json!("layer_pixels")) {
+        return Err("`layer` goes only with layer_pixels".into());
+    }
+    Ok(args)
+}
+
 /// `modify_selection`'s edits for grow, shrink and feather.
 fn selection_edit(args: &Map<String, Value>) -> Result<Plan, String> {
     let amount = args.get("amount").and_then(Value::as_f64).unwrap_or(0.0);
@@ -1367,6 +1436,20 @@ fn pick(args: Map<String, Value>, allowed: &[&str]) -> Result<Map<String, Value>
         return Err(format!("Unknown argument `{unknown}`"));
     }
     Ok(args)
+}
+
+/// The arguments with `key` read as JSON when a client sent it as a string,
+/// as some send `"\"Invert\""` or an object in quotes.
+fn unquote(mut args: Map<String, Value>, key: &str) -> Map<String, Value> {
+    if let Some(Value::String(text)) = args.get(key) {
+        let text = text.trim();
+        let value = serde_json::from_str::<Value>(text)
+            .ok()
+            .filter(|value| value.is_string() || value.is_object())
+            .unwrap_or_else(|| json!(text));
+        args.insert(key.into(), value);
+    }
+    args
 }
 
 /// An edit op with the given arguments copied over when present.

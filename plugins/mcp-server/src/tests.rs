@@ -161,7 +161,10 @@ impl Editor for FakeEditor {
                     None => Ok(json!({"ok": true, "layers": ["new-layer"]})),
                 }
             }
-            "host/run" | "document/activate" => Ok(json!({"ok": true})),
+            "host/run" => Ok(json!({
+                "ok": true, "layers": ["new-layer"], "running": params["action"] == "remove_background",
+            })),
+            "document/activate" => Ok(json!({"ok": true})),
             // As Xuan words a file that fails to load.
             "file/open" => Err(EditorError {
                 code: -32603,
@@ -637,6 +640,146 @@ fn move_layer_sends_one_move_edit() {
     assert_eq!(
         requests[0].2["edits"],
         json!([{"op": "move_layer", "layer": layer, "below": target}])
+    );
+}
+
+#[test]
+fn layers_are_chosen_for_commands_and_new_layers_and_jobs_reported() {
+    let editor = FakeEditor::new(false);
+    let incoming = editor.dir.join("incoming");
+    let cancel = CancelToken::new();
+    let cx = tools::Context {
+        editor: editor.as_ref(),
+        session: Some("s"),
+        incoming: &incoming,
+        cancel: &cancel,
+    };
+    let call = |name: &str, args: Value| {
+        let result = tools::call(&cx, name, serde_json::from_value(args).unwrap());
+        (result.is_error != Some(true), text_of(&result))
+    };
+    let last = || editor.requests().last().cloned().unwrap();
+
+    // select_layers selects through the edit op; the last one is active.
+    let (ok, text) = call("select_layers", json!({"layers": ["a", "b"]}));
+    assert!(ok, "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["active"], "b");
+    let (_, method, params) = last();
+    assert_eq!(method, "document/edit");
+    assert_eq!(
+        params["edits"],
+        json!([{"op": "select_layers", "layers": ["a", "b"]}])
+    );
+
+    // run_command passes the layers on and returns the new ones.
+    let (ok, text) = call(
+        "run_command",
+        json!({"command": "duplicate", "layers": ["a"]}),
+    );
+    assert!(ok, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap(),
+        json!({"ok": true, "layers": ["new-layer"]})
+    );
+    let (_, method, params) = last();
+    assert_eq!(method, "host/run");
+    assert_eq!(params, json!({"action": "duplicate", "layers": ["a"]}));
+    call("run_command", json!({"command": "new_layer"}));
+    assert_eq!(last().2, json!({"action": "new_layer"}));
+
+    // A job is still running when the call returns, and the client is told.
+    let (ok, text) = call("run_command", json!({"command": "remove_background"}));
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("is running in Xuan") && text.contains("The editor is busy"),
+        "{text}"
+    );
+
+    // layer_pixels may name its layer; other actions may not.
+    let (ok, text) = call(
+        "modify_selection",
+        json!({"action": "layer_pixels", "layer": "a"}),
+    );
+    assert!(ok, "{text}");
+    let run = editor
+        .requests()
+        .into_iter()
+        .rfind(|(_, method, _)| method == "host/run")
+        .unwrap();
+    assert_eq!(
+        run.2,
+        json!({"action": "select_layer_pixels", "layers": ["a"]})
+    );
+    let (ok, text) = call("modify_selection", json!({"action": "all", "layer": "a"}));
+    assert!(!ok && text.contains("layer_pixels"), "{text}");
+}
+
+#[test]
+fn adjustments_and_filters_are_typed_and_quoted_json_is_read() {
+    let tools = tools::list();
+    let schema = |tool: &str, property: &str| {
+        let tool = tools.iter().find(|t| t.name == tool).unwrap();
+        tool.input_schema["properties"][property].clone()
+    };
+    for (tool, property) in [
+        ("apply_adjustment", "adjustment"),
+        ("apply_filter", "filter"),
+    ] {
+        let schema = schema(tool, property);
+        assert_eq!(
+            schema["oneOf"],
+            json!([{"type": "string"}, {"type": "object"}]),
+            "{tool}"
+        );
+    }
+    let adjustments = schema("apply_adjustment", "adjustment")["description"].clone();
+    for variant in [
+        "HueRanges",
+        "LevelsChannels",
+        "CurvesChannels",
+        "FilmGrain",
+        "Invert",
+    ] {
+        assert!(adjustments.as_str().unwrap().contains(variant), "{variant}");
+    }
+    assert!(schema("run_command", "layers").is_object());
+
+    let editor = FakeEditor::new(false);
+    let incoming = editor.dir.join("incoming");
+    let cancel = CancelToken::new();
+    let cx = tools::Context {
+        editor: editor.as_ref(),
+        session: Some("s"),
+        incoming: &incoming,
+        cancel: &cancel,
+    };
+    let grain = json!({"Grain": {"amount": 4, "monochrome": true, "seed": 1}});
+    for (sent, expected) in [
+        (json!("Invert"), json!("Invert")),
+        (json!("\"Invert\""), json!("Invert")),
+        (json!(" Invert "), json!("Invert")),
+        (json!(grain.to_string()), grain.clone()),
+        (grain.clone(), grain.clone()),
+    ] {
+        let result = tools::call(
+            &cx,
+            "apply_adjustment",
+            serde_json::from_value(json!({"adjustment": sent})).unwrap(),
+        );
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let (_, _, params) = editor.requests().last().cloned().unwrap();
+        assert_eq!(params["edits"][0]["adjustment"], expected, "{sent}");
+    }
+    let blur = json!({"GaussianBlur": {"radius": 2}});
+    tools::call(
+        &cx,
+        "apply_filter",
+        serde_json::from_value(json!({"filter": blur.to_string(), "as_layer": true})).unwrap(),
+    );
+    let (_, _, params) = editor.requests().last().cloned().unwrap();
+    assert_eq!(
+        params["edits"][0],
+        json!({"op": "add_adjustment_layer", "filter": blur})
     );
 }
 
@@ -1346,6 +1489,7 @@ fn a_batch_is_one_request_and_later_steps_name_layers_earlier_ones_created() {
             {"tool": "paint_stroke", "arguments": {"layer": "$1", "strokes": [{"points": [[1, 1]]}, {"points": [[2, 2]]}]}},
             {"tool": "select_shape", "arguments": {"shape": "rectangle", "x": 0, "y": 0, "width": 4, "height": 4}},
             {"tool": "modify_selection", "arguments": {"action": "none"}},
+            {"tool": "select_layers", "arguments": {"layers": ["$1"]}},
         ]}),
     );
     assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
@@ -1362,10 +1506,11 @@ fn a_batch_is_one_request_and_later_steps_name_layers_earlier_ones_created() {
             {"op": "stroke", "layer": "$1", "points": [[2, 2]]},
             {"op": "select_rect", "x": 0, "y": 0, "width": 4, "height": 4},
             {"op": "set_selection"},
+            {"op": "select_layers", "layers": ["$1"]},
         ])
     );
     let answer: Value = serde_json::from_str(&text_of(&result)).unwrap();
-    assert_eq!(answer["steps"], 5);
+    assert_eq!(answer["steps"], 6);
     assert_eq!(answer["layers"], json!(["new-layer"]));
     assert!(answer.as_object().unwrap().contains_key("selection"));
     // Without a name, the step is named after its tool, or as a batch.

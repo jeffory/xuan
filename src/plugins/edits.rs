@@ -35,11 +35,18 @@ pub fn describe(document: &Document) -> Value {
         "resolution": document.resolution,
         "active": document.active,
         "selection": selection,
-        "layers": document.layers.iter().map(describe_layer).collect::<Vec<_>>(),
+        "layers": document
+            .layers
+            .iter()
+            .map(|layer| describe_layer(document, layer))
+            .collect::<Vec<_>>(),
     })
 }
 
-pub fn describe_layer(layer: &Layer) -> Value {
+/// Describe one layer. Masks are reported both ways round: an image lists
+/// the mask layers attached to it under `masks`, and an effect layer (mask,
+/// adjustment or filter) attached to an image names it in `attached_to`.
+pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
     let kind = if layer.group {
         "group"
     } else if layer.standalone_mask {
@@ -52,9 +59,23 @@ pub fn describe_layer(layer: &Layer) -> Value {
         "text"
     } else if layer.raw.is_some() {
         "raw"
+    } else if layer.shape.is_some() {
+        "shape"
     } else {
         "image"
     };
+    let shape = layer.shape.as_ref().map(|shape| {
+        json!({
+            "shape": shape.kind,
+            "color": Color(shape.color),
+            "corner_radius": shape.corner_radius,
+        })
+    });
+    let masks = masks(document, layer);
+    // An effect layer inside an image's stack applies to that image only.
+    let attached_to = document
+        .attachment_owner(layer)
+        .filter(|owner| *owner != layer.id);
     let (width, height) = layer
         .pixels
         .as_ref()
@@ -74,12 +95,35 @@ pub fn describe_layer(layer: &Layer) -> Value {
         "width": layer.transform.width,
         "height": layer.transform.height,
         "rotation": layer.transform.rotation,
+        "flip_x": layer.transform.flip_x,
+        "flip_y": layer.transform.flip_y,
         "pixel_width": width,
         "pixel_height": height,
-        "has_mask": layer.mask.is_some(),
+        "has_mask": !masks.is_empty(),
+        "masks": masks,
+        "attached_to": attached_to,
+        "shape": shape,
         "generated": layer.generated,
         "provenance": layer.provenance,
     })
+}
+
+/// The masks that apply to `layer`: its own (a mask, adjustment or filter
+/// layer's) and, for an image, the mask layers attached to it, bottom to top.
+/// Each names the layer that holds it, which is the one to pass to
+/// `layer/export` with `what = "mask"` or to make active for `disable_mask`
+/// and `link_mask`.
+fn masks(document: &Document, layer: &Layer) -> Vec<Value> {
+    let attached = document.layers.iter().filter(|child| {
+        layer.can_attach_effects() && child.parent == Some(layer.id) && child.standalone_mask
+    });
+    std::iter::once(layer)
+        .chain(attached)
+        .filter_map(|holder| {
+            let mask = holder.mask.as_ref()?;
+            Some(json!({"layer": holder.id, "enabled": mask.enabled, "linked": mask.linked}))
+        })
+        .collect()
 }
 
 /// A PNG written for a plugin, with where it sits in the document.
@@ -92,6 +136,9 @@ pub struct Export {
     pub y: f32,
     /// Export pixels per source pixel, below one when downscaled.
     pub scale: f32,
+    /// For an image's mask: the attached mask layer it was read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_layer: Option<Uuid>,
 }
 
 pub fn write_png(image: &RgbaImage, path: &Path) -> Result<()> {
@@ -427,6 +474,7 @@ pub fn export_layer(
 ) -> Result<Export> {
     let layer = find(document, layer)?;
     let path = dir.join(name);
+    let mut mask_layer = None;
     let (width, height, scale) = match what {
         What::Pixels => {
             let pixels = layer
@@ -438,10 +486,15 @@ pub fn export_layer(
             (image.width(), image.height(), scale)
         }
         What::Mask => {
-            let mask = layer
-                .mask
-                .as_ref()
-                .with_context(|| format!("Layer {} has no mask", layer.name))?;
+            // An image's mask is a mask layer attached to it.
+            let holder = match layer.mask {
+                Some(_) => layer,
+                None => attached_mask(document, layer)?,
+            };
+            if holder.id != layer.id {
+                mask_layer = Some(holder.id);
+            }
+            let mask = holder.mask.as_ref().expect("checked above");
             write_gray_png(&mask.pixels, &path)?;
             (mask.pixels.width(), mask.pixels.height(), 1.0)
         }
@@ -453,7 +506,40 @@ pub fn export_layer(
         x: layer.transform.x,
         y: layer.transform.y,
         scale,
+        mask_layer,
     })
+}
+
+/// The one mask layer attached to an image, or an error that says where its
+/// masks are.
+fn attached_mask<'a>(document: &'a Document, layer: &Layer) -> Result<&'a Layer> {
+    let masks: Vec<&Layer> = document
+        .layers
+        .iter()
+        .filter(|child| {
+            layer.can_attach_effects()
+                && child.parent == Some(layer.id)
+                && child.standalone_mask
+                && child.mask.is_some()
+        })
+        .collect();
+    match masks[..] {
+        [] => bail!(
+            "Layer {} has no mask (add one from the selection with the `mask` command)",
+            layer.name
+        ),
+        [mask] => Ok(mask),
+        _ => bail!(
+            "Layer {} has {} mask layers attached; ask for one of them: {}",
+            layer.name,
+            masks.len(),
+            masks
+                .iter()
+                .map(|mask| mask.id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 /// Write the flattened document.
@@ -484,6 +570,7 @@ pub fn export_composite(
         x: 0.0,
         y: 0.0,
         scale: width as f32 / document.width as f32,
+        mask_layer: None,
     })
 }
 
@@ -505,6 +592,7 @@ pub fn export_selection(document: &Document, dir: &Path, name: &str) -> Result<O
         x: x0 as f32,
         y: y0 as f32,
         scale: 1.0,
+        mask_layer: None,
     }))
 }
 
@@ -1892,7 +1980,7 @@ fn apply_each(
 }
 
 /// Select these layers, the last one active.
-fn select_layers(document: &mut Document, layers: &[Uuid]) -> Result<()> {
+pub fn select_layers(document: &mut Document, layers: &[Uuid]) -> Result<()> {
     ensure!(!layers.is_empty(), "List at least one layer");
     ensure!(layers.len() <= 1000, "Too many layers");
     for id in layers {
@@ -2233,6 +2321,193 @@ mod tests {
         assert_eq!(value["layers"][0]["pixel_width"], 40);
         assert_eq!(value["layers"][0]["blend"], "Normal");
         assert!(blend_names().contains(&"Multiply".to_owned()));
+    }
+
+    fn described(document: &Document, id: Uuid) -> Value {
+        describe(document)["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["id"] == json!(id))
+            .cloned()
+            .unwrap()
+    }
+
+    #[test]
+    fn describes_shapes_and_flips() {
+        let mut document = Document::new(40, 30).unwrap();
+        let added = run(
+            &mut document,
+            &[edit(json!({
+                "op": "add_shape_layer", "shape": "RoundedRectangle", "x": 2, "y": 2,
+                "width": 20, "height": 10, "color": "#ff000080", "corner_radius": 3,
+            }))],
+        )
+        .unwrap();
+        let shape = described(&document, added[0]);
+        assert_eq!(shape["kind"], "shape");
+        assert_eq!(
+            shape["shape"],
+            json!({"shape": "RoundedRectangle", "color": "#ff000080", "corner_radius": 3.0})
+        );
+        assert_eq!(
+            (&shape["flip_x"], &shape["flip_y"]),
+            (&json!(false), &json!(false))
+        );
+        let base = document.layers[0].id;
+        assert_eq!(described(&document, base)["kind"], "image");
+        assert!(described(&document, base)["shape"].is_null());
+        document.layers[0].transform.flip_x = true;
+        let flipped = described(&document, base);
+        assert_eq!(
+            (&flipped["flip_x"], &flipped["flip_y"]),
+            (&json!(true), &json!(false))
+        );
+    }
+
+    #[test]
+    fn attached_masks_are_reported_and_exported_through_their_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = Document::new(40, 30).unwrap();
+        let image = document.layers[0].id;
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::new(40, 30)));
+        let no_mask = export_layer(&document, image, What::Mask, None, dir.path(), "n.png");
+        assert!(
+            no_mask.unwrap_err().to_string().contains("`mask` command"),
+            "the error says how to add one"
+        );
+        // As the `mask` command attaches one: a child mask layer.
+        let mut mask = Layer::mask("Mask", 40, 30);
+        mask.parent = Some(image);
+        mask.mask.as_mut().unwrap().linked = false;
+        let mask_id = mask.id;
+        document.layers.push(mask);
+        let value = described(&document, image);
+        assert_eq!(value["has_mask"], true);
+        assert_eq!(
+            value["masks"],
+            json!([{"layer": mask_id, "enabled": true, "linked": false}])
+        );
+        assert!(value["attached_to"].is_null());
+        let value = described(&document, mask_id);
+        assert_eq!(value["kind"], "mask");
+        assert_eq!(value["attached_to"], json!(image));
+        assert_eq!(value["masks"][0]["layer"], json!(mask_id));
+        // The image's mask is read from the mask layer, which is named.
+        let export = export_layer(&document, image, What::Mask, None, dir.path(), "m.png").unwrap();
+        assert_eq!(export.mask_layer, Some(mask_id));
+        assert_eq!(read_gray_png(&export.path).unwrap().dimensions(), (1, 1));
+        let own = export_layer(&document, mask_id, What::Mask, None, dir.path(), "o.png").unwrap();
+        assert_eq!(own.mask_layer, None);
+        // With two, the client is told which to ask for.
+        let mut second = Layer::mask("Mask 2", 40, 30);
+        second.parent = Some(image);
+        let second_id = second.id;
+        document.layers.push(second);
+        let error = export_layer(&document, image, What::Mask, None, dir.path(), "t.png")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&mask_id.to_string()) && error.contains(&second_id.to_string()),
+            "{error}"
+        );
+        assert_eq!(
+            described(&document, image)["masks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        // A mask outside any image's stack is not attached.
+        let loose = Layer::mask("Loose", 40, 30);
+        let loose_id = loose.id;
+        document.layers.push(loose);
+        assert!(described(&document, loose_id)["attached_to"].is_null());
+    }
+
+    #[test]
+    fn out_of_range_settings_name_the_field_and_its_range() {
+        for (value, expected) in [
+            (
+                json!({"HueSaturation": {"hue": 0, "saturation": 150, "lightness": 0, "colorize": false}}),
+                "`HueSaturation.saturation` must be between -100 and 100, not 150",
+            ),
+            (
+                json!({"Grain": {"amount": 101, "monochrome": true, "seed": 1}}),
+                "`Grain.amount` must be between 0 and 100",
+            ),
+            (
+                json!({"Levels": {"black": 200, "gamma": 1, "white": 100, "output_black": 0, "output_white": 255}}),
+                "must be above `black`",
+            ),
+            (
+                json!({"Curves": {"points": [{"x": 0, "y": 0}, {"x": 1, "y": 2}]}}),
+                "`Curves.points y` must be between 0 and 1",
+            ),
+            (
+                json!({"FilmGrain": {"amount": 10, "size": 0, "roughness": 50, "seed": 1}}),
+                "`FilmGrain.size` must be between 0.1 and 100",
+            ),
+        ] {
+            let mut document = Document::new(8, 8).unwrap();
+            document.layers[0].pixels = Some(Arc::new(RgbaImage::new(8, 8)));
+            let edits = [edit(
+                json!({"op": "apply_adjustment", "layer": document.layers[0].id, "adjustment": value}),
+            )];
+            let error = format!("{:#}", run(&mut document, &edits).unwrap_err());
+            assert!(error.contains(expected), "{error}");
+        }
+        let filter = edit(
+            json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 500}}}),
+        );
+        let error = run(&mut Document::new(8, 8).unwrap(), &[filter]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("`GaussianBlur.radius` must be between 0 and 100"),
+            "{error:#}"
+        );
+    }
+
+    /// The MCP server's tool descriptions list every adjustment and filter
+    /// Xuan accepts. Serde's error for an unknown variant lists them all, so
+    /// the list comes from the code and a new variant fails this test until
+    /// it is described.
+    #[test]
+    fn the_mcp_tools_describe_every_adjustment_and_filter() {
+        fn variants<T: serde::de::DeserializeOwned + std::fmt::Debug>() -> Vec<String> {
+            let error = serde_json::from_value::<T>(json!({"NoSuchVariant": {}}))
+                .unwrap_err()
+                .to_string();
+            let listed = error
+                .split("expected one of")
+                .nth(1)
+                .expect("variants listed");
+            listed
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .map(str::to_owned)
+                .collect()
+        }
+        let tools = include_str!("../../plugins/mcp-server/src/tools.rs");
+        let constant = |name: &str| {
+            let line = tools
+                .lines()
+                .find(|line| line.starts_with(&format!("const {name}: &str = ")))
+                .unwrap_or_else(|| panic!("tools.rs has no {name}"));
+            line.replace("\\\"", "\"")
+        };
+        for (described, names) in [
+            (constant("ADJUSTMENTS"), variants::<Adjustment>()),
+            (constant("FILTERS"), variants::<Filter>()),
+        ] {
+            assert!(names.len() >= 4, "{names:?}");
+            for name in names {
+                assert!(
+                    described.contains(&format!("\"{name}\"")),
+                    "plugins/mcp-server/src/tools.rs does not describe {name}"
+                );
+            }
+        }
     }
 
     #[test]
