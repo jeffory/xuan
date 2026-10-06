@@ -848,6 +848,80 @@ fn processing_low_opacity_stroke_coverage_matches_cpu() {
 }
 
 #[test]
+#[ignore = "requires native compute adapter"]
+fn processing_brush_dynamics_match_cpu() {
+    use crate::paint::{Brush, Dynamics, PaintMode, Stroke, StrokeOptions};
+    let gpu = processor();
+    let mut base = Document::new(640, 480).unwrap();
+    base.insert(Layer::image("Pixels", fixture(640, 480)));
+    // Dabs of 280 px are large enough for the GPU path.
+    let brush = Brush {
+        diameter: 280.0,
+        hardness: 0.7,
+        opacity: 0.8,
+        color: [200, 90, 40, 255],
+        dynamics: Dynamics {
+            spacing: 0.4,
+            taper_in: 120.0,
+            taper_out: 120.0,
+            taper_opacity: true,
+            scatter: 0.3,
+            count: 2,
+            size_jitter: 0.3,
+            opacity_jitter: 0.4,
+            hue_jitter: 0.2,
+            seed: 11,
+            ..Dynamics::default()
+        },
+        ..Default::default()
+    };
+    let samples: Vec<_> = [(150.0, 200.0), (330.0, 260.0), (500.0, 220.0)]
+        .into_iter()
+        .map(|(x, y)| (Point::new(x, y), brush.clone()))
+        .collect();
+    for mask in [false, true] {
+        for mode in [PaintMode::Paint, PaintMode::Erase] {
+            let apply = |device: Option<Arc<Processor>>| {
+                let mut document = base.clone();
+                scope(device, || {
+                    Stroke::default()
+                        .path(
+                            &mut document,
+                            &samples,
+                            StrokeOptions {
+                                mode,
+                                mask_target: mask,
+                                source: None,
+                                clone_offset: Point::default(),
+                            },
+                        )
+                        .unwrap()
+                });
+                document
+            };
+            let expected = apply(None);
+            let actual = apply(Some(gpu.clone()));
+            if mask {
+                let a = &actual.active().unwrap().mask.as_ref().unwrap().pixels;
+                let b = &expected.active().unwrap().mask.as_ref().unwrap().pixels;
+                assert!(
+                    a.as_raw()
+                        .iter()
+                        .zip(b.as_raw())
+                        .all(|(a, b)| a.abs_diff(*b) <= 1)
+                );
+            } else {
+                compare(
+                    actual.active().unwrap().pixels.as_ref().unwrap(),
+                    expected.active().unwrap().pixels.as_ref().unwrap(),
+                    1,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "native GPU timing; run explicitly with --nocapture"]
 fn benchmark_processing_backends() {
     use std::time::Instant;

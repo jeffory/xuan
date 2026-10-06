@@ -112,7 +112,9 @@ impl Dynamics {
         check(self.opacity_jitter, 1.0, "The opacity jitter")?;
         check(self.hue_jitter, 1.0, "The hue jitter")?;
         if !(1..=MAX_COUNT).contains(&self.count) {
-            return Err(format!("The scatter count must be between 1 and {MAX_COUNT}"));
+            return Err(format!(
+                "The scatter count must be between 1 and {MAX_COUNT}"
+            ));
         }
         Ok(())
     }

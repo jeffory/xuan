@@ -1486,7 +1486,11 @@ fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
         json!({"points": [[1, 1]], "jitter": 1}),
     );
     assert_eq!(unknown.is_error, Some(true));
-    assert!(text_of(&unknown).contains("`jitter`"), "{}", text_of(&unknown));
+    assert!(
+        text_of(&unknown).contains("`jitter`"),
+        "{}",
+        text_of(&unknown)
+    );
 
     // The schema: points of two or three numbers, and the dynamics both at
     // the top and in each stroke.
@@ -1495,12 +1499,23 @@ fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
         .unwrap();
     let schema = &tool.input_schema;
     let point = &schema["properties"]["points"]["items"];
-    assert_eq!((point["minItems"].clone(), point["maxItems"].clone()), (json!(2), json!(3)));
+    assert_eq!(
+        (point["minItems"].clone(), point["maxItems"].clone()),
+        (json!(2), json!(3))
+    );
     let item = &schema["properties"]["strokes"]["items"]["properties"];
     assert_eq!(item["points"], schema["properties"]["points"]);
     for key in [
-        "pressure_opacity", "spacing", "taper_in", "taper_out", "scatter", "scatter_count",
-        "size_jitter", "opacity_jitter", "hue_jitter", "seed",
+        "pressure_opacity",
+        "spacing",
+        "taper_in",
+        "taper_out",
+        "scatter",
+        "scatter_count",
+        "size_jitter",
+        "opacity_jitter",
+        "hue_jitter",
+        "seed",
     ] {
         assert!(schema["properties"].get(key).is_some(), "{key}");
         assert_eq!(item[key], schema["properties"][key], "{key}");
@@ -1511,7 +1526,10 @@ fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
     let select = (tools::list().into_iter())
         .find(|t| t.name == "select_shape")
         .unwrap();
-    assert_eq!(select.input_schema["properties"]["points"]["items"]["maxItems"], json!(2));
+    assert_eq!(
+        select.input_schema["properties"]["points"]["items"]["maxItems"],
+        json!(2)
+    );
     let description = tool.description.unwrap_or_default();
     for phrase in ["[x, y, pressure]", "taper_in", "same seed repeats"] {
         assert!(description.contains(phrase), "{phrase}: {description}");

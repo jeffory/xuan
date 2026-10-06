@@ -126,7 +126,15 @@ impl Stroke {
                 Piece::Segment([from, to], [from_brush, brush]) => (*from, *to, from_brush, brush),
                 Piece::Dab(point, brush) => (*point, *point, brush, brush),
             };
-            super::stroke_segment(document, from, to, from_brush, brush, copy(options), Some(self))?;
+            super::stroke_segment(
+                document,
+                from,
+                to,
+                from_brush,
+                brush,
+                copy(options),
+                Some(self),
+            )?;
         }
         Ok(())
     }
@@ -150,7 +158,11 @@ impl Stroke {
             let y = top + (index / stride) as u32;
             if mask {
                 if let Some(mask) = &mut layer.mask {
-                    Arc::make_mut(&mut mask.pixels).put_pixel(x, y, image::Luma([sample.original[0]]));
+                    Arc::make_mut(&mut mask.pixels).put_pixel(
+                        x,
+                        y,
+                        image::Luma([sample.original[0]]),
+                    );
                 }
             } else if let Some(pixels) = &mut layer.pixels {
                 Arc::make_mut(pixels).put_pixel(x, y, image::Rgba(sample.original));
@@ -241,7 +253,10 @@ impl Stroke {
 
 /// Whether a mode paints with brush dynamics.
 fn dynamic(mode: PaintMode) -> bool {
-    matches!(mode, PaintMode::Paint | PaintMode::Erase | PaintMode::Pencil)
+    matches!(
+        mode,
+        PaintMode::Paint | PaintMode::Erase | PaintMode::Pencil
+    )
 }
 
 fn copy<'a>(options: &StrokeOptions<'a>) -> StrokeOptions<'a> {

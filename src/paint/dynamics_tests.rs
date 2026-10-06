@@ -15,8 +15,16 @@ fn blank(width: u32, height: u32) -> Document {
     document
 }
 
+/// The rendered image, with the colour of fully transparent pixels cleared:
+/// it is invisible, and depends on how far the layer has grown.
 fn pixels(document: &Document) -> RgbaImage {
-    render::render(document)
+    let mut image = render::render(document);
+    for pixel in image.pixels_mut() {
+        if pixel[3] == 0 {
+            *pixel = Rgba([0; 4]);
+        }
+    }
+    image
 }
 
 fn hard(diameter: f32, dynamics: Dynamics) -> Brush {
@@ -113,7 +121,11 @@ fn taper_narrows_and_fades_the_ends() {
         pixels(&document)
     };
     let sized = taper(true, false);
-    let (start, middle, end) = (width_at(&sized, 25), width_at(&sized, 100), width_at(&sized, 175));
+    let (start, middle, end) = (
+        width_at(&sized, 25),
+        width_at(&sized, 100),
+        width_at(&sized, 175),
+    );
     assert_eq!(middle, 20);
     assert!(start < 8 && start > 0, "start {start}");
     assert!(end < 8 && end > 0, "end {end}");
@@ -124,10 +136,11 @@ fn taper_narrows_and_fades_the_ends() {
     let faded = taper(false, true);
     assert_eq!(width_at(&faded, 25), 20);
     let alpha = |x| faded.get_pixel(x, 30)[3];
+    // A pixel takes the strongest dab over it, up to a radius further in.
     assert_eq!(alpha(100), 255);
-    assert!(alpha(25) < 90 && alpha(25) > 0, "{}", alpha(25));
-    assert!(alpha(175) < 90 && alpha(175) > 0, "{}", alpha(175));
-    assert!(alpha(40) > alpha(25));
+    assert!(alpha(12) < 90 && alpha(12) > 0, "{}", alpha(12));
+    assert!(alpha(188) < 90 && alpha(188) > 0, "{}", alpha(188));
+    assert!(alpha(12) < alpha(30) && alpha(30) < alpha(50) && alpha(50) < alpha(100));
 }
 
 #[test]
@@ -141,7 +154,11 @@ fn a_single_dab_is_not_tapered() {
         },
     );
     let mut tapered = blank(30, 30);
-    paint_path(&mut tapered, &[(Point::new(15.0, 15.0), brush.clone())], PaintMode::Paint);
+    paint_path(
+        &mut tapered,
+        &[(Point::new(15.0, 15.0), brush.clone())],
+        PaintMode::Paint,
+    );
     let mut plain = blank(30, 30);
     paint_path(
         &mut plain,
@@ -180,10 +197,12 @@ fn scatter_and_jitter_repeat_for_a_seed_and_differ_between_seeds() {
     assert_eq!(first, paint(7), "the same seed paints the same pixels");
     assert_ne!(first, paint(8), "another seed paints other pixels");
     // Scatter reaches off the path, and the dabs vary in colour and opacity.
-    assert!((0..160).any(|x| first.get_pixel(x, 40 + 14)[3] > 0 || first.get_pixel(x, 40 - 14)[3] > 0));
+    assert!(
+        (0..160).any(|x| first.get_pixel(x, 40 + 14)[3] > 0 || first.get_pixel(x, 40 - 14)[3] > 0)
+    );
     let colours: std::collections::BTreeSet<[u8; 3]> = first
         .pixels()
-        .filter(|p| p[3] == 255)
+        .filter(|p| p[3] > 0)
         .map(|p| [p[0], p[1], p[2]])
         .collect();
     assert!(colours.len() > 3, "{colours:?}");
@@ -210,8 +229,11 @@ fn a_live_stroke_finishes_as_the_whole_path_would_paint() {
         for mode in [PaintMode::Paint, PaintMode::Erase, PaintMode::Pencil] {
             let mut original = blank(220, 90);
             if mode == PaintMode::Erase {
-                original.active_mut().unwrap().pixels =
-                    Some(Arc::new(RgbaImage::from_pixel(220, 90, Rgba([20, 90, 160, 255]))));
+                original.active_mut().unwrap().pixels = Some(Arc::new(RgbaImage::from_pixel(
+                    220,
+                    90,
+                    Rgba([20, 90, 160, 255]),
+                )));
             }
             let mut samples = Vec::new();
             for i in 0..=24 {
@@ -238,11 +260,14 @@ fn a_live_stroke_finishes_as_the_whole_path_would_paint() {
             let mut with_press = vec![samples[0].clone()];
             with_press.extend(samples.clone());
             paint_path(&mut replay, &with_press, mode);
-            assert_eq!(
-                pixels(&live),
-                pixels(&replay),
-                "{mode:?} {dynamics:?}"
-            );
+            let (a, b) = (pixels(&live), pixels(&replay));
+            let diff: Vec<_> = a
+                .enumerate_pixels()
+                .filter(|(x, y, p)| b.get_pixel(*x, *y) != *p)
+                .map(|(x, y, p)| (x, y, p.0, b.get_pixel(x, y).0))
+                .take(5)
+                .collect();
+            assert!(diff.is_empty(), "{mode:?} {dynamics:?} {diff:?}");
             assert_ne!(pixels(&live), pixels(&original));
         }
     }

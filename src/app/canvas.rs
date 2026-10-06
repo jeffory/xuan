@@ -1598,7 +1598,7 @@ impl EditorApp {
                     Ok(())
                 }
                 tool if tool.is_brush() => {
-                    let mode = self.paint_mode(tool);
+                    let mode = Self::paint_mode(tool, self.blur_mode);
                     let offset = if mode == PaintMode::Smudge {
                         Point::new(gesture.last.x - point.x, gesture.last.y - point.y)
                     } else {
@@ -1764,13 +1764,13 @@ impl EditorApp {
     }
 
     /// How a painting tool paints.
-    fn paint_mode(&self, tool: Tool) -> PaintMode {
+    fn paint_mode(tool: Tool, blur_mode: PaintMode) -> PaintMode {
         match tool {
             Tool::Erase => PaintMode::Erase,
             Tool::Pencil => PaintMode::Pencil,
             Tool::Clone => PaintMode::Clone,
             Tool::Heal => PaintMode::Heal,
-            Tool::Blur => self.blur_mode,
+            Tool::Blur => blur_mode,
             _ => PaintMode::Paint,
         }
     }
@@ -1831,7 +1831,7 @@ impl EditorApp {
         }
         let mode = self.selection_mode(modifiers);
         let mask_target = self.editing_mask();
-        let paint_mode = self.paint_mode(tool);
+        let paint_mode = Self::paint_mode(tool, self.blur_mode);
         let session = &mut self.sessions[self.current];
         let start = gesture.start;
         let end = gesture.last;

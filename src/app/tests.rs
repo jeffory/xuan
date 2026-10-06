@@ -3045,6 +3045,34 @@ fn pointer_brush_selection_and_pixel_move_are_undoable() {
 }
 
 #[test]
+fn pointer_brush_tapers_its_end_on_release_as_one_undo_step() {
+    let (context, mut app) = app();
+    app.dimensions = [120, 40];
+    app.new_document();
+    app.brush.diameter = 12.0;
+    app.brush.hardness = 1.0;
+    app.brush.color = [255, 0, 0, 255];
+    app.brush.dynamics.taper_out = 40.0;
+    app.set_tool(Tool::Brush);
+    let before = render::render(&app.session().unwrap().document);
+    drag(
+        &context,
+        &mut app,
+        Point::new(10.0, 20.0),
+        Point::new(110.0, 20.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let image = render::render(&app.session().unwrap().document);
+    let rows = |x| (0..40).filter(|&y| image.get_pixel(x, y)[3] > 0).count();
+    assert_eq!(rows(40), 12);
+    assert!(rows(105) < 4, "{}", rows(105));
+    assert!(rows(90) > rows(105) && rows(90) < 12);
+    app.command("undo");
+    assert_eq!(render::render(&app.session().unwrap().document), before);
+}
+
+#[test]
 fn transform_handles_and_control_drag_distortion_change_geometry() {
     let (context, mut app) = app();
     app.dimensions = [64, 48];

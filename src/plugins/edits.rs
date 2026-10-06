@@ -1197,24 +1197,24 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                     total.stroke += length;
                     (((length + 1.0) * per_pixel * count).min(1e15) as u64, 0)
                 } else {
-                for (a, b) in pairs {
-                    let dx = f64::from((b[0] - a[0]).abs());
-                    let dy = f64::from((b[1] - a[1]).abs());
-                    if !(dx.is_finite() && dy.is_finite()) {
-                        // Refused when the stroke is checked.
-                        continue;
+                    for (a, b) in pairs {
+                        let dx = f64::from((b[0] - a[0]).abs());
+                        let dy = f64::from((b[1] - a[1]).abs());
+                        if !(dx.is_finite() && dy.is_finite()) {
+                            // Refused when the stroke is checked.
+                            continue;
+                        }
+                        length += dx.hypot(dy);
+                        work = work.saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
                     }
-                    length += dx.hypot(dy);
-                    work = work.saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
-                }
-                // A taper paints its stretch in short pieces of their own.
-                if *taper_in > 0.0 || *taper_out > 0.0 {
-                    let tapered = f64::from(taper_in + taper_out).min(length);
-                    let pieces = tapered / f64::from(crate::paint::dynamics::TAPER_PIECE) + 2.0;
-                    work = work.saturating_add((pieces * reach * reach).min(1e15) as u64);
-                }
-                total.stroke += length;
-                (work, 0)
+                    // A taper paints its stretch in short pieces of their own.
+                    if *taper_in > 0.0 || *taper_out > 0.0 {
+                        let tapered = f64::from(taper_in + taper_out).min(length);
+                        let pieces = tapered / f64::from(crate::paint::dynamics::TAPER_PIECE) + 2.0;
+                        work = work.saturating_add((pieces * reach * reach).min(1e15) as u64);
+                    }
+                    total.stroke += length;
+                    (work, 0)
                 }
             }
             Edit::AddMaskLayer { .. } | Edit::AddAdjustmentLayer { .. } => (canvas, canvas),
@@ -1942,9 +1942,9 @@ fn apply_each(
                 let positions = valid_points(&xy)?;
                 ensure!(!positions.is_empty(), "A stroke needs at least one point");
                 ensure!(
-                    points
-                        .iter()
-                        .all(|p| p.pressure.is_none_or(|v| v.is_finite() && (0.0..=1.0).contains(&v))),
+                    points.iter().all(|p| p
+                        .pressure
+                        .is_none_or(|v| v.is_finite() && (0.0..=1.0).contains(&v))),
                     "A point's pressure must be between 0 and 1"
                 );
                 ensure!(
@@ -4004,12 +4004,30 @@ mod tests {
         let mut document = clear_document();
         for (stroke, says) in [
             (json!({"op": "stroke", "points": [[1, 1, 1.5]]}), "pressure"),
-            (json!({"op": "stroke", "points": [[1, 1, -0.1]]}), "pressure"),
-            (json!({"op": "stroke", "points": [[1, 1], [2, 2]], "spacing": 11}), "spacing"),
-            (json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 0}), "count"),
-            (json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 17}), "count"),
-            (json!({"op": "stroke", "points": [[1, 1]], "hue_jitter": 2}), "hue jitter"),
-            (json!({"op": "stroke", "points": [[1, 1]], "taper_in": -1}), "taper"),
+            (
+                json!({"op": "stroke", "points": [[1, 1, -0.1]]}),
+                "pressure",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1], [2, 2]], "spacing": 11}),
+                "spacing",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 0}),
+                "count",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 17}),
+                "count",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "hue_jitter": 2}),
+                "hue jitter",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "taper_in": -1}),
+                "taper",
+            ),
         ] {
             let error = run(&mut document, &[edit(stroke.clone())]).unwrap_err();
             assert!(error.to_string().contains(says), "{stroke}: {error}");
@@ -4020,8 +4038,10 @@ mod tests {
             assert!(error.to_string().contains("[x, y, pressure]"), "{error}");
         }
         assert_eq!(
-            serde_json::to_value(edit(json!({"op": "stroke", "points": [[1, 2], [3, 4, 0.5]]})))
-                .unwrap()["points"],
+            serde_json::to_value(edit(
+                json!({"op": "stroke", "points": [[1, 2], [3, 4, 0.5]]})
+            ))
+            .unwrap()["points"],
             json!([[1.0, 2.0], [3.0, 4.0, 0.5]])
         );
         let stars = |seed: u64| {
@@ -4061,7 +4081,9 @@ mod tests {
         let document = clear_document();
         let plain = cost(
             &document,
-            &[edit(json!({"op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100}))],
+            &[edit(
+                json!({"op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100}),
+            )],
         );
         let scattered = cost(
             &document,
