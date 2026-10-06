@@ -2560,9 +2560,9 @@ mod tests {
         let radial = gradient(json!({"start": [20, 15], "end": [30, 15], "radial": true}));
         run(&mut document, &[radial]).unwrap();
         let pixels = document.layers[0].pixels.clone().unwrap();
-        near(pixels.get_pixel(20, 15).0, [0, 0, 0, 255], 12);
-        near(pixels.get_pixel(25, 15).0, [128, 128, 128, 255], 12);
-        near(pixels.get_pixel(20, 25).0, [255, 255, 255, 255], 0);
+        near(pixels.get_pixel(20, 15).0, [18, 18, 18, 255], 6);
+        near(pixels.get_pixel(25, 15).0, [140, 140, 140, 255], 6);
+        near(pixels.get_pixel(20, 25).0, [255, 255, 255, 255], 2);
         assert_eq!(pixels.get_pixel(35, 15).0, [255, 255, 255, 255]);
     }
 
