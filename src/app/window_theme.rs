@@ -880,6 +880,8 @@ pub(super) struct Pick<'a> {
 
 #[derive(Debug)]
 pub(super) struct Resolved {
+    /// Which lookup step found the images (checked by the tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub source: Source,
     images: BTreeMap<(Kind, State), Vec<Asset>>,
     pub tints: Tints,
