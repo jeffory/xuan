@@ -21,6 +21,12 @@ mod stroke_tests;
 #[path = "paint/pencil_tests.rs"]
 mod pencil_tests;
 
+#[cfg(test)]
+#[path = "paint/dynamics_tests.rs"]
+mod dynamics_tests;
+
+pub mod dynamics;
+pub use dynamics::Dynamics;
 mod pencil;
 pub use pencil::tip_offsets;
 mod stroke;
@@ -48,6 +54,9 @@ pub struct Brush {
     pub tilt: [f32; 2],
     /// Pencil tip: square instead of round. Other tools ignore this.
     pub square: bool,
+    /// Spacing, taper, scatter and jitter. The Brush, Pencil and Eraser use
+    /// them through [`Stroke`]; other tools and plain [`stroke`] calls ignore them.
+    pub dynamics: Dynamics,
 }
 
 impl Default for Brush {
@@ -59,6 +68,7 @@ impl Default for Brush {
             color: [0, 0, 0, 255],
             tilt: [0.0; 2],
             square: false,
+            dynamics: Dynamics::default(),
         }
     }
 }

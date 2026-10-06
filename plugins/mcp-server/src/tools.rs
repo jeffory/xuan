@@ -160,6 +160,10 @@ fn points() -> Value {
     json!({"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
            "description": "[[x, y], …] in document pixels"})
 }
+fn stroke_points() -> Value {
+    json!({"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
+           "description": "[[x, y], …] in document pixels, or [x, y, pressure] with pen pressure 0–1"})
+}
 fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
 }
@@ -765,25 +769,30 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "paint_stroke",
             title: "Paint strokes",
-            description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows; a single point paints one round dab. For several strokes or dabs give `strokes` instead: a list of {points, color, size, hardness, opacity, erase}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
-            properties: json!({
-                "layer": optional_layer(), "points": points(),
-                "strokes": {
-                    "type": "array", "minItems": 1, "maxItems": MAX_EDITS,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "points": points(), "color": color("Paint colour"), "size": number("Brush diameter"),
-                            "hardness": number("0–1"), "opacity": number("0–1"), "erase": {"type": "boolean"},
+            description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows; a single point paints one round dab. For several strokes or dabs give `strokes` instead: a list of {points, color, size, …}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. \
+A point may be [x, y, pressure] with pressure 0–1 (default 1), as from a pen: it scales the size along the stroke, and the opacity too with `pressure_opacity`, e.g. [[10, 50, 0.1], [60, 40, 1], [110, 50, 0.1]] for a blade thin at both ends. \
+Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
+            properties: {
+                let mut properties = brush_properties();
+                let mut item = properties.clone();
+                item.insert("points".into(), stroke_points());
+                properties.insert("layer".into(), optional_layer());
+                properties.insert("points".into(), stroke_points());
+                properties.insert(
+                    "strokes".into(),
+                    json!({
+                        "type": "array", "minItems": 1, "maxItems": MAX_EDITS,
+                        "items": {
+                            "type": "object",
+                            "properties": item,
+                            "required": ["points"],
+                            "additionalProperties": false,
                         },
-                        "required": ["points"],
-                        "additionalProperties": false,
-                    },
-                    "description": "Several strokes instead of `points`; each takes the top-level values for what it leaves out",
-                },
-                "color": color("Paint colour"), "size": number("Brush diameter"),
-                "hardness": number("0–1"), "opacity": number("0–1"), "erase": {"type": "boolean"},
-            }),
+                        "description": "Several strokes instead of `points`; each takes the top-level values for what it leaves out",
+                    }),
+                );
+                Value::Object(properties)
+            },
             required: &[],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
@@ -1350,11 +1359,70 @@ fn selection_edit(args: &Map<String, Value>) -> Result<Plan, String> {
 }
 
 /// `paint_stroke`'s arguments.
-const STROKE_ARGS: [&str; 8] = [
-    "layer", "points", "strokes", "color", "size", "hardness", "opacity", "erase",
+const STROKE_ARGS: [&str; 18] = [
+    "layer",
+    "points",
+    "strokes",
+    "color",
+    "size",
+    "hardness",
+    "opacity",
+    "erase",
+    "pressure_opacity",
+    "spacing",
+    "taper_in",
+    "taper_out",
+    "scatter",
+    "scatter_count",
+    "size_jitter",
+    "opacity_jitter",
+    "hue_jitter",
+    "seed",
 ];
 /// What each stroke of `strokes` may set, the top-level value otherwise.
-const BRUSH: [&str; 5] = ["color", "size", "hardness", "opacity", "erase"];
+const BRUSH: [&str; 15] = [
+    "color",
+    "size",
+    "hardness",
+    "opacity",
+    "erase",
+    "pressure_opacity",
+    "spacing",
+    "taper_in",
+    "taper_out",
+    "scatter",
+    "scatter_count",
+    "size_jitter",
+    "opacity_jitter",
+    "hue_jitter",
+    "seed",
+];
+
+/// The schema of the brush settings `paint_stroke` and each of its
+/// `strokes` take.
+fn brush_properties() -> Map<String, Value> {
+    let properties = json!({
+        "color": color("Paint colour"),
+        "size": number("Brush diameter, 1–2000 (default 20)"),
+        "hardness": number("0–1 (default 0.8)"),
+        "opacity": number("0–1 (default 1)"),
+        "erase": {"type": "boolean"},
+        "pressure_opacity": {"type": "boolean", "description": "Point pressure and taper also scale the opacity"},
+        "spacing": {"type": "number", "minimum": 0, "maximum": 10, "description": "Distance between dabs as a fraction of the size, e.g. 0.25; 0 (default) is continuous"},
+        "taper_in": {"type": "number", "minimum": 0, "description": "Pixels over which the stroke grows from nothing at its start"},
+        "taper_out": {"type": "number", "minimum": 0, "description": "Pixels over which the stroke shrinks to nothing at its end"},
+        "scatter": {"type": "number", "minimum": 0, "maximum": 10, "description": "How far dabs move randomly off the path, as a fraction of the size"},
+        "scatter_count": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Dabs at each spacing step (default 1)"},
+        "size_jitter": {"type": "number", "minimum": 0, "maximum": 1, "description": "How much smaller each dab may randomly be"},
+        "opacity_jitter": {"type": "number", "minimum": 0, "maximum": 1, "description": "How much more transparent each dab may randomly be"},
+        "hue_jitter": {"type": "number", "minimum": 0, "maximum": 1, "description": "How far each dab's hue may randomly turn; 1 is up to half the colour wheel either way"},
+        "seed": {"type": "integer", "minimum": 0, "description": "Random pattern for scatter and jitter (default 0); the same seed repeats the stroke exactly"},
+    });
+    match properties {
+        Value::Object(map) => map,
+        _ => unreachable!(),
+    }
+}
 
 /// `paint_stroke`'s `stroke` edits: one for `points`, or one per item of
 /// `strokes` with the top-level brush for what it leaves out.

@@ -208,6 +208,9 @@ impl EditorApp {
                                             widgets::checkbox(ui, &mut self.pressure_opacity, tr("Pressure: opacity"));
                                             widgets::checkbox(ui, &mut self.tilt_shape, tr("Tilt: shape"));
                                         });
+                                        if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase) {
+                                            ui.menu_button(tr("Brush dynamics"), |ui| self.brush_dynamics(ui));
+                                        }
                                         ui.label(tr("Smoothing"));
                                         ui.add(
                                             widgets::Slider::new(&mut self.brush_smoothing, 0.0..=1.0)
@@ -464,6 +467,99 @@ impl EditorApp {
             });
         if let Some(tool) = tool {
             self.set_tool(tool);
+        }
+    }
+
+    /// Tool options → Brush dynamics: spacing, taper, scatter and jitter.
+    fn brush_dynamics(&mut self, ui: &mut egui::Ui) {
+        let dynamics = &mut self.brush.dynamics;
+        let percent = |ui: &mut egui::Ui, label: &str, value: &mut f32, max: f32, hint: &str| {
+            ui.label(label);
+            ui.add(
+                widgets::Slider::new(value, 0.0..=max)
+                    .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                    .percentage(),
+            )
+            .on_hover_text(hint);
+            ui.end_row();
+        };
+        egui::Grid::new("brush_dynamics")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                percent(
+                    ui,
+                    tr("Spacing"),
+                    &mut dynamics.spacing,
+                    10.0,
+                    tr("Distance between dabs as a percentage of the size. 0% paints a continuous stroke."),
+                );
+                for (label, value) in [
+                    (tr("Taper in"), &mut dynamics.taper_in),
+                    (tr("Taper out"), &mut dynamics.taper_out),
+                ] {
+                    ui.label(label);
+                    ui.add(
+                        widgets::Number::new(value)
+                            .size(egui::vec2(DEFAULT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
+                            .speed(1.0)
+                            .range(0.0..=10_000.0)
+                            .suffix(" px")
+                            .max_decimals(0),
+                    )
+                    .on_hover_text(tr(
+                        "Length over which the stroke grows at its start or fades at its end. 0 turns the taper off.",
+                    ));
+                    ui.end_row();
+                }
+                ui.label("");
+                ui.horizontal(|ui| {
+                    widgets::checkbox(ui, &mut dynamics.taper_size, tr("Taper: size"));
+                    widgets::checkbox(ui, &mut dynamics.taper_opacity, tr("Taper: opacity"));
+                });
+                ui.end_row();
+                percent(
+                    ui,
+                    tr("Scatter"),
+                    &mut dynamics.scatter,
+                    10.0,
+                    tr("How far dabs scatter from the stroke, as a percentage of the size."),
+                );
+                ui.label(tr("Count"));
+                ui.add(
+                    widgets::Number::new(&mut dynamics.count)
+                        .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
+                        .range(1..=xuan::paint::dynamics::MAX_COUNT),
+                )
+                .on_hover_text(tr("Dabs painted at each spacing step."));
+                ui.end_row();
+                percent(
+                    ui,
+                    tr("Size jitter"),
+                    &mut dynamics.size_jitter,
+                    1.0,
+                    tr("How much smaller each dab may randomly be."),
+                );
+                percent(
+                    ui,
+                    tr("Opacity jitter"),
+                    &mut dynamics.opacity_jitter,
+                    1.0,
+                    tr("How much more transparent each dab may randomly be."),
+                );
+                percent(
+                    ui,
+                    tr("Hue jitter"),
+                    &mut dynamics.hue_jitter,
+                    1.0,
+                    tr("How far each dab's hue may randomly turn. 100% reaches the opposite hue."),
+                );
+            });
+        if widgets::button(ui, tr("Reset")).clicked() {
+            *dynamics = xuan::paint::Dynamics {
+                seed: dynamics.seed,
+                ..Default::default()
+            };
         }
     }
 }

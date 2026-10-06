@@ -1,4 +1,9 @@
-use super::{Brush, Document, Layer, PaintMode, Point, Result, StrokeOptions};
+use std::sync::Arc;
+
+use super::{
+    Brush, Document, Layer, PaintMode, Point, Result, StrokeOptions,
+    dynamics::{Piece, Walker},
+};
 
 /// Coverage and original pixels for one pointer-down/up gesture. Overlapping
 /// segments use the strongest coverage, so event frequency cannot darken joins.
@@ -6,6 +11,11 @@ use super::{Brush, Document, Layer, PaintMode, Point, Result, StrokeOptions};
 pub struct Stroke {
     bounds: [u32; 4],
     pixels: Vec<StrokePixel>,
+    /// Lays out dabs and taper when the brush has dynamics.
+    walker: Option<Walker>,
+    /// The samples so far, to paint the stroke again once its length is
+    /// known (for the taper at its end).
+    samples: Vec<(Point, Brush)>,
 }
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,6 +37,18 @@ impl Stroke {
         brush: &Brush,
         options: StrokeOptions<'_>,
     ) -> Result<()> {
+        if self.walker.is_some() || (dynamic(options.mode) && from_brush.dynamics.active()) {
+            if self.samples.is_empty() {
+                self.samples.push((from, from_brush.clone()));
+            }
+            self.samples.push((to, brush.clone()));
+            let walker = self
+                .walker
+                .get_or_insert_with(|| Walker::new(from_brush.dynamics, None));
+            let mut pieces = Vec::new();
+            walker.walk([from, to], [from_brush, brush], &mut pieces);
+            return self.draw(document, pieces, &options);
+        }
         let accumulate = options.mask_target
             || matches!(
                 options.mode,
@@ -41,6 +63,99 @@ impl Stroke {
             options,
             accumulate.then_some(self),
         )
+    }
+
+    /// Paint a whole stroke through `samples`, each a point and the brush
+    /// there (with pen pressure already applied). A single sample paints one
+    /// dab. As the stroke's length is known, the taper at its end is drawn
+    /// at once. Use a fresh `Stroke`.
+    pub fn path(
+        &mut self,
+        document: &mut Document,
+        samples: &[(Point, Brush)],
+        options: StrokeOptions<'_>,
+    ) -> Result<()> {
+        let Some((_, first_brush)) = samples.first() else {
+            return Ok(());
+        };
+        let pairs = samples
+            .windows(2)
+            .map(|pair| (&pair[0], &pair[1]))
+            .chain((samples.len() == 1).then(|| (&samples[0], &samples[0])));
+        if !(dynamic(options.mode) && first_brush.dynamics.active()) {
+            for ((from, from_brush), (to, brush)) in pairs {
+                self.segment(document, *from, *to, from_brush, brush, copy(&options))?;
+            }
+            return Ok(());
+        }
+        let total = samples
+            .windows(2)
+            .map(|pair| pair[0].0.distance(pair[1].0))
+            .sum::<f32>();
+        let mut walker = Walker::new(first_brush.dynamics, Some(total));
+        let mut pieces = Vec::new();
+        for ((from, from_brush), (to, brush)) in pairs {
+            walker.walk([*from, *to], [from_brush, brush], &mut pieces);
+        }
+        self.draw(document, pieces, &options)
+    }
+
+    /// End the gesture. A brush that tapers at the end paints the stroke
+    /// again now that its length is known, from the original pixels.
+    pub fn finish(&mut self, document: &mut Document, options: StrokeOptions<'_>) -> Result<()> {
+        let Some(walker) = self.walker.take() else {
+            return Ok(());
+        };
+        let samples = std::mem::take(&mut self.samples);
+        let dynamics = walker.dynamics();
+        if !(dynamics.tapered() && dynamics.taper_out > 0.0) {
+            return Ok(());
+        }
+        self.restore(document, options.mask_target);
+        self.path(document, &samples, options)
+    }
+
+    fn draw(
+        &mut self,
+        document: &mut Document,
+        pieces: Vec<Piece>,
+        options: &StrokeOptions<'_>,
+    ) -> Result<()> {
+        for piece in pieces {
+            let (from, to, from_brush, brush) = match &piece {
+                Piece::Segment([from, to], [from_brush, brush]) => (*from, *to, from_brush, brush),
+                Piece::Dab(point, brush) => (*point, *point, brush, brush),
+            };
+            super::stroke_segment(document, from, to, from_brush, brush, copy(options), Some(self))?;
+        }
+        Ok(())
+    }
+
+    /// Put back the pixels the stroke has painted and forget its coverage.
+    fn restore(&mut self, document: &mut Document, mask: bool) {
+        let [left, top, right, _] = self.bounds;
+        let stride = (right - left) as usize;
+        if stride == 0 || self.pixels.is_empty() {
+            return;
+        }
+        let Some(layer) = document.active_mut() else {
+            return;
+        };
+        for (index, sample) in self.pixels.iter_mut().enumerate() {
+            if sample.amount <= 0.0 {
+                continue;
+            }
+            sample.amount = 0.0;
+            let x = left + (index % stride) as u32;
+            let y = top + (index / stride) as u32;
+            if mask {
+                if let Some(mask) = &mut layer.mask {
+                    Arc::make_mut(&mut mask.pixels).put_pixel(x, y, image::Luma([sample.original[0]]));
+                }
+            } else if let Some(pixels) = &mut layer.pixels {
+                Arc::make_mut(pixels).put_pixel(x, y, image::Rgba(sample.original));
+            }
+        }
     }
 
     pub(super) fn shift(&mut self, [x, y]: [u32; 2]) {
@@ -121,5 +236,19 @@ impl Stroke {
     fn index(&self, x: u32, y: u32) -> usize {
         (y - self.bounds[1]) as usize * (self.bounds[2] - self.bounds[0]) as usize
             + (x - self.bounds[0]) as usize
+    }
+}
+
+/// Whether a mode paints with brush dynamics.
+fn dynamic(mode: PaintMode) -> bool {
+    matches!(mode, PaintMode::Paint | PaintMode::Erase | PaintMode::Pencil)
+}
+
+fn copy<'a>(options: &StrokeOptions<'a>) -> StrokeOptions<'a> {
+    StrokeOptions {
+        mode: options.mode,
+        mask_target: options.mask_target,
+        source: options.source,
+        clone_offset: options.clone_offset,
     }
 }

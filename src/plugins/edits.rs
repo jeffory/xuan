@@ -797,10 +797,13 @@ pub enum Edit {
         mask: bool,
     },
     /// Paint a brush stroke through the points, in document coordinates.
+    /// A point may carry pen pressure, `[x, y, pressure]`, which scales the
+    /// size (and the opacity with `pressure_opacity`). The brush dynamics
+    /// (spacing, taper, scatter, jitter) are off by default.
     Stroke {
         #[serde(default)]
         layer: Option<Uuid>,
-        points: Vec<[f32; 2]>,
+        points: Vec<StrokePoint>,
         #[serde(default = "black")]
         color: Color,
         #[serde(default = "default_brush_size")]
@@ -811,6 +814,34 @@ pub enum Edit {
         opacity: f32,
         #[serde(default)]
         erase: bool,
+        /// Pressure (and taper) also scales the opacity.
+        #[serde(default)]
+        pressure_opacity: bool,
+        /// Distance between dabs as a fraction of the size, 0 to 10; 0 is a
+        /// continuous stroke.
+        #[serde(default)]
+        spacing: f32,
+        /// Pixels over which the stroke grows from nothing at its start.
+        #[serde(default)]
+        taper_in: f32,
+        /// Pixels over which the stroke shrinks to nothing at its end.
+        #[serde(default)]
+        taper_out: f32,
+        /// How far dabs scatter from the path, as a fraction of the size, 0 to 10.
+        #[serde(default)]
+        scatter: f32,
+        /// Dabs at each spacing step, 1 to 16.
+        #[serde(default = "one_u32")]
+        scatter_count: u32,
+        #[serde(default)]
+        size_jitter: f32,
+        #[serde(default)]
+        opacity_jitter: f32,
+        #[serde(default)]
+        hue_jitter: f32,
+        /// The random sequence for scatter and jitter.
+        #[serde(default)]
+        seed: u64,
     },
     /// A filter applied to a layer's pixels inside the selection, written as
     /// in `.xuan` files, e.g. `{"GaussianBlur": {"radius": 4}}`.
@@ -970,6 +1001,66 @@ fn default_hardness() -> f32 {
 fn one() -> f32 {
     1.0
 }
+fn one_u32() -> u32 {
+    1
+}
+
+/// A stroke point in document coordinates, written `[x, y]` or
+/// `[x, y, pressure]` with the pen pressure from 0 to 1 (1 when left out).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<f32>", into = "Vec<f32>")]
+pub struct StrokePoint {
+    pub x: f32,
+    pub y: f32,
+    pub pressure: Option<f32>,
+}
+
+impl StrokePoint {
+    pub fn xy(&self) -> [f32; 2] {
+        [self.x, self.y]
+    }
+    pub fn pressure(&self) -> f32 {
+        self.pressure.unwrap_or(1.0)
+    }
+}
+
+impl From<[f32; 2]> for StrokePoint {
+    fn from([x, y]: [f32; 2]) -> Self {
+        Self {
+            x,
+            y,
+            pressure: None,
+        }
+    }
+}
+
+impl TryFrom<Vec<f32>> for StrokePoint {
+    type Error = String;
+    fn try_from(values: Vec<f32>) -> std::result::Result<Self, String> {
+        match values[..] {
+            [x, y] => Ok(Self {
+                x,
+                y,
+                pressure: None,
+            }),
+            [x, y, pressure] => Ok(Self {
+                x,
+                y,
+                pressure: Some(pressure),
+            }),
+            _ => Err("A stroke point is [x, y] or [x, y, pressure]".into()),
+        }
+    }
+}
+
+impl From<StrokePoint> for Vec<f32> {
+    fn from(point: StrokePoint) -> Self {
+        match point.pressure {
+            Some(pressure) => vec![point.x, point.y, pressure],
+            None => vec![point.x, point.y],
+        }
+    }
+}
 fn yes() -> bool {
     true
 }
@@ -1055,14 +1146,57 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 let padded = (side + pad).powi(2);
                 ((padded * factor) as u64, 0)
             }
-            Edit::Stroke { points, size, .. } => {
+            Edit::Stroke {
+                points,
+                size,
+                spacing,
+                scatter,
+                scatter_count,
+                size_jitter,
+                opacity_jitter,
+                hue_jitter,
+                taper_in,
+                taper_out,
+                ..
+            } => {
                 let reach = f64::from(size.max(1.0)) + 2.0;
                 let mut work = 0u64;
                 let mut length = 0.0;
+                let points: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
                 let pairs = points
                     .windows(2)
                     .map(|pair| (pair[0], pair[1]))
                     .chain((points.len() == 1).then(|| (points[0], points[0])));
+                let dabs = *spacing > 0.0
+                    || *scatter > 0.0
+                    || *scatter_count > 1
+                    || *size_jitter > 0.0
+                    || *opacity_jitter > 0.0
+                    || *hue_jitter > 0.0;
+                if dabs {
+                    // Each dab touches at most the brush's square, and dabs
+                    // are at least `MIN_STEP` apart along the stroke.
+                    let length: f64 = pairs
+                        .clone()
+                        .map(|(a, b)| f64::from((b[0] - a[0]).hypot(b[1] - a[1])))
+                        .filter(|l| l.is_finite())
+                        .sum();
+                    let spacing = if *spacing > 0.0 {
+                        f64::from(*spacing)
+                    } else {
+                        f64::from(crate::paint::dynamics::DEFAULT_SPACING)
+                    };
+                    let step_min = f64::from(crate::paint::dynamics::MIN_STEP);
+                    let size = f64::from(size.max(1.0));
+                    // Smaller dabs (pressure, taper, jitter) are closer together:
+                    // the worst diameter is the size, or where the step stops shrinking.
+                    let per_step = |d: f64| (d + 2.0).powi(2) / (spacing * d).max(step_min);
+                    let small = (step_min / spacing).min(size);
+                    let per_pixel = per_step(size).max(per_step(small)) + 256.0 / step_min;
+                    let count = f64::from((*scatter_count).clamp(1, 16));
+                    total.stroke += length;
+                    (((length + 1.0) * per_pixel * count).min(1e15) as u64, 0)
+                } else {
                 for (a, b) in pairs {
                     let dx = f64::from((b[0] - a[0]).abs());
                     let dy = f64::from((b[1] - a[1]).abs());
@@ -1073,8 +1207,15 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                     length += dx.hypot(dy);
                     work = work.saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
                 }
+                // A taper paints its stretch in short pieces of their own.
+                if *taper_in > 0.0 || *taper_out > 0.0 {
+                    let tapered = f64::from(taper_in + taper_out).min(length);
+                    let pieces = tapered / f64::from(crate::paint::dynamics::TAPER_PIECE) + 2.0;
+                    work = work.saturating_add((pieces * reach * reach).min(1e15) as u64);
+                }
                 total.stroke += length;
                 (work, 0)
+                }
             }
             Edit::AddMaskLayer { .. } | Edit::AddAdjustmentLayer { .. } => (canvas, canvas),
             Edit::AddShapeLayer {
@@ -1786,9 +1927,26 @@ fn apply_each(
                 hardness,
                 opacity,
                 erase,
+                pressure_opacity,
+                spacing,
+                taper_in,
+                taper_out,
+                scatter,
+                scatter_count,
+                size_jitter,
+                opacity_jitter,
+                hue_jitter,
+                seed,
             } => {
-                let points = valid_points(points)?;
-                ensure!(!points.is_empty(), "A stroke needs at least one point");
+                let xy: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
+                let positions = valid_points(&xy)?;
+                ensure!(!positions.is_empty(), "A stroke needs at least one point");
+                ensure!(
+                    points
+                        .iter()
+                        .all(|p| p.pressure.is_none_or(|v| v.is_finite() && (0.0..=1.0).contains(&v))),
+                    "A point's pressure must be between 0 and 1"
+                );
                 ensure!(
                     size.is_finite() && (1.0..=2000.0).contains(size),
                     "The brush size must be between 1 and 2000"
@@ -1798,12 +1956,27 @@ fn apply_each(
                     "The hardness must be between 0 and 1"
                 );
                 valid_opacity(*opacity)?;
+                let dynamics = crate::paint::Dynamics {
+                    spacing: *spacing,
+                    taper_in: *taper_in,
+                    taper_out: *taper_out,
+                    taper_size: true,
+                    taper_opacity: *pressure_opacity,
+                    scatter: *scatter,
+                    count: *scatter_count,
+                    size_jitter: *size_jitter,
+                    opacity_jitter: *opacity_jitter,
+                    hue_jitter: *hue_jitter,
+                    seed: *seed,
+                };
+                dynamics.validate().map_err(anyhow::Error::msg)?;
                 activate(document, *layer)?;
                 let brush = crate::paint::Brush {
                     diameter: *size,
                     hardness: *hardness,
                     opacity: *opacity,
                     color: color.0,
+                    dynamics,
                     ..crate::paint::Brush::default()
                 };
                 let mode = if *erase {
@@ -1811,26 +1984,31 @@ fn apply_each(
                 } else {
                     crate::paint::PaintMode::Paint
                 };
-                let mut stroke = crate::paint::Stroke::default();
-                let pairs = points
-                    .windows(2)
-                    .map(|pair| (pair[0], pair[1]))
-                    .chain((points.len() == 1).then(|| (points[0], points[0])));
-                for (from, to) in pairs {
-                    stroke.segment(
-                        document,
-                        from,
-                        to,
-                        &brush,
-                        &brush,
-                        crate::paint::StrokeOptions {
-                            mode,
-                            mask_target: false,
-                            source: None,
-                            clone_offset: Point::default(),
-                        },
-                    )?;
-                }
+                // Pressure goes through the pen's path: size, and opacity when asked.
+                let samples: Vec<(Point, crate::paint::Brush)> = positions
+                    .into_iter()
+                    .zip(points)
+                    .map(|(position, point)| {
+                        let mut brush = brush.clone();
+                        if let Some(pressure) = point.pressure {
+                            brush.diameter *= pressure.max(0.01);
+                            if *pressure_opacity {
+                                brush.opacity *= pressure;
+                            }
+                        }
+                        (position, brush)
+                    })
+                    .collect();
+                crate::paint::Stroke::default().path(
+                    document,
+                    &samples,
+                    crate::paint::StrokeOptions {
+                        mode,
+                        mask_target: false,
+                        source: None,
+                        clone_offset: Point::default(),
+                    },
+                )?;
             }
             Edit::ApplyFilter { layer, filter } => {
                 filter.validate()?;
@@ -3551,15 +3729,9 @@ mod tests {
                 }
             })
             .collect();
-        let bomb = Edit::Stroke {
-            layer: Some(base),
-            points,
-            color: Color([0, 0, 0, 255]),
-            size: 2000.0,
-            hardness: 1.0,
-            opacity: 1.0,
-            erase: false,
-        };
+        let bomb = edit(json!({
+            "op": "stroke", "layer": base, "points": points, "size": 2000, "hardness": 1,
+        }));
         let started = std::time::Instant::now();
         let error = run(&mut document, &[bomb]).unwrap_err().to_string();
         assert!(
@@ -3764,5 +3936,150 @@ mod tests {
         let hash = pixel_hash(&RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 4])));
         assert!(hash.starts_with("fnv1a:"));
         assert_ne!(hash, pixel_hash(&RgbaImage::new(2, 2)));
+    }
+
+    /// A clear 200 × 60 document with one pixel layer.
+    fn clear_document() -> Document {
+        let mut document = Document::new(200, 60).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::new(200, 60)));
+        document
+    }
+
+    fn painted_rows(document: &Document, x: u32) -> usize {
+        let image = crate::render::render(document);
+        (0..image.height())
+            .filter(|&y| image.get_pixel(x, y)[3] > 0)
+            .count()
+    }
+
+    #[test]
+    fn stroke_point_pressure_tapers_the_width_and_optionally_the_opacity() {
+        let mut document = clear_document();
+        run(
+            &mut document,
+            &[edit(json!({
+                "op": "stroke", "size": 30, "hardness": 1,
+                "points": [[10, 30, 0.1], [100, 30, 1], [190, 30, 0.1]],
+            }))],
+        )
+        .unwrap();
+        let (thin, wide) = (painted_rows(&document, 15), painted_rows(&document, 100));
+        assert_eq!(wide, 30);
+        assert!(thin > 0 && thin < 8, "{thin}");
+        assert!(painted_rows(&document, 55) > thin && painted_rows(&document, 55) < wide);
+        assert!(painted_rows(&document, 185) < 8);
+        // Full strength along the middle: pressure changed only the size.
+        let image = crate::render::render(&document);
+        assert_eq!(image.get_pixel(15, 30)[3], 255);
+
+        // With `pressure_opacity` the thin ends are also fainter.
+        let mut faded = clear_document();
+        run(
+            &mut faded,
+            &[edit(json!({
+                "op": "stroke", "size": 30, "hardness": 1, "pressure_opacity": true,
+                "points": [[10, 30, 0.1], [100, 30, 1], [190, 30, 0.1]],
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&faded);
+        assert!(image.get_pixel(15, 30)[3] < 80);
+        assert_eq!(image.get_pixel(100, 30)[3], 255);
+
+        // Two-number points keep pressure 1, mixed with three-number ones.
+        let mut mixed = clear_document();
+        run(
+            &mut mixed,
+            &[edit(json!({
+                "op": "stroke", "size": 30, "hardness": 1,
+                "points": [[10, 30], [100, 30, 1], [190, 30]],
+            }))],
+        )
+        .unwrap();
+        assert_eq!(painted_rows(&mixed, 15), 30);
+    }
+
+    #[test]
+    fn stroke_dynamics_are_checked_and_repeat_for_a_seed() {
+        let mut document = clear_document();
+        for (stroke, says) in [
+            (json!({"op": "stroke", "points": [[1, 1, 1.5]]}), "pressure"),
+            (json!({"op": "stroke", "points": [[1, 1, -0.1]]}), "pressure"),
+            (json!({"op": "stroke", "points": [[1, 1], [2, 2]], "spacing": 11}), "spacing"),
+            (json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 0}), "count"),
+            (json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 17}), "count"),
+            (json!({"op": "stroke", "points": [[1, 1]], "hue_jitter": 2}), "hue jitter"),
+            (json!({"op": "stroke", "points": [[1, 1]], "taper_in": -1}), "taper"),
+        ] {
+            let error = run(&mut document, &[edit(stroke.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{stroke}: {error}");
+        }
+        for points in [json!([[1, 2, 3, 4]]), json!([[1]])] {
+            let error = serde_json::from_value::<Edit>(json!({"op": "stroke", "points": points}))
+                .unwrap_err();
+            assert!(error.to_string().contains("[x, y, pressure]"), "{error}");
+        }
+        assert_eq!(
+            serde_json::to_value(edit(json!({"op": "stroke", "points": [[1, 2], [3, 4, 0.5]]})))
+                .unwrap()["points"],
+            json!([[1.0, 2.0], [3.0, 4.0, 0.5]])
+        );
+        let stars = |seed: u64| {
+            let mut document = clear_document();
+            run(
+                &mut document,
+                &[edit(json!({
+                    "op": "stroke", "size": 6, "hardness": 1, "color": "#ffe080",
+                    "points": [[10, 30], [190, 30]],
+                    "spacing": 2, "scatter": 3, "scatter_count": 2,
+                    "size_jitter": 0.6, "opacity_jitter": 0.5, "hue_jitter": 0.3, "seed": seed,
+                }))],
+            )
+            .unwrap();
+            crate::render::render(&document)
+        };
+        assert_eq!(stars(5), stars(5));
+        assert_ne!(stars(5), stars(6));
+        // Spacing leaves gaps between the dabs on the path.
+        let mut dotted = clear_document();
+        run(
+            &mut dotted,
+            &[edit(json!({
+                "op": "stroke", "size": 6, "hardness": 1, "points": [[10, 30], [190, 30]],
+                "spacing": 3,
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&dotted);
+        assert_eq!(image.get_pixel(10, 30)[3], 255);
+        assert_eq!(image.get_pixel(28, 30)[3], 255);
+        assert_eq!(image.get_pixel(19, 30)[3], 0);
+    }
+
+    #[test]
+    fn stroke_dynamics_count_against_the_work_budget() {
+        let document = clear_document();
+        let plain = cost(
+            &document,
+            &[edit(json!({"op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100}))],
+        );
+        let scattered = cost(
+            &document,
+            &[edit(json!({
+                "op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100,
+                "spacing": 0.01, "scatter": 1, "scatter_count": 16,
+            }))],
+        );
+        assert_eq!(plain.stroke, scattered.stroke);
+        assert!(scattered.work > plain.work * 100, "{scattered:?} {plain:?}");
+        // Taper is cut into short pieces, which cost more than one sweep.
+        let tapered = cost(
+            &document,
+            &[edit(json!({
+                "op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100,
+                "taper_in": 500, "taper_out": 500,
+            }))],
+        );
+        assert!(tapered.work > plain.work * 2, "{tapered:?} {plain:?}");
     }
 }

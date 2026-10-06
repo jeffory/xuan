@@ -1256,6 +1256,10 @@ impl EditorApp {
         } else {
             self.tool
         };
+        if !panning && self.gesture.is_none() && tool.is_brush() {
+            // Scatter and jitter differ from one stroke to the next.
+            self.brush.dynamics.seed = self.brush.dynamics.seed.wrapping_add(1);
+        }
         let brush = self.input_brush();
         if self.gesture.is_some() || self.sessions.is_empty() {
             return;
@@ -1594,14 +1598,7 @@ impl EditorApp {
                     Ok(())
                 }
                 tool if tool.is_brush() => {
-                    let mode = match tool {
-                        Tool::Erase => PaintMode::Erase,
-                        Tool::Pencil => PaintMode::Pencil,
-                        Tool::Clone => PaintMode::Clone,
-                        Tool::Heal => PaintMode::Heal,
-                        Tool::Blur => self.blur_mode,
-                        _ => PaintMode::Paint,
-                    };
+                    let mode = self.paint_mode(tool);
                     let offset = if mode == PaintMode::Smudge {
                         Point::new(gesture.last.x - point.x, gesture.last.y - point.y)
                     } else {
@@ -1766,6 +1763,18 @@ impl EditorApp {
         self.gesture = Some(gesture);
     }
 
+    /// How a painting tool paints.
+    fn paint_mode(&self, tool: Tool) -> PaintMode {
+        match tool {
+            Tool::Erase => PaintMode::Erase,
+            Tool::Pencil => PaintMode::Pencil,
+            Tool::Clone => PaintMode::Clone,
+            Tool::Heal => PaintMode::Heal,
+            Tool::Blur => self.blur_mode,
+            _ => PaintMode::Paint,
+        }
+    }
+
     fn end_gesture(&mut self, modifiers: egui::Modifiers) {
         let tail = self.gesture.as_mut().and_then(|gesture| {
             let smoothing = gesture.smoothing.take()?;
@@ -1777,7 +1786,7 @@ impl EditorApp {
             // and tilt. The tail belongs to the same history transaction.
             self.update_gesture_with_brush(point, Pos2::ZERO, modifiers, brush);
         }
-        let Some(gesture) = self.gesture.take() else {
+        let Some(mut gesture) = self.gesture.take() else {
             return;
         };
         self.snap_lines.clear();
@@ -1822,6 +1831,7 @@ impl EditorApp {
         }
         let mode = self.selection_mode(modifiers);
         let mask_target = self.editing_mask();
+        let paint_mode = self.paint_mode(tool);
         let session = &mut self.sessions[self.current];
         let start = gesture.start;
         let end = gesture.last;
@@ -1891,6 +1901,17 @@ impl EditorApp {
                     session.history.cancel(&mut session.document);
                     return;
                 }
+                // A brush that tapers at the end paints the stroke again now
+                // that its length is known.
+                tool if tool.is_brush() => gesture.stroke.finish(
+                    &mut session.document,
+                    paint::StrokeOptions {
+                        mode: paint_mode,
+                        mask_target,
+                        source: gesture.source.as_deref(),
+                        clone_offset: gesture.clone_offset,
+                    },
+                ),
                 _ => Ok(()),
             }
         };

@@ -195,7 +195,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `select_shape` | Rectangle, ellipse or polygon selection with a `mode` | `select_rect`, `select_polygon` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
 | `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels (of `layer`) | `host/run`, `grow_selection`, `feather_selection` |
-| `paint_stroke` | Brush strokes (or eraser) through points: one with `points`, several with `strokes`; a single point is a dab | `stroke` |
+| `paint_stroke` | Brush strokes (or eraser) through points: one with `points`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`) | `stroke` |
 | `fill` | Fill the selection with a colour | `fill` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
@@ -308,6 +308,13 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
 - Group work that belongs together, so it is one undo step and one round
   trip: `paint_stroke` with `strokes` for many strokes or dabs (a one-point
   stroke paints a single round dab), and `batch` for a sequence of edits.
+- Taper strokes instead of painting them one width: give points a pressure,
+  `[[x, y, 0.2], [x, y, 1], [x, y, 0.2]]`, or set `taper_in`/`taper_out` in
+  pixels (grass blades, rays, threads fading into the distance). For dust,
+  snow, stars or foliage, one stroke with `spacing`, `scatter`,
+  `scatter_count` and the jitters replaces many dabs; a wide `spacing` (e.g.
+  1.5) makes a dotted trail. Keep `seed` to repeat a stroke exactly, change it
+  for a different pattern.
 - Ask the user before saving; the save dialog is theirs to answer.
 
 ## The `.xuan` format for agents

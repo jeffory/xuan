@@ -968,3 +968,20 @@ lines	行
 Copies	复制
 lines to the clipboard:	行到剪贴板：
 Copies to the clipboard:	复制到剪贴板：
+Brush dynamics	画笔动态
+Distance between dabs as a percentage of the size. 0% paints a continuous stroke.	笔迹之间的距离，以大小的百分比表示。0% 绘制连续笔画。
+Taper in	起笔渐细
+Taper out	收笔渐细
+Length over which the stroke grows at its start or fades at its end. 0 turns the taper off.	笔画在起点逐渐变粗或在终点逐渐消失的长度。0 关闭渐细。
+Taper: size	渐细控制大小
+Taper: opacity	渐细控制不透明度
+Scatter	散布
+How far dabs scatter from the stroke, as a percentage of the size.	笔迹偏离笔画的距离，以大小的百分比表示。
+Count	数量
+Dabs painted at each spacing step.	每个间距步长绘制的笔迹数。
+Size jitter	大小抖动
+How much smaller each dab may randomly be.	每个笔迹随机缩小的程度。
+Opacity jitter	不透明度抖动
+How much more transparent each dab may randomly be.	每个笔迹随机变透明的程度。
+Hue jitter	色相抖动
+How far each dab's hue may randomly turn. 100% reaches the opposite hue.	每个笔迹色相随机旋转的幅度。100% 可达到相反色相。

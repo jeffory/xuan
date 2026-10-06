@@ -226,6 +226,31 @@ and painting on layer masks. Pressure and tilt continue to control the brush.
 Shift-click straight lines bypass smoothing. RAW Develop's mask brushes are
 unchanged. **Hardness** controls edge softness independently of stroke smoothing.
 
+### Brush dynamics
+
+The Brush, Pencil and Eraser have a **Brush dynamics** menu in their toolbar.
+Everything in it is off by default.
+
+- **Spacing** paints separate dabs this far apart, as a percentage of the size;
+  0% paints a continuous stroke. 150% makes a dotted line.
+- **Taper in** and **Taper out** grow the stroke from nothing over that many
+  pixels at its start, and shrink it at its end, without a tablet. **Taper:
+  size** and **Taper: opacity** choose what the taper changes. The end taper is
+  drawn when you release the mouse or lift the pen, once the stroke's length
+  is known.
+- **Scatter** moves each dab randomly off the stroke, up to that percentage of
+  the size, and **Count** paints that many dabs at each step.
+- **Size jitter**, **Opacity jitter** and **Hue jitter** vary each dab
+  randomly: up to that much smaller, more transparent, or turned around the
+  colour wheel (100% reaches the opposite hue).
+
+Scatter, a count above 1 or a jitter without spacing paint dabs at 25%. Every
+stroke gets a new random pattern. Dabs do not darken where they overlap within
+one stroke, as with a continuous stroke. **Reset** turns the dynamics off.
+Brush dynamics stay set until you change them while Xuan runs, like the size
+and hardness. Plugins and MCP clients set them per stroke (see
+[PLUGINS.md](PLUGINS.md)).
+
 ### Drawing tablets
 
 Wacom, Parblo, and other tablets supported by your system's driver can draw and

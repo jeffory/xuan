@@ -1433,6 +1433,92 @@ fn edit_requests(editor: &FakeEditor) -> Vec<Value> {
 }
 
 #[test]
+fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({
+            "points": [[10, 50, 0.1], [60, 40], [110, 50, 0.2]],
+            "size": 8, "pressure_opacity": true, "taper_in": 20, "taper_out": 30,
+        }),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    assert_eq!(
+        edit_requests(&editor)[0]["edits"],
+        json!([{
+            "op": "stroke", "points": [[10, 50, 0.1], [60, 40], [110, 50, 0.2]], "size": 8,
+            "pressure_opacity": true, "taper_in": 20, "taper_out": 30,
+        }])
+    );
+    // Dynamics set at the top apply to each stroke, which may override them.
+    let result = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({
+            "spacing": 0.5, "scatter": 2, "scatter_count": 3, "size_jitter": 0.5,
+            "opacity_jitter": 0.4, "hue_jitter": 0.1, "seed": 42,
+            "strokes": [{"points": [[1, 2], [30, 2]]}, {"points": [[5, 5, 0.5]], "seed": 7, "spacing": 0}],
+        }),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let shared = json!({
+        "op": "stroke", "spacing": 0.5, "scatter": 2, "scatter_count": 3, "size_jitter": 0.5,
+        "opacity_jitter": 0.4, "hue_jitter": 0.1, "seed": 42,
+    });
+    let with = |extra: Value| {
+        let mut edit = shared.clone();
+        edit.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        edit
+    };
+    assert_eq!(
+        edit_requests(&editor)[1]["edits"],
+        json!([
+            with(json!({"points": [[1, 2], [30, 2]]})),
+            with(json!({"points": [[5, 5, 0.5]], "seed": 7, "spacing": 0})),
+        ])
+    );
+    let unknown = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"points": [[1, 1]], "jitter": 1}),
+    );
+    assert_eq!(unknown.is_error, Some(true));
+    assert!(text_of(&unknown).contains("`jitter`"), "{}", text_of(&unknown));
+
+    // The schema: points of two or three numbers, and the dynamics both at
+    // the top and in each stroke.
+    let tool = (tools::list().into_iter())
+        .find(|t| t.name == "paint_stroke")
+        .unwrap();
+    let schema = &tool.input_schema;
+    let point = &schema["properties"]["points"]["items"];
+    assert_eq!((point["minItems"].clone(), point["maxItems"].clone()), (json!(2), json!(3)));
+    let item = &schema["properties"]["strokes"]["items"]["properties"];
+    assert_eq!(item["points"], schema["properties"]["points"]);
+    for key in [
+        "pressure_opacity", "spacing", "taper_in", "taper_out", "scatter", "scatter_count",
+        "size_jitter", "opacity_jitter", "hue_jitter", "seed",
+    ] {
+        assert!(schema["properties"].get(key).is_some(), "{key}");
+        assert_eq!(item[key], schema["properties"][key], "{key}");
+    }
+    assert_eq!(schema["properties"]["scatter_count"]["maximum"], json!(16));
+    assert_eq!(schema["properties"]["seed"]["type"], json!("integer"));
+    // `select_shape` polygons still take only [x, y].
+    let select = (tools::list().into_iter())
+        .find(|t| t.name == "select_shape")
+        .unwrap();
+    assert_eq!(select.input_schema["properties"]["points"]["items"]["maxItems"], json!(2));
+    let description = tool.description.unwrap_or_default();
+    for phrase in ["[x, y, pressure]", "taper_in", "same seed repeats"] {
+        assert!(description.contains(phrase), "{phrase}: {description}");
+    }
+}
+
+#[test]
 fn paint_stroke_sends_several_strokes_or_dabs_as_one_edit_request() {
     let editor = FakeEditor::new(false);
     // One stroke, as before; a single point is a dab.

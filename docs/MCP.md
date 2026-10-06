@@ -117,7 +117,9 @@ like the existing ones, rather than anything specific to MCP:
 - **Transforms.** `transform` sets a layer's (or a group's) box like Free
   Transform.
 - **Painting.** `stroke` paints or erases one brush stroke through a list of
-  points, with the Brush tool's coverage rules; `fill` fills the selection;
+  points, with the Brush tool's coverage rules; points may carry pen pressure
+  (`[x, y, pressure]`), and the brush dynamics (#63: taper, spacing, scatter,
+  size/opacity/hue jitter with a seed) are optional fields; `fill` fills the selection;
   `gradient` fills it with a linear or radial gradient through any number of
   colour stops, or paints the mask with one.
 - **Selections.** `select_rect` (with `ellipse`), `select_polygon`,
@@ -162,6 +164,18 @@ like the existing ones, rather than anything specific to MCP:
   (mask, adjustment or filter) names it in `attached_to`. `layer/export`
   with `what = "mask"` on an image reads its attached mask layer and says
   which in `mask_layer`.
+- **Brush dynamics** (#63). Every stroke an agent drew was the same width
+  from end to end, and stars, dust or a dotted trail took one call or one
+  stroke per dab. `paint_stroke` points may be `[x, y, pressure]`; pressure
+  goes through the tablet's path (it scales the size between samples, and
+  the opacity with `pressure_opacity`). `taper_in`/`taper_out` taper without
+  pressure, `spacing` paints separate dabs, and `scatter`, `scatter_count`,
+  `size_jitter`, `opacity_jitter` and `hue_jitter` vary them. The random
+  numbers are a hash of `seed` and the dab's index along the stroke, so a
+  replay paints identical pixels. Each dab is painted as a zero-length
+  segment by the existing brush, so the GPU and CPU paths and the stroke's
+  coverage rules are shared and agree. All are off by default; a stroke that
+  uses none of them is painted exactly as before.
 - **Batching** (#61). Painting detail one tool call at a time took hundreds
   of round trips and undo steps. `paint_stroke` takes `strokes`, sent as one
   `stroke` edit each in one request (a one-point stroke already painted a

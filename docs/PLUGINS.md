@@ -1043,12 +1043,33 @@ layer, so text and shape layers become pixel layers):
   `mask` paints the layer's mask with the gradient's brightness instead of its
   pixels. `start` and `end` must differ.
 - `{"op": "stroke", "layer"?, "points": [[x, y], …], "color"?, "size"?,
-  "hardness"?, "opacity"?, "erase"?}`: one brush stroke through the points (at
-  most 10,000) in document coordinates; `size` is the brush diameter (1–2000,
-  default 20), `hardness` and `opacity` 0–1 (defaults 0.8 and 1), and `erase`
-  erases instead of painting. A single point paints one round dab the size of
-  the brush. The layer grows to hold the stroke, as with the Brush tool.
-  Several strokes in one request are one undo step.
+  "hardness"?, "opacity"?, "erase"?, …dynamics}`: one brush stroke through the
+  points (at most 10,000) in document coordinates; `size` is the brush
+  diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (defaults 0.8
+  and 1), and `erase` erases instead of painting. A single point paints one
+  round dab the size of the brush. The layer grows to hold the stroke, as with
+  the Brush tool. Several strokes in one request are one undo step.
+
+  A point may carry pen pressure as `[x, y, pressure]` (0–1; a two-number
+  point has pressure 1). Pressure scales the size between the points, as a
+  tablet does, and the opacity too when `"pressure_opacity": true`. The brush
+  dynamics are optional and off by default, so a stroke without them paints
+  as before:
+
+  | Field | Range | Effect |
+  | --- | --- | --- |
+  | `taper_in`, `taper_out` | ≥ 0 px | The stroke grows from nothing over that many pixels at its start, and shrinks to nothing at its end: the size, and the opacity with `pressure_opacity`. A single dab is not tapered. |
+  | `spacing` | 0–10 | Paint separate dabs this far apart, as a fraction of the (current) size; 0 is a continuous stroke. Dabs are at least 1 px apart. |
+  | `scatter` | 0–10 | Move each dab randomly up to this far off the path, as a fraction of the size. |
+  | `scatter_count` | 1–16 | Dabs at each spacing step (default 1). |
+  | `size_jitter`, `opacity_jitter` | 0–1 | Make each dab randomly up to this much smaller or more transparent. |
+  | `hue_jitter` | 0–1 | Turn each dab's hue randomly, up to half the colour wheel either way at 1. |
+  | `seed` | integer ≥ 0 | The random pattern of scatter and jitter (default 0). The same points and seed always paint the same pixels. |
+
+  Scatter, `scatter_count` above 1 or a jitter without `spacing` paint dabs at
+  0.25. Dabs are drawn by the same brush as continuous strokes (on the GPU
+  when it is available), and like a stroke's segments they do not darken
+  where they overlap: each pixel keeps the strongest dab.
 - `{"op": "apply_filter", "layer"?, "filter"}` and `{"op":
   "apply_adjustment", "layer"?, "adjustment"}`.
 
@@ -1109,7 +1130,8 @@ the editor's thread, so a request (or a result, all its batches together)
 also has a **work budget**, estimated before anything runs: about 1,000
 million pixel visits, where a colour selection costs a render of every layer,
 a filter, grow or feather costs the layer or canvas area several times over,
-a stroke costs the area each segment sweeps, and a mask or adjustment layer
+a stroke costs the area each segment sweeps (or, with spacing, scatter or
+jitter, each dab's area, at the closest spacing its size allows), and a mask or adjustment layer
 costs the canvas area; at most 256 MiB of new masks and drawn layers; and
 strokes at most 200,000 pixels long in total. A request over budget is
 refused as a whole, with an error that says so; send it in smaller parts.
