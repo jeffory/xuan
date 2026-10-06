@@ -107,7 +107,8 @@ pub(crate) fn shape(
 ) -> Option<RgbaImage> {
     use crate::paint::ShapeKind;
     // Solid rectangles are a memory fill; curved boundaries benefit from compute.
-    if kind == ShapeKind::Rectangle {
+    // Paths are filled on the CPU (`vector::VectorPath::coverage`).
+    if !matches!(kind, ShapeKind::Ellipse | ShapeKind::RoundedRectangle) {
         return None;
     }
     attempt(u64::from(size[0]) * u64::from(size[1]), 65_536, |gpu| {

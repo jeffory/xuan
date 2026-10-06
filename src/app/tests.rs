@@ -39,6 +39,9 @@ mod command_palette;
 #[path = "tests/selection.rs"]
 mod selection;
 
+#[path = "tests/paths.rs"]
+mod paths;
+
 #[path = "tests/providers.rs"]
 mod providers;
 

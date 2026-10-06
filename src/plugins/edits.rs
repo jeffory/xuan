@@ -19,6 +19,7 @@ use crate::{
     paint::ShapeKind,
     selection::SelectionMode,
     text::{TextRenderer, TextStyle},
+    vector::{FillRule, VectorPath},
 };
 
 /// Describe a document for `document/get` and the `document` field of jobs.
@@ -35,6 +36,11 @@ pub fn describe(document: &Document) -> Value {
         "resolution": document.resolution,
         "active": document.active,
         "selection": selection,
+        "paths": document
+            .paths
+            .iter()
+            .map(|path| json!({"id": path.id, "name": path.name, "path": path.d}))
+            .collect::<Vec<_>>(),
         "layers": document
             .layers
             .iter()
@@ -65,11 +71,20 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         "image"
     };
     let shape = layer.shape.as_ref().map(|shape| {
-        json!({
+        let mut described = json!({
             "shape": shape.kind,
             "color": Color(shape.color),
             "corner_radius": shape.corner_radius,
-        })
+        });
+        if let Some(path) = &shape.path {
+            // Where the outline is now, as SVG path data in document coordinates (null
+            // once the layer is warped), and as stored, in its own box.
+            described["path"] = json!(path.in_document(layer.transform).map(|p| p.to_svg()));
+            described["fill_rule"] = json!(path.fill_rule);
+            described["local_path"] = json!(path.d);
+            described["local_size"] = json!([path.width, path.height]);
+        }
+        described
     });
     let masks = masks(document, layer);
     // An effect layer inside an image's stack applies to that image only.
@@ -725,7 +740,8 @@ pub enum Edit {
         #[serde(default)]
         rotation: Option<f32>,
     },
-    /// A rectangle or ellipse combined with the selection.
+    /// A rectangle or ellipse combined with the selection, its edge
+    /// softened by `feather` pixels first.
     SelectRect {
         x: f32,
         y: f32,
@@ -735,12 +751,28 @@ pub enum Edit {
         ellipse: bool,
         #[serde(default)]
         mode: SelectionMode,
+        #[serde(default)]
+        feather: f32,
     },
     /// A polygon (at least three points) combined with the selection.
     SelectPolygon {
         points: Vec<[f32; 2]>,
         #[serde(default)]
         mode: SelectionMode,
+        #[serde(default)]
+        feather: f32,
+    },
+    /// The inside of an SVG path (`d` data in document coordinates), with
+    /// antialiased edges, combined with the selection. Open subpaths are
+    /// closed, as SVG fills them.
+    SelectPath {
+        path: String,
+        #[serde(default)]
+        fill_rule: FillRule,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: f32,
     },
     /// The Magic Wand at a point of the flattened image.
     SelectColor {
@@ -779,6 +811,23 @@ pub enum Edit {
         layer: Option<Uuid>,
         color: Color,
     },
+    /// Keep SVG path data with the document as a named path, as in the
+    /// Paths panel (replacing the path of that name if there is one).
+    AddPath {
+        path: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Fill the inside of an SVG path (within the selection, if there is
+    /// one) with a colour, with antialiased edges.
+    FillPath {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        path: String,
+        color: Color,
+        #[serde(default)]
+        fill_rule: FillRule,
+    },
     /// Fill the selection (or the whole layer) with a gradient from `start`
     /// to `end` in document coordinates: linear, or radial around `start`
     /// with `end` on the rim.
@@ -803,7 +852,12 @@ pub enum Edit {
     Stroke {
         #[serde(default)]
         layer: Option<Uuid>,
+        #[serde(default)]
         points: Vec<StrokePoint>,
+        /// SVG path data the stroke follows instead of `points`: one subpath,
+        /// flattened to points.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
         #[serde(default = "black")]
         color: Color,
         #[serde(default = "default_brush_size")]
@@ -911,13 +965,22 @@ pub enum Edit {
         #[serde(default)]
         above: Option<Uuid>,
     },
-    /// An editable shape layer covering the box.
+    /// An editable shape layer covering the box, or for `Path` the shape of
+    /// `path` (SVG path data in document coordinates), which places it.
     AddShapeLayer {
         shape: ShapeKind,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default)]
+        fill_rule: FillRule,
         #[serde(default = "black")]
         color: Color,
         #[serde(default)]
@@ -1162,9 +1225,22 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
     for edit in edits {
         let canvas = width * height;
         let (work, bytes) = match edit {
-            Edit::SelectRect { .. } | Edit::SelectPolygon { .. } | Edit::SetSelection { .. } => {
-                (canvas, 0)
+            Edit::SetSelection { .. } => (canvas, 0),
+            Edit::SelectRect { feather, .. } | Edit::SelectPolygon { feather, .. } => {
+                (canvas.saturating_mul(if *feather > 0.0 { 6 } else { 2 }), 0)
             }
+            Edit::SelectPath { feather, path, .. } => (
+                canvas
+                    .saturating_mul(if *feather > 0.0 { 6 } else { 2 })
+                    .saturating_add(path_work(path, height)),
+                0,
+            ),
+            Edit::FillPath { layer, path, .. } => (
+                canvas
+                    .saturating_add(layer_area(layer, canvas).saturating_mul(2))
+                    .saturating_add(path_work(path, height)),
+                0,
+            ),
             // A render of every layer, then the mask.
             Edit::SelectColor { .. } | Edit::SelectColorRange { .. } => {
                 (canvas.saturating_mul(2 + layers), 0)
@@ -1194,6 +1270,7 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
             }
             Edit::Stroke {
                 points,
+                path,
                 size,
                 spacing,
                 scatter,
@@ -1209,6 +1286,7 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 let reach = f64::from(size.max(1.0)) + 2.0;
                 let mut work = 0u64;
                 let mut length = 0.0;
+                let points = stroke_points(points, path).unwrap_or_default();
                 let points: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
                 // Every symmetric copy is painted in full.
                 let side = |n: u64| n.min(u64::from(u32::MAX)) as u32;
@@ -1287,10 +1365,23 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
             Edit::AddShapeLayer {
                 width: w,
                 height: h,
+                path,
                 ..
             } => {
-                let area = (f64::from(w.max(1.0)) * f64::from(h.max(1.0))).min(1e15) as u64;
-                (area, area.saturating_mul(4))
+                let (w, h) = match path {
+                    Some(path) => crate::vector::VectorPath::parse(path)
+                        .ok()
+                        .and_then(|path| path.bounds())
+                        .map_or((1.0, 1.0), |b| (b.width() as f32, b.height() as f32)),
+                    None => (w.unwrap_or(1.0), h.unwrap_or(1.0)),
+                };
+                let area =
+                    (f64::from(w.max(1.0) + 2.0) * f64::from(h.max(1.0) + 2.0)).min(1e15) as u64;
+                let work = match path {
+                    Some(path) => area.saturating_add(path_work(path, u64::from(MAX_SIDE))),
+                    None => area,
+                };
+                (work, area.saturating_mul(4))
             }
             Edit::MergeLayers { .. } => (canvas.saturating_mul(1 + layers), canvas * 4),
             Edit::Transform { .. } => (canvas, 0),
@@ -1357,6 +1448,7 @@ impl Edit {
             Self::SetSelection { .. }
                 | Self::SelectRect { .. }
                 | Self::SelectPolygon { .. }
+                | Self::SelectPath { .. }
                 | Self::SelectColor { .. }
                 | Self::SelectColorRange { .. }
                 | Self::GrowSelection { .. }
@@ -1488,6 +1580,7 @@ macro_rules! layer_ids {
                 .chain(parent.$option())
                 .collect(),
             Edit::Fill { layer, .. }
+            | Edit::FillPath { layer, .. }
             | Edit::Gradient { layer, .. }
             | Edit::Stroke { layer, .. }
             | Edit::ApplyFilter { layer, .. }
@@ -1502,6 +1595,8 @@ macro_rules! layer_ids {
             | Edit::ExtendCanvas { .. }
             | Edit::SelectRect { .. }
             | Edit::SelectPolygon { .. }
+            | Edit::SelectPath { .. }
+            | Edit::AddPath { .. }
             | Edit::SelectColor { .. }
             | Edit::SelectColorRange { .. }
             | Edit::GrowSelection { .. }
@@ -1848,6 +1943,7 @@ fn apply_each(
                 height,
                 ellipse,
                 mode,
+                feather,
             } => {
                 ensure!(
                     [x, y, width, height].iter().all(|v| v.is_finite())
@@ -1862,13 +1958,27 @@ fn apply_each(
                     Point::new(x + width, y + height),
                     *ellipse,
                 );
-                crate::selection::combine(document, mask, *mode);
+                combine_selection(document, mask, *mode, *feather)?;
             }
-            Edit::SelectPolygon { points, mode } => {
+            Edit::SelectPolygon {
+                points,
+                mode,
+                feather,
+            } => {
                 let points = valid_points(points)?;
                 ensure!(points.len() >= 3, "A polygon needs at least three points");
                 let mask = crate::selection::polygon(document.width, document.height, &points);
-                crate::selection::combine(document, mask, *mode);
+                combine_selection(document, mask, *mode, *feather)?;
+            }
+            Edit::SelectPath {
+                path,
+                fill_rule,
+                mode,
+                feather,
+            } => {
+                let path = VectorPath::parse(path)?;
+                let mask = path.mask(*fill_rule, document.width, document.height);
+                combine_selection(document, mask, *mode, *feather)?;
             }
             Edit::SelectColor {
                 x,
@@ -1941,6 +2051,40 @@ fn apply_each(
                 activate(document, *layer)?;
                 crate::paint::fill(document, color.0, false, false)?;
             }
+            Edit::AddPath { path, name } => {
+                let d = VectorPath::parse(path)?;
+                let name = match name {
+                    Some(name) => {
+                        ensure!(
+                            !name.trim().is_empty() && name.len() <= 256,
+                            "A path name has 1 to 256 bytes"
+                        );
+                        name.clone()
+                    }
+                    None => crate::vector::next_path_name(&document.paths),
+                };
+                match document.paths.iter_mut().find(|p| p.name == name) {
+                    Some(existing) => existing.d = d,
+                    None => {
+                        ensure!(
+                            document.paths.len() < crate::vector::MAX_DOCUMENT_PATHS,
+                            "A document keeps at most {} paths",
+                            crate::vector::MAX_DOCUMENT_PATHS
+                        );
+                        document.paths.push(crate::vector::NamedPath::new(name, d));
+                    }
+                }
+            }
+            Edit::FillPath {
+                layer,
+                path,
+                color,
+                fill_rule,
+            } => {
+                let path = VectorPath::parse(path)?;
+                activate(document, *layer)?;
+                crate::paint::fill_path(document, &path, *fill_rule, color.0)?;
+            }
             Edit::Gradient {
                 layer,
                 start,
@@ -1988,6 +2132,7 @@ fn apply_each(
             Edit::Stroke {
                 layer,
                 points,
+                path,
                 color,
                 size,
                 hardness,
@@ -2005,6 +2150,7 @@ fn apply_each(
                 seed,
                 symmetry,
             } => {
+                let points = &*stroke_points(points, path)?;
                 let xy: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
                 let positions = valid_points(&xy)?;
                 ensure!(!positions.is_empty(), "A stroke needs at least one point");
@@ -2192,29 +2338,50 @@ fn apply_each(
                 y,
                 width,
                 height,
+                path,
+                fill_rule,
                 color,
                 corner_radius,
                 name,
                 above,
             } => {
                 reader.add_layer()?;
-                ensure!(
-                    [x, y, width, height, corner_radius]
-                        .iter()
-                        .all(|v| v.is_finite())
-                        && *width >= 1.0
-                        && *height >= 1.0
-                        && *corner_radius >= 0.0,
-                    "The shape needs a finite position and a size of at least 1"
-                );
-                reader.add_pixels(width.round() as u32, height.round() as u32)?;
-                let mut layer = crate::paint::shape(
-                    Point::new(*x, *y),
-                    Point::new(x + width, y + height),
-                    *shape,
-                    color.0,
-                    *corner_radius,
-                )?;
+                let mut layer = if *shape == ShapeKind::Path {
+                    let path = path
+                        .as_deref()
+                        .context("A path shape needs `path`, SVG path data")?;
+                    ensure!(
+                        [x, y, width, height].iter().all(|v| v.is_none()),
+                        "A path shape is placed by its path's coordinates; leave out x, y, width and height"
+                    );
+                    let path = VectorPath::parse(path)?;
+                    let (w, h) = crate::paint::path_shape_size(&path)?;
+                    reader.add_pixels(w, h)?;
+                    crate::paint::path_shape(&path, *fill_rule, color.0)?
+                } else {
+                    ensure!(path.is_none(), "`path` goes only with the Path shape");
+                    let (Some(x), Some(y), Some(width), Some(height)) = (x, y, width, height)
+                    else {
+                        bail!("The shape needs x, y, width and height");
+                    };
+                    ensure!(
+                        [x, y, width, height, corner_radius]
+                            .iter()
+                            .all(|v| v.is_finite())
+                            && *width >= 1.0
+                            && *height >= 1.0
+                            && *corner_radius >= 0.0,
+                        "The shape needs a finite position and a size of at least 1"
+                    );
+                    reader.add_pixels(width.round() as u32, height.round() as u32)?;
+                    crate::paint::shape(
+                        Point::new(*x, *y),
+                        Point::new(x + width, y + height),
+                        *shape,
+                        color.0,
+                        *corner_radius,
+                    )?
+                };
                 if name.is_some() {
                     layer.name = layer_name(name, "")?;
                 }
@@ -2315,6 +2482,52 @@ fn valid_points(points: &[[f32; 2]]) -> Result<Vec<Point>> {
         "Points must be finite"
     );
     Ok(points.iter().map(|[x, y]| Point::new(*x, *y)).collect())
+}
+
+/// What filling a path over `rows` pixel rows (from its top, or the canvas's) costs beyond
+/// its area, as [`cost`] counts it; nothing for a path that does not parse, which is refused
+/// when it runs.
+fn path_work(path: &str, rows: u64) -> u64 {
+    VectorPath::parse(path).map_or(0, |path| {
+        let top = path.bounds().map_or(0.0, |b| b.y0.max(0.0));
+        path.fill_work(top, top + rows as f64)
+    })
+}
+
+/// A stroke's points: those given, or its `path` flattened.
+fn stroke_points<'a>(
+    points: &'a [StrokePoint],
+    path: &Option<String>,
+) -> Result<std::borrow::Cow<'a, [StrokePoint]>> {
+    let Some(path) = path else {
+        return Ok(points.into());
+    };
+    ensure!(
+        points.is_empty(),
+        "Give a stroke `points` or a `path`, not both"
+    );
+    let points = crate::vector::VectorPath::parse(path)?.stroke_points()?;
+    Ok(points.into_iter().map(StrokePoint::from).collect())
+}
+
+/// Combine `mask` with the selection, its edge first softened by `feather` pixels.
+fn combine_selection(
+    document: &mut Document,
+    mask: GrayImage,
+    mode: SelectionMode,
+    feather: f32,
+) -> Result<()> {
+    ensure!(
+        feather.is_finite() && (0.0..=MAX_SELECTION_AMOUNT).contains(&feather),
+        "The feather radius must be between 0 and {MAX_SELECTION_AMOUNT}"
+    );
+    let mask = if feather > 0.0 {
+        crate::gpu::blur_gray(&mask, feather)
+    } else {
+        mask
+    };
+    crate::selection::combine(document, mask, mode);
+    Ok(())
 }
 
 fn valid_opacity(opacity: f32) -> Result<f32> {
@@ -2431,6 +2644,10 @@ pub fn blend_names() -> Vec<String> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "edits_path_tests.rs"]
+mod path_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3158,6 +3375,7 @@ mod tests {
             &[Edit::SelectPolygon {
                 points: too_many,
                 mode: SelectionMode::Replace,
+                feather: 0.0,
             }],
         )
         .unwrap_err();
@@ -4239,6 +4457,17 @@ mod tests {
         assert_eq!(image.get_pixel(159, 30)[3], 255);
         assert_eq!(image.get_pixel(100, 25)[3], 0);
         assert_eq!(image, image::imageops::flip_horizontal(&image));
+        // A path stroke is mirrored the same way.
+        let mut along_path = clear_document();
+        run(
+            &mut along_path,
+            &[edit(json!({
+                "op": "stroke", "size": 10, "hardness": 1, "path": "M 20 20 L 40 30",
+                "symmetry": {"mode": "vertical"},
+            }))],
+        )
+        .unwrap();
+        assert_eq!(crate::render::render(&along_path), image);
         // Four turns around a centre of choice.
         let mut radial = clear_document();
         run(

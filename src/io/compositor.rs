@@ -934,6 +934,7 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
                         kind,
                         color: [color("red"), color("green"), color("blue"), 255],
                         corner_radius: radius,
+                        path: None,
                     })
                 }
                 None => report.add(Dropped::LineShape),

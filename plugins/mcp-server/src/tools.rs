@@ -164,6 +164,14 @@ fn stroke_points() -> Value {
     json!({"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3},
            "description": "[[x, y], …] in document pixels, or [x, y, pressure] with pen pressure 0–1"})
 }
+fn svg_path(description: &str) -> Value {
+    json!({"type": "string", "minLength": 1, "description": description})
+}
+fn fill_rule() -> Value {
+    json!({"type": "string", "enum": ["nonzero", "evenodd"],
+           "description": "Which parts of the path are inside, as SVG's fill-rule (default nonzero); with evenodd an inner subpath always cuts a hole"})
+}
+const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
 fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
 }
@@ -440,13 +448,14 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "create_shape_layer",
             title: "Create a shape layer",
-            description: "An editable rectangle, ellipse or rounded rectangle filling the box x, y, width, height.",
+            description: "An editable rectangle, ellipse or rounded rectangle filling the box x, y, width, height; or with shape path, an editable, antialiased vector shape filled inside `path` (SVG path data in document pixels, which also places it: give no x, y, width or height). The layer stays a live shape: resizing it redraws the outline.",
             properties: json!({
-                "shape": {"type": "string", "enum": ["rectangle", "ellipse", "rounded_rectangle"]},
+                "shape": {"type": "string", "enum": ["rectangle", "ellipse", "rounded_rectangle", "path"]},
                 "x": number("Left"), "y": number("Top"), "width": number("Width"), "height": number("Height"),
+                "path": svg_path(SVG_PATH), "fill_rule": fill_rule(),
                 "color": color("Fill colour"), "corner_radius": number("For rounded rectangles"), "name": name(), "above": above(),
             }),
-            required: &["shape", "x", "y", "width", "height"],
+            required: &["shape"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
                 let keys = [
@@ -455,6 +464,8 @@ fn specs() -> Vec<Spec> {
                     "y",
                     "width",
                     "height",
+                    "path",
+                    "fill_rule",
                     "color",
                     "corner_radius",
                     "name",
@@ -466,12 +477,38 @@ fn specs() -> Vec<Spec> {
                     Some("rectangle") => "Rectangle",
                     Some("ellipse") => "Ellipse",
                     Some("rounded_rectangle") => "RoundedRectangle",
+                    Some("path") => "Path",
                     _ => {
                         return Err(
-                            "`shape` must be rectangle, ellipse or rounded_rectangle".into()
+                            "`shape` must be rectangle, ellipse, rounded_rectangle or path".into(),
                         );
                     }
                 };
+                let given = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
+                if shape == "Path" {
+                    if !given("path") {
+                        return Err("shape path needs `path`, SVG path data".into());
+                    }
+                    if let Some(key) = ["x", "y", "width", "height"].into_iter().find(|k| given(k))
+                    {
+                        return Err(format!(
+                            "A path shape is placed by its path's coordinates; leave out `{key}`"
+                        ));
+                    }
+                } else {
+                    if given("path") || given("fill_rule") {
+                        return Err("`path` and `fill_rule` go only with shape path".into());
+                    }
+                    if let Some(key) = ["x", "y", "width", "height"]
+                        .into_iter()
+                        .find(|k| !given(k))
+                    {
+                        return Err(format!(
+                            "shape {} needs `{key}`",
+                            args["shape"].as_str().unwrap_or_default()
+                        ));
+                    }
+                }
                 edit.insert("shape".into(), json!(shape));
                 Ok(Plan::new(
                     "Create Shape Layer",
@@ -634,31 +671,63 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "select_shape",
             title: "Select a shape",
-            description: "Select a rectangle or ellipse (x, y, width, height) or a polygon (points), combined with the current selection by `mode` (default replace).",
+            description: "Select a rectangle or ellipse (x, y, width, height), a polygon (points) or the inside of an SVG path (`path`, with antialiased edges), combined with the current selection by `mode` (default replace). `feather` softens the new shape's edge by that many pixels (0–256) before it is combined.",
             properties: json!({
-                "shape": {"type": "string", "enum": ["rectangle", "ellipse", "polygon"]},
+                "shape": {"type": "string", "enum": ["rectangle", "ellipse", "polygon", "path"]},
                 "x": number("Left"), "y": number("Top"), "width": number("Width"), "height": number("Height"),
-                "points": points(), "mode": mode(),
+                "points": points(), "path": svg_path(SVG_PATH), "fill_rule": fill_rule(),
+                "feather": number("Pixels to soften the shape's edge by (0–256, default 0)"), "mode": mode(),
             }),
             required: &["shape"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
                 let args = pick(
                     args,
-                    &["shape", "x", "y", "width", "height", "points", "mode"],
+                    &[
+                        "shape",
+                        "x",
+                        "y",
+                        "width",
+                        "height",
+                        "points",
+                        "path",
+                        "fill_rule",
+                        "feather",
+                        "mode",
+                    ],
                 )?;
-                let edit = match args.get("shape").and_then(Value::as_str) {
-                    Some("rectangle") => {
-                        op("select_rect", &args, &["x", "y", "width", "height", "mode"])
-                    }
+                let shape = args.get("shape").and_then(Value::as_str);
+                let given = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
+                if shape != Some("path") && (given("path") || given("fill_rule")) {
+                    return Err("`path` and `fill_rule` go only with shape path".into());
+                }
+                let edit = match shape {
+                    Some("rectangle") => op(
+                        "select_rect",
+                        &args,
+                        &["x", "y", "width", "height", "mode", "feather"],
+                    ),
                     Some("ellipse") => {
-                        let mut edit =
-                            op("select_rect", &args, &["x", "y", "width", "height", "mode"]);
+                        let mut edit = op(
+                            "select_rect",
+                            &args,
+                            &["x", "y", "width", "height", "mode", "feather"],
+                        );
                         edit.insert("ellipse".into(), json!(true));
                         edit
                     }
-                    Some("polygon") => op("select_polygon", &args, &["points", "mode"]),
-                    _ => return Err("`shape` must be rectangle, ellipse or polygon".into()),
+                    Some("polygon") => op("select_polygon", &args, &["points", "mode", "feather"]),
+                    Some("path") => {
+                        if !given("path") {
+                            return Err("shape path needs `path`, SVG path data".into());
+                        }
+                        op(
+                            "select_path",
+                            &args,
+                            &["path", "fill_rule", "mode", "feather"],
+                        )
+                    }
+                    _ => return Err("`shape` must be rectangle, ellipse, polygon or path".into()),
                 };
                 Ok(Plan::new(
                     "Select",
@@ -769,7 +838,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "paint_stroke",
             title: "Paint strokes",
-            description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows; a single point paints one round dab. For several strokes or dabs give `strokes` instead: a list of {points, color, size, …}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. \
+            description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows (a single point paints one round dab), or `path`, SVG path data such as \"M 0 700 C 120 640 380 640 512 700\" whose curves Xuan flattens to points (one subpath; `taper_in`/`taper_out` taper its ends). For several strokes or dabs give `strokes` instead: a list of {points, color, size, …}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. \
 A point may be [x, y, pressure] with pressure 0–1 (default 1), as from a pen: it scales the size along the stroke, and the opacity too with `pressure_opacity`, e.g. [[10, 50, 0.1], [60, 40, 1], [110, 50, 0.1]] for a blade thin at both ends. \
 Symmetry paints each stroke again as one coat with it: `symmetry` {\"mode\": \"vertical\"} mirrors it left↔right across a vertical axis (x → 2·cx − x), \"horizontal\" top↔bottom, and {\"mode\": \"radial\", \"segments\": 12} turns it into 12 copies around the centre, e.g. a starburst's rays from one ray. `center` [x, y] (on the canvas, default its middle) is where the axis or the turns go through. Scatter and jitter are mirrored with the stroke, and every copy counts against the limits. \
 Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
@@ -778,8 +847,10 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 properties.insert(SYMMETRY.into(), symmetry_schema());
                 let mut item = properties.clone();
                 item.insert("points".into(), stroke_points());
+                item.insert("path".into(), svg_path("The stroke's path instead of `points`: SVG path data with one subpath (one M)"));
                 properties.insert("layer".into(), optional_layer());
                 properties.insert("points".into(), stroke_points());
+                properties.insert("path".into(), svg_path("The path the stroke follows, instead of `points`: SVG path data in document pixels with one subpath (one M), e.g. \"M 10 50 C 40 0 80 100 110 50\". Xuan flattens its curves to points"));
                 properties.insert(
                     "strokes".into(),
                     json!({
@@ -787,10 +858,9 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                         "items": {
                             "type": "object",
                             "properties": item,
-                            "required": ["points"],
                             "additionalProperties": false,
                         },
-                        "description": "Several strokes instead of `points`; each takes the top-level values for what it leaves out",
+                        "description": "Several strokes instead of `points` or `path`; each gives `points` or `path` and takes the top-level values for what it leaves out",
                     }),
                 );
                 Value::Object(properties)
@@ -805,15 +875,40 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "fill",
             title: "Fill",
-            description: "Fill the selection (or the whole layer without one) of a pixel layer with a colour.",
-            properties: json!({"layer": optional_layer(), "color": color("Fill colour")}),
+            description: "Fill the selection (or the whole layer without one) of a pixel layer with a colour. With `path`, fill only the inside of that SVG path (and of the selection, if there is one), with antialiased edges.",
+            properties: json!({
+                "layer": optional_layer(), "color": color("Fill colour"),
+                "path": svg_path(SVG_PATH), "fill_rule": fill_rule(),
+            }),
             required: &["color"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = pick(args, &["layer", "color"])?;
+                let args = pick(args, &["layer", "color", "path", "fill_rule"])?;
+                let edit = if args.get("path").is_some_and(|v| !v.is_null()) {
+                    op("fill_path", &args, &["layer", "color", "path", "fill_rule"])
+                } else if args.get("fill_rule").is_some_and(|v| !v.is_null()) {
+                    return Err("`fill_rule` goes only with `path`".into());
+                } else {
+                    op("fill", &args, &["layer", "color"])
+                };
+                Ok(Plan::new("Fill", vec![Value::Object(edit)], Reply::Ok))
+            }),
+        },
+        Spec {
+            name: "save_path",
+            title: "Save a path",
+            description: "Keep an SVG path with the document under `name`, as in Xuan's Paths panel, where the user can fill, stroke or select it later. A path of the same name is replaced; without `name` it is called Path 1, Path 2, …. get_document lists the saved paths under `paths`, with their data.",
+            properties: json!({"path": svg_path(SVG_PATH), "name": {"type": "string", "description": "The path's name"}}),
+            required: &["path"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let args = pick(args, &["path", "name"])?;
+                if args.get("path").is_none_or(Value::is_null) {
+                    return Err("save_path needs `path`, SVG path data".into());
+                }
                 Ok(Plan::new(
-                    "Fill",
-                    vec![Value::Object(op("fill", &args, &["layer", "color"]))],
+                    "Save Path",
+                    vec![Value::Object(op("add_path", &args, &["path", "name"]))],
                     Reply::Ok,
                 ))
             }),
@@ -1005,7 +1100,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1361,9 +1456,10 @@ fn selection_edit(args: &Map<String, Value>) -> Result<Plan, String> {
 }
 
 /// `paint_stroke`'s arguments.
-const STROKE_ARGS: [&str; 18] = [
+const STROKE_ARGS: [&str; 19] = [
     "layer",
     "points",
+    "path",
     "strokes",
     "color",
     "size",
@@ -1445,41 +1541,56 @@ fn brush_properties() -> Map<String, Value> {
     }
 }
 
-/// `paint_stroke`'s `stroke` edits: one for `points`, or one per item of
-/// `strokes` with the top-level brush for what it leaves out.
+/// `paint_stroke`'s `stroke` edits: one for `points` or `path`, or one per
+/// item of `strokes` with the top-level brush for what it leaves out.
 fn strokes(args: &Map<String, Value>) -> Result<Vec<Value>, String> {
     let given = |key: &str| args.get(key).filter(|value| !value.is_null());
     let mut shared = op("stroke", args, &["layer"]);
     shared.extend(op("stroke", args, &BRUSH));
     shared.extend(op("stroke", args, &[SYMMETRY]));
-    match (given("points"), given("strokes")) {
+    let line = match (given("points"), given("path")) {
+        (Some(_), Some(_)) => return Err("Give `points` or `path`, not both".into()),
+        (Some(points), None) => Some(("points", points)),
+        (None, Some(path)) => Some(("path", path)),
+        (None, None) => None,
+    };
+    match (line, given("strokes")) {
         (Some(_), Some(_)) => {
-            Err("Give `points` for one stroke or `strokes` for several, not both".into())
+            Err("Give `points` or `path` for one stroke or `strokes` for several, not both".into())
         }
-        (None, None) => Err("Give `points` for one stroke or `strokes` for several".into()),
-        (Some(points), None) => {
-            shared.insert("points".into(), points.clone());
+        (None, None) => {
+            Err("Give `points` or `path` for one stroke or `strokes` for several".into())
+        }
+        (Some((key, line)), None) => {
+            shared.insert(key.into(), line.clone());
             Ok(vec![Value::Object(shared)])
         }
         (None, Some(list)) => {
-            let list = (list.as_array())
-                .filter(|list| !list.is_empty())
-                .ok_or("`strokes` must be a list of at least one {\"points\": …}")?;
+            let list = (list.as_array()).filter(|list| !list.is_empty()).ok_or(
+                "`strokes` must be a list of at least one {\"points\": …} or {\"path\": …}",
+            )?;
             let strokes = list.iter().enumerate().map(|(index, stroke)| {
                 let number = index + 1;
-                let stroke = stroke
-                    .as_object()
-                    .ok_or_else(|| format!("Stroke {number} must be an object with `points`"))?;
+                let stroke = stroke.as_object().ok_or_else(|| {
+                    format!("Stroke {number} must be an object with `points` or `path`")
+                })?;
                 if let Some(unknown) = (stroke.keys()).find(|key| {
-                    key.as_str() != "points"
-                        && key.as_str() != SYMMETRY
+                    !matches!(key.as_str(), "points" | "path" | SYMMETRY)
                         && !BRUSH.contains(&key.as_str())
-                })
-                {
+                }) {
                     return Err(format!("Stroke {number}: unknown argument `{unknown}`"));
                 }
-                if stroke.get("points").is_none_or(Value::is_null) {
-                    return Err(format!("Stroke {number} has no `points`"));
+                let has = |key: &str| stroke.get(key).is_some_and(|v| !v.is_null());
+                match (has("points"), has("path")) {
+                    (false, false) => {
+                        return Err(format!("Stroke {number} has no `points` or `path`"));
+                    }
+                    (true, true) => {
+                        return Err(format!(
+                            "Stroke {number}: give `points` or `path`, not both"
+                        ));
+                    }
+                    _ => {}
                 }
                 let mut edit = shared.clone();
                 edit.extend(

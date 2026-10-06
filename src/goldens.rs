@@ -84,6 +84,7 @@ const SCENES: &[&str] = &[
     "layer_effects",
     "layer_effects_combined",
     "text_and_shapes",
+    "path_shapes",
     "remove_background",
     "raw_default",
     "raw_negative",
@@ -148,6 +149,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("layer_effects", layer_effects()),
         composite("layer_effects_combined", layer_effects_combined()),
         composite("text_and_shapes", text_and_shapes()),
+        composite("path_shapes", path_shapes()),
         composite("remove_background", remove_background()),
     ];
     if let Some(raw) = raw_fixture() {
@@ -760,6 +762,69 @@ fn text_and_shapes() -> Document {
         text(&mut renderer, regular, 24.0, 100.0),
         text(&mut renderer, emphasis, 120.0, 196.0),
     ])
+}
+
+/// Path shape layers from SVG path data: a translucent heart of cubic curves, an even-odd ring
+/// of arcs, a quadratic wave stretched and rotated after it was made (so it is redrawn from its
+/// outline), and a star filled into a pixel layer with `fill_path` inside a selection.
+fn path_shapes() -> Document {
+    use crate::vector::{FillRule, VectorPath};
+    let path = |d: &str| VectorPath::parse(d).unwrap();
+    let heart = paint::path_shape(
+        &path(
+            "M 80 60 C 80 40 50 30 40 50 C 30 70 60 90 80 110 \
+             C 100 90 130 70 120 50 C 110 30 80 40 80 60 Z",
+        ),
+        FillRule::Nonzero,
+        [200, 40, 70, 200],
+    )
+    .unwrap();
+    let ring = paint::path_shape(
+        &path(
+            "M 150 70 a 45 45 0 1 0 90 0 a 45 45 0 1 0 -90 0 Z \
+             M 170 70 a 25 25 0 1 0 50 0 a 25 25 0 1 0 -50 0 Z",
+        ),
+        FillRule::Evenodd,
+        [40, 110, 200, 255],
+    )
+    .unwrap();
+    let mut wave = paint::path_shape(
+        &path("M 20 200 Q 50 150 80 200 T 140 200 T 200 200 L 200 230 L 20 230 Z"),
+        FillRule::Nonzero,
+        [40, 150, 90, 255],
+    )
+    .unwrap();
+    wave.transform.width *= 1.15;
+    wave.transform.height *= 0.8;
+    wave.transform.rotation = -8.0;
+    let mut doc = document(vec![
+        Layer::image(
+            "Paper",
+            RgbaImage::from_pixel(SIZE, SIZE, Rgba([238, 232, 220, 255])),
+        ),
+        Layer::image("Star", RgbaImage::new(SIZE, SIZE)),
+        heart,
+        ring,
+        wave,
+    ]);
+    paint::refresh_shapes(&mut doc).unwrap();
+    doc.active = Some(doc.layers[1].id);
+    doc.selection = Some(Arc::new(crate::selection::rectangle(
+        SIZE,
+        SIZE,
+        Point::new(0.0, 0.0),
+        Point::new(SIZE as f32, 160.0),
+        false,
+    )));
+    paint::fill_path(
+        &mut doc,
+        &path("M 200 120 L 211 152 L 245 152 L 218 172 L 228 205 L 200 185 L 172 205 L 182 172 L 155 152 L 189 152 Z"),
+        FillRule::Nonzero,
+        [230, 180, 30, 255],
+    )
+    .unwrap();
+    doc.selection = None;
+    doc
 }
 
 /// A 256-pixel preview of the RAW fixture, or `None` when it is not fetched.

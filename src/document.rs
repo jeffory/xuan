@@ -312,6 +312,54 @@ pub struct ShapeStyle {
     pub kind: crate::paint::ShapeKind,
     pub color: [u8; 4],
     pub corner_radius: f32,
+    /// The outline of a `Path` shape (format 10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<ShapePath>,
+}
+
+/// A path shape's outline: SVG path data in the coordinates of a `width` × `height` box,
+/// which the layer's pixels cover, so the path stretches with the layer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapePath {
+    pub d: crate::vector::VectorPath,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub fill_rule: crate::vector::FillRule,
+}
+
+impl ShapePath {
+    pub fn validate(&self) -> Result<()> {
+        self.d.validate()?;
+        ensure!(
+            [self.width, self.height]
+                .iter()
+                .all(|v| v.is_finite() && (1.0..=300_000.0).contains(v)),
+            "Invalid path shape box"
+        );
+        Ok(())
+    }
+
+    /// The outline in document coordinates for a layer placed by `transform`, unless the
+    /// layer is warped (then it is no longer an affine image of the box).
+    pub fn in_document(&self, transform: Transform) -> Option<crate::vector::VectorPath> {
+        if transform.warp.is_some() {
+            return None;
+        }
+        let o = transform.point(Point::new(0.0, 0.0));
+        let x = transform.point(Point::new(1.0, 0.0));
+        let y = transform.point(Point::new(0.0, 1.0));
+        let (w, h) = (f64::from(self.width), f64::from(self.height));
+        let affine = kurbo::Affine::new([
+            f64::from(x.x - o.x) / w,
+            f64::from(x.y - o.y) / w,
+            f64::from(y.x - o.x) / h,
+            f64::from(y.y - o.y) / h,
+            f64::from(o.x),
+            f64::from(o.y),
+        ]);
+        Some(self.d.transformed(affine))
+    }
 }
 
 /// Where a layer produced by a plugin came from, so the action can be repeated.
@@ -445,6 +493,9 @@ pub struct Document {
     /// This project's layout grid; `None` uses the app's default grid (format version 5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid: Option<crate::layout::GridSettings>,
+    /// Paths kept with the document, as in Photoshop's Paths panel (format version 10).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<crate::vector::NamedPath>,
     #[serde(skip)]
     pub selected: HashSet<Uuid>,
     #[serde(skip)]
@@ -465,6 +516,7 @@ impl Document {
             layers: vec![layer],
             guides: Vec::new(),
             grid: None,
+            paths: Vec::new(),
             selection: None,
         })
     }
@@ -718,6 +770,7 @@ impl Document {
         if let Some(grid) = &self.grid {
             grid.validate()?;
         }
+        crate::vector::validate_paths(&self.paths)?;
         // Indexed so hostile files with many deeply nested layers validate in linear time.
         let ids: std::collections::HashMap<_, _> =
             self.layers.iter().map(|layer| (layer.id, layer)).collect();
@@ -762,9 +815,13 @@ impl Document {
                 ensure!(
                     shape.corner_radius.is_finite()
                         && shape.corner_radius >= 0.0
-                        && layer.pixels.is_some(),
+                        && layer.pixels.is_some()
+                        && (shape.kind == crate::paint::ShapeKind::Path) == shape.path.is_some(),
                     "Invalid live shape"
                 );
+                if let Some(path) = &shape.path {
+                    path.validate()?;
+                }
             }
             if let Some(adjustment) = &layer.adjustment {
                 crate::effects::validate_adjustment(adjustment)?;

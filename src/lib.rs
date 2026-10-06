@@ -26,3 +26,4 @@ pub mod segment;
 pub mod selection;
 pub mod selection_ops;
 pub mod text;
+pub mod vector;

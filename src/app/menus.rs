@@ -469,6 +469,8 @@ impl EditorApp {
                                         &mut action,
                                     );
                                     item(ui, &items, "feather", &mut action);
+                                    ui.separator();
+                                    item(ui, &items, "paths", &mut action);
                                     plugin_items(
                                         ui,
                                         plugin_menu.get(&Menu::Select),

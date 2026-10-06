@@ -1,6 +1,6 @@
 [package]
 name = "xuan"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.89"
 description = "A native image compositor for Linux and Windows, built with Rust, wgpu and egui"
@@ -18,6 +18,8 @@ egui_extras = { version = "0.33.3", default-features = false, features = ["svg"]
 flate2 = "1.1"
 heic-rs = "0.1.1"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
+# Bézier paths (src/vector.rs): flattening, bounds and SVG arcs. The version usvg already uses.
+kurbo = { version = "0.11.3", default-features = false, features = ["std"] }
 png = "0.18"
 # Model downloads (src/plugins/models.rs): a small blocking HTTPS client on
 # rustls with ring, so no OpenSSL; certificates are checked against the

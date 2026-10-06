@@ -221,3 +221,33 @@ these limits or holds a key that looks like a credential. Plugin results are sto
 the same checks and with secrets removed; see [PLUGINS.md](PLUGINS.md#provenance). The
 record is metadata only: pixels, masks and rendering are unaffected, and the layer panel
 shows it read-only. It is not C2PA content credentials, and exports do not carry it.
+
+## Vector paths and path shapes (version 10)
+
+A document that keeps paths, or has a path shape layer, is written as version 10;
+everything else keeps the lowest version its content needs (1-9), so older builds report
+an unsupported version instead of dropping the paths or showing a shape they cannot
+redraw. A version 10 document may also carry anything the earlier versions can. The
+reader accepts versions 1-10.
+
+Paths are SVG path data (the `d` attribute of an SVG `<path>`), stored as Xuan writes it:
+absolute `M`, `L`, `Q`, `C` and `Z` commands with comma-separated coordinates, e.g.
+`"M0,700 C120,640 380,640 512,700 Z"` (arcs are stored as the cubic curves they became).
+Reading accepts any SVG path data (M, L, H, V, C, S, Q, T, A, Z, absolute or relative), at
+most 256 KiB, with at most 10,000 segments and every coordinate finite and within
+±1,000,000.
+
+- The `document` object gains an optional `paths` key: up to 1,000 objects `{"id": UUID,
+  "name": string, "d": path data}` in the Paths dialog's order, in document pixels. Names
+  are 1-256 bytes and not blank; IDs are unique. Paths follow Crop, Canvas Size, Image
+  Size and Flip Canvas.
+- A layer's `shape` may have `"kind": "Path"` with a `path` object `{"d": path data,
+  "width": number, "height": number, "fill_rule": "nonzero" | "evenodd"}`. The outline is
+  in the coordinates of a `width` × `height` box (each 1-300,000), which the layer's
+  pixels cover, so the outline stretches with the layer's transform; `fill_rule` defaults
+  to `nonzero`, as in SVG, and open subpaths are filled as if closed. `corner_radius` is
+  0. A `Path` shape must have `path`, and other kinds must not. The layer's PNG holds the
+  antialiased fill (16 sample rows per pixel, exact coverage across each row), so readers
+  that do not redraw shapes still show it.
+
+Invalid path data, names or boxes fail validation on load and save.
