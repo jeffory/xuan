@@ -756,12 +756,26 @@ fn benchmark_large_image_motion_blur_apply() {
             angle: 35.0,
         };
         let padding = (distance * 0.5_f32).ceil() as u32 + 1;
+        let edges = xuan::effects::canvas_edges(
+            original.active().unwrap().transform,
+            [original.width, original.height],
+        );
         let start = std::time::Instant::now();
         let result = worker
-            .render(pixels, distance, 35.0, padding, &cancel)
+            .render(pixels, distance, 35.0, padding, edges, &cancel)
             .unwrap()
             .expect("GPU must execute the benchmark");
         let gpu_time = start.elapsed();
+        // Apply crops the padding of sides that reach the canvas edge.
+        let [left, top, right, bottom] = edges.map(|repeat| if repeat { padding } else { 0 });
+        let result = image::imageops::crop_imm(
+            &result,
+            left,
+            top,
+            result.width() - left - right,
+            result.height() - top - bottom,
+        )
+        .to_image();
         let mut expected = original.clone();
         let start = std::time::Instant::now();
         xuan::effects::apply_filter(&mut expected, &filter, false).unwrap();

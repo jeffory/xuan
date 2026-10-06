@@ -1115,6 +1115,36 @@ mod tests {
         }
         compositor.render(&document, [64, 48]);
         compare(&document, &readback(&compositor), "Preview off");
+        // Sides at the canvas edge repeat edge pixels in the preview as in Apply.
+        for (x, width) in [(0.0, 64), (-6.0, 40)] {
+            let mut document = Document::new(64, 48).unwrap();
+            let mut layer = Layer::image(
+                "Edges",
+                RgbaImage::from_fn(width, 48, |x, y| {
+                    Rgba([(x * 5) as u8, (y * 5) as u8, 160, 255])
+                }),
+            );
+            layer.transform.x = x;
+            document.insert(layer);
+            for angle in [0.0, 35.0, -90.0] {
+                compositor.render_with_motion_blur(&document, [64, 48], Some([15.0, angle]));
+                let mut expected = document.clone();
+                crate::effects::apply_filter(
+                    &mut expected,
+                    &crate::effects::Filter::MotionBlur {
+                        distance: 15.0,
+                        angle,
+                    },
+                    false,
+                )
+                .unwrap();
+                compare(
+                    &expected,
+                    &readback(&compositor),
+                    &format!("Motion Blur at canvas edges, x {x}, angle {angle}"),
+                );
+            }
+        }
     }
 
     pub(super) fn readback(compositor: &GpuCompositor) -> Vec<u8> {
