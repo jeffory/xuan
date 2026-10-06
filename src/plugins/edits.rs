@@ -224,6 +224,8 @@ pub struct Reader {
     layers: usize,
     max_layers: usize,
     edits: usize,
+    /// Work charged so far; see [`Cost`].
+    cost: Cost,
     /// Draws `add_text_layer` edits; made when first needed.
     text: Option<TextRenderer>,
 }
@@ -236,6 +238,7 @@ impl std::fmt::Debug for Reader {
             .field("layers", &self.layers)
             .field("max_layers", &self.max_layers)
             .field("edits", &self.edits)
+            .field("cost", &self.cost)
             .finish_non_exhaustive()
     }
 }
@@ -248,8 +251,37 @@ impl Reader {
             layers: 0,
             max_layers,
             edits: 0,
+            cost: Cost::default(),
             text: None,
         }
+    }
+
+    /// Charge the work a batch will do, before it does any, so a batch over
+    /// budget is refused at once and as a whole.
+    fn charge(&mut self, cost: Cost) -> Result<()> {
+        let total = Cost {
+            work: self.cost.work.saturating_add(cost.work),
+            bytes: self.cost.bytes.saturating_add(cost.bytes),
+            stroke: self.cost.stroke + cost.stroke,
+        };
+        ensure!(
+            total.work <= MAX_WORK,
+            "The edits would take too long: they touch more than {} million pixels in total \
+             (filters, strokes, colour selections and masks on a large canvas count many times). \
+             Send fewer or smaller edits per request",
+            MAX_WORK / 1_000_000
+        );
+        ensure!(
+            total.bytes <= MAX_NEW_BYTES,
+            "The edits would need more than {} MiB of new masks and layers",
+            MAX_NEW_BYTES / (1024 * 1024)
+        );
+        ensure!(
+            total.stroke <= MAX_STROKE_LENGTH,
+            "The strokes are longer than {MAX_STROKE_LENGTH} pixels in total"
+        );
+        self.cost = total;
+        Ok(())
     }
 
     /// Draw text with this renderer (the editor's, whose fonts are loaded)
@@ -816,6 +848,152 @@ fn centre() -> [f32; 2] {
 pub const MAX_POINTS: usize = 10_000;
 /// The largest `grow_selection` and `feather_selection` amount, in pixels.
 pub const MAX_SELECTION_AMOUNT: f32 = 256.0;
+/// Pixel visits one `document/edit` request (or one result) may cost, as
+/// [`cost`] estimates them. Edits run on the editor's thread, so this keeps a
+/// request from freezing it: about a second or two of work.
+pub const MAX_WORK: u64 = 1_000_000_000;
+/// Bytes of new canvas-size masks and drawn layers one request may make.
+pub const MAX_NEW_BYTES: u64 = 256 * 1024 * 1024;
+/// Total length of the strokes of one request, in document pixels.
+pub const MAX_STROKE_LENGTH: f64 = 200_000.0;
+
+/// What a batch of edits costs, estimated before it runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Cost {
+    /// Pixel visits: renders, filters, selection changes, masks, strokes.
+    pub work: u64,
+    /// New memory for masks and layers the host draws.
+    pub bytes: u64,
+    /// Stroke length in document pixels.
+    pub stroke: f64,
+}
+
+/// Estimate a batch's cost from the document as it is, following the
+/// canvas size through the batch. Upper bounds: an edit that fails early
+/// costs less.
+pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
+    let (mut width, mut height) = (u64::from(document.width), u64::from(document.height));
+    let layers = document.layers.len() as u64;
+    let layer_area = |layer: &Option<Uuid>, canvas: u64| -> u64 {
+        let id = layer.or(document.active);
+        let area = id
+            .and_then(|id| document.layers.iter().find(|l| l.id == id))
+            .map(|l| match &l.pixels {
+                Some(pixels) => u64::from(pixels.width()) * u64::from(pixels.height()),
+                None => (l.transform.width.max(1.0) * l.transform.height.max(1.0)) as u64,
+            })
+            .unwrap_or(canvas);
+        area.max(1)
+    };
+    let mut total = Cost::default();
+    for edit in edits {
+        let canvas = width * height;
+        let (work, bytes) = match edit {
+            Edit::SelectRect { .. } | Edit::SelectPolygon { .. } | Edit::SetSelection { .. } => {
+                (canvas, 0)
+            }
+            // A render of every layer, then the mask.
+            Edit::SelectColor { .. } | Edit::SelectColorRange { .. } => {
+                (canvas.saturating_mul(2 + layers), 0)
+            }
+            Edit::GrowSelection { by } => (
+                canvas.saturating_mul(1 + u64::from(by.unsigned_abs()) / 4),
+                0,
+            ),
+            Edit::FeatherSelection { .. } => (canvas.saturating_mul(4), 0),
+            Edit::Fill { layer, .. } | Edit::ApplyAdjustment { layer, .. } => {
+                (layer_area(layer, canvas).saturating_mul(2), 0)
+            }
+            Edit::ApplyFilter { layer, filter } => {
+                let area = layer_area(layer, canvas);
+                let side = (area as f64).sqrt();
+                let (pad, factor) = match *filter {
+                    Filter::GaussianBlur { radius } => ((radius * 6.0) as f64, 4.0),
+                    Filter::MotionBlur { distance, .. } => {
+                        (distance as f64, 1.0 + distance.max(0.0) as f64 / 4.0)
+                    }
+                    _ => (0.0, 2.0),
+                };
+                let padded = (side + pad).powi(2);
+                ((padded * factor) as u64, 0)
+            }
+            Edit::Stroke { points, size, .. } => {
+                let reach = f64::from(size.max(1.0)) + 2.0;
+                let mut work = 0u64;
+                let mut length = 0.0;
+                let pairs = points
+                    .windows(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .chain((points.len() == 1).then(|| (points[0], points[0])));
+                for (a, b) in pairs {
+                    let dx = f64::from((b[0] - a[0]).abs());
+                    let dy = f64::from((b[1] - a[1]).abs());
+                    if !(dx.is_finite() && dy.is_finite()) {
+                        // Refused when the stroke is checked.
+                        continue;
+                    }
+                    length += dx.hypot(dy);
+                    work = work.saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
+                }
+                total.stroke += length;
+                (work, 0)
+            }
+            Edit::AddMaskLayer { .. } | Edit::AddAdjustmentLayer { .. } => (canvas, canvas),
+            Edit::AddShapeLayer {
+                width: w,
+                height: h,
+                ..
+            } => {
+                let area = (f64::from(w.max(1.0)) * f64::from(h.max(1.0))).min(1e15) as u64;
+                (area, area.saturating_mul(4))
+            }
+            Edit::MergeLayers { .. } => (canvas.saturating_mul(1 + layers), canvas * 4),
+            Edit::Transform { .. } => (canvas, 0),
+            Edit::ResizeImage {
+                width: w,
+                height: h,
+            } => {
+                width = u64::from(*w);
+                height = u64::from(*h);
+                (canvas.max(width * height), 0)
+            }
+            Edit::ResizeCanvas {
+                width: w,
+                height: h,
+                ..
+            } => {
+                width = u64::from(*w);
+                height = u64::from(*h);
+                (0, 0)
+            }
+            Edit::Crop {
+                width: w,
+                height: h,
+                ..
+            } => {
+                width = u64::from(*w);
+                height = u64::from(*h);
+                (0, 0)
+            }
+            Edit::ExtendCanvas {
+                left,
+                top,
+                right,
+                bottom,
+            } => {
+                width = width.saturating_add(u64::from(*left) + u64::from(*right));
+                height = height.saturating_add(u64::from(*top) + u64::from(*bottom));
+                (0, 0)
+            }
+            // Images are charged to the pixel budget as they are read, and
+            // text as it is drawn.
+            _ => (0, 0),
+        };
+        total.work = total.work.saturating_add(work);
+        total.bytes = total.bytes.saturating_add(bytes);
+    }
+    total
+}
 
 impl Edit {
     /// Whether the edit changes the document beyond what a read-only plugin
@@ -878,6 +1056,7 @@ pub fn origin_shift<'a>(edits: impl IntoIterator<Item = &'a Edit>) -> (f32, f32)
 /// failing batch changes nothing.
 pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Result<Vec<Uuid>> {
     reader.add_edits(edits.len())?;
+    reader.charge(cost(document, edits))?;
     let mut added = Vec::new();
     for edit in edits {
         match edit {
@@ -2422,6 +2601,84 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn heavy_batches_are_refused_before_any_work() {
+        let (mut document, base) = grey_document();
+        let before = document.clone();
+        // A zig-zag of huge dabs across the canvas.
+        let points: Vec<[f32; 2]> = (0..MAX_POINTS)
+            .map(|i| {
+                if i % 2 == 0 {
+                    [0.0, 0.0]
+                } else {
+                    [29_000.0, 29_000.0]
+                }
+            })
+            .collect();
+        let bomb = Edit::Stroke {
+            layer: Some(base),
+            points,
+            color: Color([0, 0, 0, 255]),
+            size: 2000.0,
+            hardness: 1.0,
+            opacity: 1.0,
+            erase: false,
+        };
+        let started = std::time::Instant::now();
+        let error = run(&mut document, &[bomb]).unwrap_err().to_string();
+        assert!(
+            error.contains("too long") || error.contains("longer"),
+            "{error}"
+        );
+        // Canvas-size masks after growing the canvas to 100 megapixels.
+        let mut masks = vec![edit(
+            json!({"op": "resize_canvas", "width": 10_000, "height": 10_000}),
+        )];
+        masks.extend((0..MAX_LAYERS).map(|_| edit(json!({"op": "add_mask_layer"}))));
+        let error = run(&mut document, &masks).unwrap_err().to_string();
+        assert!(
+            error.contains("MiB") || error.contains("too long"),
+            "{error}"
+        );
+        // Colour selections and grown selections on a large canvas.
+        let mut renders = vec![edit(
+            json!({"op": "resize_canvas", "width": 10_000, "height": 10_000}),
+        )];
+        renders.extend((0..20).map(|_| edit(json!({"op": "select_color", "x": 1, "y": 1}))));
+        assert!(run(&mut document, &renders).is_err());
+        let grow = [
+            edit(json!({"op": "resize_canvas", "width": 10_000, "height": 10_000})),
+            edit(json!({"op": "grow_selection", "by": 256})),
+        ];
+        assert!(run(&mut document, &grow).is_err());
+        let blur = [edit(
+            json!({"op": "apply_filter", "filter": {"MotionBlur": {"distance": 200, "angle": 0}}}),
+        )];
+        let mut wide = document.clone();
+        wide.layers[0].pixels = Some(Arc::new(RgbaImage::new(20_000, 5_000)));
+        assert!(run(&mut wide, &blur).is_err());
+        // Nothing was done, and quickly.
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(document.width, before.width);
+        assert_eq!(document.layers.len(), before.layers.len());
+        // One reader shares the budget across the batches of a result.
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS);
+        let big = [edit(
+            json!({"op": "resize_canvas", "width": 10_000, "height": 10_000}),
+        )];
+        let mut huge = document.clone();
+        apply(&mut huge, &big, &mut reader).unwrap();
+        let masks: Vec<Edit> = (0..6)
+            .map(|_| edit(json!({"op": "add_mask_layer"})))
+            .collect();
+        assert!(apply(&mut huge.clone(), &masks, &mut reader).is_err());
+        // Ordinary edits fit easily.
+        let stroke = edit(json!({"op": "stroke", "points": [[1, 1], [30, 20]], "size": 40}));
+        let fine = vec![stroke; 50];
+        run(&mut document, &fine).unwrap();
+        assert!(cost(&document, &fine).work < MAX_WORK / 100);
     }
 
     #[test]

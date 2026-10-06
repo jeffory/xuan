@@ -1015,7 +1015,15 @@ Edits apply in order, each in the document's coordinates at that point: an
 that fails anywhere changes nothing, and every edit respects the same limits
 as the editor: locked layers, 30,000 pixels a side and 100 megapixels per
 image, at most 1,000 edits and 32 new layers per batch, and the 100-megapixel
-budget for the images it reads and the text and shapes it draws.
+budget for the images it reads and the text and shapes it draws. Edits run on
+the editor's thread, so a request (or a result, all its batches together)
+also has a **work budget**, estimated before anything runs: about 1,000
+million pixel visits, where a colour selection costs a render of every layer,
+a filter, grow or feather costs the layer or canvas area several times over,
+a stroke costs the area each segment sweeps, and a mask or adjustment layer
+costs the canvas area; at most 256 MiB of new masks and drawn layers; and
+strokes at most 200,000 pixels long in total. A request over budget is
+refused as a whole, with an error that says so; send it in smaller parts.
 
 ### Files the user chooses
 
