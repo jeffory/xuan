@@ -1495,9 +1495,8 @@ impl EditorApp {
                     let lower = doc.layers[..index]
                         .iter()
                         .rev()
-                        .find(|l| {
-                            l.parent == doc.layers[index].parent && !l.group && !l.is_effect()
-                        })
+                        // A folder can be the base too: its layers' combined shape.
+                        .find(|l| l.parent == doc.layers[index].parent && !l.is_effect())
                         .map(|l| l.clip_to.unwrap_or(l.id));
                     if !doc.layers[index].group
                         && !doc.layers[index].standalone_mask

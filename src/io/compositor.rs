@@ -96,7 +96,7 @@ pub enum Dropped {
     FillLayer,
     /// A layer cropped to the canvas so the file fits Xuan's memory limits.
     CroppedToCanvas,
-    /// A clipping mask whose base is a folder or a left-out layer, released.
+    /// A clipped folder, or a clipping mask whose base was left out, released.
     ClippingBase,
 }
 

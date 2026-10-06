@@ -322,10 +322,11 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
+                "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
                 "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees"),
             }),
             required: &["layer"],
@@ -334,8 +335,8 @@ fn specs() -> Vec<Spec> {
                 let args = pick(
                     args,
                     &[
-                        "layer", "name", "visible", "locked", "opacity", "blend", "x", "y",
-                        "width", "height", "rotation",
+                        "layer", "name", "visible", "locked", "opacity", "blend", "clip_to", "x",
+                        "y", "width", "height", "rotation",
                     ],
                 )?;
                 // Locks protect layers from the agent: it may lock, but only
@@ -347,11 +348,18 @@ fn specs() -> Vec<Spec> {
                 }
                 let layer = args.get("layer").cloned().unwrap_or(Value::Null);
                 let mut edits = Vec::new();
-                let set = op(
+                let mut set = op(
                     "set",
                     &args,
                     &["layer", "name", "visible", "locked", "opacity", "blend"],
                 );
+                // `null` releases the clipping, so it is passed on, unlike other nulls.
+                if let Some(clip_to) = args.get("clip_to") {
+                    if !(clip_to.is_null() || clip_to.is_string()) {
+                        return Err("`clip_to` must be a layer id or null".into());
+                    }
+                    set.insert("clip_to".into(), clip_to.clone());
+                }
                 if set.len() > 2 {
                     edits.push(Value::Object(set));
                 }
@@ -986,7 +994,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {

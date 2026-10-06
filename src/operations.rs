@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Result, ensure};
 use image::{GrayImage, Luma, RgbaImage};
@@ -251,6 +254,10 @@ pub fn ungroup(document: &mut Document) {
         if layer.parent == Some(group.id) {
             layer.parent = group.parent;
         }
+        // Layers clipped to the folder are released, as Photoshop does.
+        if layer.clip_to == Some(group.id) {
+            layer.clip_to = None;
+        }
     }
     document.layers.retain(|l| l.id != group.id);
     document.active = document.layers.last().map(|l| l.id);
@@ -326,6 +333,7 @@ pub fn merge_selected(document: &mut Document, down: bool) -> Result<()> {
             }
         }
     }
+    keep_folder_clipping_shapes(document, &targets, &mut isolated);
     let pixels = render::render(&isolated);
     let mut merged = Layer::image(
         document
@@ -354,6 +362,64 @@ pub fn merge_selected(document: &mut Document, down: bool) -> Result<()> {
         .layers
         .insert(remaining_below.min(document.layers.len()), merged);
     Ok(())
+}
+
+/// A merge renders its layers with the others hidden, which would empty a folder that merged
+/// layers are clipped to. Each such folder's shape is rendered from the real document into a
+/// hidden stand-in layer (a hidden base still clips) that the merged layers clip to instead.
+fn keep_folder_clipping_shapes(
+    document: &Document,
+    targets: &HashSet<Uuid>,
+    isolated: &mut Document,
+) {
+    let bases: HashSet<Uuid> = isolated
+        .layers
+        .iter()
+        .filter_map(|l| l.clip_to)
+        .filter(|id| {
+            !targets.contains(id) && document.layers.iter().any(|l| l.id == *id && l.group)
+        })
+        .collect();
+    if bases.is_empty() {
+        return;
+    }
+    let prepared = render::prepare_attachments(document);
+    for base in bases {
+        let Some(group) = prepared.layers.iter().find(|l| l.id == base) else {
+            continue;
+        };
+        let alpha = alpha_image(&prepared, group);
+        let mut shape = Layer::image(
+            "Clipping shape",
+            RgbaImage::from_fn(alpha.width(), alpha.height(), |x, y| {
+                image::Rgba([255, 255, 255, alpha.get_pixel(x, y)[0]])
+            }),
+        );
+        shape.visible = false;
+        for layer in &mut isolated.layers {
+            if layer.clip_to == Some(base) {
+                layer.clip_to = Some(shape.id);
+            }
+        }
+        isolated.layers.push(shape);
+    }
+}
+
+/// A layer's clipping-base alpha ([`render::layer_alpha`]) at document resolution.
+fn alpha_image(document: &Document, layer: &Layer) -> GrayImage {
+    crate::gpu::coverage_image(
+        document,
+        layer,
+        [document.width, document.height],
+        crate::gpu::CoverageMode::Alpha,
+        None,
+    )
+    .unwrap_or_else(|| {
+        GrayImage::from_fn(document.width, document.height, |x, y| {
+            let point = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+            Luma([(render::layer_alpha(document, layer, point, 0) * 255.0).round() as u8])
+        })
+    })
 }
 
 pub fn canvas_size(

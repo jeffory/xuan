@@ -1697,7 +1697,7 @@ struct Built {
     parent: Option<Uuid>,
     clipping: bool,
     group: bool,
-    /// Kept, and a layer Xuan can clip to (not a folder or an adjustment).
+    /// Kept, and a layer Xuan can clip to (a pixel layer or a folder, not an adjustment).
     base: bool,
     kept: bool,
 }
@@ -1894,7 +1894,7 @@ fn build(
             parent,
             clipping: record.clipping,
             group,
-            base: !group && layer.adjustment.is_none(),
+            base: layer.adjustment.is_none(),
             kept: true,
         });
         document.layers.push(layer);

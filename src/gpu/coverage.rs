@@ -3,13 +3,45 @@ use super::{
     processor::attempt,
     raster::{padded, transform_config},
 };
-use crate::document::{Document, Layer, Transform};
-use anyhow::Result;
+use crate::{
+    document::{Document, Layer, Transform},
+    render,
+};
+use anyhow::{Result, ensure};
+use std::{collections::HashMap, sync::Arc};
 
+/// Coverage is a small stack program over sampled sources, evaluated per pixel by
+/// `coverage.wgsl`. Each instruction takes six config rows: a sampled source's header and
+/// transform, with the operation in row 3's `w` and its parameter in row 4's `w`. A plain
+/// chain of layers only multiplies (`MUL_SAMPLE`, with opacities folded into the starting
+/// value); a folder clipping base pushes its children's alphas and combines them as
+/// [`crate::render::group_alpha`] does.
 struct Coverage {
     config: Vec<[f32; 4]>,
     pixels: Vec<u8>,
+    /// Sources already in `pixels`, by address and kind, so a base used twice is uploaded once.
+    offsets: HashMap<(usize, bool), u32>,
+    depth: usize,
+    max_depth: usize,
 }
+
+/// Multiply the top of the stack by a sampled source.
+const MUL_SAMPLE: f32 = 0.0;
+/// Push the parameter.
+const PUSH: f32 = 1.0;
+/// Pop `a` and set the top to `a + top * (1 - a)`.
+const UNION: f32 = 2.0;
+/// Multiply the top by the parameter.
+const MUL_SCALAR: f32 = 3.0;
+/// Multiply the top by `1 - parameter * (1 - sample)`: a mask layer inside a folder.
+const FADE_SAMPLE: f32 = 4.0;
+/// Pop `a` and multiply the top by it.
+const MUL: f32 = 5.0;
+/// The stack size in `coverage.wgsl`.
+const STACK: usize = 32;
+/// Longer programs are left to the CPU.
+const MAX_INSTRUCTIONS: usize = 4096;
+
 impl Coverage {
     fn new(document: &Document, layer: &Layer, size: [u32; 2], mode: CoverageMode) -> Self {
         let stride = size[0].div_ceil(256) * 256;
@@ -24,6 +56,9 @@ impl Coverage {
                 [1.0, 0.0, stride as f32, 0.0],
             ],
             pixels: Vec::new(),
+            offsets: HashMap::new(),
+            depth: 0,
+            max_depth: 0,
         };
         if mode == CoverageMode::Composite && !layer.standalone_mask {
             coverage.config[1][0] = if layer.visible { 1.0 } else { 0.0 };
@@ -41,43 +76,122 @@ impl Coverage {
         if mode != CoverageMode::Alpha {
             coverage.mask(layer);
         }
-        let mut clip = if mode == CoverageMode::Alpha {
-            Some(layer.id)
-        } else if mode == CoverageMode::Composite {
-            layer.clip_to
-        } else {
-            None
+        let base = match mode {
+            CoverageMode::Alpha => Some(layer),
+            CoverageMode::Composite => layer
+                .clip_to
+                .and_then(|id| document.layers.iter().find(|l| l.id == id)),
+            CoverageMode::Mask => None,
         };
-        for depth in 0..258 {
-            let Some(source) = clip.and_then(|id| document.layers.iter().find(|l| l.id == id))
-            else {
-                break;
-            };
-            if depth > 256 {
-                coverage.config[1][0] = 0.0;
-                break;
-            }
-            coverage.config[1][0] *= source.opacity;
-            if let Some(pixels) = &source.pixels {
-                coverage.source(
-                    [pixels.width(), pixels.height()],
-                    pixels.as_raw(),
-                    source.transform,
-                    true,
-                );
-            } else {
-                coverage.config[1][0] = 0.0;
-            }
-            coverage.mask(source);
-            clip = source.clip_to;
+        if let Some(base) = base {
+            coverage.alpha(document, base, 0);
         }
         coverage
     }
+
+    /// Multiply the top of the stack by [`crate::render::layer_alpha`] of `layer`.
+    fn alpha(&mut self, document: &Document, layer: &Layer, depth: usize) {
+        if depth > 256 || self.instructions() > MAX_INSTRUCTIONS {
+            self.scalar(0.0);
+            return;
+        }
+        if layer.group {
+            self.op(PUSH, 0.0);
+            for child in document
+                .layers
+                .iter()
+                .filter(|l| l.parent == Some(layer.id) && l.visible)
+            {
+                if render::fades_group(child) {
+                    let mask = child.mask.as_ref().unwrap();
+                    self.source(
+                        [mask.pixels.width(), mask.pixels.height()],
+                        Arc::as_ptr(&mask.pixels) as usize,
+                        mask.pixels.as_raw(),
+                        mask.placement.unwrap_or(child.transform),
+                        false,
+                    );
+                    self.set_op(FADE_SAMPLE, child.opacity);
+                } else if render::adds_group_alpha(child) {
+                    self.op(PUSH, 1.0);
+                    self.alpha(document, child, depth + 1);
+                    self.op(UNION, 0.0);
+                }
+            }
+            self.scalar(layer.opacity);
+            self.mask(layer);
+            self.op(MUL, 0.0);
+            return;
+        }
+        self.scalar(layer.opacity);
+        if let Some(pixels) = &layer.pixels {
+            self.source(
+                [pixels.width(), pixels.height()],
+                Arc::as_ptr(pixels) as usize,
+                pixels.as_raw(),
+                layer.transform,
+                true,
+            );
+        } else {
+            self.scalar(0.0);
+        }
+        self.mask(layer);
+        if let Some(source) = layer
+            .clip_to
+            .and_then(|id| document.layers.iter().find(|l| l.id == id))
+        {
+            self.alpha(document, source, depth + 1);
+        }
+    }
+
+    fn instructions(&self) -> usize {
+        self.config[1][1] as usize
+    }
+
+    /// Whether the shader can run the program; otherwise the caller falls back to the CPU.
+    fn supported(&self) -> bool {
+        self.max_depth < STACK && self.instructions() <= MAX_INSTRUCTIONS
+    }
+
+    /// Multiply the top of the stack by `value`, folded into the start when nothing is pushed.
+    fn scalar(&mut self, value: f32) {
+        if self.depth == 0 {
+            self.config[1][0] *= value;
+        } else {
+            self.op(MUL_SCALAR, value);
+        }
+    }
+
+    /// An instruction that samples nothing.
+    fn op(&mut self, op: f32, parameter: f32) {
+        self.config.push([0.0; 4]);
+        self.config.extend([[0.0; 4]; 5]);
+        self.config[1][1] += 1.0;
+        self.set_op(op, parameter);
+    }
+
+    /// Set the last instruction's operation, tracking the stack depth.
+    fn set_op(&mut self, op: f32, parameter: f32) {
+        let base = self.config.len() - 6;
+        self.config[base + 3][3] = op;
+        self.config[base + 4][3] = parameter;
+        if op == PUSH {
+            self.depth += 1;
+            self.max_depth = self.max_depth.max(self.depth);
+        } else if op == UNION || op == MUL {
+            self.depth -= 1;
+        }
+    }
+
     fn encode(
         &self,
         gpu: &Processor,
         size: [u32; 2],
     ) -> Result<(wgpu::CommandEncoder, wgpu::Buffer)> {
+        ensure!(
+            self.supported(),
+            "Clipping is nested too deeply for the GPU"
+        );
         let stride = self.config[1][2] as u32;
         let pixels = gpu.buffer(&self.pixels)?;
         let result = gpu.empty(u64::from(stride) * u64::from(size[1]))?;
@@ -93,11 +207,25 @@ impl Coverage {
         Ok((encoder, result))
     }
 
-    fn source(&mut self, size: [u32; 2], bytes: &[u8], transform: Transform, rgba: bool) {
+    /// Multiply the top of the stack by a sampled source: `rgba` pixels' bilinear alpha, or
+    /// a mask's nearest value.
+    fn source(
+        &mut self,
+        size: [u32; 2],
+        key: usize,
+        bytes: &[u8],
+        transform: Transform,
+        rgba: bool,
+    ) {
+        let offset = *self.offsets.entry((key, rgba)).or_insert_with(|| {
+            let offset = (self.pixels.len() / 4) as u32;
+            self.pixels.extend(padded(bytes));
+            offset
+        });
         self.config.push([
             size[0] as f32,
             size[1] as f32,
-            f32::from_bits((self.pixels.len() / 4) as u32),
+            f32::from_bits(offset),
             if rgba { 1.0 } else { 0.0 },
         ]);
         let mut transform_rows = transform_config(transform);
@@ -110,13 +238,14 @@ impl Coverage {
             *row = [matrix[0], matrix[1], matrix[2], 0.0];
         }
         self.config.extend(transform_rows);
-        self.pixels.extend(padded(bytes));
         self.config[1][1] += 1.0;
+        self.set_op(MUL_SAMPLE, 0.0);
     }
     fn mask(&mut self, layer: &Layer) {
         if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {
             self.source(
                 [mask.pixels.width(), mask.pixels.height()],
+                Arc::as_ptr(&mask.pixels) as usize,
                 mask.pixels.as_raw(),
                 mask.placement.unwrap_or(layer.transform),
                 false,
@@ -251,6 +380,10 @@ fn bake(
 ) -> Option<Vec<u8>> {
     attempt(u64::from(size[0]) * u64::from(size[1]), 65_536, |gpu| {
         let mut coverage = Coverage::new(document, base, size, mode);
+        ensure!(
+            coverage.supported(),
+            "Clipping is nested too deeply for the GPU"
+        );
         coverage.config[1][2] = size[0] as f32 * 4.0;
         coverage.config[1][3] = coverage.config.len() as f32;
         let mut mapping = transform_config(transform);

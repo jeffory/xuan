@@ -157,12 +157,18 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 8;
+const LATEST_VERSION: u32 = 9;
 
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
-    if document.layers.iter().any(|l| l.provenance.is_some()) {
+    // Older readers reject a folder as a clipping base.
+    if document.layers.iter().any(|l| {
+        l.clip_to
+            .is_some_and(|id| document.layers.iter().any(|b| b.id == id && b.group))
+    }) {
+        9
+    } else if document.layers.iter().any(|l| l.provenance.is_some()) {
         8
     } else if document.layers.iter().any(|l| {
         !l.blend.is_legacy()
@@ -501,6 +507,45 @@ mod tests {
         save(&doc, &path).unwrap();
         assert_eq!(manifest_json(&path)["version"], 5);
         assert_eq!(load(&path).unwrap().grid, None);
+    }
+
+    #[test]
+    fn clipping_to_a_folder_round_trips_as_version_9() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clip.xuan");
+        let mut doc = Document::new(4, 2).unwrap();
+        let mut group = Layer::blank("Figure", 4, 2);
+        group.group = true;
+        group.opacity = 0.75;
+        group.mask = Some(Mask {
+            pixels: Arc::new(GrayImage::from_fn(4, 2, |x, _| Luma([(x * 80) as u8]))),
+            ..Mask::white()
+        });
+        let mut shape = Layer::image(
+            "Shape",
+            RgbaImage::from_fn(4, 2, |x, y| {
+                Rgba([200, 30, 30, if x > y { 255 } else { 0 }])
+            }),
+        );
+        shape.parent = Some(group.id);
+        let mut clipped =
+            Layer::image("Shading", RgbaImage::from_pixel(4, 2, Rgba([0, 0, 0, 255])));
+        clipped.blend = crate::blend::BlendMode::Multiply;
+        clipped.clip_to = Some(group.id);
+        doc.layers = vec![shape, group, clipped];
+        doc.active = Some(doc.layers[2].id);
+        doc.validate().unwrap();
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 9);
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[2].clip_to, Some(loaded.layers[1].id));
+        assert!(loaded.layers[1].group);
+        assert_eq!(render::render(&loaded), render::render(&doc));
+        // Released, the same project needs no newer version than before.
+        doc.layers[2].clip_to = None;
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 1);
+        assert_eq!(load(&path).unwrap().layers[2].clip_to, None);
     }
 
     #[test]

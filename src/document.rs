@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Result, ensure};
 use image::{GrayImage, RgbaImage};
@@ -608,6 +611,55 @@ impl Document {
         self.selected = self.active.into_iter().collect();
     }
 
+    /// Whether some clipping shape depends on itself. A layer's clipping shape depends on its
+    /// base, and a folder's shape on its children, so a layer inside a folder (or clipped
+    /// through a chain to a layer inside it) cannot clip to that folder.
+    fn group_clipping_cycle(&self) -> bool {
+        let index: HashMap<Uuid, usize> = self
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.id, i))
+            .collect();
+        let mut edges = vec![Vec::new(); self.layers.len()];
+        for (i, layer) in self.layers.iter().enumerate() {
+            if let Some(&base) = layer.clip_to.as_ref().and_then(|id| index.get(id)) {
+                edges[i].push(base);
+            }
+            if let Some(&parent) = layer.parent.as_ref().and_then(|id| index.get(id))
+                && self.layers[parent].group
+            {
+                edges[parent].push(i);
+            }
+        }
+        // Iterative depth-first search: 0 unvisited, 1 on the stack, 2 done.
+        let mut state = vec![0_u8; self.layers.len()];
+        for start in 0..self.layers.len() {
+            if state[start] != 0 {
+                continue;
+            }
+            let mut stack = vec![(start, 0)];
+            state[start] = 1;
+            while let Some(&(node, next)) = stack.last() {
+                if let Some(&to) = edges[node].get(next) {
+                    stack.last_mut().unwrap().1 += 1;
+                    match state[to] {
+                        0 => {
+                            state[to] = 1;
+                            stack.push((to, 0));
+                        }
+                        1 => return true,
+                        _ => {}
+                    }
+                } else {
+                    state[node] = 2;
+                    stack.pop();
+                }
+            }
+        }
+        false
+    }
+
     pub fn validate(&self) -> Result<()> {
         validate_size(self.width, self.height)?;
         ensure!(
@@ -742,11 +794,21 @@ impl Document {
                 );
                 let target = ids.get(&id).copied();
                 ensure!(
-                    target.is_some_and(|l| !l.group && !l.standalone_mask && l.filter.is_none()),
+                    target.is_some_and(|l| !l.standalone_mask && l.filter.is_none()),
                     "Missing clipping source"
                 );
                 source = target.and_then(|l| l.clip_to);
             }
+        }
+        if self
+            .layers
+            .iter()
+            .any(|l| l.clip_to.is_some_and(|id| ids[&id].group))
+        {
+            ensure!(
+                !self.group_clipping_cycle(),
+                "A layer cannot clip to a folder whose shape depends on it"
+            );
         }
         ensure!(
             pixels <= MAX_PIXELS && mask_pixels <= MAX_PIXELS,
@@ -838,6 +900,54 @@ mod tests {
         assert!(doc.validate().is_err());
         doc.layers[0].clip_to = None;
         doc.layers[0].parent = Some(Uuid::new_v4());
+        assert!(doc.validate().is_err());
+    }
+
+    #[test]
+    fn folders_are_clipping_bases_unless_the_shape_depends_on_the_clipped_layer() {
+        let mut doc = Document::new(8, 8).unwrap();
+        doc.layers[0].group = true;
+        let group = doc.layers[0].id;
+        let mut child = Layer::image("Child", RgbaImage::new(8, 8));
+        child.parent = Some(group);
+        let child = {
+            let id = child.id;
+            doc.layers.push(child);
+            id
+        };
+        let mut clipped = Layer::blank("Clipped", 8, 8);
+        clipped.clip_to = Some(group);
+        let clipped = {
+            let id = clipped.id;
+            doc.layers.push(clipped);
+            id
+        };
+        doc.validate().unwrap();
+        // A chain through a clipped layer reaches the folder too.
+        let mut chained = Layer::blank("Chained", 8, 8);
+        chained.clip_to = Some(clipped);
+        doc.layers.push(chained);
+        doc.validate().unwrap();
+        // A layer inside the folder cannot clip to it, directly or through a chain.
+        doc.layers[1].clip_to = Some(group);
+        assert!(doc.validate().is_err());
+        doc.layers[1].clip_to = Some(clipped);
+        assert!(doc.validate().is_err());
+        doc.layers[1].clip_to = None;
+        doc.validate().unwrap();
+        // Two folders whose layers clip to each other.
+        let mut other = Layer::blank("Other", 8, 8);
+        other.group = true;
+        let mut inside = Layer::image("Inside", RgbaImage::new(8, 8));
+        inside.parent = Some(other.id);
+        inside.clip_to = Some(group);
+        doc.layers[1].clip_to = Some(other.id);
+        doc.layers.extend([other, inside]);
+        assert!(doc.validate().is_err());
+        doc.layers[1].clip_to = None;
+        doc.validate().unwrap();
+        // A folder still cannot be clipped itself.
+        doc.layers[0].clip_to = Some(child);
         assert!(doc.validate().is_err());
     }
 

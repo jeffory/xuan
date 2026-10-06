@@ -20,41 +20,75 @@ fn coverage_at(position: vec2<u32>) -> f32 {
                 vec2(local.x * rotation.x - local.y * rotation.y,
                      local.x * rotation.y + local.y * rotation.x);
     }
-    var alpha = config[1].x;
+    // A stack program; see `Coverage` in coverage.rs for the operations.
+    var stack: array<f32, 32>;
+    var top = 0u;
+    stack[0] = config[1].x;
     for (var i = 0u; i < u32(config[1].y); i++) {
         let base = 2u + i * 6u;
-        let header = config[base];
-        let bounds = config[base + 1u];
-        let rotation = config[base + 2u];
-        let local = point - bounds.xy - bounds.zw * 0.5;
-        var uv = vec2(local.x * rotation.x + local.y * rotation.y,
-                      -local.x * rotation.y + local.y * rotation.x) /
-                     bounds.zw * rotation.zw +
-                 0.5;
-        let h = vec3(uv, 1.0);
-        uv = vec2(dot(config[base + 3u].xyz, h), dot(config[base + 4u].xyz, h)) /
-             dot(config[base + 5u].xyz, h);
-        if (any(uv < vec2(0.0)) || any(uv >= vec2(1.0))) {
-            return 0.0;
-        }
-        let size = vec2<u32>(header.xy);
-        let offset = bitcast<u32>(header.z);
-        if (header.w == 0.0) {
-            let p = vec2<u32>(uv * header.xy);
-            let index = p.y * size.x + p.x;
-            alpha *= f32((pixels[offset + index / 4u] >> ((index % 4u) * 8u)) & 255u) / 255.0;
-        } else {
-            let p = uv * header.xy - 0.5;
-            let low = vec2<i32>(floor(p));
-            let f = fract(p);
-            alpha *=
-                mix(mix(alpha_at(low, size, offset), alpha_at(low + vec2(1, 0), size, offset), f.x),
-                    mix(alpha_at(low + vec2(0, 1), size, offset),
-                        alpha_at(low + vec2(1, 1), size, offset), f.x),
-                    f.y);
+        let op = u32(config[base + 3u].w);
+        let parameter = config[base + 4u].w;
+        switch op {
+            case 1u: {
+                top = min(top + 1u, 31u);
+                stack[top] = parameter;
+            }
+            case 2u: {
+                let a = stack[top];
+                top = max(top, 1u) - 1u;
+                stack[top] = a + stack[top] * (1.0 - a);
+            }
+            case 3u: {
+                stack[top] *= parameter;
+            }
+            case 5u: {
+                let a = stack[top];
+                top = max(top, 1u) - 1u;
+                stack[top] *= a;
+            }
+            default: {
+                let value = sample_source(point, base);
+                if (op == 4u) {
+                    stack[top] *= 1.0 - parameter * (1.0 - value);
+                } else {
+                    stack[top] *= value;
+                }
+            }
         }
     }
-    return alpha;
+    return stack[0];
+}
+
+// The alpha of the source described at `config[base]`, zero outside it.
+fn sample_source(point: vec2<f32>, base: u32) -> f32 {
+    let header = config[base];
+    let bounds = config[base + 1u];
+    let rotation = config[base + 2u];
+    let local = point - bounds.xy - bounds.zw * 0.5;
+    var uv = vec2(local.x * rotation.x + local.y * rotation.y,
+                  -local.x * rotation.y + local.y * rotation.x) /
+                 bounds.zw * rotation.zw +
+             0.5;
+    let h = vec3(uv, 1.0);
+    uv = vec2(dot(config[base + 3u].xyz, h), dot(config[base + 4u].xyz, h)) /
+         dot(config[base + 5u].xyz, h);
+    if (any(uv < vec2(0.0)) || any(uv >= vec2(1.0))) {
+        return 0.0;
+    }
+    let size = vec2<u32>(header.xy);
+    let offset = bitcast<u32>(header.z);
+    if (header.w == 0.0) {
+        let p = vec2<u32>(uv * header.xy);
+        let index = p.y * size.x + p.x;
+        return f32((pixels[offset + index / 4u] >> ((index % 4u) * 8u)) & 255u) / 255.0;
+    }
+    let p = uv * header.xy - 0.5;
+    let low = vec2<i32>(floor(p));
+    let f = fract(p);
+    return mix(mix(alpha_at(low, size, offset), alpha_at(low + vec2(1, 0), size, offset), f.x),
+               mix(alpha_at(low + vec2(0, 1), size, offset),
+                   alpha_at(low + vec2(1, 1), size, offset), f.x),
+               f.y);
 }
 
 @compute @workgroup_size(8, 8)

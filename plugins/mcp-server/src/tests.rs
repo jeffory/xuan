@@ -644,6 +644,42 @@ fn move_layer_sends_one_move_edit() {
 }
 
 #[test]
+fn set_layer_clips_to_a_base_or_releases_with_null() {
+    let editor = FakeEditor::new(false);
+    let incoming = editor.dir.join("incoming");
+    let cx = tools::Context {
+        editor: editor.as_ref(),
+        session: Some("s"),
+        incoming: &incoming,
+        cancel: &CancelToken::new(),
+    };
+    let call = |args: Value| tools::call(&cx, "set_layer", serde_json::from_value(args).unwrap());
+    let (layer, group) = (
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    );
+    let result = call(json!({"layer": layer, "clip_to": group, "opacity": 0.5}));
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    // `null` is passed on: it releases the clipping rather than leaving it alone.
+    let result = call(json!({"layer": layer, "clip_to": null}));
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    let requests = editor.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].2["edits"],
+        json!([{"op": "set", "layer": layer, "opacity": 0.5, "clip_to": group}])
+    );
+    assert_eq!(
+        requests[1].2["edits"],
+        json!([{"op": "set", "layer": layer, "clip_to": null}])
+    );
+    let result = call(json!({"layer": layer, "clip_to": 3}));
+    assert_eq!(result.is_error, Some(true));
+    assert!(text_of(&result).contains("`clip_to` must be a layer id or null"));
+    assert_eq!(editor.requests().len(), 2, "nothing was sent");
+}
+
+#[test]
 fn layers_are_chosen_for_commands_and_new_layers_and_jobs_reported() {
     let editor = FakeEditor::new(false);
     let incoming = editor.dir.join("incoming");

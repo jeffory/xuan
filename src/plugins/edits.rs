@@ -641,6 +641,14 @@ pub enum Edit {
         opacity: Option<f32>,
         #[serde(default)]
         blend: Option<BlendMode>,
+        /// Clip to this layer below in the same parent (a layer or a folder), or with
+        /// `null` release the clipping; left out, it does not change.
+        #[serde(
+            default,
+            deserialize_with = "nullable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        clip_to: Option<Option<Uuid>>,
     },
     RemoveLayer {
         layer: Uuid,
@@ -1183,7 +1191,16 @@ pub fn origin_shift<'a>(edits: impl IntoIterator<Item = &'a Edit>) -> (f32, f32)
 
 /// The fields of a `document/edit` edit that name a layer, where `"$n"` may
 /// stand for the n-th layer the request added before it.
-const LAYER_KEYS: [&str; 4] = ["layer", "above", "below", "parent"];
+const LAYER_KEYS: [&str; 5] = ["layer", "above", "below", "parent", "clip_to"];
+
+/// A field where `null` differs from leaving it out: `Some(None)` is `null`.
+fn nullable<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
 /// The ids `"$n"` references are parsed to until [`apply`] resolves them:
 /// "xuan" then zeros and `n`, a version-0 UUID that no layer ever has.
 const REFERENCE: u128 = 0x7875_616e_0000_0000_0000_0000_0000_0000;
@@ -1241,8 +1258,10 @@ pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
 macro_rules! layer_ids {
     ($edit:expr, $option:ident, $list:ident) => {
         match $edit {
+            Edit::Set { layer, clip_to, .. } => std::iter::once(layer)
+                .chain(clip_to.$option().and_then(|base| base.$option()))
+                .collect(),
             Edit::ReplacePixels { layer, .. }
-            | Edit::Set { layer, .. }
             | Edit::RemoveLayer { layer }
             | Edit::SetMask { layer, .. }
             | Edit::Select { layer }
@@ -1419,7 +1438,12 @@ fn apply_each(
                 locked,
                 opacity,
                 blend,
+                clip_to,
             } => {
+                if let Some(base) = clip_to {
+                    let base = clipping_base(document, *layer, *base)?;
+                    find_mut(document, *layer)?.clip_to = base;
+                }
                 let target = find_mut(document, *layer)?;
                 if let Some(name) = name {
                     ensure!(name.len() <= 256, "Layer name too long");
@@ -2045,6 +2069,43 @@ fn valid_opacity(opacity: f32) -> Result<f32> {
     Ok(opacity)
 }
 
+/// The base `layer` clips to when asked to clip to `base`, following **Layer → Clipping
+/// Mask**: a layer or folder below it in the same parent, not a mask, adjustment or filter
+/// layer. A base that is itself clipped passes on its own base. Folders, mask layers and
+/// filter layers cannot be clipped.
+fn clipping_base(document: &Document, layer: Uuid, base: Option<Uuid>) -> Result<Option<Uuid>> {
+    let clipped = find(document, layer)?;
+    let Some(base) = base else {
+        return Ok(None);
+    };
+    ensure!(
+        !clipped.group && !clipped.standalone_mask && clipped.filter.is_none(),
+        "Layer {} cannot be clipped: folders, mask layers and filter layers do not clip",
+        clipped.name
+    );
+    let target = find(document, base)?;
+    ensure!(base != layer, "A layer cannot clip to itself");
+    ensure!(
+        target.parent == clipped.parent,
+        "The clipping base {} must be in the same folder as {}",
+        target.name,
+        clipped.name
+    );
+    let position = |id| document.layers.iter().position(|l| l.id == id);
+    ensure!(
+        position(base) < position(layer),
+        "The clipping base {} must be below {}",
+        target.name,
+        clipped.name
+    );
+    ensure!(
+        !target.is_effect(),
+        "{} cannot be a clipping base: mask, adjustment and filter layers have no pixels to clip to",
+        target.name
+    );
+    Ok(Some(target.clip_to.unwrap_or(base)))
+}
+
 fn find(document: &Document, id: Uuid) -> Result<&Layer> {
     document
         .layers
@@ -2581,6 +2642,7 @@ mod tests {
                     locked: None,
                     opacity: None,
                     blend: None,
+                    clip_to: None,
                 },
             ],
         )
@@ -2629,7 +2691,8 @@ mod tests {
                     visible: None,
                     locked: None,
                     opacity: Some(2.0),
-                    blend: None
+                    blend: None,
+                    clip_to: None,
                 }]
             )
             .is_err()
@@ -3001,6 +3064,90 @@ mod tests {
         assert_eq!(pixels.get_pixel(20, 15).0[3], 0);
         let painted = pixels.pixels().filter(|p| p.0[3] > 0).count();
         assert!((40..=80).contains(&painted), "{painted} pixels painted");
+    }
+
+    #[test]
+    fn set_clips_to_a_layer_or_folder_below_and_null_releases() {
+        let mut document = Document::new(8, 8).unwrap();
+        let mut group = Layer::blank("Figure", 8, 8);
+        group.group = true;
+        let mut inside = Layer::image("Cloak", RgbaImage::new(8, 8));
+        inside.parent = Some(group.id);
+        let base = Layer::image("Base", RgbaImage::new(8, 8));
+        let mut clipped = Layer::image("Clipped", RgbaImage::new(8, 8));
+        clipped.clip_to = Some(base.id);
+        let shading = Layer::image("Shading", RgbaImage::new(8, 8));
+        let mut invert = Layer::blank("Invert", 8, 8);
+        invert.adjustment = Some(Adjustment::Invert);
+        let [
+            inside_id,
+            group_id,
+            base_id,
+            clipped_id,
+            shading_id,
+            invert_id,
+        ] = [&inside, &group, &base, &clipped, &shading, &invert].map(|l| l.id);
+        // Bottom to top: the folder, a base with a clipped layer, the shading layer and an
+        // adjustment.
+        document.layers = vec![inside, group, base, clipped, shading, invert];
+        document.validate().unwrap();
+        let set = |document: &mut Document, layer: Uuid, clip_to: Value| {
+            let edits =
+                parse_edits(json!([{"op": "set", "layer": layer, "clip_to": clip_to}])).unwrap();
+            run(document, &edits).map_err(|e| format!("{e:#}"))
+        };
+        let clip_of = |document: &Document, id: Uuid| {
+            document.layers.iter().find(|l| l.id == id).unwrap().clip_to
+        };
+
+        // A folder below in the same parent is a base.
+        set(&mut document, shading_id, json!(group_id)).unwrap();
+        assert_eq!(clip_of(&document, shading_id), Some(group_id));
+        // Leaving `clip_to` out keeps it; `null` releases it.
+        let edits =
+            parse_edits(json!([{"op": "set", "layer": shading_id, "opacity": 0.5}])).unwrap();
+        run(&mut document, &edits).unwrap();
+        assert_eq!(clip_of(&document, shading_id), Some(group_id));
+        set(&mut document, shading_id, Value::Null).unwrap();
+        assert_eq!(clip_of(&document, shading_id), None);
+        // A clipped layer passes on its base, as Layer → Clipping Mask does.
+        set(&mut document, shading_id, json!(clipped_id)).unwrap();
+        assert_eq!(clip_of(&document, shading_id), Some(base_id));
+        // Adjustments clip too.
+        set(&mut document, invert_id, json!(group_id)).unwrap();
+        assert_eq!(clip_of(&document, invert_id), Some(group_id));
+
+        let before = document.clone();
+        for (layer, base, message) in [
+            (base_id, json!(shading_id), "must be below"),
+            (shading_id, json!(shading_id), "cannot clip to itself"),
+            (shading_id, json!(inside_id), "same folder"),
+            (inside_id, json!(group_id), "same folder"),
+            (shading_id, json!(invert_id), "must be below"),
+            (group_id, json!(base_id), "cannot be clipped"),
+            (shading_id, json!(Uuid::new_v4()), "No layer"),
+        ] {
+            let mut copy = before.clone();
+            let error = set(&mut copy, layer, base).unwrap_err();
+            assert!(
+                error.to_lowercase().contains(&message.to_lowercase()),
+                "{message}: {error}"
+            );
+        }
+        // An adjustment is no base.
+        document.layers.swap(4, 5);
+        let error = set(&mut document, shading_id, json!(invert_id)).unwrap_err();
+        assert!(error.contains("cannot be a clipping base"), "{error}");
+
+        // A layer the same request adds can be the base, as `$n`.
+        let edits = parse_edits(json!([
+            {"op": "add_empty_layer", "name": "New base", "above": invert_id},
+            {"op": "add_empty_layer", "name": "On top"},
+            {"op": "set", "layer": "$2", "clip_to": "$1"},
+        ]))
+        .unwrap();
+        let added = run(&mut document, &edits).unwrap();
+        assert_eq!(clip_of(&document, added[1]), Some(added[0]));
     }
 
     #[test]

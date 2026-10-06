@@ -58,11 +58,31 @@ pub fn can_preview_motion_blur(document: &Document) -> bool {
                 && layer.adjustment.is_none()
                 && layer.raw.is_none()
                 && !document.layers.iter().any(|other| {
-                    other.clip_to == Some(layer.id)
+                    clips_through(document, other, layer.id)
                         || other.parent == Some(layer.id)
                         || other.filter.is_some()
                 })
         })
+}
+
+/// Whether `layer`'s clipping shape depends on `target`: `target` is a base in its clipping
+/// chain, or inside a folder that is.
+fn clips_through(document: &Document, layer: &Layer, target: uuid::Uuid) -> bool {
+    let mut base = layer.clip_to;
+    for _ in 0..257 {
+        let Some(id) = base else {
+            return false;
+        };
+        if id == target || document.descendants(id).contains(&target) {
+            return true;
+        }
+        base = document
+            .layers
+            .iter()
+            .find(|l| l.id == id)
+            .and_then(|l| l.clip_to);
+    }
+    false
 }
 
 #[repr(C)]

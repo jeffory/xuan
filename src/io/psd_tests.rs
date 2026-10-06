@@ -1101,10 +1101,11 @@ fn clipping_masks_follow_their_base() {
     let base = find("Base").id;
     assert_eq!(find("A").clip_to, Some(base));
     assert_eq!(find("B").clip_to, Some(base));
-    assert_eq!(find("On folder").clip_to, None);
+    // A folder is a clipping base too: its layers' combined shape.
+    assert_eq!(find("On folder").clip_to, Some(find("Folder").id));
     assert_eq!(find("On left out").clip_to, None);
     assert!(document.layers.iter().all(|l| l.name != "Threshold"));
-    assert_eq!(report.count(Dropped::ClippingBase), 2);
+    assert_eq!(report.count(Dropped::ClippingBase), 1);
     assert_eq!(report.count(Dropped::PhotoshopAdjustment("Threshold")), 1);
 }
 
