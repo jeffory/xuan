@@ -387,7 +387,7 @@ fn stroke_path_can_paint_with_the_pencil() {
     let document = &app.session().unwrap().document;
     let pixels = document.active().unwrap().pixels.clone().unwrap();
     let alphas: Vec<u8> = pixels.pixels().map(|p| p[3]).collect();
-    assert!(alphas.iter().any(|&a| a == 255));
+    assert!(alphas.contains(&255));
     assert!(
         alphas.iter().all(|&a| a == 0 || a == 255),
         "the Pencil paints hard pixels"

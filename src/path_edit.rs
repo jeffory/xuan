@@ -511,10 +511,7 @@ pub fn trace_mask(mask: &image::GrayImage, tolerance: f64) -> Option<VectorPath>
         while edges.get(&start).is_some_and(|e| !e.is_empty()) {
             let mut points = vec![start];
             let mut at = start;
-            loop {
-                let Some(next) = edges.get_mut(&at).and_then(|e| e.pop()) else {
-                    break;
-                };
+            while let Some(next) = edges.get_mut(&at).and_then(|e| e.pop()) {
                 at = next;
                 if at == start {
                     break;
