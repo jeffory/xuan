@@ -18,7 +18,7 @@ use std::{
 
 use egui::Color32;
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 pub(super) mod linux;
 #[cfg(any(windows, test))]
 pub(super) mod windows;
@@ -33,6 +33,7 @@ pub(super) struct SystemTheme {
 
 impl SystemTheme {
     /// Each field from `self`, or from `fallback` where `self` has none.
+    #[cfg(any(target_os = "linux", test))]
     pub fn or(self, fallback: Self) -> Self {
         Self {
             dark: self.dark.or(fallback.dark),
