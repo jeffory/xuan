@@ -2051,7 +2051,11 @@ fn text_layers_are_set_along_paths_and_their_options_changed() {
         ("set_layer", json!({"layer": layer, "path": null})),
     ] {
         let result = call_tool(&editor, tool, arguments.clone());
-        assert_ne!(result.is_error, Some(true), "{tool} {arguments}: {result:?}");
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "{tool} {arguments}: {result:?}"
+        );
     }
     let edits: Vec<Value> = edit_requests(&editor)
         .into_iter()
