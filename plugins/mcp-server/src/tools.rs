@@ -1,6 +1,7 @@
 //! The MCP tools and how each maps onto plugin protocol requests. Every
 //! tool that changes a document sends one `document/edit` or `host/run`
-//! request, so it is one undo step in Xuan and shows at once.
+//! request, so it is one undo step in Xuan and shows at once. The `batch`
+//! tool sends the edits of several edit tools as one `document/edit`.
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -14,6 +15,8 @@ use xuan_plugin::CancelToken;
 
 use crate::editor::{CANCELLED, Editor, EditorError, TIMED_OUT, WITHDRAWN};
 
+/// Most edits Xuan takes in one `document/edit` request.
+pub const MAX_EDITS: usize = 1000;
 /// Largest image a client may send for `create_image_layer`, decoded.
 pub const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 /// Largest request this plugin sends Xuan, as JSON. Xuan stops a plugin
@@ -36,6 +39,70 @@ pub struct Context<'a> {
 }
 
 type Run = fn(&Context, Map<String, Value>) -> Result<Vec<ContentBlock>, String>;
+/// Turns a tool's arguments into the edits it makes, without sending them.
+type Planner = fn(&Context, Map<String, Value>) -> Result<Plan, String>;
+
+/// What a tool does when called.
+#[derive(Clone, Copy)]
+enum Action {
+    /// Reads, files, commands and history: not part of a batch.
+    Run(Run),
+    /// Edits: the tool plans them, and they are sent as one `document/edit`
+    /// request, on their own or with the other steps of a batch.
+    Edit(Planner),
+    /// Runs its own way when called alone; in a batch, plans edits (or says
+    /// why it cannot).
+    Mixed(Run, Planner),
+}
+
+/// The edits a tool makes, for one `document/edit` request, and what it
+/// answers once Xuan has applied them.
+struct Plan {
+    /// The undo step's name.
+    name: &'static str,
+    edits: Vec<Value>,
+    reply: Reply,
+    /// Images written for Xuan to read, removed with the plan.
+    files: Incoming,
+}
+
+impl Plan {
+    fn new(name: &'static str, edits: Vec<Value>, reply: Reply) -> Self {
+        Self {
+            name,
+            edits,
+            reply,
+            files: Incoming::default(),
+        }
+    }
+}
+
+/// What an edit tool answers when called on its own.
+#[derive(Clone, PartialEq)]
+enum Reply {
+    /// `{"ok": true}`.
+    Ok,
+    /// `{"ok": true, "layer": …}`.
+    Layer(Value),
+    /// The ids of the layers the request added.
+    Added,
+    /// The selection after the edit.
+    Selection,
+    /// The canvas size after the edit.
+    Size,
+}
+
+/// Files in the plugin's incoming folder, removed when dropped.
+#[derive(Default)]
+struct Incoming(Vec<PathBuf>);
+
+impl Drop for Incoming {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
 
 /// One tool: its MCP definition and what it does.
 struct Spec {
@@ -46,7 +113,7 @@ struct Spec {
     properties: Value,
     required: &'static [&'static str],
     kind: Kind,
-    run: Run,
+    run: Action,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -142,7 +209,7 @@ fn specs() -> Vec<Spec> {
             properties: json!({}),
             required: &[],
             kind: Kind::Read,
-            run: |cx, _| text(cx.call("document/list", json!({}))?),
+            run: Action::Run(|cx, _| text(cx.call("document/list", json!({}))?)),
         },
         Spec {
             name: "get_document",
@@ -151,13 +218,13 @@ fn specs() -> Vec<Spec> {
             properties: json!({"document": {"type": "string", "description": "A document id from list_documents"}}),
             required: &[],
             kind: Kind::Read,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["document"])?;
                 if let Some(document) = args.get("document") {
                     cx.call("document/activate", json!({"document": document}))?;
                 }
                 text(document(cx)?)
-            },
+            }),
         },
         Spec {
             name: "get_layer",
@@ -166,7 +233,7 @@ fn specs() -> Vec<Spec> {
             properties: json!({"layer": layer()}),
             required: &["layer"],
             kind: Kind::Read,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["layer"])?;
                 let id = string(&args, "layer")?;
                 let document = document(cx)?;
@@ -175,7 +242,7 @@ fn specs() -> Vec<Spec> {
                     .cloned()
                     .ok_or_else(|| format!("No layer {id}"))?;
                 text(found)
-            },
+            }),
         },
         Spec {
             name: "get_preview",
@@ -184,12 +251,12 @@ fn specs() -> Vec<Spec> {
             properties: json!({"max_side": integer("Longest side in pixels")}),
             required: &[],
             kind: Kind::Read,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["max_side"])?;
                 let side = max_side(&args, DEFAULT_PREVIEW)?;
                 let export = cx.call("document/export", json!({"max_side": side}))?;
                 image_result(&export, "Flattened preview")
-            },
+            }),
         },
         Spec {
             name: "get_layer_image",
@@ -198,7 +265,7 @@ fn specs() -> Vec<Spec> {
             properties: json!({"layer": layer(), "what": {"type": "string", "enum": ["pixels", "mask"]}, "max_side": integer("Longest side in pixels")}),
             required: &["layer"],
             kind: Kind::Read,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["layer", "what", "max_side"])?;
                 let side = max_side(&args, 512)?;
                 let what = args.get("what").cloned().unwrap_or(json!("pixels"));
@@ -207,7 +274,7 @@ fn specs() -> Vec<Spec> {
                     json!({"layer": string(&args, "layer")?, "what": what, "max_side": side}),
                 )?;
                 image_result(&export, "Layer")
-            },
+            }),
         },
         Spec {
             name: "get_selection",
@@ -216,14 +283,14 @@ fn specs() -> Vec<Spec> {
             properties: json!({}),
             required: &[],
             kind: Kind::Read,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 pick(args, &[])?;
                 let export = cx.call("selection/export", json!({}))?;
                 if export.is_null() {
                     return Ok(vec![ContentBlock::text("Nothing is selected.")]);
                 }
                 image_result(&export, "Selection mask")
-            },
+            }),
         },
         Spec {
             name: "get_edit_permission",
@@ -232,10 +299,10 @@ fn specs() -> Vec<Spec> {
             properties: json!({}),
             required: &[],
             kind: Kind::Read,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 pick(args, &[])?;
                 text(cx.call("session/status", json!({}))?)
-            },
+            }),
         },
         // Layers.
         Spec {
@@ -249,7 +316,7 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["layer"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(
                     args,
                     &[
@@ -285,9 +352,8 @@ fn specs() -> Vec<Spec> {
                 if edits.is_empty() {
                     return Err("Give at least one property to change".into());
                 }
-                cx.edit("Set Layer", edits)?;
-                text(json!({"ok": true, "layer": layer}))
-            },
+                Ok(Plan::new("Set Layer", edits, Reply::Layer(layer)))
+            }),
         },
         Spec {
             name: "create_layer",
@@ -296,18 +362,18 @@ fn specs() -> Vec<Spec> {
             properties: json!({"kind": {"type": "string", "enum": ["empty", "mask"]}, "name": name(), "above": above()}),
             required: &[],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["kind", "name", "above"])?;
                 let kind = match args.get("kind").and_then(Value::as_str) {
                     None | Some("empty") => "add_empty_layer",
                     Some("mask") => "add_mask_layer",
                     Some(other) => return Err(format!("Unknown kind {other}")),
                 };
-                added(cx.edit(
+                Ok(Plan::new(
                     "Create Layer",
                     vec![Value::Object(op(kind, &args, &["name", "above"]))],
-                )?)
-            },
+                Reply::Added))
+            }),
         },
         Spec {
             name: "create_text_layer",
@@ -321,7 +387,7 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["text"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let keys = [
                     "text",
                     "x",
@@ -337,11 +403,11 @@ fn specs() -> Vec<Spec> {
                     "above",
                 ];
                 let args = pick(args, &keys)?;
-                added(cx.edit(
+                Ok(Plan::new(
                     "Create Text Layer",
                     vec![Value::Object(op("add_text_layer", &args, &keys))],
-                )?)
-            },
+                Reply::Added))
+            }),
         },
         Spec {
             name: "create_shape_layer",
@@ -354,7 +420,7 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["shape", "x", "y", "width", "height"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let keys = [
                     "shape",
                     "x",
@@ -379,8 +445,8 @@ fn specs() -> Vec<Spec> {
                     }
                 };
                 edit.insert("shape".into(), json!(shape));
-                added(cx.edit("Create Shape Layer", vec![Value::Object(edit)])?)
-            },
+                Ok(Plan::new("Create Shape Layer", vec![Value::Object(edit)], Reply::Added))
+            }),
         },
         Spec {
             name: "create_image_layer",
@@ -393,7 +459,7 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["png_base64"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|cx, args| {
                 let args = pick(
                     args,
                     &[
@@ -410,7 +476,6 @@ fn specs() -> Vec<Spec> {
                 )?;
                 let bytes = decode_png(string(&args, "png_base64")?)?;
                 let path = incoming_file(cx.incoming)?;
-                std::fs::write(&path, bytes).map_err(|e| format!("Cannot write the image: {e}"))?;
                 let mut edit = op(
                     "add_layer",
                     &args,
@@ -419,10 +484,12 @@ fn specs() -> Vec<Spec> {
                     ],
                 );
                 edit.insert("image".into(), json!(path));
-                let result = cx.edit("Add Image Layer", vec![Value::Object(edit)]);
-                let _ = std::fs::remove_file(&path);
-                added(result?)
-            },
+                let mut plan = Plan::new("Add Image Layer", vec![Value::Object(edit)], Reply::Added);
+                // Removed with the plan, once Xuan has read it or on failure.
+                plan.files.0.push(path.clone());
+                std::fs::write(&path, bytes).map_err(|e| format!("Cannot write the image: {e}"))?;
+                Ok(plan)
+            }),
         },
         Spec {
             name: "delete_layer",
@@ -431,14 +498,13 @@ fn specs() -> Vec<Spec> {
             properties: json!({"layer": layer()}),
             required: &["layer"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["layer"])?;
-                cx.edit(
+                Ok(Plan::new(
                     "Delete Layer",
                     vec![Value::Object(op("remove_layer", &args, &["layer"]))],
-                )?;
-                text(json!({"ok": true}))
-            },
+                Reply::Ok))
+            }),
         },
         Spec {
             name: "merge_layers",
@@ -447,13 +513,13 @@ fn specs() -> Vec<Spec> {
             properties: json!({"layers": layers()}),
             required: &["layers"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["layers"])?;
-                added(cx.edit(
+                Ok(Plan::new(
                     "Merge Layers",
                     vec![Value::Object(op("merge_layers", &args, &["layers"]))],
-                )?)
-            },
+                Reply::Added))
+            }),
         },
         Spec {
             name: "group_layers",
@@ -462,13 +528,13 @@ fn specs() -> Vec<Spec> {
             properties: json!({"layers": layers()}),
             required: &["layers"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["layers"])?;
-                added(cx.edit(
+                Ok(Plan::new(
                     "Group Layers",
                     vec![Value::Object(op("group_layers", &args, &["layers"]))],
-                )?)
-            },
+                Reply::Added))
+            }),
         },
         Spec {
             name: "ungroup_layer",
@@ -477,14 +543,13 @@ fn specs() -> Vec<Spec> {
             properties: json!({"layer": layer()}),
             required: &["layer"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["layer"])?;
-                cx.edit(
+                Ok(Plan::new(
                     "Ungroup Layers",
                     vec![Value::Object(op("ungroup_layers", &args, &["layer"]))],
-                )?;
-                text(json!({"ok": true}))
-            },
+                Reply::Ok))
+            }),
         },
         Spec {
             name: "move_layer",
@@ -498,18 +563,17 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["layer"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["layer", "above", "below", "parent"])?;
-                cx.edit(
+                Ok(Plan::new(
                     "Move Layer",
                     vec![Value::Object(op(
                         "move_layer",
                         &args,
                         &["layer", "above", "below", "parent"],
                     ))],
-                )?;
-                text(json!({"ok": true}))
-            },
+                Reply::Ok))
+            }),
         },
         // Selections.
         Spec {
@@ -523,7 +587,7 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["shape"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(
                     args,
                     &["shape", "x", "y", "width", "height", "points", "mode"],
@@ -541,9 +605,8 @@ fn specs() -> Vec<Spec> {
                     Some("polygon") => op("select_polygon", &args, &["points", "mode"]),
                     _ => return Err("`shape` must be rectangle, ellipse or polygon".into()),
                 };
-                cx.edit("Select", vec![Value::Object(edit)])?;
-                selection_summary(cx)
-            },
+                Ok(Plan::new("Select", vec![Value::Object(edit)], Reply::Selection))
+            }),
         },
         Spec {
             name: "select_color",
@@ -557,7 +620,7 @@ fn specs() -> Vec<Spec> {
             }),
             required: &[],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(
                     args,
                     &[
@@ -585,9 +648,8 @@ fn specs() -> Vec<Spec> {
                         &["x", "y", "tolerance", "contiguous", "mode"],
                     )
                 };
-                cx.edit("Select Color", vec![Value::Object(edit)])?;
-                selection_summary(cx)
-            },
+                Ok(Plan::new("Select Color", vec![Value::Object(edit)], Reply::Selection))
+            }),
         },
         Spec {
             name: "modify_selection",
@@ -599,67 +661,72 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["action"],
             kind: Kind::Edit,
-            run: |cx, args| {
-                let args = pick(args, &["action", "amount"])?;
-                let amount = args.get("amount").and_then(Value::as_f64).unwrap_or(0.0);
-                let command = match args.get("action").and_then(Value::as_str) {
-                    Some("all") => "select_all",
-                    Some("none") => "deselect",
-                    Some("invert") => "invert_selection",
-                    Some("subject") => "select_subject",
-                    Some("layer_pixels") => "select_layer_pixels",
-                    Some("grow") | Some("shrink") => {
-                        let by = if args["action"] == "grow" {
-                            amount
-                        } else {
-                            -amount
-                        };
-                        cx.edit(
-                            "Modify Selection",
-                            vec![json!({"op": "grow_selection", "by": by.round() as i64})],
-                        )?;
-                        return selection_summary(cx);
+            run: Action::Mixed(
+                |cx, args| {
+                    let args = pick(args, &["action", "amount"])?;
+                    let command = match args.get("action").and_then(Value::as_str) {
+                        Some("all") => "select_all",
+                        Some("none") => "deselect",
+                        Some("invert") => "invert_selection",
+                        Some("subject") => "select_subject",
+                        Some("layer_pixels") => "select_layer_pixels",
+                        _ => return perform(cx, selection_edit(&args)?),
+                    };
+                    cx.run(command)?;
+                    if command == "select_subject" {
+                        return Ok(vec![ContentBlock::text(
+                            "Select Subject is running in Xuan; the selection changes when it finishes. Check with get_document.",
+                        )]);
                     }
-                    Some("feather") => {
-                        cx.edit(
-                            "Feather Selection",
-                            vec![json!({"op": "feather_selection", "radius": amount})],
-                        )?;
-                        return selection_summary(cx);
+                    selection_summary(cx)
+                },
+                // In a batch, `none` clears the selection with an edit; the
+                // other commands cannot be part of one.
+                |_, args| {
+                    let args = pick(args, &["action", "amount"])?;
+                    match args.get("action").and_then(Value::as_str) {
+                        Some("none") => Ok(Plan::new(
+                            "Deselect",
+                            vec![json!({"op": "set_selection"})],
+                            Reply::Selection,
+                        )),
+                        Some(action @ ("all" | "invert" | "subject" | "layer_pixels")) => Err(format!(
+                            "modify_selection `{action}` runs a command in Xuan, so it cannot be part of a batch; call it on its own"
+                        )),
+                        _ => selection_edit(&args),
                     }
-                    _ => return Err("Unknown `action`".into()),
-                };
-                cx.run(command)?;
-                if command == "select_subject" {
-                    return Ok(vec![ContentBlock::text(
-                        "Select Subject is running in Xuan; the selection changes when it finishes. Check with get_document.",
-                    )]);
-                }
-                selection_summary(cx)
-            },
+                },
+            ),
         },
         // Pixels.
         Spec {
             name: "paint_stroke",
-            title: "Paint a stroke",
-            description: "Paint (or with `erase`, erase) one brush stroke through the points on a pixel layer, inside the selection if there is one. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1.",
+            title: "Paint strokes",
+            description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows; a single point paints one round dab. For several strokes or dabs give `strokes` instead: a list of {points, color, size, hardness, opacity, erase}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
             properties: json!({
-                "layer": optional_layer(), "points": points(), "color": color("Paint colour"), "size": number("Brush diameter"),
+                "layer": optional_layer(), "points": points(),
+                "strokes": {
+                    "type": "array", "minItems": 1, "maxItems": MAX_EDITS,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "points": points(), "color": color("Paint colour"), "size": number("Brush diameter"),
+                            "hardness": number("0–1"), "opacity": number("0–1"), "erase": {"type": "boolean"},
+                        },
+                        "required": ["points"],
+                        "additionalProperties": false,
+                    },
+                    "description": "Several strokes instead of `points`; each takes the top-level values for what it leaves out",
+                },
+                "color": color("Paint colour"), "size": number("Brush diameter"),
                 "hardness": number("0–1"), "opacity": number("0–1"), "erase": {"type": "boolean"},
             }),
-            required: &["points"],
+            required: &[],
             kind: Kind::Edit,
-            run: |cx, args| {
-                let keys = [
-                    "layer", "points", "color", "size", "hardness", "opacity", "erase",
-                ];
-                let args = pick(args, &keys)?;
-                cx.edit(
-                    "Paint Stroke",
-                    vec![Value::Object(op("stroke", &args, &keys))],
-                )?;
-                text(json!({"ok": true}))
-            },
+            run: Action::Edit(|_, args| {
+                let args = pick(args, &STROKE_ARGS)?;
+                Ok(Plan::new("Paint Stroke", strokes(&args)?, Reply::Ok))
+            }),
         },
         Spec {
             name: "fill",
@@ -668,14 +735,13 @@ fn specs() -> Vec<Spec> {
             properties: json!({"layer": optional_layer(), "color": color("Fill colour")}),
             required: &["color"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["layer", "color"])?;
-                cx.edit(
+                Ok(Plan::new(
                     "Fill",
                     vec![Value::Object(op("fill", &args, &["layer", "color"]))],
-                )?;
-                text(json!({"ok": true}))
-            },
+                Reply::Ok))
+            }),
         },
         Spec {
             name: "fill_gradient",
@@ -701,17 +767,16 @@ fn specs() -> Vec<Spec> {
             }),
             required: &["start", "end", "stops"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let keys = [
                     "layer", "start", "end", "stops", "radial", "opacity", "mask",
                 ];
                 let args = pick(args, &keys)?;
-                cx.edit(
+                Ok(Plan::new(
                     "Gradient",
                     vec![Value::Object(op("gradient", &args, &keys))],
-                )?;
-                text(json!({"ok": true}))
-            },
+                Reply::Ok))
+            }),
         },
         Spec {
             name: "apply_filter",
@@ -720,15 +785,15 @@ fn specs() -> Vec<Spec> {
             properties: json!({"filter": {"description": FILTERS}, "layer": optional_layer(), "as_layer": {"type": "boolean", "description": "Add a non-destructive filter layer instead"}}),
             required: &["filter"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["filter", "layer", "as_layer"])?;
                 let edit = if args.get("as_layer") == Some(&json!(true)) {
                     op("add_adjustment_layer", &args, &["filter"])
                 } else {
                     op("apply_filter", &args, &["filter", "layer"])
                 };
-                added(cx.edit("Apply Filter", vec![Value::Object(edit)])?)
-            },
+                Ok(Plan::new("Apply Filter", vec![Value::Object(edit)], Reply::Added))
+            }),
         },
         Spec {
             name: "apply_adjustment",
@@ -737,15 +802,15 @@ fn specs() -> Vec<Spec> {
             properties: json!({"adjustment": {"description": ADJUSTMENTS}, "layer": optional_layer(), "as_layer": {"type": "boolean"}}),
             required: &["adjustment"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let args = pick(args, &["adjustment", "layer", "as_layer"])?;
                 let edit = if args.get("as_layer") == Some(&json!(true)) {
                     op("add_adjustment_layer", &args, &["adjustment"])
                 } else {
                     op("apply_adjustment", &args, &["adjustment", "layer"])
                 };
-                added(cx.edit("Apply Adjustment", vec![Value::Object(edit)])?)
-            },
+                Ok(Plan::new("Apply Adjustment", vec![Value::Object(edit)], Reply::Added))
+            }),
         },
         // The canvas.
         Spec {
@@ -755,12 +820,11 @@ fn specs() -> Vec<Spec> {
             properties: json!({"x": number("Left"), "y": number("Top"), "width": integer("Width"), "height": integer("Height")}),
             required: &["x", "y", "width", "height"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let keys = ["x", "y", "width", "height"];
                 let args = pick(args, &keys)?;
-                cx.edit("Crop", vec![Value::Object(op("crop", &args, &keys))])?;
-                size_summary(cx)
-            },
+                Ok(Plan::new("Crop", vec![Value::Object(op("crop", &args, &keys))], Reply::Size))
+            }),
         },
         Spec {
             name: "resize_canvas",
@@ -769,15 +833,14 @@ fn specs() -> Vec<Spec> {
             properties: json!({"width": integer("Width"), "height": integer("Height"), "anchor": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}}),
             required: &["width", "height"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let keys = ["width", "height", "anchor"];
                 let args = pick(args, &keys)?;
-                cx.edit(
+                Ok(Plan::new(
                     "Canvas Size",
                     vec![Value::Object(op("resize_canvas", &args, &keys))],
-                )?;
-                size_summary(cx)
-            },
+                Reply::Size))
+            }),
         },
         Spec {
             name: "resize_image",
@@ -786,15 +849,14 @@ fn specs() -> Vec<Spec> {
             properties: json!({"width": integer("Width"), "height": integer("Height")}),
             required: &["width", "height"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Edit(|_, args| {
                 let keys = ["width", "height"];
                 let args = pick(args, &keys)?;
-                cx.edit(
+                Ok(Plan::new(
                     "Image Size",
                     vec![Value::Object(op("resize_image", &args, &keys))],
-                )?;
-                size_summary(cx)
-            },
+                Reply::Size))
+            }),
         },
         // History and commands.
         Spec {
@@ -804,7 +866,7 @@ fn specs() -> Vec<Spec> {
             properties: json!({"steps": integer("1–20")}),
             required: &[],
             kind: Kind::Edit,
-            run: |cx, args| history(cx, args, "undo"),
+            run: Action::Run(|cx, args| history(cx, args, "undo")),
         },
         Spec {
             name: "redo",
@@ -813,7 +875,7 @@ fn specs() -> Vec<Spec> {
             properties: json!({"steps": integer("1–20")}),
             required: &[],
             kind: Kind::Edit,
-            run: |cx, args| history(cx, args, "redo"),
+            run: Action::Run(|cx, args| history(cx, args, "redo")),
         },
         Spec {
             name: "run_command",
@@ -822,7 +884,7 @@ fn specs() -> Vec<Spec> {
             properties: json!({"command": {"type": "string", "enum": COMMANDS}}),
             required: &["command"],
             kind: Kind::Edit,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["command"])?;
                 let command = string(&args, "command")?;
                 if !COMMANDS.contains(&command) {
@@ -832,7 +894,30 @@ fn specs() -> Vec<Spec> {
                 }
                 cx.run(command)?;
                 text(json!({"ok": true}))
-            },
+            }),
+        },
+        Spec {
+            name: "batch",
+            title: "Several edits as one step",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            properties: json!({
+                "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
+                "steps": {
+                    "type": "array", "minItems": 1, "maxItems": MAX_EDITS,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string", "description": "An edit tool's name"},
+                            "arguments": {"type": "object", "description": "The tool's arguments"},
+                        },
+                        "required": ["tool"],
+                        "additionalProperties": false,
+                    },
+                },
+            }),
+            required: &["steps"],
+            kind: Kind::Edit,
+            run: Action::Run(batch),
         },
         // Documents and files.
         Spec {
@@ -842,11 +927,11 @@ fn specs() -> Vec<Spec> {
             properties: json!({"document": {"type": "string"}}),
             required: &["document"],
             kind: Kind::Read,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["document"])?;
                 cx.call("document/activate", Value::Object(args))?;
                 text(json!({"ok": true}))
-            },
+            }),
         },
         Spec {
             name: "save_document",
@@ -855,10 +940,10 @@ fn specs() -> Vec<Spec> {
             properties: json!({"document": {"type": "string"}, "suggested_name": {"type": "string"}}),
             required: &[],
             kind: Kind::File,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["document", "suggested_name"])?;
                 text(cx.call("file/save_as", Value::Object(args))?)
-            },
+            }),
         },
         Spec {
             name: "export_document",
@@ -867,10 +952,10 @@ fn specs() -> Vec<Spec> {
             properties: json!({"document": {"type": "string"}, "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]}, "suggested_name": {"type": "string"}}),
             required: &[],
             kind: Kind::File,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["document", "format", "suggested_name"])?;
                 text(cx.call("file/export", Value::Object(args))?)
-            },
+            }),
         },
         Spec {
             name: "open_document",
@@ -879,10 +964,10 @@ fn specs() -> Vec<Spec> {
             properties: json!({"path": {"type": "string"}}),
             required: &["path"],
             kind: Kind::File,
-            run: |cx, args| {
+            run: Action::Run(|cx, args| {
                 let args = pick(args, &["path"])?;
                 text(cx.call("file/open", Value::Object(args))?)
-            },
+            }),
         },
     ]
 }
@@ -909,6 +994,7 @@ pub fn list() -> Vec<Tool> {
                         | "resize_canvas"
                         | "resize_image"
                         | "run_command"
+                        | "batch"
                 ))
                 .open_world(false);
             let description = match spec.kind {
@@ -943,7 +1029,11 @@ pub fn call(cx: &Context, name: &str, args: Map<String, Value>) -> CallToolResul
     let Some(spec) = specs().into_iter().find(|spec| spec.name == name) else {
         return CallToolResult::error(vec![ContentBlock::text(format!("Unknown tool {name}"))]);
     };
-    match (spec.run)(cx, args) {
+    let result = match spec.run {
+        Action::Run(run) | Action::Mixed(run, _) => run(cx, args),
+        Action::Edit(plan) => plan(cx, args).and_then(|plan| perform(cx, plan)),
+    };
+    match result {
         Ok(content) => CallToolResult::success(content),
         // Where the user keeps files is not the client's business.
         Err(message) => CallToolResult::error(vec![ContentBlock::text(redact_paths(&message))]),
@@ -968,11 +1058,223 @@ impl Context<'_> {
     }
 
     fn edit(&self, name: &str, edits: Vec<Value>) -> Result<Value, String> {
+        if edits.len() > MAX_EDITS {
+            return Err(format!(
+                "Xuan takes at most {MAX_EDITS} edits in one request and this has {}; split it into several calls",
+                edits.len()
+            ));
+        }
         self.call("document/edit", json!({"name": name, "edits": edits}))
     }
 
     fn run(&self, action: &str) -> Result<Value, String> {
         self.call("host/run", json!({"action": action}))
+    }
+}
+
+/// The tools a batch takes.
+pub fn batchable() -> Vec<&'static str> {
+    specs()
+        .into_iter()
+        .filter(|spec| !matches!(spec.run, Action::Run(_)))
+        .map(|spec| spec.name)
+        .collect()
+}
+
+/// Send a tool's edits as one request and answer as the tool does.
+fn perform(cx: &Context, plan: Plan) -> Result<Vec<ContentBlock>, String> {
+    let answer = cx.edit(plan.name, plan.edits)?;
+    match plan.reply {
+        Reply::Ok => text(json!({"ok": true})),
+        Reply::Layer(layer) => text(json!({"ok": true, "layer": layer})),
+        Reply::Added => added(answer),
+        Reply::Selection => selection_summary(cx),
+        Reply::Size => size_summary(cx),
+    }
+}
+
+/// The `batch` tool: every step's edits in one `document/edit` request, so
+/// they are one undo step, and Xuan applies all of them or none.
+fn batch(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, String> {
+    let args = pick(args, &["name", "steps"])?;
+    let name = match args.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) if !name.trim().is_empty() && name.chars().count() <= 100 => {
+            Some(name.trim().to_owned())
+        }
+        Some(_) => return Err("`name` must be a short text (at most 100 characters)".into()),
+    };
+    let steps = (args.get("steps").and_then(Value::as_array))
+        .filter(|steps| !steps.is_empty())
+        .ok_or("`steps` must be a list of at least one {\"tool\", \"arguments\"}")?;
+    let specs = specs();
+    let mut plans: Vec<(&str, Plan)> = Vec::with_capacity(steps.len());
+    for (index, step) in steps.iter().enumerate() {
+        let number = index + 1;
+        let step = step
+            .as_object()
+            .ok_or_else(|| format!("Step {number} must be {{\"tool\", \"arguments\"}}"))?;
+        if let Some(unknown) = (step.keys()).find(|key| !matches!(key.as_str(), "tool" | "arguments")) {
+            return Err(format!(
+                "Step {number}: unknown key `{unknown}`; a step is {{\"tool\", \"arguments\"}}"
+            ));
+        }
+        let tool = (step.get("tool").and_then(Value::as_str))
+            .ok_or_else(|| format!("Step {number}: `tool` must be a tool's name"))?;
+        let arguments = match step.get("arguments") {
+            None | Some(Value::Null) => Map::new(),
+            Some(Value::Object(arguments)) => arguments.clone(),
+            Some(_) => return Err(format!("Step {number}: `arguments` must be an object")),
+        };
+        let spec = (specs.iter().find(|spec| spec.name == tool))
+            .ok_or_else(|| format!("Step {number}: there is no tool `{tool}`"))?;
+        let planner = match spec.run {
+            Action::Edit(planner) | Action::Mixed(_, planner) => planner,
+            Action::Run(_) => {
+                return Err(format!(
+                    "Step {number}: {} cannot be part of a batch, which takes only these edit tools: {}. Call it on its own, before or after the batch. Nothing was changed.",
+                    spec.name,
+                    batchable().join(", ")
+                ));
+            }
+        };
+        let plan = planner(cx, arguments)
+            .map_err(|error| format!("Step {number} ({}): {error}. Nothing was changed.", spec.name))?;
+        plans.push((spec.name, plan));
+    }
+    // Which step each edit came from, to say which one Xuan refused.
+    let mut owners = Vec::new();
+    let mut edits = Vec::new();
+    for (index, (_, plan)) in plans.iter_mut().enumerate() {
+        owners.extend(std::iter::repeat_n(index, plan.edits.len()));
+        edits.append(&mut plan.edits);
+    }
+    let name = name.unwrap_or_else(|| {
+        let first = plans[0].1.name;
+        if plans.iter().all(|(_, plan)| plan.name == first) {
+            first.to_owned()
+        } else {
+            "Batch Edit".to_owned()
+        }
+    });
+    let answer = cx
+        .edit(&name, edits)
+        .map_err(|error| blame(error, &owners, &plans))?;
+    let mut result = json!({
+        "ok": true,
+        "steps": plans.len(),
+        "layers": answer.get("layers").cloned().unwrap_or(json!([])),
+    });
+    let selection = plans.iter().any(|(_, plan)| plan.reply == Reply::Selection);
+    let size = plans.iter().any(|(_, plan)| plan.reply == Reply::Size);
+    if selection || size {
+        let document = document(cx)?;
+        if selection {
+            result["selection"] = document["selection"].clone();
+        }
+        if size {
+            result["width"] = document["width"].clone();
+            result["height"] = document["height"].clone();
+        }
+    }
+    text(result)
+}
+
+/// Xuan's error for a batch, naming the step whose edit it refused. Xuan
+/// says `Edit 3 (stroke): …` when a request of several edits fails.
+fn blame(error: String, owners: &[usize], plans: &[(&str, Plan)]) -> String {
+    let Some(message) = error.strip_prefix("Xuan: ") else {
+        // Not Xuan refusing an edit: the user, a timeout or the size.
+        return error;
+    };
+    let numbered = (message.strip_prefix("Edit ")).and_then(|rest| {
+        let (number, rest) = rest.split_once(' ')?;
+        let (_, detail) = rest.split_once("): ")?;
+        Some((number.parse::<usize>().ok()?.checked_sub(1)?, detail))
+    });
+    let (step, detail) = match numbered {
+        Some((edit, detail)) => (owners.get(edit).copied(), detail),
+        None if owners.len() == 1 => (Some(owners[0]), message),
+        None => (None, message),
+    };
+    match step {
+        Some(step) => format!(
+            "Step {} ({}): Xuan: {detail}. Nothing in the batch was applied.",
+            step + 1,
+            plans[step].0
+        ),
+        None => format!("{error}. Nothing in the batch was applied."),
+    }
+}
+
+/// `modify_selection`'s edits for grow, shrink and feather.
+fn selection_edit(args: &Map<String, Value>) -> Result<Plan, String> {
+    let amount = args.get("amount").and_then(Value::as_f64).unwrap_or(0.0);
+    match args.get("action").and_then(Value::as_str) {
+        Some(action @ ("grow" | "shrink")) => {
+            let by = if action == "grow" { amount } else { -amount };
+            Ok(Plan::new(
+                "Modify Selection",
+                vec![json!({"op": "grow_selection", "by": by.round() as i64})],
+                Reply::Selection,
+            ))
+        }
+        Some("feather") => Ok(Plan::new(
+            "Feather Selection",
+            vec![json!({"op": "feather_selection", "radius": amount})],
+            Reply::Selection,
+        )),
+        _ => Err("Unknown `action`".into()),
+    }
+}
+
+/// `paint_stroke`'s arguments.
+const STROKE_ARGS: [&str; 8] = [
+    "layer", "points", "strokes", "color", "size", "hardness", "opacity", "erase",
+];
+/// What each stroke of `strokes` may set, the top-level value otherwise.
+const BRUSH: [&str; 5] = ["color", "size", "hardness", "opacity", "erase"];
+
+/// `paint_stroke`'s `stroke` edits: one for `points`, or one per item of
+/// `strokes` with the top-level brush for what it leaves out.
+fn strokes(args: &Map<String, Value>) -> Result<Vec<Value>, String> {
+    let given = |key| args.get(key).filter(|value| !value.is_null());
+    let mut shared = op("stroke", args, &["layer"]);
+    shared.extend(op("stroke", args, &BRUSH));
+    match (given("points"), given("strokes")) {
+        (Some(_), Some(_)) => Err("Give `points` for one stroke or `strokes` for several, not both".into()),
+        (None, None) => Err("Give `points` for one stroke or `strokes` for several".into()),
+        (Some(points), None) => {
+            shared.insert("points".into(), points.clone());
+            Ok(vec![Value::Object(shared)])
+        }
+        (None, Some(list)) => {
+            let list = (list.as_array())
+                .filter(|list| !list.is_empty())
+                .ok_or("`strokes` must be a list of at least one {\"points\": …}")?;
+            let strokes = list.iter().enumerate().map(|(index, stroke)| {
+                let number = index + 1;
+                let stroke = stroke
+                    .as_object()
+                    .ok_or_else(|| format!("Stroke {number} must be an object with `points`"))?;
+                if let Some(unknown) = (stroke.keys())
+                    .find(|key| key.as_str() != "points" && !BRUSH.contains(&key.as_str()))
+                {
+                    return Err(format!("Stroke {number}: unknown argument `{unknown}`"));
+                }
+                if stroke.get("points").is_none_or(Value::is_null) {
+                    return Err(format!("Stroke {number} has no `points`"));
+                }
+                let mut edit = shared.clone();
+                edit.extend(
+                    (stroke.iter())
+                        .filter(|(_, value)| !value.is_null())
+                        .map(|(key, value)| (key.clone(), value.clone())),
+                );
+                Ok(Value::Object(edit))
+            });
+            strokes.collect()
+        }
     }
 }
 

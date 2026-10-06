@@ -235,7 +235,7 @@ impl Shared {
 }
 
 /// How the server explains itself to clients.
-const INSTRUCTIONS: &str = "Xuan is an image editor running on the user's computer. Start with get_document to see the layers and get_preview to see the image. Edits apply live as one undo step each; the first edit of a session asks the user in Xuan, who may refuse. Layer ids, coordinates and sizes are in document pixels with the origin at the top-left. Saving, exporting and opening files show a dialog to the user. A call that waits for the user fails if they do not answer in time; then ask the user instead of retrying.";
+const INSTRUCTIONS: &str = "Xuan is an image editor running on the user's computer. Start with get_document to see the layers and get_preview to see the image. Edits apply live as one undo step each; to make many edits one step, use paint_stroke with strokes or the batch tool. The first edit of a session asks the user in Xuan, who may refuse. Layer ids, coordinates and sizes are in document pixels with the origin at the top-left. Saving, exporting and opening files show a dialog to the user. A call that waits for the user fails if they do not answer in time; then ask the user instead of retrying.";
 
 /// The MCP side: tools and resources over the editor.
 #[derive(Clone)]

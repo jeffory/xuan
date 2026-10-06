@@ -194,13 +194,14 @@ larger tool arguments with a tool error saying the request is too large.
 | `select_shape` | Rectangle, ellipse or polygon selection with a `mode` | `select_rect`, `select_polygon` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
 | `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels | `host/run`, `grow_selection`, `feather_selection` |
-| `paint_stroke` | A brush stroke (or eraser) through points | `stroke` |
+| `paint_stroke` | Brush strokes (or eraser) through points: one with `points`, several with `strokes`; a single point is a dab | `stroke` |
 | `fill` | Fill the selection with a colour | `fill` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
 | `crop_canvas`, `resize_canvas`, `resize_image` | Crop, Canvas Size, Image Size | `crop`, `resize_canvas`, `resize_image` |
 | `undo`, `redo` | Up to 20 steps | `host/run` |
+| `batch` | Several edit tools' steps as one undo step, all or nothing | one `document/edit` |
 | `run_command` | Flatten, duplicate, flip, invert, clear, content-aware fill, remove background, masks, zoom… | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
 | `save_document` | Save as a `.xuan` project, through the save dialog | `file/save_as` |
@@ -213,6 +214,40 @@ Filters and adjustments use the shapes `.xuan` files store, for example
 10, "gamma": 1.2, "white": 245, "output_black": 0, "output_white": 255}}`; the
 tool descriptions list them all with their ranges, and
 [PLUGINS.md](PLUGINS.md#reading-and-editing-the-document) has the full list.
+
+### Batches
+
+`batch` takes `{"name"?, "steps": [{"tool", "arguments"}, …]}` and sends the
+edits of every step to Xuan in one `document/edit` request: one undo step
+named `name`, applied all or nothing. Each step is an edit tool with the
+arguments it takes on its own. A later step names a layer an earlier step
+created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
+(each `create_*` step creates one, as do `merge_layers`, `group_layers` and
+`apply_filter` or `apply_adjustment` with `as_layer`):
+
+```json
+{"name": "Title", "steps": [
+  {"tool": "create_text_layer", "arguments": {"text": "X", "x": 40, "y": 30, "size": 64}},
+  {"tool": "set_layer", "arguments": {"layer": "$1", "opacity": 0.8, "rotation": -12}},
+  {"tool": "create_layer", "arguments": {"name": "Stars", "above": "$1"}},
+  {"tool": "paint_stroke", "arguments": {"layer": "$2", "color": "#ffffff", "size": 3,
+    "strokes": [{"points": [[12, 9]]}, {"points": [[80, 22]]}, {"points": [[140, 15]], "size": 5}]}}
+]}
+```
+
+- Steps are checked before anything is sent; a step with bad arguments fails
+  the call without contacting Xuan. If Xuan refuses an edit (a locked layer,
+  a reference to a layer not created yet), it applies none of them. Either way
+  the error names the step, and nothing changes.
+- Only edit tools may be steps: `modify_selection` only with `none`, `grow`,
+  `shrink` or `feather`. Reading tools, `undo`, `redo`, `run_command`, the
+  document and file tools and `batch` itself are refused.
+- A batch is held to the limits of one request: at most 1,000 edits (each
+  stroke is one, `set_layer` with both properties and placement two), 32 new
+  layers, 200,000 pixels of strokes, the work budget and Xuan's 16 MiB message
+  limit. Split larger work into several calls.
+- The answer lists the ids of the layers created, in order, and the selection
+  or canvas size when a step changed them.
 
 ### Resources
 
@@ -236,6 +271,9 @@ tool descriptions list them all with their ranges, and
   done.
 - Each tool call is one undo step. If the user did not like a change,
   `undo` it rather than trying to reverse it by hand.
+- Group work that belongs together, so it is one undo step and one round
+  trip: `paint_stroke` with `strokes` for many strokes or dabs (a one-point
+  stroke paints a single round dab), and `batch` for a sequence of edits.
 - Ask the user before saving; the save dialog is theirs to answer.
 
 ## The `.xuan` format for agents

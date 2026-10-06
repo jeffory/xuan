@@ -141,7 +141,26 @@ impl Editor for FakeEditor {
                 message: "The user did not allow this plugin to edit documents in this session"
                     .into(),
             }),
-            "document/edit" => Ok(json!({"ok": true, "layers": ["new-layer"]})),
+            "document/edit" => {
+                // As Xuan refuses an edit of a locked layer, naming the edit
+                // when the request has several.
+                let edits = params["edits"].as_array().cloned().unwrap_or_default();
+                match edits.iter().position(|edit| edit["layer"] == "locked") {
+                    Some(index) if edits.len() > 1 => Err(EditorError {
+                        code: -32603,
+                        message: format!(
+                            "Edit {} ({}): Layer locked is locked",
+                            index + 1,
+                            edits[index]["op"].as_str().unwrap_or_default()
+                        ),
+                    }),
+                    Some(_) => Err(EditorError {
+                        code: -32603,
+                        message: "Layer locked is locked".into(),
+                    }),
+                    None => Ok(json!({"ok": true, "layers": ["new-layer"]})),
+                }
+            }
             "host/run" | "document/activate" => Ok(json!({"ok": true})),
             // As Xuan words a file that fails to load.
             "file/open" => Err(EditorError {
@@ -1195,7 +1214,7 @@ async fn tools_that_wait_for_the_user_say_so() {
         let tool = list.tools.iter().find(|tool| tool.name == name).unwrap();
         tool.description.clone().unwrap_or_default().into_owned()
     };
-    for name in ["create_layer", "fill", "run_command", "undo"] {
+    for name in ["create_layer", "fill", "run_command", "undo", "batch"] {
         let text = description(name);
         assert!(
             text.contains("waits until the user answers Xuan's prompt")
@@ -1212,4 +1231,281 @@ async fn tools_that_wait_for_the_user_say_so() {
         );
     }
     assert!(!description("get_document").contains("waits"));
+}
+
+/// Call a tool directly, as the server does, against `editor`.
+fn call_tool(editor: &FakeEditor, name: &str, arguments: Value) -> CallToolResult {
+    let incoming = editor.dir.join("incoming");
+    let cx = tools::Context {
+        editor,
+        session: Some("s"),
+        incoming: &incoming,
+        cancel: &CancelToken::new(),
+    };
+    tools::call(&cx, name, serde_json::from_value(arguments).unwrap())
+}
+
+/// The `document/edit` requests sent so far.
+fn edit_requests(editor: &FakeEditor) -> Vec<Value> {
+    (editor.requests().into_iter())
+        .filter(|(_, method, _)| method == "document/edit")
+        .map(|(.., params)| params)
+        .collect()
+}
+
+#[test]
+fn paint_stroke_sends_several_strokes_or_dabs_as_one_edit_request() {
+    let editor = FakeEditor::new(false);
+    // One stroke, as before; a single point is a dab.
+    let one = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"points": [[7, 8]], "size": 5}),
+    );
+    assert_ne!(one.is_error, Some(true), "{}", text_of(&one));
+    assert_eq!(
+        edit_requests(&editor)[0]["edits"],
+        json!([{"op": "stroke", "points": [[7, 8]], "size": 5}])
+    );
+    // Several, taking the top-level brush for what they leave out.
+    let many = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({
+            "layer": "base", "color": "#ffffff", "hardness": 1,
+            "strokes": [
+                {"points": [[1, 2]]},
+                {"points": [[3, 4], [5, 6]], "color": "#ff0000", "size": 3},
+                {"points": [[9, 9]], "erase": true},
+            ],
+        }),
+    );
+    assert_ne!(many.is_error, Some(true), "{}", text_of(&many));
+    let requests = edit_requests(&editor);
+    assert_eq!(requests.len(), 2, "one request for all the strokes");
+    assert_eq!(requests[1]["name"], "Paint Stroke");
+    assert_eq!(
+        requests[1]["edits"],
+        json!([
+            {"op": "stroke", "layer": "base", "points": [[1, 2]], "color": "#ffffff", "hardness": 1},
+            {"op": "stroke", "layer": "base", "points": [[3, 4], [5, 6]], "color": "#ff0000", "size": 3, "hardness": 1},
+            {"op": "stroke", "layer": "base", "points": [[9, 9]], "color": "#ffffff", "hardness": 1, "erase": true},
+        ])
+    );
+    // Mistakes are explained and nothing is sent.
+    let too_many = vec![json!({"points": [[1, 1]]}); tools::MAX_EDITS + 1];
+    for (arguments, says) in [
+        (
+            json!({"points": [[1, 1]], "strokes": [{"points": [[1, 1]]}]}),
+            "not both",
+        ),
+        (json!({"color": "#000000"}), "Give `points`"),
+        (json!({"strokes": []}), "at least one"),
+        (
+            json!({"strokes": [{"points": [[1, 1]]}, {"size": 3}]}),
+            "Stroke 2 has no `points`",
+        ),
+        (
+            json!({"strokes": [{"points": [[1, 1]], "layer": "base"}]}),
+            "Stroke 1: unknown argument `layer`",
+        ),
+        (json!({"strokes": too_many}), "at most 1000 edits"),
+    ] {
+        let result = call_tool(&editor, "paint_stroke", arguments.clone());
+        assert_eq!(result.is_error, Some(true), "{arguments}");
+        assert!(
+            text_of(&result).contains(says),
+            "{arguments}: {}",
+            text_of(&result)
+        );
+    }
+    assert_eq!(edit_requests(&editor).len(), 2, "nothing more sent");
+    // The schema offers both forms and requires neither.
+    let tool = (tools::list().into_iter())
+        .find(|t| t.name == "paint_stroke")
+        .unwrap();
+    assert!(tool.input_schema.get("required").is_none());
+    let strokes = &tool.input_schema["properties"]["strokes"];
+    assert_eq!(strokes["items"]["required"], json!(["points"]));
+    let description = tool.description.unwrap_or_default();
+    assert!(
+        description.contains("a single point paints one round dab"),
+        "{description}"
+    );
+}
+
+#[test]
+fn a_batch_is_one_request_and_later_steps_name_layers_earlier_ones_created() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "batch",
+        json!({"name": "Letters", "steps": [
+            {"tool": "create_text_layer", "arguments": {"text": "A", "x": 10, "y": 20}},
+            {"tool": "set_layer", "arguments": {"layer": "$1", "opacity": 0.5, "rotation": 12}},
+            {"tool": "paint_stroke", "arguments": {"layer": "$1", "strokes": [{"points": [[1, 1]]}, {"points": [[2, 2]]}]}},
+            {"tool": "select_shape", "arguments": {"shape": "rectangle", "x": 0, "y": 0, "width": 4, "height": 4}},
+            {"tool": "modify_selection", "arguments": {"action": "none"}},
+        ]}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let requests = edit_requests(&editor);
+    assert_eq!(requests.len(), 1, "one request, so one undo step");
+    assert_eq!(requests[0]["name"], "Letters");
+    assert_eq!(
+        requests[0]["edits"],
+        json!([
+            {"op": "add_text_layer", "text": "A", "x": 10, "y": 20},
+            {"op": "set", "layer": "$1", "opacity": 0.5},
+            {"op": "transform", "layer": "$1", "rotation": 12},
+            {"op": "stroke", "layer": "$1", "points": [[1, 1]]},
+            {"op": "stroke", "layer": "$1", "points": [[2, 2]]},
+            {"op": "select_rect", "x": 0, "y": 0, "width": 4, "height": 4},
+            {"op": "set_selection"},
+        ])
+    );
+    let answer: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    assert_eq!(answer["steps"], 5);
+    assert_eq!(answer["layers"], json!(["new-layer"]));
+    assert!(answer.as_object().unwrap().contains_key("selection"));
+    // Without a name, the step is named after its tool, or as a batch.
+    call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "fill", "arguments": {"color": "#000000"}},
+            {"tool": "fill", "arguments": {"color": "#ffffff", "layer": "base"}},
+        ]}),
+    );
+    call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "fill", "arguments": {"color": "#000000"}},
+            {"tool": "crop_canvas", "arguments": {"x": 0, "y": 0, "width": 8, "height": 8}},
+        ]}),
+    );
+    let requests = edit_requests(&editor);
+    assert_eq!(requests[1]["name"], "Fill");
+    assert_eq!(requests[2]["name"], "Batch Edit");
+}
+
+#[test]
+fn a_failing_batch_step_is_named_and_nothing_is_applied() {
+    let editor = FakeEditor::new(false);
+    let incoming = editor.dir.join("incoming");
+    // A step with bad arguments: nothing is sent, and an image an earlier
+    // step wrote for Xuan is removed.
+    let bad = call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "create_image_layer", "arguments": {"png_base64": PNG}},
+            {"tool": "fill", "arguments": {"layer": "base"}},
+        ]}),
+    );
+    assert_eq!(bad.is_error, Some(true));
+    let text = text_of(&bad);
+    assert!(text.starts_with("Step 2 (fill): "), "{text}");
+    assert!(text.contains("Nothing was changed"), "{text}");
+    assert!(edit_requests(&editor).is_empty());
+    assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
+    // Xuan refusing an edit: the error names the step it came from (the
+    // fourth edit is the third step's), and Xuan applied none of them.
+    let refused = call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "fill", "arguments": {"color": "#000000"}},
+            {"tool": "set_layer", "arguments": {"layer": "base", "opacity": 0.5, "x": 3}},
+            {"tool": "paint_stroke", "arguments": {"layer": "locked", "points": [[1, 1]]}},
+        ]}),
+    );
+    assert_eq!(refused.is_error, Some(true));
+    assert_eq!(
+        text_of(&refused),
+        "Step 3 (paint_stroke): Xuan: Layer locked is locked. Nothing in the batch was applied."
+    );
+    assert_eq!(edit_requests(&editor).len(), 1);
+    // Refused by the user: said as for any edit.
+    let denied = call_tool(
+        &FakeEditor::new(true),
+        "batch",
+        json!({"steps": [{"tool": "fill", "arguments": {"color": "#000000"}}]}),
+    );
+    assert!(
+        text_of(&denied).contains("did not allow edits"),
+        "{}",
+        text_of(&denied)
+    );
+}
+
+#[test]
+fn a_batch_takes_only_edit_tools() {
+    let editor = FakeEditor::new(false);
+    for (step, says) in [
+        (
+            json!({"tool": "get_document"}),
+            "get_document cannot be part of a batch",
+        ),
+        (
+            json!({"tool": "undo", "arguments": {"steps": 2}}),
+            "undo cannot be part of a batch",
+        ),
+        (
+            json!({"tool": "run_command", "arguments": {"command": "flatten"}}),
+            "run_command cannot",
+        ),
+        (json!({"tool": "save_document"}), "save_document cannot"),
+        (
+            json!({"tool": "batch", "arguments": {"steps": []}}),
+            "batch cannot",
+        ),
+        (
+            json!({"tool": "modify_selection", "arguments": {"action": "invert"}}),
+            "`invert` runs a command",
+        ),
+        (
+            json!({"tool": "no_such_tool"}),
+            "there is no tool `no_such_tool`",
+        ),
+        (json!({"tool": "fill", "args": {}}), "unknown key `args`"),
+        (
+            json!({"tool": "fill", "arguments": [1]}),
+            "`arguments` must be an object",
+        ),
+    ] {
+        let result = call_tool(
+            &editor,
+            "batch",
+            json!({"steps": [{"tool": "fill", "arguments": {"color": "#000000"}}, step]}),
+        );
+        assert_eq!(result.is_error, Some(true), "{step}");
+        let text = text_of(&result);
+        assert!(text.starts_with("Step 2"), "{step}: {text}");
+        assert!(text.contains(says), "{step}: {text}");
+    }
+    assert!(editor.requests().is_empty(), "nothing was sent");
+    let empty = call_tool(&editor, "batch", json!({"steps": []}));
+    assert!(text_of(&empty).contains("at least one"));
+    // The description lists exactly the tools a batch takes.
+    let tools = tools::list();
+    let batch = tools.iter().find(|t| t.name == "batch").unwrap();
+    let description = batch.description.clone().unwrap_or_default();
+    let batchable = tools::batchable();
+    for tool in &tools {
+        let name = tool.name.as_ref();
+        let listed = [",", " (", " and", ";"]
+            .iter()
+            .any(|after| description.contains(&format!(" {name}{after}")));
+        assert_eq!(
+            listed,
+            batchable.contains(&name),
+            "{name}: {description}"
+        );
+    }
+    assert_eq!(
+        batch.annotations.as_ref().unwrap().destructive_hint,
+        Some(true)
+    );
 }

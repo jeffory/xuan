@@ -87,6 +87,7 @@ the document takes effect on the next frame and is drawn at once.
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
 | reorder layers | `document/edit` `move_layer` (new) |
 | crop / resize canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas` |
+| several edits as one undo step (#61) | one `document/edit` with every edit; `"$n"` names a layer added earlier in the request (new) |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
 | provenance | `document/get` lists each generated layer's `provenance` |
@@ -136,6 +137,20 @@ like the existing ones, rather than anything specific to MCP:
   now refuses commands that are greyed out in their menu.
 - **Knowing what was added.** `document/edit` answers with the ids of the
   layers it added.
+- **Batching** (#61). Painting detail one tool call at a time took hundreds
+  of round trips and undo steps. `paint_stroke` takes `strokes`, sent as one
+  `stroke` edit each in one request (a one-point stroke already painted a
+  dab). The `batch` tool runs each step's tool only as far as the edits it
+  would send, checks them all, and sends them as one `document/edit`, so the
+  batch is one undo step and Xuan applies all of it or none. Tools that are
+  not edits (reads, files, `host/run` commands, undo and redo) are refused as
+  steps rather than run outside the undo step. A step cannot know the id of a
+  layer an earlier step creates, so `document/edit` gained layer
+  references: `"$n"` in a layer field is the n-th layer the request has
+  added so far, resolved by Xuan as the edit runs. The plugin passes
+  references through untouched. When a request of several edits fails, Xuan
+  names the edit (`Edit 3 (stroke): …`), which the server maps back to the
+  step.
 - **Documents.** `document/list` and `document/activate`.
 - **Undo/redo** needed nothing: they were already `Edit` commands.
 
