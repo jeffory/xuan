@@ -26,12 +26,18 @@ mod pencil_tests;
 #[path = "paint/dynamics_tests.rs"]
 mod dynamics_tests;
 
+#[cfg(test)]
+#[path = "paint/symmetry_tests.rs"]
+mod symmetry_tests;
+
 pub mod dynamics;
 pub use dynamics::Dynamics;
 mod pencil;
 pub use pencil::tip_offsets;
 mod stroke;
 pub use stroke::Stroke;
+pub mod symmetry;
+pub use symmetry::{Symmetry, SymmetryMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintMode {
@@ -58,6 +64,9 @@ pub struct Brush {
     /// Spacing, taper, scatter and jitter. The Brush, Pencil and Eraser use
     /// them through [`Stroke`]; other tools and plain [`stroke`] calls ignore them.
     pub dynamics: Dynamics,
+    /// Mirror or radial copies of the stroke, for the same tools as the
+    /// dynamics. Off by default.
+    pub symmetry: Symmetry,
 }
 
 impl Default for Brush {
@@ -70,6 +79,7 @@ impl Default for Brush {
             tilt: [0.0; 2],
             square: false,
             dynamics: Dynamics::default(),
+            symmetry: Symmetry::default(),
         }
     }
 }

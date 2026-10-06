@@ -1014,3 +1014,11 @@ Flip to the other side	翻转到另一侧
 Turn letters with the path	字母随路径旋转
 End size	结尾字号
 Letters past the end of an open path are hidden; on a closed path the text wraps around.	超出开放路径末端的字母会被隐藏；在闭合路径上文字会环绕。
+Symmetry	对称
+Off	关闭
+Vertical mirrors left and right across the axis, Horizontal mirrors top and bottom, Radial turns the stroke around the centre.	垂直沿轴左右镜像，水平上下镜像，径向绕中心旋转笔画。
+Segments	分段
+Copies of the stroke around the centre.	笔画绕中心的副本数。
+Centre X	中心 X
+Centre Y	中心 Y
+Centre on canvas	居中于画布

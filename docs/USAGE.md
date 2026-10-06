@@ -253,6 +253,29 @@ Brush dynamics stay set until you change them while Xuan runs, like the size
 and hardness. Plugins and MCP clients set them per stroke (see
 [PLUGINS.md](PLUGINS.md)).
 
+### Paint symmetry
+
+The Brush, Pencil and Eraser also have a **Symmetry** menu, which paints every
+stroke again as you draw it:
+
+- **Vertical** mirrors the stroke left and right across a vertical axis.
+- **Horizontal** mirrors it top and bottom across a horizontal axis.
+- **Radial** turns it around the centre into **Segments** copies (2–32), for
+  mandalas, starbursts and snowflakes.
+- **Off** paints one stroke.
+
+The axis goes through the centre, which is the middle of the canvas until you
+type a **Centre X** and **Centre Y** in pixels; **Centre on canvas** puts it
+back in the middle. While a Brush, Pencil or Eraser is selected and symmetry is
+on, the axis or the radial spokes are drawn as dashed lines over the canvas,
+with a circle at the centre.
+
+Each copy is the same stroke mirrored or turned, with the same spacing, taper,
+scatter and jitter, so the result stays symmetric. All copies are one stroke:
+where they cross they don't darken each other, and one **Undo** removes them
+all. Other tools ignore symmetry. Like the brush dynamics, symmetry stays set
+while Xuan runs. Plugins and MCP clients set it per stroke.
+
 ### Drawing tablets
 
 Wacom, Parblo, and other tablets supported by your system's driver can draw and
