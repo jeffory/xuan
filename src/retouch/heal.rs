@@ -67,29 +67,46 @@ fn cancelled(cancel: &AtomicBool) -> Result<()> {
 }
 
 /// Mean squared difference between the ring around the spot and the ring around the
-/// patch offset by `(dx, dy)`. Infinite when the patch would overlap the spot's work box
-/// or leave the image.
+/// patch offset by `(dx, dy)`. Infinite when the patch would touch the painted pixels or
+/// leave the image.
 struct Scorer<'a> {
     rgba: &'a [u8],
     /// Byte offsets of the ring pixels in `rgba`.
     ring: &'a [usize],
+    /// Roles of the work box, row-major.
+    role: &'a [u8],
+    /// Work-box coordinates of every ring and hole pixel.
+    cells: &'a [(i64, i64)],
     work: [i64; 4],
     size: [i64; 2],
 }
 
 impl Scorer<'_> {
-    fn score(&self, dx: i64, dy: i64) -> f64 {
+    /// Whether the patch at `(dx, dy)` stays inside the image and off the painted pixels.
+    /// A thin stroke's bounding box is mostly untouched skin, so the test is on the
+    /// pixels themselves, not the box: a source two stroke-widths to the side is fine.
+    fn usable(&self, dx: i64, dy: i64) -> bool {
         let [wx0, wy0, ww, wh] = self.work;
         let [w, h] = self.size;
-        if dx.abs() < ww && dy.abs() < wh {
+        let box_inside = wx0 + dx >= 0 && wy0 + dy >= 0 && wx0 + ww + dx <= w && wy0 + wh + dy <= h;
+        if box_inside && (dx.abs() >= ww || dy.abs() >= wh) {
+            return true;
+        }
+        self.cells.iter().all(|&(x, y)| {
+            let (sx, sy) = (x + dx, y + dy);
+            if sx + wx0 < 0 || sy + wy0 < 0 || sx + wx0 >= w || sy + wy0 >= h {
+                return false;
+            }
+            !(sx >= 0 && sy >= 0 && sx < ww && sy < wh)
+                || self.role[(sy * ww + sx) as usize] != HOLE
+        })
+    }
+
+    fn score(&self, dx: i64, dy: i64) -> f64 {
+        if self.ring.is_empty() || !self.usable(dx, dy) {
             return f64::INFINITY;
         }
-        if wx0 + dx < 0 || wy0 + dy < 0 || wx0 + ww + dx > w || wy0 + wh + dy > h {
-            return f64::INFINITY;
-        }
-        if self.ring.is_empty() {
-            return f64::INFINITY;
-        }
+        let [w, _] = self.size;
         let shift = (dy * w + dx) * 4;
         let mut sum = 0u64;
         for &t in self.ring {
@@ -293,32 +310,50 @@ pub fn spot_heal(
     // Source patch for Content-Aware and Proximity Match.
     let mut offset = None;
     if mode != HealMode::CreateTexture {
-        const FACTORS: [f64; 5] = [1.05, 1.35, 1.75, 2.25, 2.8];
+        let cells: Vec<(i64, i64)> = (0..wn)
+            .filter(|&p| role[p] != OUTSIDE)
+            .map(|p| ((p % ww) as i64, (p / ww) as i64))
+            .collect();
         let scorer = Scorer {
             rgba,
             ring: &ring_pixels,
+            role: &role,
+            cells: &cells,
             work: [wx0, wy0, ww as i64, wh as i64],
             size: [big_w, big_h],
         };
         let proximity = mode == HealMode::ProximityMatch;
-        let count = if proximity { 2 } else { 5 };
+        let step = if proximity { 0.6 } else { 0.1 };
+        // Candidate distances, nearest first, each with the weight that makes nearer
+        // patches win ties. Upstream's five are fractions of the work box, which for a
+        // long stroke is a box-width away. The three before them are measured from the
+        // painted area's own thickness, so a thin stroke can take its texture from
+        // alongside itself: they only pass the overlap test when the painted area is
+        // thin compared with its box, and for a dab the search is upstream's.
+        let hole_count = role.iter().filter(|&&r| r == HOLE).count();
+        let thickness = hole_count as f64 / size as f64 + 2.0 * ring as f64;
+        const BOX_FACTORS: [f64; 5] = [1.05, 1.35, 1.75, 2.25, 2.8];
+        const NEAR_FACTORS: [f64; 3] = [1.0, 1.5, 2.25];
+        let near = NEAR_FACTORS.iter().enumerate().map(|(i, f)| {
+            (
+                1.0 / (1.0 + step * (NEAR_FACTORS.len() - i) as f64),
+                f * thickness,
+                f * thickness,
+            )
+        });
+        let far = BOX_FACTORS
+            .iter()
+            .take(if proximity { 2 } else { 5 })
+            .enumerate()
+            .map(|(i, f)| (1.0 + step * i as f64, f * ww as f64, f * wh as f64));
         let mut best = f64::INFINITY;
         let (mut ox, mut oy) = (0, 0);
-        for (f, factor) in FACTORS.iter().take(count).enumerate() {
+        for (weight, rx, ry) in near.chain(far) {
             for a in 0..24 {
                 let angle = f64::from(a) * std::f64::consts::PI / 12.0;
-                let dx = (angle.cos() * factor * ww as f64).round() as i64;
-                let dy = (angle.sin() * factor * wh as f64).round() as i64;
-                let mut score = scorer.score(dx, dy);
-                if !score.is_finite() {
-                    continue;
-                }
-                // Nearer patches win ties.
-                score *= if proximity {
-                    1.0 + 0.6 * f as f64
-                } else {
-                    1.0 + 0.1 * f as f64
-                };
+                let dx = (angle.cos() * rx).round() as i64;
+                let dy = (angle.sin() * ry).round() as i64;
+                let score = scorer.score(dx, dy) * weight;
                 if score < best {
                     best = score;
                     (ox, oy) = (dx, dy);
