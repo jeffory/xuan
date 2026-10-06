@@ -330,6 +330,17 @@ impl EditorApp {
             .filter(|request| self.plugins.running(&request.plugin))
             .collect();
         self.plugins.file_requests = still;
+        // Another dialog may have replaced the open prompt (a menu command,
+        // opening a document): its request still waits, so show it again.
+        if let Some(prompt) = &self.plugins.file_prompt
+            && self.dialog.is_none()
+        {
+            if self.plugins.running(&prompt.plugin) {
+                self.dialog = Some(Dialog::PluginFile);
+            } else {
+                self.plugins.file_prompt = None;
+            }
+        }
         if self.dialog.is_some() || self.plugins.file_prompt.is_some() || self.job.is_some() {
             return;
         }

@@ -4389,4 +4389,158 @@ done
         assert!(!ui.app().edits_without_asking("mock"));
         ui.app_mut().stop_plugin("mock");
     }
+
+    /// Start the installed mock plugin and wait until it runs.
+    fn start_mock(ui: &mut crate::app::tests::ui::UiTest) {
+        ui.app_mut().render_pane("plugin:mock/info", "open", None);
+        for _ in 0..200 {
+            ui.settle();
+            if ui.app().plugins.running("mock") && !ui.app().plugins.starting("mock") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the mock plugin did not start");
+    }
+
+    /// Help → About replaces the open dialog; then About is closed.
+    fn open_and_close_about(ui: &mut crate::app::tests::ui::UiTest) {
+        ui.app_mut().command("about");
+        ui.settle();
+        assert_eq!(ui.app().dialog, Some(Dialog::About));
+        ui.app_mut().dialog = None;
+        ui.settle();
+    }
+
+    #[test]
+    fn the_session_prompt_comes_back_after_another_dialog_replaced_it() {
+        use crate::app::tests::ui::UiTest;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_session_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let request = file_request(
+            401,
+            "document/edit",
+            json!({"name": "Agent paint", "edits": [{"op": "add_empty_layer"}]}),
+        );
+        assert!(ui.app_mut().hold_edit("mock", request).is_none());
+        ui.settle();
+        let title = "Allow Mock (plugin mock) to edit your documents for this session?";
+        assert!(ui.has(title));
+        open_and_close_about(&mut ui);
+        // The held edit still waits for an answer, so its prompt shows again.
+        assert!(!ui.app().plugins.edit_held.is_empty());
+        assert!(ui.has(title), "the held edit's prompt never came back");
+        // Opening a document clears the dialog too.
+        ui.app_mut().new_document();
+        ui.settle();
+        assert!(ui.has(title), "the prompt did not come back after New");
+        ui.click_role(egui::accesskit::Role::Button, "Allow");
+        assert!(ui.app().plugins.edit_held.is_empty());
+        assert!(ui.app().plugins.edit_prompt.is_none());
+        assert_eq!(ui.app().dialog, None);
+        ui.app_mut().stop_plugin("mock");
+    }
+
+    #[test]
+    fn the_send_prompt_comes_back_after_another_dialog_replaced_it() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_network_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let title = "Send to Mock (plugin mock)?";
+
+        // An export the plugin asks for outside an action waits for the user.
+        let request = file_request(402, "document/export", json!({}));
+        ui.app_mut().plugins.held.push(("mock".into(), request));
+        ui.settle();
+        assert!(ui.has(title));
+        open_and_close_about(&mut ui);
+        assert_eq!(ui.app().plugins.held.len(), 1);
+        assert!(ui.has(title), "the held export's prompt never came back");
+        ui.click_role(Role::Button, "Cancel");
+        assert!(ui.app().plugins.held.is_empty());
+        assert!(ui.app().plugins.consent.is_none());
+        for _ in 0..200 {
+            if answer(dir.path(), 402).is_some() {
+                break;
+            }
+            ui.settle();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let answered = answer(dir.path(), 402).expect("the export was never answered");
+        assert_eq!(
+            answered["error"]["code"],
+            xuan::plugins::protocol::CANCELLED
+        );
+
+        // An action's prompt comes back while its action is still open…
+        ui.app_mut().command("fill_fg");
+        ui.open_menu("Plugins");
+        ui.click("Send Layer · Mock");
+        assert_eq!(ui.app().dialog, Some(Dialog::PluginConsent));
+        open_and_close_about(&mut ui);
+        assert_eq!(ui.app().dialog, Some(Dialog::PluginConsent));
+        assert!(ui.has(title), "the action's prompt never came back");
+        // …and is dropped once the action was closed.
+        ui.app_mut().command("about");
+        ui.settle();
+        ui.app_mut().close_plugin_action();
+        ui.app_mut().dialog = None;
+        ui.settle();
+        assert!(ui.app().plugins.consent.is_none());
+        assert_eq!(ui.app().dialog, None);
+        ui.app_mut().stop_plugin("mock");
+    }
+
+    #[test]
+    fn the_file_prompt_comes_back_after_another_dialog_replaced_it() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_read_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let image = out.path().join("asked.png");
+        RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 200, 255]))
+            .save(&image)
+            .unwrap();
+        ui.app_mut().queue_file_request(
+            "mock",
+            file_request(403, "file/open", json!({"path": image})),
+        );
+        ui.settle();
+        let title = "Open a file?";
+        assert!(ui.has(title));
+        open_and_close_about(&mut ui);
+        assert!(ui.app().plugins.file_prompt.is_some());
+        assert!(ui.has(title), "the file request's prompt never came back");
+        let sessions = ui.app().sessions.len();
+        ui.click_role(Role::Button, "Open");
+        assert!(ui.app().plugins.file_prompt.is_none());
+        assert_eq!(ui.app().sessions.len(), sessions + 1);
+        for _ in 0..200 {
+            if answer(dir.path(), 403).is_some() {
+                break;
+            }
+            ui.settle();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let answered = answer(dir.path(), 403).expect("the file request was never answered");
+        assert_eq!(answered["result"]["ok"], true);
+        ui.app_mut().stop_plugin("mock");
+    }
 }

@@ -214,6 +214,17 @@ impl EditorApp {
         // Edits that arrived while these were applied wait behind them.
         waiting.append(&mut self.plugins.edit_held);
         self.plugins.edit_held = waiting;
+        // Another dialog may have replaced the open prompt (a menu command,
+        // opening a document): its edits still wait, so show it again.
+        if let Some(prompt) = &self.plugins.edit_prompt
+            && self.dialog.is_none()
+        {
+            if self.plugins.running(&prompt.plugin) {
+                self.dialog = Some(Dialog::PluginEditSession);
+            } else {
+                self.plugins.edit_prompt = None;
+            }
+        }
         if self.plugins.edit_prompt.is_none()
             && self.dialog.is_none()
             && let Some((plugin, request)) = self.plugins.edit_held.first()

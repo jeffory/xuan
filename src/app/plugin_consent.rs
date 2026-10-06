@@ -368,6 +368,23 @@ impl EditorApp {
             }
         }
         self.plugins.held = waiting;
+        // Another dialog may have replaced the open prompt (a menu command,
+        // opening a document): what it asks about still waits, so show it
+        // again, unless its plugin stopped or its action was closed.
+        if let Some(consent) = &self.plugins.consent
+            && self.dialog.is_none()
+        {
+            let waiting = self.plugins.running(&consent.plugin)
+                && consent.action.as_ref().is_none_or(|action| {
+                    (self.plugins.action.as_ref())
+                        .is_some_and(|edit| edit.plugin == consent.plugin && &edit.action == action)
+                });
+            if waiting {
+                self.dialog = Some(Dialog::PluginConsent);
+            } else {
+                self.plugins.consent = None;
+            }
+        }
         if self.plugins.consent.is_none()
             && self.dialog.is_none()
             && let Some((plugin, request)) = self.plugins.held.first()
