@@ -484,6 +484,7 @@ impl EditorApp {
         let mut setting_changed: Option<(String, String, Value)> = None;
         let mut ask_again: Option<String> = None;
         let mut auto_mode: Option<(String, bool)> = None;
+        let mut save_mode: Option<(String, bool)> = None;
         let mut offline = self.config.disable_network_plugins;
         let mut block = self.config.block_undeclared_network();
         let plugin_dir = self
@@ -623,6 +624,20 @@ impl EditorApp {
                                     auto_mode = Some((id.clone(), auto));
                                 }
                             }
+                            // Shown for plugins that drive the editor (the MCP
+                            // server), and for any plugin while it is on, so it
+                            // can be turned off.
+                            if self.plugin_granted(&id)
+                                && (self.asks_before_edits(&id) || self.saves_without_asking(&id))
+                            {
+                                let mut save = self.saves_without_asking(&id);
+                                if widgets::checkbox(ui, &mut save, tr("Save and export without asking"))
+                                    .on_hover_text(tr("Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files Xuan wrote since it started, without asking; the status bar shows each one. Replacing any other file still asks."))
+                                    .changed()
+                                {
+                                    save_mode = Some((id.clone(), save));
+                                }
+                            }
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
@@ -733,6 +748,9 @@ impl EditorApp {
         }
         if let Some((id, on)) = auto_mode {
             self.set_edit_auto_mode(&id, on);
+        }
+        if let Some((id, on)) = save_mode {
+            self.set_save_without_asking(&id, on);
         }
         if offline != self.config.disable_network_plugins {
             self.set_network_plugins_disabled(offline);

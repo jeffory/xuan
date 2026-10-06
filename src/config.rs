@@ -308,6 +308,13 @@ pub struct PluginGrant {
     /// belongs to this grant like `send_without_asking`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub edit_without_asking: bool,
+    /// "Always allow" in the prompt shown when a plugin asks to save or
+    /// export to a path it names (`file/save_as`, `file/export` or
+    /// `file/save` with a `path`): its writes no longer wait for the user,
+    /// except to replace a file Xuan did not write in this run. It belongs
+    /// to this grant like `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub save_without_asking: bool,
 }
 
 impl PluginGrant {

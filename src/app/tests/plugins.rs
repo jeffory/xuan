@@ -2349,7 +2349,7 @@ fn edit_sessions_gate_direct_edits_until_the_user_allows_them() {
     assert_eq!(
         app.service_request("mock", &session_request("session/status", json!({})))
             .unwrap(),
-        json!({"edit_prompt": "session", "edits": "ask", "auto": false})
+        json!({"edit_prompt": "session", "edits": "ask", "auto": false, "save_auto": false})
     );
 
     // Allow holds for its session only; Deny refuses the session.
@@ -2397,7 +2397,7 @@ fn edit_sessions_gate_direct_edits_until_the_user_allows_them() {
     assert_eq!(
         app.service_request("mock", &session_request("session/status", json!({})))
             .unwrap(),
-        json!({"edit_prompt": "session", "edits": "allowed", "auto": true})
+        json!({"edit_prompt": "session", "edits": "allowed", "auto": true, "save_auto": false})
     );
     // Turning it off in Manage Plugins asks again, even in allowed sessions.
     app.set_edit_auto_mode("mock", false);

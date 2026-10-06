@@ -373,6 +373,9 @@ impl ServerHandler for Xuan {
                 } else {
                     "an unknown tool"
                 };
+                // A save or export names the file it wrote: the pane is the
+                // user's, and writes made without asking must be visible.
+                let outcome = tools::written(&name, &result).unwrap_or_else(|| outcome.into());
                 this.shared.record(format!("{shown}: {outcome}"));
                 result
             })

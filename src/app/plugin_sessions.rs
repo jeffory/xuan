@@ -374,6 +374,7 @@ impl EditorApp {
             "edit_prompt": if asks { "session" } else { "none" },
             "edits": edits,
             "auto": asks && self.edits_without_asking(plugin),
+            "save_auto": self.saves_without_asking(plugin),
         })
     }
 

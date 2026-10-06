@@ -126,6 +126,10 @@ pub(super) struct PluginState {
     /// When a plugin last switched the current document; see
     /// `ACTIVATE_INTERVAL`.
     pub activated_at: HashMap<String, std::time::Instant>,
+    /// Files Xuan wrote in this run (saved projects and exported images,
+    /// whoever asked), canonicalized: a plugin allowed to save without
+    /// asking may replace these without asking, and no others.
+    pub written_files: std::collections::HashSet<PathBuf>,
 }
 
 enum Pending {
@@ -557,6 +561,7 @@ impl EditorApp {
         {
             new.send_without_asking = old.send_without_asking;
             new.edit_without_asking = old.edit_without_asking;
+            new.save_without_asking = old.save_without_asking;
         } else {
             self.plugins.forget_session(plugin);
         }
@@ -2839,6 +2844,7 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
         permissions: manifest.permissions.clone(),
         send_without_asking: false,
         edit_without_asking: false,
+        save_without_asking: false,
     }
 }
 

@@ -86,6 +86,11 @@ pub fn tree(shared: &Shared, permissions: Option<&Value>) -> Value {
         _ => "Edits are applied as clients send them.",
     };
     children.push(ui::muted(edits));
+    if permissions.is_some_and(|status| status["save_auto"] == true) {
+        children.push(ui::muted(
+            "Clients save and export to the paths they name without asking. Turn it off in Plugins → Manage Plugins….",
+        ));
+    }
     children.push(ui::button("new_token", "New Token"));
     children.push(ui::muted(
         "A new token disconnects every client that uses the old one.",

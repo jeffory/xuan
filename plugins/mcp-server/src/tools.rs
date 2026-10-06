@@ -1135,24 +1135,72 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "save_document",
             title: "Save the project",
-            description: "Ask the user to save a document (the current one by default) as a .xuan project: Xuan shows its save dialog with `suggested_name`, and the user chooses where. Returns the file name, or an error if the user cancelled.",
-            properties: json!({"document": {"type": "string"}, "suggested_name": {"type": "string"}}),
+            description: concat!(
+                "Save a document (the current one by default) as a .xuan project. ",
+                "With an absolute `path` (ending in .xuan, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
+                "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
+                "With `in_place: true`, save the document back to its own .xuan file, as Ctrl+S does, asking the same way. ",
+                "Without either, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
+                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file Xuan did not write since it started asks the user.",
+                " Returns the file name (never the folder), with `asked: false` when it was written without asking, or an error if the user cancelled."
+            ),
+            properties: json!({
+                "document": {"type": "string"},
+                "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
+                "path": {"type": "string", "description": "Where to save, an absolute path ending in .xuan"},
+                "overwrite": {"type": "boolean", "description": "Allow replacing an existing file at `path`"},
+                "in_place": {"type": "boolean", "description": "Save to the document's own .xuan file"},
+            }),
             required: &[],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["document", "suggested_name"])?;
+                let mut args = pick(
+                    args,
+                    &["document", "suggested_name", "path", "overwrite", "in_place"],
+                )?;
+                let in_place = args.remove("in_place");
+                if in_place.as_ref().is_some_and(|value| !value.is_null() && !value.is_boolean()) {
+                    return Err("`in_place` must be true or false".into());
+                }
+                if in_place == Some(json!(true)) {
+                    if let Some(key) = ["suggested_name", "path", "overwrite"]
+                        .into_iter()
+                        .find(|key| args.contains_key(*key))
+                    {
+                        return Err(format!(
+                            "`in_place` saves to the document's own file; leave out `{key}`"
+                        ));
+                    }
+                    return text(cx.call("file/save", Value::Object(args))?);
+                }
                 text(cx.call("file/save_as", Value::Object(args))?)
             }),
         },
         Spec {
             name: "export_document",
             title: "Export an image",
-            description: "Ask the user to export a document as png (default), jpg, tiff or webp: Xuan shows its save dialog and the user chooses where. Returns the file name.",
-            properties: json!({"document": {"type": "string"}, "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]}, "suggested_name": {"type": "string"}}),
+            description: concat!(
+                "Export a document (the current one by default) as png (default), jpg, tiff or webp. ",
+                "With an absolute `path` (ending in .png, .jpg, .jpeg, .tif, .tiff or .webp, which picks the format, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
+                "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
+                "Without `path`, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
+                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file Xuan did not write since it started asks the user.",
+                " Returns the file name (never the folder), with `asked: false` when it was written without asking."
+            ),
+            properties: json!({
+                "document": {"type": "string"},
+                "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]},
+                "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
+                "path": {"type": "string", "description": "Where to export, an absolute path with an image extension"},
+                "overwrite": {"type": "boolean", "description": "Allow replacing an existing file at `path`"},
+            }),
             required: &[],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["document", "format", "suggested_name"])?;
+                let args = pick(
+                    args,
+                    &["document", "format", "suggested_name", "path", "overwrite"],
+                )?;
                 text(cx.call("file/export", Value::Object(args))?)
             }),
         },
@@ -1220,6 +1268,41 @@ pub fn waiting_message(name: &str) -> &'static str {
         Some(Kind::File) => "Waiting for the user to answer in Xuan",
         _ => "Waiting for Xuan",
     }
+}
+
+/// For the pane's activity: what a save or export wrote, such as
+/// "exported out.png without asking". Only the file name Xuan answered with,
+/// stripped of control and bidi characters.
+pub fn written(name: &str, result: &CallToolResult) -> Option<String> {
+    let verb = match name {
+        "save_document" => "saved",
+        "export_document" => "exported",
+        _ => return None,
+    };
+    if result.is_error == Some(true) {
+        return None;
+    }
+    let text = (result.content.iter()).find_map(|content| content.as_text())?;
+    let answer: Value = serde_json::from_str(&text.text).ok()?;
+    let file: String = (answer.get("name")?.as_str()?.chars())
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{200B}'..='\u{200F}'
+                        | '\u{202A}'..='\u{202E}'
+                        | '\u{2066}'..='\u{2069}'
+                        | '\u{061C}'
+                        | '\u{FEFF}'
+                )
+        })
+        .take(120)
+        .collect();
+    Some(if answer.get("asked") == Some(&Value::Bool(false)) {
+        format!("{verb} {file} without asking")
+    } else {
+        format!("{verb} {file}")
+    })
 }
 
 /// Run a tool. Errors from Xuan or from the arguments become a tool error
@@ -1592,7 +1675,7 @@ fn explain(method: &str, error: &EditorError) -> String {
     }
     match method {
         "document/edit" | "host/run" => "The user did not allow edits from this session in Xuan. Ask the user before trying again.".into(),
-        "file/save_as" | "file/export" | "file/open" => "The user cancelled.".into(),
+        "file/save_as" | "file/export" | "file/save" | "file/open" => "The user cancelled.".into(),
         _ if method.ends_with("/export") => "The user did not allow sending the image to this MCP server.".into(),
         _ => format!("Xuan: {}", error.message),
     }
@@ -1606,7 +1689,7 @@ pub fn not_answered(method: &str) -> String {
         "document/edit" | "host/run" => {
             "The user has not yet answered Xuan's prompt to allow edits from this session"
         }
-        "file/save_as" | "file/export" | "file/open" => {
+        "file/save_as" | "file/export" | "file/save" | "file/open" => {
             "The user has not yet answered Xuan's dialog for this request"
         }
         _ if method.ends_with("/export") => {
