@@ -1014,6 +1014,20 @@ Flip to the other side	翻转到另一侧
 Turn letters with the path	字母随路径旋转
 End size	结尾字号
 Letters past the end of an open path are hidden; on a closed path the text wraps around.	超出开放路径末端的字母会被隐藏；在闭合路径上文字会环绕。
+Pen	钢笔
+Click for a corner, drag for a curve · Click the first anchor to close · Enter finishes · Drag anchors and handles · Alt-drag a handle breaks it · Click a segment to add an anchor, an anchor to delete it · Alt-click converts	单击添加角点，拖动添加曲线 · 单击第一个锚点闭合 · Enter 完成 · 拖动锚点和手柄 · Alt 拖动手柄可将其断开 · 单击线段添加锚点，单击锚点删除 · Alt 单击转换
+Convert Anchor	转换锚点
+Move Anchor	移动锚点
+Delete Anchor	删除锚点
+Move Handle	移动手柄
+Add Anchor	添加锚点
+Click the first anchor to close the path · Enter finishes it	单击第一个锚点闭合路径 · Enter 完成路径
+Editing “{}”	正在编辑“{}”
+Editing the outline of “{}”	正在编辑“{}”的轮廓
+Click to start a path · Click a path to edit it	单击开始绘制路径 · 单击路径进行编辑
+Edit with Pen	用钢笔编辑
+Stroke with	描边工具
+Make Path from Selection	从选区建立路径
 Symmetry	对称
 Off	关闭
 Vertical mirrors left and right across the axis, Horizontal mirrors top and bottom, Radial turns the stroke around the centre.	垂直沿轴左右镜像，水平上下镜像，径向绕中心旋转笔画。

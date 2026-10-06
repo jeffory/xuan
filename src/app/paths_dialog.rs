@@ -26,6 +26,8 @@ pub(super) struct PathsEdit {
     pub feather: f32,
     pub mode: SelectionMode,
     pub evenodd: bool,
+    /// Stroke Path paints with the Pencil's hard pixels instead of the Brush.
+    pub pencil: bool,
     /// Why the last action failed.
     pub error: Option<String>,
 }
@@ -41,8 +43,14 @@ pub(super) enum PathAction {
     Delete,
 }
 
-/// Paint `brush` along each subpath of `path` on the active layer, as one stroke per subpath.
-pub(super) fn stroke_path(document: &mut Document, path: &VectorPath, brush: &Brush) -> Result<()> {
+/// Paint `brush` along each subpath of `path` on the active layer, as one stroke per subpath,
+/// with the Brush or (`pencil`) the Pencil.
+pub(super) fn stroke_path(
+    document: &mut Document,
+    path: &VectorPath,
+    brush: &Brush,
+    pencil: bool,
+) -> Result<()> {
     let lines = path.flatten(0.2);
     anyhow::ensure!(!lines.is_empty(), "The path has no points");
     for line in lines {
@@ -55,7 +63,11 @@ pub(super) fn stroke_path(document: &mut Document, path: &VectorPath, brush: &Br
             document,
             &samples,
             paint::StrokeOptions {
-                mode: paint::PaintMode::Paint,
+                mode: if pencil {
+                    paint::PaintMode::Pencil
+                } else {
+                    paint::PaintMode::Paint
+                },
                 mask_target: false,
                 source: None,
                 clone_offset: Point::default(),
@@ -70,21 +82,47 @@ impl EditorApp {
         let Some(session) = self.session() else {
             return;
         };
-        let first = session.document.paths.first();
+        // The path the Pen shows, or else the first.
+        let shown = match self.pen_target() {
+            Some(super::pen_tool::PenTarget::Path(id)) => {
+                session.document.paths.iter().find(|p| p.id == id)
+            }
+            _ => None,
+        };
+        let first = shown.or(session.document.paths.first());
+        let selected = first.map(|p| p.id);
         self.paths_edit = Some(PathsEdit {
             selected: first.map(|p| p.id),
             name: first.map(|p| p.name.clone()).unwrap_or_default(),
             ..PathsEdit::default()
         });
         self.dialog = Some(Dialog::Paths);
+        if selected.is_some() {
+            self.pen_select(selected.map(super::pen_tool::PenTarget::Path));
+        }
     }
 
     /// Add `data` to the document's paths as a new path; its id.
     pub(super) fn add_path(&mut self, data: &str) -> Result<Uuid> {
         let d = VectorPath::parse(data)?;
+        self.add_vector_path(tr("New Path"), d)
+    }
+
+    /// Select → Paths… → Make Path from Selection: the selection's outline (where it is at
+    /// least half selected) as a new path, within a pixel of the pixel edges; its id.
+    pub(super) fn path_from_selection(&mut self) -> Result<Uuid> {
+        let selection = self
+            .session()
+            .and_then(|s| s.document.selection.clone())
+            .context("Make a selection first")?;
+        let d = xuan::path_edit::trace_mask(&selection, 1.0).context("Nothing is selected")?;
+        self.add_vector_path(tr("Make Path from Selection"), d)
+    }
+
+    fn add_vector_path(&mut self, name: &str, d: VectorPath) -> Result<Uuid> {
         let mut id = None;
         let mut failure = None;
-        self.edit(tr("New Path"), |document| {
+        self.edit(name, |document| {
             let path = NamedPath::new(xuan::vector::next_path_name(&document.paths), d);
             id = Some(path.id);
             document.paths.push(path);
@@ -119,13 +157,13 @@ impl EditorApp {
         };
         let color = self.brush.color;
         let brush = self.brush.clone();
-        let (feather, mode) = (edit.feather, edit.mode);
+        let (feather, mode, pencil) = (edit.feather, edit.mode, edit.pencil);
         match action {
             PathAction::Fill => self.edit(tr("Fill Path"), |document| {
                 paint::fill_path(document, &path, rule, color)
             }),
             PathAction::Stroke => self.edit(tr("Stroke Path"), |document| {
-                stroke_path(document, &path, &brush)
+                stroke_path(document, &path, &brush, pencil)
             }),
             PathAction::Select => self.edit_selection(tr("Make Selection"), |document| {
                 let mut mask = path.mask(rule, document.width, document.height);
@@ -186,6 +224,12 @@ impl EditorApp {
         let mut open = true;
         let mut action = None;
         let mut add = false;
+        let mut edit_on_canvas = false;
+        let mut from_selection = false;
+        let has_selection = self
+            .session()
+            .is_some_and(|s| s.document.selection.is_some());
+        let before = edit.selected;
         widgets::Window::new(tr("Paths"))
             .id("paths")
             .open(&mut open)
@@ -217,6 +261,9 @@ impl EditorApp {
                         if widgets::button(ui, tr("Delete")).clicked() {
                             action = Some(PathAction::Delete);
                         }
+                        if widgets::button(ui, tr("Edit with Pen")).clicked() {
+                            edit_on_canvas = true;
+                        }
                     });
                     ui.separator();
                     ui.horizontal(|ui| {
@@ -229,6 +276,14 @@ impl EditorApp {
                         if widgets::button(ui, tr("Shape Layer")).clicked() {
                             action = Some(PathAction::ShapeLayer);
                         }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Stroke with"));
+                        widgets::segmented(
+                            ui,
+                            &mut edit.pencil,
+                            &[(false, tr("Brush")), (true, tr("Pencil"))],
+                        );
                     });
                     widgets::checkbox(
                         ui,
@@ -267,15 +322,31 @@ impl EditorApp {
                         .desired_rows(2)
                         .desired_width(f32::INFINITY),
                 );
-                if widgets::button(ui, tr("Add Path")).clicked() {
-                    add = true;
-                }
+                ui.horizontal(|ui| {
+                    if widgets::button(ui, tr("Add Path")).clicked() {
+                        add = true;
+                    }
+                    if ui
+                        .add_enabled_ui(has_selection, |ui| {
+                            widgets::button(ui, tr("Make Path from Selection"))
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        from_selection = true;
+                    }
+                });
                 if let Some(error) = &edit.error {
                     ui.colored_label(egui::Color32::from_rgb(220, 80, 80), error);
                 }
             });
-        if add {
-            match self.add_path(&edit.data) {
+        if add || from_selection {
+            let added = if from_selection {
+                self.path_from_selection()
+            } else {
+                self.add_path(&edit.data)
+            };
+            match added {
                 Ok(id) => {
                     edit.selected = Some(id);
                     edit.data.clear();
@@ -294,6 +365,14 @@ impl EditorApp {
                 .path_action(id, action, &edit)
                 .err()
                 .map(|e| format!("{e:#}"));
+        }
+        // The selected path is shown on the canvas, and the Pen edits it.
+        if edit.selected != before || edit_on_canvas {
+            self.pen_select(edit.selected.map(super::pen_tool::PenTarget::Path));
+        }
+        if edit_on_canvas && edit.selected.is_some() {
+            self.set_tool(super::Tool::Pen);
+            open = false;
         }
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.dialog = None;

@@ -68,6 +68,18 @@ impl EditorApp {
             return;
         }
 
+        // With the Pen, Delete and Backspace remove an anchor rather than clear pixels.
+        if self.tool == Tool::Pen
+            && !developing
+            && (self.pen.draft.is_some() || self.pen.selected.is_some())
+            && ctx.input_mut(|i| {
+                consume_exact(i, Modifiers::NONE, Key::Delete)
+                    || consume_exact(i, Modifiers::NONE, Key::Backspace)
+            })
+        {
+            self.pen_delete();
+        }
+
         // Bound keys, in the order they were pressed. A command ends the frame's key handling;
         // tool keys and other quick actions let later keys through.
         let presses: Vec<(Modifiers, Key)> = ctx.input(|i| {
@@ -126,6 +138,9 @@ impl EditorApp {
             self.cancel_gesture();
             self.crop_rect = None;
             self.polygon.clear();
+            if self.tool == Tool::Pen {
+                self.pen_escape();
+            }
         }
         if pressed(Key::Enter) {
             if let Some((start, end)) = self.crop_rect.take() {
@@ -135,6 +150,8 @@ impl EditorApp {
                 }
             } else if self.polygon.len() >= 3 {
                 self.finish_polygon();
+            } else if self.pen.draft.is_some() {
+                self.pen_finish();
             }
         }
         for (index, key) in [

@@ -77,6 +77,7 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Tools | Gradient | G |
 | Tools | Shape | U |
 | Tools | Switch Rectangle / Ellipse Shape | Shift+U |
+| Tools | Pen | P |
 | Tools | Text | T |
 | Tools | Eyedropper | I |
 | Tools | Hand | H |
@@ -91,7 +92,7 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Help | Keyboard Shortcuts | F1 |
 <!-- END GENERATED -->
 
-With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. B selects whichever of Brush and Pencil you used last.
+With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last.
 
 ## Other keys and pointer controls
 
@@ -107,6 +108,7 @@ These keys belong to the editor and cannot be assigned to commands.
 | Pan horizontally | Horizontal mouse wheel or Shift+wheel over the canvas |
 | Adjust slider or number | Wheel up / down over the control (increase / decrease) |
 | Apply crop or polygon / Cancel | Enter / Escape |
+| Finish a Pen path | Enter / Escape |
 
 ## Changing shortcuts
 

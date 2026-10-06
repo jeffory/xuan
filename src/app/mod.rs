@@ -29,6 +29,7 @@ mod palette;
 mod panels;
 mod panes;
 mod paths_dialog;
+mod pen_tool;
 mod photoshop;
 mod pixel_grid;
 mod plugin_consent;
@@ -93,6 +94,8 @@ pub enum Tool {
     Blur,
     Gradient,
     Shape,
+    /// Draws and edits Bézier paths.
+    Pen,
     Text,
     Dropper,
     Hand,
@@ -102,7 +105,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 18] = [
+    const ALL: [Self; 19] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
@@ -116,6 +119,7 @@ impl Tool {
         Self::Blur,
         Self::Gradient,
         Self::Shape,
+        Self::Pen,
         Self::Text,
         Self::Dropper,
         Self::Hand,
@@ -138,6 +142,7 @@ impl Tool {
             Self::Blur => tr("Blur / Smudge"),
             Self::Gradient => tr("Gradient"),
             Self::Shape => tr("Shape"),
+            Self::Pen => tr("Pen"),
             Self::Text => tr("Text"),
             Self::Dropper => tr("Eyedropper"),
             Self::Hand => tr("Hand"),
@@ -181,6 +186,9 @@ impl Tool {
             Self::Gradient => tr("Drag to draw gradient · Shift locks angle · Escape cancels"),
             Self::Shape => tr(
                 "Drag to draw a new shape · Shift constrains proportions · Alt draws from center",
+            ),
+            Self::Pen => tr(
+                "Click for a corner, drag for a curve · Click the first anchor to close · Enter finishes · Drag anchors and handles · Alt-drag a handle breaks it · Click a segment to add an anchor, an anchor to delete it · Alt-click converts",
             ),
             Self::Text => tr("Click to add text · Click text to edit · Use Move to transform"),
             Self::Dropper => {
@@ -485,6 +493,8 @@ pub struct EditorApp {
     selection_amount: Option<selection_dialogs::AmountEdit>,
     /// Select → Paths…, while it is open.
     paths_edit: Option<paths_dialog::PathsEdit>,
+    /// The Pen tool's path being drawn and the path shown for editing.
+    pen: pen_tool::PenState,
     expand_amount: u32,
     contract_amount: u32,
     /// Select → Color Range…, while open; and the Fuzziness it remembers.
@@ -680,6 +690,7 @@ impl EditorApp {
             tolerance: 32,
             selection_amount: None,
             paths_edit: None,
+            pen: Default::default(),
             expand_amount: 2,
             contract_amount: 2,
             color_range: None,
@@ -1112,6 +1123,8 @@ impl EditorApp {
 
     fn set_tool(&mut self, tool: Tool) {
         self.cancel_gesture();
+        // Another tool finishes the path being drawn.
+        self.pen_finish();
         self.tool = tool;
         self.release_sample_caches();
         if matches!(tool, Tool::Brush | Tool::Pencil) {
