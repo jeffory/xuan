@@ -3,15 +3,10 @@
 //! Follows Compositor's `UI/CanvasRulers.swift`: numbered ticks about 70 points apart in 1-2-5
 //! steps, each split in ten with a longer tick at the half. Positions come from the same mapping
 //! as the canvas (`canvas::image_origin` and the zoom), so a tick sits exactly over its pixel.
-use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, pos2, vec2};
+use egui::{FontId, Painter, Pos2, Rect, Stroke, pos2, vec2};
 
 /// Width of the left ruler and height of the top one, in points.
 pub(super) const RULER_SIZE: f32 = 18.0;
-
-const BACKGROUND: Color32 = Color32::from_gray(51);
-const TICK: Color32 = Color32::from_gray(158);
-const LABEL: Color32 = Color32::from_gray(199);
-const EDGE: Color32 = Color32::from_gray(20);
 
 /// Document pixels between numbered ticks: the first 1-2-5 step at least 70 points apart.
 pub(super) fn major_step(zoom: f32) -> f32 {
@@ -126,11 +121,14 @@ impl RulerLayout {
 
 /// Paints both rulers for an image whose top-left corner is at `origin`.
 pub(super) fn paint(painter: &Painter, layout: &RulerLayout, origin: Pos2, zoom: f32) {
+    let p = super::theme::palette(painter.ctx());
+    let (background, tick_color, label_color, edge) =
+        (p.ruler, p.ruler_tick, p.ruler_label, p.ruler_edge);
     let hairline = 1.0 / painter.pixels_per_point().max(1.0);
     let font = FontId::monospace(8.0);
     // Horizontal ruler.
     let top = painter.with_clip_rect(layout.top);
-    top.rect_filled(layout.top, 0.0, BACKGROUND);
+    top.rect_filled(layout.top, 0.0, background);
     for tick in ticks(origin.x, zoom, layout.top.left(), layout.top.right()) {
         let x = tick.screen;
         top.line_segment(
@@ -138,7 +136,7 @@ pub(super) fn paint(painter: &Painter, layout: &RulerLayout, origin: Pos2, zoom:
                 pos2(x, layout.top.bottom() - tick.length()),
                 pos2(x, layout.top.bottom()),
             ],
-            Stroke::new(hairline, TICK),
+            Stroke::new(hairline, tick_color),
         );
         if tick.kind == TickKind::Major {
             top.text(
@@ -146,7 +144,7 @@ pub(super) fn paint(painter: &Painter, layout: &RulerLayout, origin: Pos2, zoom:
                 egui::Align2::LEFT_TOP,
                 label(tick.value),
                 font.clone(),
-                LABEL,
+                label_color,
             );
         }
     }
@@ -155,11 +153,11 @@ pub(super) fn paint(painter: &Painter, layout: &RulerLayout, origin: Pos2, zoom:
             pos2(layout.top.left(), layout.top.bottom() - hairline * 0.5),
             pos2(layout.top.right(), layout.top.bottom() - hairline * 0.5),
         ],
-        Stroke::new(hairline, EDGE),
+        Stroke::new(hairline, edge),
     );
     // Vertical ruler, its labels turned to read up along the tick.
     let left = painter.with_clip_rect(layout.left);
-    left.rect_filled(layout.left, 0.0, BACKGROUND);
+    left.rect_filled(layout.left, 0.0, background);
     for tick in ticks(origin.y, zoom, layout.left.top(), layout.left.bottom()) {
         let y = tick.screen;
         left.line_segment(
@@ -167,16 +165,16 @@ pub(super) fn paint(painter: &Painter, layout: &RulerLayout, origin: Pos2, zoom:
                 pos2(layout.left.right() - tick.length(), y),
                 pos2(layout.left.right(), y),
             ],
-            Stroke::new(hairline, TICK),
+            Stroke::new(hairline, tick_color),
         );
         if tick.kind == TickKind::Major {
-            let galley = left.layout_no_wrap(label(tick.value), font.clone(), LABEL);
+            let galley = left.layout_no_wrap(label(tick.value), font.clone(), label_color);
             let width = galley.size().x;
             left.add(
                 egui::epaint::TextShape::new(
                     pos2(layout.left.left() + 1.0, y + 2.0 + width),
                     galley,
-                    LABEL,
+                    label_color,
                 )
                 .with_angle(-std::f32::consts::FRAC_PI_2),
             );
@@ -187,16 +185,16 @@ pub(super) fn paint(painter: &Painter, layout: &RulerLayout, origin: Pos2, zoom:
             pos2(layout.left.right() - hairline * 0.5, layout.left.top()),
             pos2(layout.left.right() - hairline * 0.5, layout.left.bottom()),
         ],
-        Stroke::new(hairline, EDGE),
+        Stroke::new(hairline, edge),
     );
     // The corner, with upstream's diagonal mark.
-    painter.rect_filled(layout.corner, 0.0, BACKGROUND);
+    painter.rect_filled(layout.corner, 0.0, background);
     painter.line_segment(
         [
             layout.corner.min + vec2(5.0, RULER_SIZE - 4.0),
             layout.corner.min + vec2(RULER_SIZE - 4.0, 5.0),
         ],
-        Stroke::new(1.0_f32, Color32::from_white_alpha(71)),
+        Stroke::new(1.0_f32, p.ruler_corner),
     );
 }
 

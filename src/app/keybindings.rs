@@ -1,6 +1,7 @@
 //! Settings → Keyboard Shortcuts: every command of the registry with its bindings, to search,
 //! rebind by pressing keys, clear and reset. Only the changes are stored, in `[keybindings]`.
 
+use super::theme::PaletteExt as _;
 use egui::{Button, Event, Key, Modifiers, RichText, Ui, WidgetInfo, WidgetType};
 use xuan::i18n::tr;
 
@@ -239,7 +240,7 @@ pub(super) fn page(
             .map_or(conflict.other.as_str(), Entry::label);
         let mut answer = None;
         egui::Frame::new()
-            .fill(theme::FIELD)
+            .fill(ui.palette().field)
             .corner_radius(theme::BUTTON_RADIUS)
             .inner_margin(8)
             .show(ui, |ui| {
@@ -266,14 +267,14 @@ pub(super) fn page(
             None => {}
         }
     } else if let Some(message) = &editor.message {
-        ui.add(egui::Label::new(RichText::new(message).color(theme::MUTED)).wrap());
+        ui.add(egui::Label::new(RichText::new(message).color(ui.palette().muted)).wrap());
     } else {
         ui.add(
             egui::Label::new(
                 RichText::new(tr(
                     "Click a shortcut and press keys. Escape cancels; Backspace removes it.",
                 ))
-                .color(theme::MUTED),
+                .color(ui.palette().muted),
             )
             .wrap(),
         );
@@ -295,7 +296,7 @@ pub(super) fn page(
                     continue;
                 }
                 ui.add_space(6.0);
-                ui.label(RichText::new(tr(category.name())).color(theme::MUTED));
+                ui.label(RichText::new(tr(category.name())).color(ui.palette().muted));
                 for entry in rows {
                     row(ui, entry, editor, overrides);
                 }

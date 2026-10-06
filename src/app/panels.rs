@@ -1,3 +1,4 @@
+use super::theme::PaletteExt as _;
 use super::widgets;
 use egui::RichText;
 use xuan::i18n::tr;
@@ -25,7 +26,7 @@ macro_rules! value {
         $(,)?
     ) => {{
         let ui = &mut *($ui);
-        ui.label(RichText::new($label).color(theme::MUTED));
+        ui.label(RichText::new($label).color(ui.palette().muted));
         ui.add(
             widgets::Number::new($number)
                 .size(egui::vec2(
@@ -49,7 +50,7 @@ impl EditorApp {
         let mut changed = false;
         egui::TopBottomPanel::top("tool_options")
             .min_height(42.0)
-            .frame(theme::frame())
+            .frame(theme::frame(&ctx.palette()))
             .show(ctx, |ui| {
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none() && self.color_range.is_none(), |ui| {
                     egui::ScrollArea::horizontal()
@@ -123,7 +124,7 @@ impl EditorApp {
                                         } else {
                                             ui.label(
                                                 RichText::new(tr("Select a layer to transform"))
-                                                    .color(theme::MUTED),
+                                                    .color(ui.palette().muted),
                                             );
                                         }
                                     }
@@ -255,7 +256,7 @@ impl EditorApp {
                                                         egui::RichText::new(tr(
                                                             "Click an object or drag a box around it",
                                                         ))
-                                                        .color(theme::MUTED),
+                                                        .color(ui.palette().muted),
                                                     );
                                                 } else {
                                                     ui.label(tr("Tolerance"));
@@ -323,7 +324,7 @@ impl EditorApp {
                                             RichText::new(
                                                 tr("Drag a crop area, then press Enter to apply"),
                                             )
-                                            .color(theme::MUTED),
+                                            .color(ui.palette().muted),
                                         );
                                     }
                                     Tool::Dropper => {
@@ -352,7 +353,7 @@ impl EditorApp {
                                         RichText::new(
                                             tr("Scroll to zoom · Space-drag to pan · Ctrl+0 to fit"),
                                         )
-                                        .color(theme::MUTED),
+                                        .color(ui.palette().muted),
                                     );
                                     }
                                     _ => {}
@@ -370,53 +371,54 @@ impl EditorApp {
     }
 
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
-        super::chrome::status_bar(self.window_corner_radius(ctx), "status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(session) = self.session() {
-                    ui.add_sized(
-                        [50.0, 22.0],
-                        egui::Label::new(
-                            RichText::new(format!("{:.1}%", session.zoom * 100.0))
-                                .size(11.0)
-                                .color(theme::MUTED),
-                        )
-                        .halign(egui::Align::Min)
-                        .truncate(),
-                    );
-                    ui.separator();
-                    ui.label(
-                        RichText::new(format!(
-                            "{} × {} px",
-                            session.document.width, session.document.height
-                        ))
-                        .size(11.0)
-                        .color(theme::MUTED),
-                    );
-                    ui.separator();
-                    ui.label(
-                        RichText::new(tr("sRGB · Transparent"))
+        super::chrome::status_bar(&ctx.palette(), self.window_corner_radius(ctx), "status_bar")
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if let Some(session) = self.session() {
+                        ui.add_sized(
+                            [50.0, 22.0],
+                            egui::Label::new(
+                                RichText::new(format!("{:.1}%", session.zoom * 100.0))
+                                    .size(11.0)
+                                    .color(ui.palette().muted),
+                            )
+                            .halign(egui::Align::Min)
+                            .truncate(),
+                        );
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "{} × {} px",
+                                session.document.width, session.document.height
+                            ))
                             .size(11.0)
-                            .color(theme::MUTED),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new(tr("Ready when you are"))
-                            .size(11.0)
-                            .color(theme::MUTED),
-                    );
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(self.tool.hint())
+                            .color(ui.palette().muted),
+                        );
+                        ui.separator();
+                        ui.label(
+                            RichText::new(tr("sRGB · Transparent"))
                                 .size(11.0)
-                                .color(theme::MUTED),
-                        )
-                        .truncate(),
-                    );
+                                .color(ui.palette().muted),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(tr("Ready when you are"))
+                                .size(11.0)
+                                .color(ui.palette().muted),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(self.tool.hint())
+                                    .size(11.0)
+                                    .color(ui.palette().muted),
+                            )
+                            .truncate(),
+                        );
+                    });
                 });
             });
-        });
     }
 
     pub(super) fn tool_rail(&mut self, ctx: &egui::Context) {
@@ -426,7 +428,7 @@ impl EditorApp {
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::PANEL)
+                    .fill(ctx.palette().panel)
                     .inner_margin(egui::Margin::symmetric(10, 16)),
             )
             .show(ctx, |ui| {

@@ -1,21 +1,29 @@
 use egui::{Color32, Rect, Stroke, StrokeKind, Ui, Vec2, vec2};
 use xuan::i18n::tr;
 
-use super::{Tool, theme};
+use super::{
+    Tool,
+    theme::{self, PaletteExt},
+};
 
 /// A tool rail button. Its tooltip names the tool and its current `shortcut`, if any.
 pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, shortcut: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::click());
     let painter = ui.painter();
+    let p = ui.palette();
     if selected || response.hovered() {
         painter.rect(
             rect,
             theme::BUTTON_RADIUS,
-            Color32::from_gray(if selected { 62 } else { 48 }),
+            if selected {
+                p.tool_selected
+            } else {
+                p.tool_hover
+            },
             Stroke::new(
                 1.0_f32,
                 if selected {
-                    Color32::from_gray(80)
+                    p.tool_selected_edge
                 } else {
                     Color32::TRANSPARENT
                 },
@@ -24,7 +32,7 @@ pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, shortcut: &str) -> e
         );
     }
     let icon_padding = if tool == Tool::Gradient { 9.0 } else { 7.0 };
-    draw(ui, tool, rect.shrink(icon_padding), theme::TEXT);
+    draw(ui, tool, rect.shrink(icon_padding), ui.palette().text);
     if shortcut.is_empty() {
         response.on_hover_text(tool.label())
     } else {
@@ -88,7 +96,7 @@ fn svg(ui: &Ui, source: egui::ImageSource<'_>, rect: Rect, color: Color32) {
 pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
     if response.hovered() {
-        ui.painter().rect_filled(rect, 4.0, Color32::from_gray(55));
+        ui.painter().rect_filled(rect, 4.0, ui.palette().icon_hover);
     }
     let center = rect.center();
     let offsets = if collapsed {
@@ -98,7 +106,7 @@ pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
     };
     ui.painter().add(egui::Shape::line(
         offsets.into_iter().map(|offset| center + offset).collect(),
-        Stroke::new(1.5_f32, theme::MUTED),
+        Stroke::new(1.5_f32, ui.palette().muted),
     ));
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -123,9 +131,9 @@ pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
         egui::include_image!("../../assets/svg/eye-off.svg")
     };
     let color = if visible {
-        theme::TEXT
+        ui.palette().text
     } else {
-        Color32::from_gray(80)
+        ui.palette().disabled
     };
     svg(ui, source, rect, color);
     response.on_hover_text(tr("Toggle visibility"))
@@ -135,7 +143,7 @@ pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::click());
     let painter = ui.painter();
     if response.hovered() {
-        painter.rect_filled(rect, 5.0, Color32::from_gray(55));
+        painter.rect_filled(rect, 5.0, ui.palette().icon_hover);
     }
     let source = match kind {
         "new_layer" => egui::include_image!("../../assets/svg/square-plus.svg"),
@@ -146,7 +154,7 @@ pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
         "delete_layer" => egui::include_image!("../../assets/svg/trash.svg"),
         _ => return response,
     };
-    svg(ui, source, rect.shrink(6.0), theme::MUTED);
+    svg(ui, source, rect.shrink(6.0), ui.palette().muted);
     response
 }
 
@@ -166,7 +174,7 @@ pub fn rotate_button(ui: &mut Ui, clockwise: bool) -> egui::Response {
         ui,
         source,
         Rect::from_center_size(response.rect.center(), Vec2::splat(16.0)),
-        theme::TEXT,
+        ui.palette().text,
     );
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
@@ -181,7 +189,11 @@ pub fn lock(ui: &mut Ui, locked: bool) -> egui::Response {
     } else {
         egui::include_image!("../../assets/svg/lock-open.svg")
     };
-    let color = if locked { theme::TEXT } else { theme::MUTED };
+    let color = if locked {
+        ui.palette().text
+    } else {
+        ui.palette().muted
+    };
     svg(
         ui,
         source,

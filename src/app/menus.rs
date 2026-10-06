@@ -1,3 +1,4 @@
+use super::theme::PaletteExt as _;
 use std::collections::HashMap;
 
 use egui::{Button, RichText};
@@ -235,381 +236,412 @@ impl EditorApp {
             || self.close_app
             || self.develop_close_requested.is_some()
             || self.close_tab.is_some();
-        super::chrome::title_bar(self.window_corner_radius(ctx), "menubar").show(ctx, |ui| {
-            egui::MenuBar::new()
-                .config(egui::containers::menu::MenuConfig::new().style(theme::menu_style))
-                .ui(ui, |ui| {
-                    self.leading_window_controls(ui);
-                    ui.add_enabled_ui(!blocked, |ui| {
-                        // Leave a small gap between the expanded highlights.
-                        ui.spacing_mut().item_spacing.x += 2.0;
-                        menu_bar_button(ui, tr("File"), |ui| {
-                            item(ui, &items, "new", &mut action);
-                            item(ui, &items, "open", &mut action);
-                            item(ui, &items, "open_clipboard", &mut action);
-                            item(ui, &items, "open_comp", &mut action);
-                            ui.add_enabled_ui(!developing, |ui| {
-                                item(ui, &items, "import", &mut action);
-                            });
-                            ui.separator();
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, &items, "save", &mut action);
-                                item(ui, &items, "save_as", &mut action);
-                                item(ui, &items, "export", &mut action);
+        super::chrome::title_bar(&ctx.palette(), self.window_corner_radius(ctx), "menubar").show(
+            ctx,
+            |ui| {
+                egui::MenuBar::new()
+                    .config(egui::containers::menu::MenuConfig::new().style({
+                        let palette = ui.palette();
+                        move |style: &mut egui::Style| theme::menu_style(style, &palette)
+                    }))
+                    .ui(ui, |ui| {
+                        self.leading_window_controls(ui);
+                        ui.add_enabled_ui(!blocked, |ui| {
+                            // Leave a small gap between the expanded highlights.
+                            ui.spacing_mut().item_spacing.x += 2.0;
+                            menu_bar_button(ui, tr("File"), |ui| {
+                                item(ui, &items, "new", &mut action);
+                                item(ui, &items, "open", &mut action);
+                                item(ui, &items, "open_clipboard", &mut action);
+                                item(ui, &items, "open_comp", &mut action);
+                                ui.add_enabled_ui(!developing, |ui| {
+                                    item(ui, &items, "import", &mut action);
+                                });
                                 ui.separator();
-                                item(ui, &items, "close", &mut action);
-                            });
-                            if developing {
-                                labelled(ui, &items, tr("Close RAW Develop"), "close", &mut action);
-                            }
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                plugin_items(ui, plugin_menu.get(&Menu::File), &mut plugin_action);
-                            });
-                            ui.separator();
-                            item(ui, &items, "quit", &mut action);
-                        });
-                        menu_bar_button(ui, tr("Edit"), |ui| {
-                            item(ui, &items, "settings", &mut action);
-                            plugin_items(ui, plugin_menu.get(&Menu::Edit), &mut plugin_action);
-                            ui.separator();
-                            let (undo, redo) = if let Some(d) = &self.develop {
-                                (
-                                    (d.ready() && !d.undo.is_empty())
-                                        .then_some(tr("RAW adjustment")),
-                                    (d.ready() && !d.redo.is_empty())
-                                        .then_some(tr("RAW adjustment")),
-                                )
-                            } else {
-                                (
-                                    self.session().and_then(|s| s.history.undo_name()),
-                                    self.session().and_then(|s| s.history.redo_name()),
-                                )
-                            };
-                            ui.add_enabled_ui(undo.is_some(), |ui| {
-                                labelled(
-                                    ui,
-                                    &items,
-                                    &format!("{} {}", tr("Undo"), tr(undo.unwrap_or(""))),
-                                    "undo",
-                                    &mut action,
-                                )
-                            });
-                            ui.add_enabled_ui(redo.is_some(), |ui| {
-                                labelled(
-                                    ui,
-                                    &items,
-                                    &format!("{} {}", tr("Redo"), tr(redo.unwrap_or(""))),
-                                    "redo",
-                                    &mut action,
-                                )
-                            });
-                            ui.separator();
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, &items, "cut", &mut action);
-                                item(ui, &items, "copy", &mut action);
-                                item(ui, &items, "copy_merged", &mut action);
-                            });
-                            ui.add_enabled_ui(!developing, |ui| {
-                                item(ui, &items, "paste", &mut action);
-                            });
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                ui.separator();
-                                item(ui, &items, "fill_fg", &mut action);
-                                item(ui, &items, "fill_bg", &mut action);
-                                item(ui, &items, "clear", &mut action);
-                                item(ui, &items, "content_fill", &mut action);
-                            });
-                        });
-                        menu_bar_button(ui, tr("Image"), |ui| {
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                ui.menu_button(tr("Adjustments"), |ui| {
-                                    adjustment = adjustment_menu(ui);
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    item(ui, &items, "save", &mut action);
+                                    item(ui, &items, "save_as", &mut action);
+                                    item(ui, &items, "export", &mut action);
                                     ui.separator();
-                                    item(ui, &items, "invert", &mut action);
+                                    item(ui, &items, "close", &mut action);
                                 });
-                                ui.separator();
-                                item(ui, &items, "image_size", &mut action);
-                                item(ui, &items, "canvas_size", &mut action);
-                                ui.separator();
-                                item(ui, &items, "flip_canvas_h", &mut action);
-                                item(ui, &items, "flip_canvas_v", &mut action);
-                                plugin_items(ui, plugin_menu.get(&Menu::Image), &mut plugin_action);
-                            });
-                        });
-                        menu_bar_button(ui, tr("Layer"), |ui| {
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, &items, "new_layer", &mut action);
-                                item(ui, &items, "duplicate", &mut action);
-                                item(ui, &items, "delete_layer", &mut action);
-                                ui.add_enabled_ui(
-                                    self.session()
-                                        .and_then(|s| s.document.active())
-                                        .is_some_and(|l| l.raw.is_some() && !l.locked),
-                                    |ui| {
-                                        item(ui, &items, "develop", &mut action);
-                                        item(ui, &items, "rasterize_raw", &mut action);
-                                    },
-                                );
-                                item(ui, &items, "layer_effects", &mut action);
-                                ui.separator();
-                                item(ui, &items, "group", &mut action);
-                                item(ui, &items, "ungroup", &mut action);
-                                item(ui, &items, "merge", &mut action);
-                                item(ui, &items, "flatten", &mut action);
-                                ui.separator();
-                                ui.menu_button(tr("New Adjustment Layer"), |ui| {
-                                    adjustment = adjustment_menu(ui);
-                                    adjustment_layer = true;
-                                });
-                                ui.menu_button(tr("New Filter Layer"), |ui| {
-                                    filter = filter_menu(ui);
-                                    filter_layer = true;
-                                });
-                                ui.menu_button(tr("Layer Mask"), |ui| {
-                                    item(ui, &items, "new_mask_layer", &mut action);
-                                    item(ui, &items, "mask", &mut action);
+                                if developing {
                                     labelled(
                                         ui,
                                         &items,
-                                        tr("Enable / Disable"),
-                                        "disable_mask",
+                                        tr("Close RAW Develop"),
+                                        "close",
                                         &mut action,
                                     );
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Link / Unlink"),
-                                        "link_mask",
-                                        &mut action,
-                                    );
-                                    item(ui, &items, "delete_mask", &mut action);
-                                });
-                                item(ui, &items, "clip", &mut action);
-                                ui.separator();
-                                item(ui, &items, "flip_h", &mut action);
-                                item(ui, &items, "flip_v", &mut action);
-                                ui.separator();
-                                ui.add_enabled_ui(can_rerun, |ui| {
-                                    item(ui, &items, "rerun_plugin", &mut action);
-                                });
-                                plugin_items(ui, plugin_menu.get(&Menu::Layer), &mut plugin_action);
-                            });
-                        });
-                        menu_bar_button(ui, tr("Select"), |ui| {
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                labelled(ui, &items, tr("All"), "select_all", &mut action);
-                                item(ui, &items, "deselect", &mut action);
-                                labelled(
-                                    ui,
-                                    &items,
-                                    tr("Inverse"),
-                                    "invert_selection",
-                                    &mut action,
-                                );
-                                labelled(
-                                    ui,
-                                    &items,
-                                    tr("Layer's Pixels"),
-                                    "select_layer_pixels",
-                                    &mut action,
-                                );
-                                labelled(
-                                    ui,
-                                    &items,
-                                    tr("Mask's Black Areas"),
-                                    "select_mask_black",
-                                    &mut action,
-                                );
-                                labelled(ui, &items, tr("Subject"), "select_subject", &mut action);
-                                item(ui, &items, "color_range", &mut action);
-                                item(ui, &items, "load_selection", &mut action);
-                                ui.separator();
-                                labelled(
-                                    ui,
-                                    &items,
-                                    tr("Expand…"),
-                                    "expand_selection",
-                                    &mut action,
-                                );
-                                labelled(
-                                    ui,
-                                    &items,
-                                    tr("Contract…"),
-                                    "contract_selection",
-                                    &mut action,
-                                );
-                                item(ui, &items, "feather", &mut action);
-                                plugin_items(
-                                    ui,
-                                    plugin_menu.get(&Menu::Select),
-                                    &mut plugin_action,
-                                );
-                            });
-                        });
-                        menu_bar_button(ui, tr("Filter"), |ui| {
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                item(ui, &items, "remove_background", &mut action);
-                                item(ui, &items, "remove_flat_background", &mut action);
-                                ui.separator();
-                                for f in [
-                                    Filter::GaussianBlur { radius: 4.0 },
-                                    Filter::MotionBlur {
-                                        distance: 15.0,
-                                        angle: 0.0,
-                                    },
-                                    Filter::Noise {
-                                        amount: 10.0,
-                                        monochrome: true,
-                                    },
-                                    Filter::LensCorrection {
-                                        distortion: 0.0,
-                                        vignette: 0.0,
-                                    },
-                                ] {
-                                    if ui.button(format!("{}…", tr(f.name()))).clicked() {
-                                        filter = Some(f);
-                                        ui.close();
-                                    }
                                 }
-                                plugin_items(
-                                    ui,
-                                    plugin_menu.get(&Menu::Filter),
-                                    &mut plugin_action,
-                                );
-                            });
-                        });
-                        menu_bar_button(ui, tr("View"), |ui| {
-                            ui.add_enabled_ui(can_view, |ui| {
-                                item(ui, &items, "fit", &mut action);
-                                item(ui, &items, "actual", &mut action);
-                                item(ui, &items, "zoom_in", &mut action);
-                                item(ui, &items, "zoom_out", &mut action);
-                            });
-                            ui.separator();
-                            check_item(
-                                ui,
-                                &items,
-                                self.config.pixel_grid,
-                                None,
-                                "toggle_pixel_grid",
-                                &mut action,
-                            );
-                            check_item(
-                                ui,
-                                &items,
-                                self.show_controls,
-                                None,
-                                "toggle_controls",
-                                &mut action,
-                            );
-                            // Rulers, grid, guides and snapping, as upstream's View menu.
-                            ui.separator();
-                            ui.add_enabled_ui(has_doc, |ui| {
-                                ui.menu_button(tr("Show"), |ui| {
-                                    check_item(
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    plugin_items(
                                         ui,
-                                        &items,
-                                        self.config.show_grid,
-                                        Some(tr("Grid")),
-                                        "toggle_grid",
-                                        &mut action,
-                                    );
-                                    check_item(
-                                        ui,
-                                        &items,
-                                        self.config.show_guides,
-                                        Some(tr("Guides")),
-                                        "toggle_guides",
-                                        &mut action,
+                                        plugin_menu.get(&Menu::File),
+                                        &mut plugin_action,
                                     );
                                 });
-                                item(ui, &items, "grid_settings", &mut action);
-                                check_item(
-                                    ui,
-                                    &items,
-                                    self.config.rulers,
-                                    None,
-                                    "toggle_rulers",
-                                    &mut action,
-                                );
+                                ui.separator();
+                                item(ui, &items, "quit", &mut action);
+                            });
+                            menu_bar_button(ui, tr("Edit"), |ui| {
+                                item(ui, &items, "settings", &mut action);
+                                plugin_items(ui, plugin_menu.get(&Menu::Edit), &mut plugin_action);
+                                ui.separator();
+                                let (undo, redo) = if let Some(d) = &self.develop {
+                                    (
+                                        (d.ready() && !d.undo.is_empty())
+                                            .then_some(tr("RAW adjustment")),
+                                        (d.ready() && !d.redo.is_empty())
+                                            .then_some(tr("RAW adjustment")),
+                                    )
+                                } else {
+                                    (
+                                        self.session().and_then(|s| s.history.undo_name()),
+                                        self.session().and_then(|s| s.history.redo_name()),
+                                    )
+                                };
+                                ui.add_enabled_ui(undo.is_some(), |ui| {
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        &format!("{} {}", tr("Undo"), tr(undo.unwrap_or(""))),
+                                        "undo",
+                                        &mut action,
+                                    )
+                                });
+                                ui.add_enabled_ui(redo.is_some(), |ui| {
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        &format!("{} {}", tr("Redo"), tr(redo.unwrap_or(""))),
+                                        "redo",
+                                        &mut action,
+                                    )
+                                });
+                                ui.separator();
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    item(ui, &items, "cut", &mut action);
+                                    item(ui, &items, "copy", &mut action);
+                                    item(ui, &items, "copy_merged", &mut action);
+                                });
+                                ui.add_enabled_ui(!developing, |ui| {
+                                    item(ui, &items, "paste", &mut action);
+                                });
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    ui.separator();
+                                    item(ui, &items, "fill_fg", &mut action);
+                                    item(ui, &items, "fill_bg", &mut action);
+                                    item(ui, &items, "clear", &mut action);
+                                    item(ui, &items, "content_fill", &mut action);
+                                });
+                            });
+                            menu_bar_button(ui, tr("Image"), |ui| {
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    ui.menu_button(tr("Adjustments"), |ui| {
+                                        adjustment = adjustment_menu(ui);
+                                        ui.separator();
+                                        item(ui, &items, "invert", &mut action);
+                                    });
+                                    ui.separator();
+                                    item(ui, &items, "image_size", &mut action);
+                                    item(ui, &items, "canvas_size", &mut action);
+                                    ui.separator();
+                                    item(ui, &items, "flip_canvas_h", &mut action);
+                                    item(ui, &items, "flip_canvas_v", &mut action);
+                                    plugin_items(
+                                        ui,
+                                        plugin_menu.get(&Menu::Image),
+                                        &mut plugin_action,
+                                    );
+                                });
+                            });
+                            menu_bar_button(ui, tr("Layer"), |ui| {
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    item(ui, &items, "new_layer", &mut action);
+                                    item(ui, &items, "duplicate", &mut action);
+                                    item(ui, &items, "delete_layer", &mut action);
+                                    ui.add_enabled_ui(
+                                        self.session()
+                                            .and_then(|s| s.document.active())
+                                            .is_some_and(|l| l.raw.is_some() && !l.locked),
+                                        |ui| {
+                                            item(ui, &items, "develop", &mut action);
+                                            item(ui, &items, "rasterize_raw", &mut action);
+                                        },
+                                    );
+                                    item(ui, &items, "layer_effects", &mut action);
+                                    ui.separator();
+                                    item(ui, &items, "group", &mut action);
+                                    item(ui, &items, "ungroup", &mut action);
+                                    item(ui, &items, "merge", &mut action);
+                                    item(ui, &items, "flatten", &mut action);
+                                    ui.separator();
+                                    ui.menu_button(tr("New Adjustment Layer"), |ui| {
+                                        adjustment = adjustment_menu(ui);
+                                        adjustment_layer = true;
+                                    });
+                                    ui.menu_button(tr("New Filter Layer"), |ui| {
+                                        filter = filter_menu(ui);
+                                        filter_layer = true;
+                                    });
+                                    ui.menu_button(tr("Layer Mask"), |ui| {
+                                        item(ui, &items, "new_mask_layer", &mut action);
+                                        item(ui, &items, "mask", &mut action);
+                                        labelled(
+                                            ui,
+                                            &items,
+                                            tr("Enable / Disable"),
+                                            "disable_mask",
+                                            &mut action,
+                                        );
+                                        labelled(
+                                            ui,
+                                            &items,
+                                            tr("Link / Unlink"),
+                                            "link_mask",
+                                            &mut action,
+                                        );
+                                        item(ui, &items, "delete_mask", &mut action);
+                                    });
+                                    item(ui, &items, "clip", &mut action);
+                                    ui.separator();
+                                    item(ui, &items, "flip_h", &mut action);
+                                    item(ui, &items, "flip_v", &mut action);
+                                    ui.separator();
+                                    ui.add_enabled_ui(can_rerun, |ui| {
+                                        item(ui, &items, "rerun_plugin", &mut action);
+                                    });
+                                    plugin_items(
+                                        ui,
+                                        plugin_menu.get(&Menu::Layer),
+                                        &mut plugin_action,
+                                    );
+                                });
+                            });
+                            menu_bar_button(ui, tr("Select"), |ui| {
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    labelled(ui, &items, tr("All"), "select_all", &mut action);
+                                    item(ui, &items, "deselect", &mut action);
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        tr("Inverse"),
+                                        "invert_selection",
+                                        &mut action,
+                                    );
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        tr("Layer's Pixels"),
+                                        "select_layer_pixels",
+                                        &mut action,
+                                    );
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        tr("Mask's Black Areas"),
+                                        "select_mask_black",
+                                        &mut action,
+                                    );
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        tr("Subject"),
+                                        "select_subject",
+                                        &mut action,
+                                    );
+                                    item(ui, &items, "color_range", &mut action);
+                                    item(ui, &items, "load_selection", &mut action);
+                                    ui.separator();
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        tr("Expand…"),
+                                        "expand_selection",
+                                        &mut action,
+                                    );
+                                    labelled(
+                                        ui,
+                                        &items,
+                                        tr("Contract…"),
+                                        "contract_selection",
+                                        &mut action,
+                                    );
+                                    item(ui, &items, "feather", &mut action);
+                                    plugin_items(
+                                        ui,
+                                        plugin_menu.get(&Menu::Select),
+                                        &mut plugin_action,
+                                    );
+                                });
+                            });
+                            menu_bar_button(ui, tr("Filter"), |ui| {
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    item(ui, &items, "remove_background", &mut action);
+                                    item(ui, &items, "remove_flat_background", &mut action);
+                                    ui.separator();
+                                    for f in [
+                                        Filter::GaussianBlur { radius: 4.0 },
+                                        Filter::MotionBlur {
+                                            distance: 15.0,
+                                            angle: 0.0,
+                                        },
+                                        Filter::Noise {
+                                            amount: 10.0,
+                                            monochrome: true,
+                                        },
+                                        Filter::LensCorrection {
+                                            distortion: 0.0,
+                                            vignette: 0.0,
+                                        },
+                                    ] {
+                                        if ui.button(format!("{}…", tr(f.name()))).clicked() {
+                                            filter = Some(f);
+                                            ui.close();
+                                        }
+                                    }
+                                    plugin_items(
+                                        ui,
+                                        plugin_menu.get(&Menu::Filter),
+                                        &mut plugin_action,
+                                    );
+                                });
+                            });
+                            menu_bar_button(ui, tr("View"), |ui| {
+                                ui.add_enabled_ui(can_view, |ui| {
+                                    item(ui, &items, "fit", &mut action);
+                                    item(ui, &items, "actual", &mut action);
+                                    item(ui, &items, "zoom_in", &mut action);
+                                    item(ui, &items, "zoom_out", &mut action);
+                                });
                                 ui.separator();
                                 check_item(
                                     ui,
                                     &items,
-                                    self.config.snap.enabled,
+                                    self.config.pixel_grid,
                                     None,
-                                    "toggle_snap",
+                                    "toggle_pixel_grid",
                                     &mut action,
                                 );
-                                let mut snap = self.config.snap;
-                                ui.menu_button(tr("Snap To"), |ui| {
-                                    ui.add_enabled_ui(snap.enabled, |ui| {
-                                        for (value, label) in [
-                                            (&mut snap.guides, tr("Guides")),
-                                            (&mut snap.grid, tr("Grid")),
-                                            (&mut snap.layers, tr("Layers")),
-                                            (&mut snap.bounds, tr("Document Bounds")),
-                                        ] {
-                                            if widgets::menu_check(ui, *value, label, "").clicked()
-                                            {
-                                                *value = !*value;
+                                check_item(
+                                    ui,
+                                    &items,
+                                    self.show_controls,
+                                    None,
+                                    "toggle_controls",
+                                    &mut action,
+                                );
+                                // Rulers, grid, guides and snapping, as upstream's View menu.
+                                ui.separator();
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    ui.menu_button(tr("Show"), |ui| {
+                                        check_item(
+                                            ui,
+                                            &items,
+                                            self.config.show_grid,
+                                            Some(tr("Grid")),
+                                            "toggle_grid",
+                                            &mut action,
+                                        );
+                                        check_item(
+                                            ui,
+                                            &items,
+                                            self.config.show_guides,
+                                            Some(tr("Guides")),
+                                            "toggle_guides",
+                                            &mut action,
+                                        );
+                                    });
+                                    item(ui, &items, "grid_settings", &mut action);
+                                    check_item(
+                                        ui,
+                                        &items,
+                                        self.config.rulers,
+                                        None,
+                                        "toggle_rulers",
+                                        &mut action,
+                                    );
+                                    ui.separator();
+                                    check_item(
+                                        ui,
+                                        &items,
+                                        self.config.snap.enabled,
+                                        None,
+                                        "toggle_snap",
+                                        &mut action,
+                                    );
+                                    let mut snap = self.config.snap;
+                                    ui.menu_button(tr("Snap To"), |ui| {
+                                        ui.add_enabled_ui(snap.enabled, |ui| {
+                                            for (value, label) in [
+                                                (&mut snap.guides, tr("Guides")),
+                                                (&mut snap.grid, tr("Grid")),
+                                                (&mut snap.layers, tr("Layers")),
+                                                (&mut snap.bounds, tr("Document Bounds")),
+                                            ] {
+                                                if widgets::menu_check(ui, *value, label, "")
+                                                    .clicked()
+                                                {
+                                                    *value = !*value;
+                                                }
                                             }
-                                        }
+                                        });
+                                    });
+                                    if snap != self.config.snap {
+                                        self.set_view_option(|config| config.snap = snap);
+                                    }
+                                    ui.separator();
+                                    check_item(
+                                        ui,
+                                        &items,
+                                        self.config.lock_guides,
+                                        None,
+                                        "lock_guides",
+                                        &mut action,
+                                    );
+                                    let has_guides = self
+                                        .session()
+                                        .is_some_and(|s| !s.document.guides.is_empty());
+                                    ui.add_enabled_ui(has_guides, |ui| {
+                                        item(ui, &items, "clear_guides", &mut action);
                                     });
                                 });
-                                if snap != self.config.snap {
-                                    self.set_view_option(|config| config.snap = snap);
-                                }
-                                ui.separator();
-                                check_item(
-                                    ui,
-                                    &items,
-                                    self.config.lock_guides,
-                                    None,
-                                    "lock_guides",
-                                    &mut action,
-                                );
-                                let has_guides = self
-                                    .session()
-                                    .is_some_and(|s| !s.document.guides.is_empty());
-                                ui.add_enabled_ui(has_guides, |ui| {
-                                    item(ui, &items, "clear_guides", &mut action);
+                            });
+                            menu_bar_button(ui, tr("Plugins"), |ui| {
+                                item(ui, &items, "plugins", &mut action);
+                                item(ui, &items, "install_plugin", &mut action);
+                                ui.add_enabled_ui(!developing, |ui| {
+                                    plugin_items(
+                                        ui,
+                                        plugin_menu.get(&Menu::Plugins),
+                                        &mut plugin_action,
+                                    );
                                 });
                             });
-                        });
-                        menu_bar_button(ui, tr("Plugins"), |ui| {
-                            item(ui, &items, "plugins", &mut action);
-                            item(ui, &items, "install_plugin", &mut action);
-                            ui.add_enabled_ui(!developing, |ui| {
-                                plugin_items(
-                                    ui,
-                                    plugin_menu.get(&Menu::Plugins),
-                                    &mut plugin_action,
-                                );
-                            });
-                        });
-                        menu_bar_button(ui, tr("Window"), |ui| {
-                            ui.add_enabled_ui(!developing, |ui| {
-                                for (id, title, shown) in &pane_entries {
-                                    let mut shown = *shown;
-                                    if widgets::checkbox(ui, &mut shown, title).changed() {
-                                        pane_toggle = Some((id.clone(), !shown));
-                                        ui.close();
+                            menu_bar_button(ui, tr("Window"), |ui| {
+                                ui.add_enabled_ui(!developing, |ui| {
+                                    for (id, title, shown) in &pane_entries {
+                                        let mut shown = *shown;
+                                        if widgets::checkbox(ui, &mut shown, title).changed() {
+                                            pane_toggle = Some((id.clone(), !shown));
+                                            ui.close();
+                                        }
                                     }
-                                }
-                                ui.separator();
-                                item(ui, &items, "reset_panels", &mut action);
+                                    ui.separator();
+                                    item(ui, &items, "reset_panels", &mut action);
+                                });
+                            });
+                            menu_bar_button(ui, tr("Help"), |ui| {
+                                item(ui, &items, "command_palette", &mut action);
+                                item(ui, &items, "shortcuts", &mut action);
+                                item(ui, &items, "about", &mut action);
                             });
                         });
-                        menu_bar_button(ui, tr("Help"), |ui| {
-                            item(ui, &items, "command_palette", &mut action);
-                            item(ui, &items, "shortcuts", &mut action);
-                            item(ui, &items, "about", &mut action);
-                        });
+                        self.trailing_window_controls(ui);
                     });
-                    self.trailing_window_controls(ui);
-                });
-        });
+            },
+        );
         if let Some((id, hidden)) = pane_toggle {
             self.config.panes.set_hidden(&id, hidden);
             self.save_config();
@@ -650,7 +682,7 @@ impl EditorApp {
             .exact_height(46.0)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::TITLEBAR)
+                    .fill(ctx.palette().titlebar)
                     .inner_margin(egui::Margin::symmetric(14, 9)),
             )
             .show(ctx, |ui| {
@@ -681,7 +713,8 @@ impl EditorApp {
                                             && self.inactive_develop.is_empty()
                                         {
                                             ui.label(
-                                                RichText::new(tr("Untitled")).color(theme::MUTED),
+                                                RichText::new(tr("Untitled"))
+                                                    .color(ui.palette().muted),
                                             );
                                         }
                                         for (index, session) in self.sessions.iter().enumerate() {
@@ -704,7 +737,10 @@ impl EditorApp {
                                                     ui.painter().rect_stroke(
                                                         response.rect,
                                                         theme::BUTTON_RADIUS,
-                                                        egui::Stroke::new(2.0_f32, theme::ACCENT),
+                                                        egui::Stroke::new(
+                                                            2.0_f32,
+                                                            ui.palette().accent,
+                                                        ),
                                                         egui::StrokeKind::Inside,
                                                     );
                                                 }

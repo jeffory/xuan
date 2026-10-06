@@ -1,5 +1,6 @@
 //! Windows for plugins: the action dialog built from a manifest's inputs,
 //! permission prompts, the plugin manager, running jobs and proposals.
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
@@ -207,7 +208,7 @@ impl EditorApp {
                     return;
                 };
                 if !spec.description.is_empty() {
-                    ui.add(egui::Label::new(RichText::new(&spec.description).color(theme::MUTED)).wrap());
+                    ui.add(egui::Label::new(RichText::new(&spec.description).color(ui.palette().muted)).wrap());
                     ui.add_space(8.0);
                 }
                 for input in &spec.inputs {
@@ -220,7 +221,7 @@ impl EditorApp {
                                     "Drag on the canvas to add a box, or add the current selection.",
                                 ))
                                 .small()
-                                .color(theme::MUTED),
+                                .color(ui.palette().muted),
                             )
                             .wrap(),
                         );
@@ -313,7 +314,7 @@ impl EditorApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if let Some(estimate) = &edit.estimate {
-                        ui.label(RichText::new(estimate).color(theme::MUTED));
+                        ui.label(RichText::new(estimate).color(ui.palette().muted));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         run = widgets::primary_button(ui, tr("Run")).clicked();
@@ -386,7 +387,7 @@ impl EditorApp {
                         grant.command.join(" ")
                     ))
                     .small()
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
                 );
                 ui.add_space(8.0);
                 permissions_list(ui, &manifest, blocked);
@@ -495,7 +496,7 @@ impl EditorApp {
                                         .get(&manifest.plugin.id)
                                         .is_none_or(|c| c.enabled);
                                     let text = RichText::new(&manifest.plugin.name);
-                                    let text = if enabled { text } else { text.color(theme::MUTED) };
+                                    let text = if enabled { text } else { text.color(ui.palette().muted) };
                                     if ui
                                         .selectable_label(selected.as_deref() == Some(&manifest.plugin.id), text)
                                         .clicked()
@@ -504,7 +505,7 @@ impl EditorApp {
                                     }
                                 }
                                 if manifests.is_empty() {
-                                    ui.label(RichText::new(tr("No plugins installed")).color(theme::MUTED));
+                                    ui.label(RichText::new(tr("No plugins installed")).color(ui.palette().muted));
                                 }
                             });
                         ui.add_space(8.0);
@@ -540,7 +541,7 @@ impl EditorApp {
                             );
                             if let Some(dir) = &plugin_dir {
                                 ui.add_space(8.0);
-                                ui.label(RichText::new(dir.display().to_string()).color(theme::MUTED));
+                                ui.label(RichText::new(dir.display().to_string()).color(ui.palette().muted));
                             }
                             return;
                         };
@@ -548,7 +549,7 @@ impl EditorApp {
                         let config = self.config.plugins.get(&id).cloned().unwrap_or_default();
                         ui.horizontal(|ui| {
                             ui.heading(&manifest.plugin.name);
-                            ui.label(RichText::new(&manifest.plugin.version).color(theme::MUTED));
+                            ui.label(RichText::new(&manifest.plugin.version).color(ui.palette().muted));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let mut enabled = config.enabled;
                                 if widgets::checkbox(ui, &mut enabled, tr("Enabled")).changed() {
@@ -560,7 +561,7 @@ impl EditorApp {
                             ui.add(egui::Label::new(&manifest.plugin.description).wrap());
                         }
                         ui.add_space(4.0);
-                        ui.label(RichText::new(manifest.dir.display().to_string()).small().color(theme::MUTED));
+                        ui.label(RichText::new(manifest.dir.display().to_string()).small().color(ui.palette().muted));
                         let status = if self.plugin_offline(&id) {
                             tr("Off: plugins that use the network are disabled")
                         } else if self.plugins.running(&id) {
@@ -568,14 +569,14 @@ impl EditorApp {
                         } else {
                             tr("Not running")
                         };
-                        ui.label(RichText::new(status).small().color(theme::MUTED));
+                        ui.label(RichText::new(status).small().color(ui.palette().muted));
                         ui.add_space(8.0);
                         {
                             ui.label(RichText::new(tr("Permissions")).strong());
                             permissions_list(ui, manifest, self.plugin_network_blocked(&id));
                             ui.horizontal(|ui| {
                                 if self.plugin_granted(&id) {
-                                    ui.label(RichText::new(tr("Allowed")).color(theme::MUTED));
+                                    ui.label(RichText::new(tr("Allowed")).color(ui.palette().muted));
                                     if widgets::button(ui, tr("Revoke")).clicked() {
                                         grant = Some((id.clone(), false));
                                     }
@@ -589,7 +590,7 @@ impl EditorApp {
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         RichText::new(tr("Gets document data without asking"))
-                                            .color(theme::MUTED),
+                                            .color(ui.palette().muted),
                                     );
                                     if widgets::button(ui, tr("Ask Again")).clicked() {
                                         ask_again = Some(id.clone());
@@ -632,7 +633,7 @@ impl EditorApp {
                             manifest.formats.len(),
                             tr("formats")
                         );
-                        ui.label(RichText::new(summary).small().color(theme::MUTED));
+                        ui.label(RichText::new(summary).small().color(ui.palette().muted));
                         let log = self.plugins.log(&id);
                         if !log.is_empty() {
                             egui::CollapsingHeader::new(tr("Log"))
@@ -663,7 +664,7 @@ impl EditorApp {
                             egui::Label::new(
                                 RichText::new(format!("{}: {}", error.dir.display(), error.error))
                                     .small()
-                                    .color(theme::MUTED),
+                                    .color(ui.palette().muted),
                             )
                             .wrap(),
                         );
@@ -678,7 +679,7 @@ impl EditorApp {
                 }
                 ui.horizontal(|ui| {
                     if let Some(dir) = &plugin_dir {
-                        ui.label(RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display())).small().color(theme::MUTED));
+                        ui.label(RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display())).small().color(ui.palette().muted));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::primary_button(ui, tr("Done")).clicked() {
@@ -780,7 +781,7 @@ impl EditorApp {
                 .collapsible(false)
                 .resizable(false)
                 .title_bar(false)
-                .frame(theme::frame().inner_margin(egui::Margin::same(10)))
+                .frame(theme::frame(&ctx.palette()).inner_margin(egui::Margin::same(10)))
                 .show(ctx, |ui| {
                     ui.set_width(240.0);
                     ui.horizontal(|ui| {
@@ -798,14 +799,16 @@ impl EditorApp {
                         None => {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                ui.label(RichText::new(tr("Working…")).color(theme::MUTED));
+                                ui.label(RichText::new(tr("Working…")).color(ui.palette().muted));
                             });
                         }
                     }
                     if !message.is_empty() {
                         ui.add(
-                            egui::Label::new(RichText::new(message).small().color(theme::MUTED))
-                                .wrap(),
+                            egui::Label::new(
+                                RichText::new(message).small().color(ui.palette().muted),
+                            )
+                            .wrap(),
                         );
                     }
                 });
@@ -842,14 +845,14 @@ impl EditorApp {
             .collapsible(false)
             .resizable(false)
             .title_bar(false)
-            .frame(theme::frame().inner_margin(egui::Margin::symmetric(14, 10)))
+            .frame(theme::frame(&ctx.palette()).inner_margin(egui::Margin::symmetric(14, 10)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&name).strong())
                         .on_hover_text(&source);
-                    ui.label(RichText::new(&source).small().color(theme::MUTED));
+                    ui.label(RichText::new(&source).small().color(ui.palette().muted));
                     if let Some(message) = &message {
-                        ui.label(RichText::new(message).color(theme::MUTED));
+                        ui.label(RichText::new(message).color(ui.palette().muted));
                     }
                     ui.add_space(12.0);
                     if ui
@@ -897,7 +900,7 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
                     tr("It cannot open network sockets, not even to this computer.")
                 ))
                 .small()
-                .color(theme::MUTED),
+                .color(ui.palette().muted),
             )
             .wrap(),
         );
@@ -918,7 +921,7 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
                     tr("Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.")
                 ))
                 .small()
-                .color(theme::MUTED),
+                .color(ui.palette().muted),
             )
             .wrap(),
         );

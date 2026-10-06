@@ -1,13 +1,14 @@
 //! The right sidebar: a stack of collapsible panes that the user can reorder
 //! by dragging their headers and resize with the splitters between them. The
 //! arrangement lives in the user configuration ([`xuan::panes`]).
-use egui::{Align2, Color32, CursorIcon, FontId, Rect, Sense, Stroke, pos2, vec2};
+use super::theme::PaletteExt as _;
+use egui::{Align2, CursorIcon, FontId, Rect, Sense, Stroke, pos2, vec2};
 use xuan::{
     i18n::tr,
     panes::{self, MIN_HEIGHT},
 };
 
-use super::{EditorApp, theme};
+use super::EditorApp;
 
 const HEADER_HEIGHT: f32 = 26.0;
 const SPLITTER_HEIGHT: f32 = 5.0;
@@ -97,7 +98,7 @@ impl EditorApp {
             .default_width(252.0)
             .width_range(206.0..=352.0)
             .resizable(true)
-            .frame(egui::Frame::new().fill(theme::PANEL))
+            .frame(egui::Frame::new().fill(ctx.palette().panel))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let panel = ui.max_rect();
@@ -154,9 +155,9 @@ impl EditorApp {
                                 Stroke::new(
                                     1.0_f32,
                                     if active {
-                                        theme::ACCENT
+                                        ui.palette().accent
                                     } else {
-                                        theme::DIVIDER
+                                        ui.palette().divider
                                     },
                                 ),
                             );
@@ -188,7 +189,7 @@ impl EditorApp {
                         ui.painter().hline(
                             panel.x_range(),
                             y.clamp(panel.top() + 1.0, panel.bottom() - 1.0),
-                            Stroke::new(2.0_f32, theme::ACCENT),
+                            Stroke::new(2.0_f32, ui.palette().accent),
                         );
                         drag.insert = Some(slot);
                     }
@@ -233,7 +234,7 @@ impl EditorApp {
             .as_ref()
             .is_some_and(|drag| drag.id == entry.id);
         if response.hovered() || dragging {
-            painter.rect_filled(rect, 0.0, Color32::from_gray(44));
+            painter.rect_filled(rect, 0.0, ui.palette().pane_hover);
         }
         let center = rect.left_center() + vec2(13.0, 0.0);
         let offsets = if entry.collapsed {
@@ -243,9 +244,13 @@ impl EditorApp {
         };
         painter.add(egui::Shape::line(
             offsets.into_iter().map(|offset| center + offset).collect(),
-            Stroke::new(1.5_f32, theme::MUTED),
+            Stroke::new(1.5_f32, ui.palette().muted),
         ));
-        let text = if enabled { theme::TEXT } else { theme::MUTED };
+        let text = if enabled {
+            ui.palette().text
+        } else {
+            ui.palette().muted
+        };
         painter.text(
             pos2(rect.left() + 26.0, rect.center().y),
             Align2::LEFT_CENTER,
@@ -259,13 +264,13 @@ impl EditorApp {
                 Align2::RIGHT_CENTER,
                 detail,
                 FontId::proportional(11.0),
-                theme::MUTED,
+                ui.palette().muted,
             );
         }
         painter.hline(
             rect.x_range(),
             rect.bottom() - 0.5,
-            Stroke::new(1.0_f32, theme::DIVIDER),
+            Stroke::new(1.0_f32, ui.palette().divider),
         );
         response.widget_info(|| {
             egui::WidgetInfo::selected(

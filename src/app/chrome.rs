@@ -3,15 +3,22 @@ use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, emath::GuiRounding 
 use xuan::config::WindowButtons;
 use xuan::{config::TitleBar, i18n::tr};
 
-use super::{EditorApp, theme};
+use super::{
+    EditorApp,
+    theme::{self, PaletteExt},
+};
 
 /// Size of one compact-style window button.
 const BUTTON_SIZE: egui::Vec2 = vec2(30.0, 22.0);
 
-pub(super) fn title_bar(radius: u8, id: &'static str) -> egui::TopBottomPanel {
+pub(super) fn title_bar(
+    palette: &theme::Palette,
+    radius: u8,
+    id: &'static str,
+) -> egui::TopBottomPanel {
     egui::TopBottomPanel::top(id).exact_height(32.0).frame(
         egui::Frame::new()
-            .fill(theme::TITLEBAR)
+            .fill(palette.titlebar)
             .corner_radius(egui::CornerRadius {
                 nw: radius,
                 ne: radius,
@@ -22,10 +29,14 @@ pub(super) fn title_bar(radius: u8, id: &'static str) -> egui::TopBottomPanel {
     )
 }
 
-pub(super) fn status_bar(radius: u8, id: &'static str) -> egui::TopBottomPanel {
+pub(super) fn status_bar(
+    palette: &theme::Palette,
+    radius: u8,
+    id: &'static str,
+) -> egui::TopBottomPanel {
     egui::TopBottomPanel::bottom(id).exact_height(30.0).frame(
         egui::Frame::new()
-            .fill(theme::PANEL)
+            .fill(palette.panel)
             .corner_radius(egui::CornerRadius {
                 nw: 0,
                 ne: 0,
@@ -235,22 +246,19 @@ impl EditorApp {
             let themed = false;
             if !themed {
                 let painter = ui.painter();
+                let p = ui.palette();
                 if response.hovered() || response.has_focus() {
-                    let alpha = if response.is_pointer_button_down_on() {
-                        36
+                    let fill = if response.is_pointer_button_down_on() {
+                        p.pressed
                     } else {
-                        20
+                        p.hover
                     };
-                    painter.rect_filled(
-                        rect.shrink2(vec2(2.0, 0.0)),
-                        theme::BUTTON_RADIUS,
-                        Color32::from_white_alpha(alpha),
-                    );
+                    painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
                 }
                 let color = if focused || response.hovered() {
-                    theme::TEXT
+                    p.text
                 } else {
-                    theme::MUTED
+                    p.muted
                 };
                 let stroke = Stroke::new(1.0_f32, color);
                 // Pixel-centered 1 px strokes stay crisp at integer offsets.
@@ -351,23 +359,24 @@ impl EditorApp {
             return false;
         };
         let (asset, highlight, dim) = (pick.asset.clone(), pick.highlight, pick.dim);
+        let p = ui.palette();
         // A monochrome close icon without a hover image of its own is drawn as Breeze does:
         // a circle in the scheme's negative colour with the glyph in the title bar colour.
         let close_fill = (kind == Kind::Close && asset.symbolic)
-            .then(|| resolved.tints.close_fill(highlight, theme::TITLEBAR))
+            .then(|| resolved.tints.close_fill(highlight, p.titlebar))
             .flatten();
         let tint = asset.symbolic.then(|| {
             if let Some((_, glyph)) = close_fill {
                 return glyph;
             }
             let fallback = if state == State::Backdrop {
-                theme::MUTED
+                p.muted
             } else {
-                theme::TEXT
+                p.text
             };
             resolved
                 .tints
-                .color(state == State::Backdrop, theme::TITLEBAR, fallback)
+                .color(state == State::Backdrop, p.titlebar, fallback)
         });
         let Some((texture, size)) = theme.texture(ui.ctx(), &asset, ppp, tint) else {
             return false;
@@ -377,16 +386,13 @@ impl EditorApp {
             let radius = (rect.width().min(rect.height()) / 2.0 - 1.0).max(6.0);
             painter.circle_filled(rect.center(), radius, fill);
         } else if highlight != Highlight::None {
-            let alpha = if highlight == Highlight::Pressed {
-                36
+            let fill = if highlight == Highlight::Pressed {
+                p.pressed
+
             } else {
-                20
+                p.hover
             };
-            painter.rect_filled(
-                rect.shrink2(vec2(2.0, 0.0)),
-                theme::BUTTON_RADIUS,
-                Color32::from_white_alpha(alpha),
-            );
+            painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
         }
         let fit = (rect.width() / size.x).min(rect.height() / size.y).min(1.0);
         let image = Rect::from_center_size(rect.center().round_to_pixel_center(ppp), size * fit);
@@ -473,7 +479,7 @@ impl EditorApp {
             let color = if focused || hovered {
                 color
             } else {
-                Color32::from_gray(83)
+                ui.palette().traffic_inactive
             };
             ui.painter().circle_filled(
                 center,
@@ -556,7 +562,7 @@ impl EditorApp {
             ui.painter().galley_with_override_text_color(
                 center - galley.size() / 2.0,
                 galley,
-                theme::MUTED,
+                ui.palette().muted,
             );
         }
         if response.double_clicked() {

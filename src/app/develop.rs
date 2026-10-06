@@ -1,3 +1,4 @@
+use super::theme::PaletteExt as _;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -19,7 +20,7 @@ use xuan::{
 };
 
 use super::develop_preview::{PreparedPreview, PreviewImage, PreviewTexture, PreviewWorker};
-use super::{EditorApp, Session, theme, widgets};
+use super::{EditorApp, Session, widgets};
 
 const PREVIEW_INTERVAL: Duration = Duration::from_millis(33);
 const PREVIEW_SETTLE: Duration = Duration::from_millis(150);
@@ -876,7 +877,7 @@ impl EditorApp {
             .exact_height(44.0)
             .frame(
                 egui::Frame::new()
-                    .fill(theme::PANEL)
+                    .fill(ctx.palette().panel)
                     .inner_margin(egui::Margin::symmetric(12, 8)),
             )
             .show(ctx, |ui| {
@@ -915,8 +916,11 @@ impl EditorApp {
                     });
                 });
             });
-        let status_bar =
-            super::chrome::status_bar(self.window_corner_radius(ctx), "develop_status");
+        let status_bar = super::chrome::status_bar(
+            &ctx.palette(),
+            self.window_corner_radius(ctx),
+            "develop_status",
+        );
         status_bar.show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if d.receiver.is_some() {
@@ -973,7 +977,11 @@ impl EditorApp {
         egui::SidePanel::right("develop_controls")
             .default_width(400.0)
             .width_range(400.0..=480.0)
-            .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(12))
+            .frame(
+                egui::Frame::new()
+                    .fill(ctx.palette().panel)
+                    .inner_margin(12),
+            )
             .show(ctx, |ui| {
                 ui.add_enabled_ui(interactive, |ui| {
                     ui.push_id(d.id, |ui| {
@@ -982,10 +990,10 @@ impl EditorApp {
                 });
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::CANVAS))
+            .frame(egui::Frame::new().fill(ctx.palette().canvas))
             .show(ctx, |ui| {
                 if let Some(error) = &d.error {
-                    ui.colored_label(Color32::from_rgb(255, 140, 140), error);
+                    ui.colored_label(ui.palette().error_soft, error);
                     if d.full.is_some() && widgets::button(ui, tr("Retry preview")).clicked() {
                         d.changed();
                     }
@@ -1199,9 +1207,11 @@ fn draw_canvas(
     } else {
         viewport
     };
-    painter
-        .with_clip_rect(edited_viewport)
-        .rect_filled(rect, 0.0, Color32::from_gray(50));
+    painter.with_clip_rect(edited_viewport).rect_filled(
+        rect,
+        0.0,
+        super::theme::palette(painter.ctx()).preview,
+    );
     let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
     let original_uv = Rect::from_min_max(
         pos2(

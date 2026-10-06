@@ -10,12 +10,13 @@
 //! the sidebar draws its header and remembers whether it is collapsed, hidden
 //! or resized. Develop mode shows its own workspace without the sidebar, so
 //! the pane is hidden there.
+use super::theme::PaletteExt as _;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use image::RgbaImage;
 use uuid::Uuid;
 use xuan::{i18n::tr, render};
 
-use super::{EditorApp, canvas, theme};
+use super::{EditorApp, canvas};
 
 /// Longest side, in pixels, of the cached thumbnail texture.
 const THUMBNAIL_SIDE: u32 = 320;
@@ -171,7 +172,7 @@ impl EditorApp {
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 if self.sessions.is_empty() {
-                    ui.label(egui::RichText::new(tr("No document open")).color(theme::MUTED));
+                    ui.label(egui::RichText::new(tr("No document open")).color(ui.palette().muted));
                     return;
                 }
                 ui.add_enabled_ui(enabled, |ui| self.navigator_body(ui));
@@ -203,7 +204,7 @@ impl EditorApp {
         let size = fit_size(image, vec2(width, height));
         ui.vertical_centered(|ui| {
             let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
-            ui.painter().rect_filled(rect, 0.0, theme::CANVAS);
+            ui.painter().rect_filled(rect, 0.0, ui.palette().canvas);
             if let Some(texture) = &session.navigator.texture {
                 ui.painter().image(
                     texture.id(),
@@ -218,7 +219,7 @@ impl EditorApp {
                 ui.painter().with_clip_rect(rect).rect_stroke(
                     box_rect,
                     0.0,
-                    Stroke::new(1.5_f32, theme::ACCENT),
+                    Stroke::new(1.5_f32, ui.palette().accent),
                     StrokeKind::Inside,
                 );
             }

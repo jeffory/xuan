@@ -1,3 +1,4 @@
+use super::theme::PaletteExt as _;
 use super::widgets;
 use std::{ops::RangeInclusive, sync::Arc};
 use xuan::i18n::tr;
@@ -12,7 +13,7 @@ use xuan::{
     selection::{self, SelectionMode},
 };
 
-use super::{EditorApp, Gesture, Tool, TransformDrag, theme};
+use super::{EditorApp, Gesture, Tool, TransformDrag};
 
 /// Colour of the Clone Stamp source marker: dimmer than the pointer's outline.
 pub(super) const CLONE_SOURCE_COLOR: Color32 = Color32::from_rgba_premultiplied(190, 190, 190, 190);
@@ -291,7 +292,7 @@ fn drag_transform(
 impl EditorApp {
     pub(super) fn canvas(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::CANVAS))
+            .frame(egui::Frame::new().fill(ctx.palette().canvas))
             .show(ctx, |ui| {
                 let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
                 if self.sessions.is_empty() {
@@ -356,7 +357,8 @@ impl EditorApp {
                 let session = &self.sessions[self.current];
                 let visible = canvas.intersect(viewport);
                 let painter = ui.painter().with_clip_rect(viewport);
-                painter.rect_filled(canvas.expand(3.0), 0.0, Color32::from_black_alpha(60));
+                let palette = ui.palette();
+                painter.rect_filled(canvas.expand(3.0), 0.0, palette.canvas_shadow);
                 if visible.is_positive() {
                     let checker = 12.0;
                     let min_x = ((visible.left() - origin.x) / checker).floor() as i32;
@@ -372,7 +374,7 @@ impl EditorApp {
                                     Vec2::splat(checker),
                                 ),
                                 0.0,
-                                Color32::from_gray(if (x + y) % 2 == 0 { 66 } else { 80 }),
+                                palette.checker[usize::from((x + y) % 2 != 0)],
                             );
                         }
                     }
@@ -393,7 +395,7 @@ impl EditorApp {
                 painter.rect_stroke(
                     canvas,
                     0.0,
-                    Stroke::new(1.0_f32, Color32::from_gray(17)),
+                    Stroke::new(1.0_f32, palette.canvas_edge),
                     StrokeKind::Outside,
                 );
                 let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
@@ -511,8 +513,9 @@ impl EditorApp {
                     let top = map(t.point(Point::new(0.5, 0.0)));
                     let center = map(t.center());
                     let rotate = top + (top - center).normalized() * 23.0;
-                    painter.line_segment([top, rotate], Stroke::new(1.0_f32, theme::TEXT));
-                    painter.circle_filled(rotate, 3.5, theme::TEXT);
+                    painter
+                        .line_segment([top, rotate], Stroke::new(1.0_f32, super::theme::ON_CANVAS));
+                    painter.circle_filled(rotate, 3.5, super::theme::ON_CANVAS);
                     if response
                         .hover_pos()
                         .is_some_and(|p| p.distance(rotate) < 8.0)
@@ -606,7 +609,7 @@ impl EditorApp {
                         painter.rect_stroke(
                             rect,
                             0.0,
-                            Stroke::new(1.5_f32, theme::ACCENT),
+                            Stroke::new(1.5_f32, ui.palette().accent),
                             StrokeKind::Inside,
                         );
                     }
@@ -624,16 +627,21 @@ impl EditorApp {
                         painter.rect_filled(
                             rect,
                             0.0,
-                            theme::ACCENT.gamma_multiply(if selected { 0.2 } else { 0.08 }),
+                            ui.palette()
+                                .accent
+                                .gamma_multiply(if selected { 0.2 } else { 0.08 }),
                         );
                         painter.rect_stroke(
                             rect,
                             0.0,
-                            Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, theme::ACCENT),
+                            Stroke::new(
+                                if selected { 2.0_f32 } else { 1.0_f32 },
+                                ui.palette().accent,
+                            ),
                             StrokeKind::Inside,
                         );
                         let badge = Rect::from_min_size(rect.min, vec2(22.0, 16.0));
-                        painter.rect_filled(badge, 0.0, theme::ACCENT);
+                        painter.rect_filled(badge, 0.0, ui.palette().accent);
                         painter.text(
                             badge.center(),
                             egui::Align2::CENTER_CENTER,
@@ -897,7 +905,7 @@ impl EditorApp {
                     painter.rect_stroke(
                         viewport.shrink(5.0),
                         8.0,
-                        Stroke::new(2.0_f32, theme::ACCENT),
+                        Stroke::new(2.0_f32, ui.palette().accent),
                         StrokeKind::Inside,
                     );
                 }
@@ -924,7 +932,7 @@ impl EditorApp {
             ui.label(
                 egui::RichText::new(tr("A blank space for your next composition."))
                     .size(14.0)
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
             );
             ui.add_space(24.0);
             egui::Grid::new("welcome_dimensions")
@@ -953,7 +961,9 @@ impl EditorApp {
                     ui.end_row();
                 });
             ui.add_space(15.0);
-            ui.label(egui::RichText::new(tr("Transparent canvas · sRGB")).color(theme::MUTED));
+            ui.label(
+                egui::RichText::new(tr("Transparent canvas · sRGB")).color(ui.palette().muted),
+            );
             ui.add_space(20.0);
             ui.horizontal(|ui| {
                 open = widgets::button(ui, tr("Open project")).clicked();

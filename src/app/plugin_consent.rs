@@ -6,6 +6,7 @@
 //! these rules cover what Xuan itself hands over: the source image of an
 //! action, its regions and text inputs, and the layer, composite and
 //! selection exports a plugin asks for. See "Network" in `docs/PLUGINS.md`.
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
@@ -17,7 +18,7 @@ use xuan::{
     },
 };
 
-use super::{Dialog, EditorApp, plugins::one_line, theme, widgets};
+use super::{Dialog, EditorApp, plugins::one_line, widgets};
 
 /// Requests that hand a plugin pixels outside the source of an action.
 pub(super) const EXPORT_METHODS: [&str; 3] =
@@ -477,7 +478,7 @@ impl EditorApp {
                 } else {
                     tr("Your answer holds until the plugin stops. Xuan cannot check where the plugin sends what it receives.")
                 };
-                ui.add(egui::Label::new(RichText::new(note).small().color(theme::MUTED)).wrap());
+                ui.add(egui::Label::new(RichText::new(note).small().color(ui.palette().muted)).wrap());
                 ui.add_space(8.0);
                 widgets::checkbox(ui, &mut dont_ask, tr("Don't ask again for this plugin"));
                 ui.add_space(4.0);

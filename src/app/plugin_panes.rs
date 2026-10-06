@@ -1,4 +1,5 @@
 //! Drawing a plugin pane from the widget tree the plugin returned.
+use super::theme::PaletteExt as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -16,7 +17,7 @@ use xuan::{
 use super::{
     EditorApp,
     plugins::{PaneImage, PaneState, PendingStart},
-    theme, widgets,
+    widgets,
 };
 
 const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
@@ -66,7 +67,7 @@ impl EditorApp {
                                 "{name} {}",
                                 tr("uses the network, and plugins that use the network are disabled.")
                             ))
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                         )
                         .wrap(),
                     );
@@ -84,7 +85,7 @@ impl EditorApp {
                                 "{name} {}",
                                 tr("needs your permission to run.")
                             ))
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                         )
                         .wrap(),
                     );
@@ -106,7 +107,7 @@ impl EditorApp {
                 let state = self.plugins.panes.entry(key.to_owned()).or_default();
                 if let Some(error) = &state.error {
                     ui.add(
-                        egui::Label::new(RichText::new(error).small().color(theme::MUTED)).wrap(),
+                        egui::Label::new(RichText::new(error).small().color(ui.palette().muted)).wrap(),
                     );
                     if widgets::button(ui, tr("Retry")).clicked() {
                         state.error = None;
@@ -189,7 +190,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
         } => {
             let mut rich = RichText::new(text);
             if *muted {
-                rich = rich.color(theme::MUTED);
+                rich = rich.color(ui.palette().muted);
             }
             if *small {
                 rich = rich.small();
@@ -375,7 +376,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                 ui.label(
                     RichText::new(tr("Image unavailable"))
                         .small()
-                        .color(theme::MUTED),
+                        .color(ui.palette().muted),
                 );
             }
         }
@@ -397,7 +398,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                     }
                 }
                 if !label.is_empty() {
-                    ui.label(RichText::new(label).small().color(theme::MUTED));
+                    ui.label(RichText::new(label).small().color(ui.palette().muted));
                 }
             });
         }
@@ -419,7 +420,11 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                     }
                     let response = ui.selectable_label(is_selected, &item.label);
                     if !item.detail.is_empty() {
-                        ui.label(RichText::new(&item.detail).small().color(theme::MUTED));
+                        ui.label(
+                            RichText::new(&item.detail)
+                                .small()
+                                .color(ui.palette().muted),
+                        );
                     }
                     response
                 });
@@ -450,7 +455,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                         ui.painter().rect_stroke(
                             rect,
                             3.0,
-                            egui::Stroke::new(2.0_f32, theme::ACCENT),
+                            egui::Stroke::new(2.0_f32, ui.palette().accent),
                             egui::StrokeKind::Outside,
                         );
                     }

@@ -5,6 +5,7 @@
 //! the menus. This file holds the fuzzy matcher, the ranking, the small state machine and the
 //! overlay.
 
+use super::theme::PaletteExt as _;
 use egui::{
     Align2, Color32, FontId, Key, Modifiers, Order, Sense, TextEdit, WidgetInfo, WidgetType,
     text::{LayoutJob, TextFormat},
@@ -14,7 +15,7 @@ use xuan::i18n::tr;
 use super::{
     EditorApp,
     commands::{Category, Entry, Kind},
-    shortcuts, theme,
+    shortcuts,
 };
 
 /// Recent commands kept in the configuration.
@@ -400,11 +401,17 @@ fn take_keys(ctx: &egui::Context, toggle_keys: &[super::commands::Chord]) -> Key
 }
 
 /// The label with `indices` highlighted.
-fn label_job(label: &str, indices: &[usize], color: Color32, font: FontId) -> LayoutJob {
+fn label_job(
+    label: &str,
+    indices: &[usize],
+    color: Color32,
+    accent: Color32,
+    font: FontId,
+) -> LayoutJob {
     let mut job = LayoutJob::default();
     let plain = TextFormat::simple(font.clone(), color);
-    let mut highlighted = TextFormat::simple(font, theme::ACCENT);
-    highlighted.underline = egui::Stroke::new(1.0_f32, theme::ACCENT);
+    let mut highlighted = TextFormat::simple(font, accent);
+    highlighted.underline = egui::Stroke::new(1.0_f32, accent);
     let mut run = String::new();
     let mut run_highlighted = false;
     for (position, c) in label.chars().enumerate() {
@@ -463,14 +470,14 @@ impl EditorApp {
             .order(Order::Foreground)
             .interactable(true);
         let frame = egui::Frame::popup(&ctx.style())
-            .fill(theme::PANEL)
-            .stroke(egui::Stroke::new(1.0_f32, theme::DIVIDER))
+            .fill(ctx.palette().panel)
+            .stroke(egui::Stroke::new(1.0_f32, ctx.palette().divider))
             .corner_radius(8)
             .inner_margin(8);
         let response = egui::Modal::new(egui::Id::new("command_palette"))
             .area(area)
             .frame(frame)
-            .backdrop_color(Color32::from_black_alpha(70))
+            .backdrop_color(ctx.palette().modal_backdrop)
             .show(ctx, |ui| {
                 ui.set_width(WIDTH);
                 let id = egui::Id::new(FILTER_ID);
@@ -509,7 +516,9 @@ impl EditorApp {
                 ui.add_space(6.0);
                 if rows.is_empty() {
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(tr("No matching commands")).color(theme::MUTED));
+                    ui.label(
+                        egui::RichText::new(tr("No matching commands")).color(ui.palette().muted),
+                    );
                     ui.add_space(8.0);
                     return;
                 }
@@ -545,7 +554,7 @@ impl EditorApp {
                             Group::Result => "",
                         };
                         ui.add_space(4.0);
-                        ui.label(egui::RichText::new(name).small().color(theme::MUTED));
+                        ui.label(egui::RichText::new(name).small().color(ui.palette().muted));
                     }
                     previous = Some(row.group);
                     let entry = &self.keymap.entries()[row.entry];
@@ -583,9 +592,9 @@ impl EditorApp {
             return false;
         }
         let fill = if selected {
-            Some(theme::ACCENT.gamma_multiply(0.35))
+            Some(ui.palette().accent.gamma_multiply(0.35))
         } else if response.hovered() {
-            Some(Color32::from_white_alpha(18))
+            Some(ui.palette().row_hover)
         } else {
             None
         };
@@ -593,17 +602,21 @@ impl EditorApp {
             ui.painter().rect_filled(rect, 4.0, fill);
         }
         let (text, muted) = if enabled {
-            (theme::TEXT, theme::MUTED)
+            (ui.palette().text, ui.palette().muted)
         } else {
             (
-                theme::MUTED.gamma_multiply(0.7),
-                theme::MUTED.gamma_multiply(0.5),
+                ui.palette().muted.gamma_multiply(0.7),
+                ui.palette().muted.gamma_multiply(0.5),
             )
         };
         let font = FontId::proportional(14.0);
-        let galley = ui
-            .painter()
-            .layout_job(label_job(label, &row.indices, text, font.clone()));
+        let galley = ui.painter().layout_job(label_job(
+            label,
+            &row.indices,
+            text,
+            ui.palette().accent,
+            font.clone(),
+        ));
         let left = rect.left() + 8.0;
         let label_width = galley.size().x;
         ui.painter().galley(

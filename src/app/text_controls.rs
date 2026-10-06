@@ -1,3 +1,4 @@
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use uuid::Uuid;
 use xuan::i18n::tr;
@@ -7,7 +8,7 @@ use xuan::{
     text::{self, TextRenderer, TextStyle},
 };
 
-use super::{Dialog, EditorApp, Tool, font_picker::FontPicker, theme, widgets};
+use super::{Dialog, EditorApp, Tool, font_picker::FontPicker, widgets};
 
 pub(super) struct TextEdit {
     target: Uuid,
@@ -46,7 +47,7 @@ impl EditorApp {
             );
             self.start_text(None, point);
         }
-        ui.label(RichText::new(tr("Click the canvas to place text")).color(theme::MUTED));
+        ui.label(RichText::new(tr("Click the canvas to place text")).color(ui.palette().muted));
     }
 
     pub(super) fn text_click(&mut self, point: Point) {
@@ -268,7 +269,7 @@ impl EditorApp {
                         RichText::new(tr(
                             "This font is unavailable. Editing uses a fallback font.",
                         ))
-                        .color(theme::MUTED)
+                        .color(ui.palette().muted)
                         .small(),
                     );
                 }
@@ -291,13 +292,13 @@ impl EditorApp {
                     widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
                 });
                 if let Some(error) = &edit.error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.palette().error, error);
                 }
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(tr("Live preview · Ctrl+Enter to apply"))
                             .small()
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         apply = ui

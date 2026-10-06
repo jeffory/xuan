@@ -1,3 +1,4 @@
+use theme::PaletteExt as _;
 use xuan::i18n::tr;
 mod canvas;
 mod chrome;
@@ -607,7 +608,7 @@ impl EditorApp {
         screenshot: Option<PathBuf>,
     ) -> Self {
         xuan::i18n::set_language(xuan::config::Language::English);
-        theme::apply(ctx);
+        theme::apply(ctx, &theme::Palette::DARK);
         egui_extras::install_image_loaders(ctx);
         let mut app = Self {
             config: Default::default(),
@@ -1735,7 +1736,7 @@ impl EditorApp {
         ctx.layer_painter(egui::LayerId::background()).rect_filled(
             ctx.content_rect(),
             self.window_corner_radius(ctx),
-            theme::PANEL,
+            ctx.palette().panel,
         );
         self.sync_decorations(ctx);
         self.window_resize(ctx);

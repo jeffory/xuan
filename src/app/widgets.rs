@@ -8,7 +8,7 @@ use egui::{
     vec2,
 };
 
-use super::theme;
+use super::theme::{self, PaletteExt};
 
 pub const NUMBER_WIDTH: f32 = 80.0;
 pub const SLIDER_LABEL_WIDTH: f32 = 82.0;
@@ -53,41 +53,21 @@ pub fn gradient(ui: &Ui, rect: Rect, radius: f32, top: Color32, bottom: Color32)
 pub fn bezel(ui: &Ui, response: &Response, radius: f32, primary: bool) {
     let rect = response.rect;
     let pressed = response.is_pointer_button_down_on();
-    let (top, bottom) = if primary {
-        if pressed {
-            (
-                Color32::from_rgb(30, 103, 210),
-                Color32::from_rgb(24, 89, 183),
-            )
-        } else {
-            (
-                Color32::from_rgb(65, 155, 255),
-                Color32::from_rgb(22, 112, 231),
-            )
-        }
-    } else {
-        let lift = if pressed {
-            -12
-        } else if response.hovered() {
-            8
-        } else {
-            0
-        };
-        (
-            Color32::from_gray((86 + lift) as u8),
-            Color32::from_gray((67 + lift) as u8),
-        )
+    let p = ui.palette();
+    let [top, bottom] = match (primary, pressed) {
+        (true, true) => p.accent_pressed,
+        (true, false) => p.accent_gradient,
+        (false, true) => p.control_pressed,
+        (false, false) if response.hovered() => p.control_hover,
+        (false, false) => p.control,
     };
-    ui.painter().rect_filled(
-        rect.translate(vec2(0.0, 1.0)),
-        radius,
-        Color32::from_black_alpha(65),
-    );
+    ui.painter()
+        .rect_filled(rect.translate(vec2(0.0, 1.0)), radius, p.control_shadow);
     gradient(ui, rect, radius, top, bottom);
     ui.painter().rect_stroke(
         rect.shrink(0.5),
         radius,
-        Stroke::new(1.0_f32, Color32::from_white_alpha(28)),
+        Stroke::new(1.0_f32, p.control_edge),
         StrokeKind::Inside,
     );
     focus_ring(ui, response, radius);
@@ -98,7 +78,7 @@ fn focus_ring(ui: &Ui, response: &Response, radius: f32) {
         ui.painter().rect_stroke(
             response.rect.expand(2.0),
             radius + 2.0,
-            Stroke::new(2.0_f32, theme::ACCENT.gamma_multiply(0.8)),
+            Stroke::new(2.0_f32, ui.palette().accent.gamma_multiply(0.8)),
             StrokeKind::Outside,
         );
     }
@@ -133,7 +113,7 @@ impl Widget for Button {
         let galley = ui.painter().layout_no_wrap(
             self.label.clone(),
             FontId::proportional(12.0),
-            theme::TEXT,
+            ui.palette().text,
         );
         let size = vec2(galley.size().x + 24.0, 22.0).max(self.size);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -142,8 +122,11 @@ impl Widget for Button {
         });
         if ui.is_rect_visible(rect) {
             bezel(ui, &response, theme::BUTTON_RADIUS as f32, self.primary);
-            ui.painter()
-                .galley(rect.center() - galley.size() / 2.0, galley, theme::TEXT);
+            ui.painter().galley(
+                rect.center() - galley.size() / 2.0,
+                galley,
+                ui.palette().text,
+            );
         }
         response
     }
@@ -277,17 +260,18 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
         ui.scope(|ui| {
             ui.spacing_mut().button_padding = vec2(6.0, 3.0);
             ui.spacing_mut().interact_size = self.size;
+            let p = ui.palette();
             let visuals = ui.visuals_mut();
-            visuals.selection.bg_fill = theme::ACCENT.gamma_multiply(0.5);
+            visuals.selection.bg_fill = p.accent.gamma_multiply(0.5);
             for widget in [
                 &mut visuals.widgets.inactive,
                 &mut visuals.widgets.hovered,
                 &mut visuals.widgets.active,
             ] {
                 widget.corner_radius = CornerRadius::same(4);
-                widget.bg_fill = theme::FIELD;
-                widget.weak_bg_fill = theme::FIELD;
-                widget.bg_stroke = Stroke::new(1.0_f32, Color32::from_gray(83));
+                widget.bg_fill = p.field;
+                widget.weak_bg_fill = p.field;
+                widget.bg_stroke = Stroke::new(1.0_f32, p.border);
                 widget.expansion = 0.0;
             }
             let mut number = egui::DragValue::new(&mut *self.value)
@@ -323,9 +307,9 @@ pub fn bare_checkbox(ui: &mut Ui, value: &mut bool, description: &str) -> Respon
 }
 
 fn described_checkbox(ui: &mut Ui, value: &mut bool, label: &str, description: &str) -> Response {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.into(), FontId::proportional(12.0), theme::TEXT);
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.into(), FontId::proportional(12.0), ui.palette().text);
     let width = 14.0
         + if label.is_empty() {
             0.0
@@ -347,21 +331,19 @@ fn described_checkbox(ui: &mut Ui, value: &mut bool, label: &str, description: &
     });
     let box_rect =
         Rect::from_center_size(pos2(rect.left() + 7.0, rect.center().y), vec2(14.0, 14.0));
-    let (top, bottom) = if *value {
-        (
-            Color32::from_rgb(62, 151, 255),
-            Color32::from_rgb(24, 113, 228),
-        )
+    let p = ui.palette();
+    let [top, bottom] = if *value {
+        p.check
     } else if response.hovered() {
-        (Color32::from_gray(95), Color32::from_gray(71))
+        p.checkbox_hover
     } else {
-        (Color32::from_gray(78), Color32::from_gray(57))
+        p.checkbox
     };
     gradient(ui, box_rect, 3.5, top, bottom);
     ui.painter().rect_stroke(
         box_rect,
         3.5,
-        Stroke::new(0.7_f32, Color32::from_white_alpha(45)),
+        Stroke::new(0.7_f32, p.checkbox_edge),
         StrokeKind::Inside,
     );
     if *value {
@@ -371,13 +353,13 @@ fn described_checkbox(ui: &mut Ui, value: &mut bool, label: &str, description: &
                 box_rect.min + vec2(6.0, 10.0),
                 box_rect.min + vec2(11.0, 4.0),
             ],
-            Stroke::new(1.6_f32, Color32::WHITE),
+            Stroke::new(1.6_f32, p.on_accent),
         ));
     }
     ui.painter().galley(
         pos2(rect.left() + 20.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        theme::TEXT,
+        ui.palette().text,
     );
     focus_ring(ui, &response, 4.0);
     response
@@ -506,39 +488,31 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
                 pos2(*x_range.start(), r.center().y - 1.5),
                 pos2(*x_range.end(), r.center().y + 1.5),
             );
-            ui.painter().rect_filled(
-                rail.translate(vec2(0.0, 1.0)),
-                2.0,
-                Color32::from_white_alpha(12),
-            );
-            ui.painter().rect_filled(rail, 2.0, Color32::from_gray(70));
+            let p = ui.palette();
+            ui.painter()
+                .rect_filled(rail.translate(vec2(0.0, 1.0)), 2.0, p.slider_rail_edge);
+            ui.painter().rect_filled(rail, 2.0, p.slider_rail);
             ui.painter().rect_filled(
                 Rect::from_min_max(rail.min, pos2(x, rail.bottom())),
                 2.0,
-                theme::ACCENT,
+                p.accent,
             );
             let thumb = Rect::from_center_size(pos2(x, r.center().y), vec2(14.0, 14.0));
-            ui.painter().circle_filled(
-                thumb.center() + vec2(0.0, 1.0),
-                7.5,
-                Color32::from_black_alpha(85),
-            );
+            ui.painter()
+                .circle_filled(thumb.center() + vec2(0.0, 1.0), 7.5, p.thumb_shadow);
             gradient(
                 ui,
                 thumb,
                 7.0,
-                Color32::from_gray(255),
-                Color32::from_gray(if response.is_pointer_button_down_on() {
-                    190
+                p.thumb[0],
+                if response.is_pointer_button_down_on() {
+                    p.thumb_pressed
                 } else {
-                    221
-                }),
+                    p.thumb[1]
+                },
             );
-            ui.painter().circle_stroke(
-                thumb.center(),
-                7.0,
-                Stroke::new(0.6_f32, Color32::from_gray(175)),
-            );
+            ui.painter()
+                .circle_stroke(thumb.center(), 7.0, Stroke::new(0.6_f32, p.thumb_edge));
             focus_ring(ui, &response, 4.0);
             let mut display = value * scale;
             let mut number = Number::new(&mut display)
@@ -572,9 +546,11 @@ pub fn segmented<T: Copy + PartialEq>(
         ui.spacing_mut().item_spacing.x = 0.0;
         let mut responses = Vec::new();
         for &(option, label) in options {
-            let galley =
-                ui.painter()
-                    .layout_no_wrap(label.into(), FontId::proportional(12.0), theme::TEXT);
+            let galley = ui.painter().layout_no_wrap(
+                label.into(),
+                FontId::proportional(12.0),
+                ui.palette().text,
+            );
             let (rect, mut response) =
                 ui.allocate_exact_size(vec2(galley.size().x + 20.0, 22.0), Sense::click());
             if response.clicked() && *value != option {
@@ -594,17 +570,12 @@ pub fn segmented<T: Copy + PartialEq>(
         let rect = responses
             .iter()
             .fold(Rect::NOTHING, |rect, (r, ..)| rect.union(*r));
-        gradient(
-            ui,
-            rect,
-            5.0,
-            Color32::from_gray(47),
-            Color32::from_gray(43),
-        );
+        let p = ui.palette();
+        gradient(ui, rect, 5.0, p.segment_track[0], p.segment_track[1]);
         ui.painter().rect_stroke(
             rect,
             5.0,
-            Stroke::new(1.0_f32, Color32::from_gray(66)),
+            Stroke::new(1.0_f32, p.segment_edge),
             StrokeKind::Inside,
         );
         let mut combined = ui.interact(rect, ui.next_auto_id(), Sense::hover());
@@ -625,11 +596,11 @@ pub fn segmented<T: Copy + PartialEq>(
                         rect.left_top() + vec2(0.0, 5.0),
                         rect.left_bottom() - vec2(0.0, 5.0),
                     ],
-                    Stroke::new(1.0_f32, Color32::from_gray(68)),
+                    Stroke::new(1.0_f32, p.segment_separator),
                 );
             }
             ui.painter()
-                .galley(rect.center() - galley.size() / 2.0, galley, theme::TEXT);
+                .galley(rect.center() - galley.size() / 2.0, galley, p.text);
             combined = combined.union(response);
         }
         combined
@@ -707,7 +678,7 @@ impl PopUp {
             egui::Align2::LEFT_CENTER,
             &self.text,
             FontId::proportional(12.0),
-            theme::TEXT,
+            ui.palette().text,
         );
         let center = pos2(rect.right() - 12.0, rect.center().y);
         for direction in [-1.0, 1.0] {
@@ -717,7 +688,7 @@ impl PopUp {
                     center + vec2(0.0, direction * 4.0),
                     center + vec2(3.0, direction * 1.5),
                 ],
-                Stroke::new(1.2_f32, theme::TEXT),
+                Stroke::new(1.2_f32, ui.palette().text),
             ));
         }
         response
@@ -828,9 +799,9 @@ pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
 }
 
 pub fn project_tab(ui: &mut Ui, title: &str, dirty: bool, selected: bool) -> (Response, bool) {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(title.into(), FontId::proportional(12.0), theme::TEXT);
+    let galley =
+        ui.painter()
+            .layout_no_wrap(title.into(), FontId::proportional(12.0), ui.palette().text);
     let width = galley.size().x.clamp(35.0, 155.0) + 40.0 + if dirty { 9.0 } else { 0.0 };
     let (rect, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
     let close_rect = Rect::from_min_max(pos2(rect.right() - 22.0, rect.top()), rect.max);
@@ -850,29 +821,37 @@ pub fn project_tab(ui: &mut Ui, title: &str, dirty: bool, selected: bool) -> (Re
             title,
         )
     });
+    let p = ui.palette();
     ui.painter().rect_filled(
         rect,
         theme::BUTTON_RADIUS,
-        Color32::from_white_alpha(if selected {
-            31
+        if selected {
+            p.tab_selected
         } else if response.hovered() {
-            19
+            p.tab_hover
         } else {
-            9
-        }),
+            p.tab_fill
+        },
     );
     ui.painter().rect_stroke(
         rect,
         theme::BUTTON_RADIUS,
         Stroke::new(
             1.0_f32,
-            Color32::from_white_alpha(if selected { 56 } else { 20 }),
+            if selected {
+                p.tab_selected_edge
+            } else {
+                p.tab_edge
+            },
         ),
         StrokeKind::Inside,
     );
     if dirty {
-        ui.painter()
-            .circle_filled(pos2(rect.left() + 13.0, rect.center().y), 2.5, theme::TEXT);
+        ui.painter().circle_filled(
+            pos2(rect.left() + 13.0, rect.center().y),
+            2.5,
+            ui.palette().text,
+        );
     }
     let text_rect = Rect::from_min_max(
         rect.min + vec2(if dirty { 21.0 } else { 11.0 }, 0.0),
@@ -881,14 +860,14 @@ pub fn project_tab(ui: &mut Ui, title: &str, dirty: bool, selected: bool) -> (Re
     ui.painter().with_clip_rect(text_rect).galley(
         pos2(text_rect.left(), rect.center().y - galley.size().y / 2.0),
         galley,
-        theme::TEXT,
+        ui.palette().text,
     );
     if close.hovered() {
         ui.painter()
-            .circle_filled(close_rect.center(), 7.0, Color32::from_white_alpha(22));
+            .circle_filled(close_rect.center(), 7.0, p.tab_close_hover);
     }
     let center = close_rect.center() - vec2(1.0, 0.0);
-    let stroke = Stroke::new(1.0_f32, theme::MUTED);
+    let stroke = Stroke::new(1.0_f32, ui.palette().muted);
     ui.painter()
         .line_segment([center - vec2(2.5, 2.5), center + vec2(2.5, 2.5)], stroke);
     ui.painter()
@@ -960,18 +939,18 @@ impl<'a> Window<'a> {
                         sw: 0,
                         se: 0,
                     },
-                    theme::TITLEBAR,
+                    ui.palette().titlebar,
                 );
                 ui.painter().line_segment(
                     [rect.left_bottom(), rect.right_bottom()],
-                    Stroke::new(1.0_f32, Color32::from_gray(24)),
+                    Stroke::new(1.0_f32, ui.palette().header_rule),
                 );
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     &self.title,
                     FontId::proportional(12.0),
-                    theme::TEXT,
+                    ui.palette().text,
                 );
                 if self.open.is_some() {
                     let center = pos2(rect.left() + 15.0, rect.center().y);
@@ -983,16 +962,16 @@ impl<'a> Window<'a> {
                     ui.painter().circle_filled(
                         center,
                         5.0,
-                        Color32::from_gray(if response.hovered() { 143 } else { 98 }),
+                        ui.palette().close_dot[usize::from(response.hovered())],
                     );
                     if response.hovered() {
                         ui.painter().line_segment(
                             [center - vec2(2.0, 2.0), center + vec2(2.0, 2.0)],
-                            Stroke::new(1.0_f32, theme::PANEL),
+                            Stroke::new(1.0_f32, ui.palette().panel),
                         );
                         ui.painter().line_segment(
                             [center + vec2(-2.0, 2.0), center + vec2(2.0, -2.0)],
-                            Stroke::new(1.0_f32, theme::PANEL),
+                            Stroke::new(1.0_f32, ui.palette().panel),
                         );
                     }
                     close = response.on_hover_text(tr("Close panel")).clicked();
@@ -1055,7 +1034,7 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
         .interact(swap_rect, ui.id().with("swap_colors"), Sense::click())
         .on_hover_text(tr("Swap colors (X)"));
     let c = swap_rect.center();
-    let stroke = Stroke::new(1.0_f32, theme::MUTED);
+    let stroke = Stroke::new(1.0_f32, ui.palette().muted);
     ui.painter().add(egui::Shape::line(
         vec![
             c + vec2(-4.0, -2.0),
@@ -1116,7 +1095,7 @@ pub fn selectable_value<T: PartialEq>(
     let selected = *value == option;
     let galley =
         ui.painter()
-            .layout_no_wrap(label.clone(), FontId::proportional(12.0), theme::TEXT);
+            .layout_no_wrap(label.clone(), FontId::proportional(12.0), ui.palette().text);
     let (rect, mut response) = ui.allocate_exact_size(
         vec2(ui.available_width().max(galley.size().x + 32.0), 22.0),
         Sense::click(),
@@ -1130,7 +1109,7 @@ pub fn selectable_value<T: PartialEq>(
         )
     });
     if response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, 4.0, theme::ACCENT);
+        ui.painter().rect_filled(rect, 4.0, ui.palette().accent);
     }
     if selected {
         let center = pos2(rect.left() + 10.0, rect.center().y);
@@ -1140,13 +1119,13 @@ pub fn selectable_value<T: PartialEq>(
                 center + vec2(-1.0, 2.5),
                 center + vec2(4.0, -3.0),
             ],
-            Stroke::new(1.3_f32, theme::TEXT),
+            Stroke::new(1.3_f32, ui.palette().text),
         ));
     }
     ui.painter().galley(
         pos2(rect.left() + 23.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        theme::TEXT,
+        ui.palette().text,
     );
     if response.clicked() && !selected {
         *value = option;
@@ -1158,13 +1137,15 @@ pub fn selectable_value<T: PartialEq>(
 /// A menu toggle: a check mark when `checked`, the label, and a right-aligned shortcut hint. Its
 /// accessible label is "<label> <shortcut>", like other menu items.
 pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Response {
-    let galley =
-        ui.painter()
-            .layout_no_wrap(label.to_owned(), FontId::proportional(12.0), theme::TEXT);
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        FontId::proportional(12.0),
+        ui.palette().text,
+    );
     let hint = ui.painter().layout_no_wrap(
         shortcut.to_owned(),
         FontId::proportional(12.0),
-        theme::MUTED,
+        ui.palette().muted,
     );
     let gap = if shortcut.is_empty() { 0.0 } else { 24.0 };
     let width = galley.size().x + hint.size().x + 32.0 + gap;
@@ -1184,9 +1165,13 @@ pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Re
         )
     });
     let enabled = ui.is_enabled();
-    let text = if enabled { theme::TEXT } else { theme::MUTED };
+    let text = if enabled {
+        ui.palette().text
+    } else {
+        ui.palette().muted
+    };
     if enabled && (response.hovered() || response.has_focus()) {
-        ui.painter().rect_filled(rect, 4.0, theme::ACCENT);
+        ui.painter().rect_filled(rect, 4.0, ui.palette().accent);
     }
     if checked {
         let center = pos2(rect.left() + 10.0, rect.center().y);
@@ -1210,7 +1195,7 @@ pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Re
             rect.center().y - hint.size().y / 2.0,
         ),
         hint,
-        theme::MUTED,
+        ui.palette().muted,
     );
     response
 }

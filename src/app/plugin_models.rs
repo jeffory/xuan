@@ -2,6 +2,7 @@
 //! downloads them, the background downloads and verifications, the Models
 //! section of Manage Plugins, and the verified paths handed to plugins.
 //! The downloading itself is [`xuan::plugins::models`].
+use super::theme::PaletteExt as _;
 use std::{
     path::PathBuf,
     sync::{
@@ -23,7 +24,7 @@ use xuan::{
     },
 };
 
-use super::{Dialog, EditorApp, plugins::one_line, theme, widgets};
+use super::{Dialog, EditorApp, plugins::one_line, widgets};
 
 /// A download or verification running in the background.
 pub(super) struct ModelJob {
@@ -91,9 +92,6 @@ impl ModelStatus {
         }
     }
 }
-
-/// The colour of a corrupt model's status.
-const CORRUPT: egui::Color32 = egui::Color32::from_rgb(255, 140, 140);
 
 /// `bytes` as KB, MB or GB (powers of 1000, as file managers show them).
 pub(super) fn format_size(bytes: u64) -> String {
@@ -534,7 +532,7 @@ impl EditorApp {
                     for detail in details {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(format!("  {detail}")).small().color(theme::MUTED),
+                                RichText::new(format!("  {detail}")).small().color(ui.palette().muted),
                             )
                             .wrap(),
                         );
@@ -548,7 +546,7 @@ impl EditorApp {
                             "Xuan downloads them over https into the plugin's models folder and checks each against the size and SHA-256 the plugin declares. It never runs or unpacks them; the plugin loads them.",
                         ))
                         .small()
-                        .color(theme::MUTED),
+                        .color(ui.palette().muted),
                     )
                     .wrap(),
                 );
@@ -559,7 +557,7 @@ impl EditorApp {
                             RichText::new(tr(
                                 "Models are not downloaded while plugins that use the network are disabled",
                             ))
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                         )
                         .wrap(),
                     );
@@ -618,13 +616,13 @@ impl EditorApp {
                         format_size(model.size)
                     ));
                     ui.label(RichText::new(status.text()).color(match status {
-                        ModelStatus::Corrupt => CORRUPT,
+                        ModelStatus::Corrupt => ui.palette().error_soft,
                         ModelStatus::Ready => ui.visuals().text_color(),
-                        _ => theme::MUTED,
+                        _ => ui.palette().muted,
                     }));
                     ui.label(
                         RichText::new(on_disk.map_or_else(|| "—".to_owned(), format_size))
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                     );
                     ui.horizontal(|ui| match status {
                         ModelStatus::Downloading(_) | ModelStatus::Verifying(_) => {
@@ -670,7 +668,7 @@ impl EditorApp {
                 ui.label(
                     RichText::new(dir.display().to_string())
                         .small()
-                        .color(theme::MUTED),
+                        .color(ui.palette().muted),
                 );
             }
         });

@@ -3,12 +3,13 @@
 //! Every change shows on the canvas at once, with the grid shown while the dialog is open; Cancel
 //! puts back what was there. OK keeps the settings for this project (saved in it) and as the
 //! default for projects without their own grid.
+use super::theme::PaletteExt as _;
 use xuan::{
     i18n::tr,
     layout::{GridColor, GridSettings, GridStyle},
 };
 
-use super::{Dialog, EditorApp, theme, widgets};
+use super::{Dialog, EditorApp, widgets};
 
 /// The dialog's working copy.
 #[derive(Clone, Copy, Debug)]
@@ -136,7 +137,7 @@ impl EditorApp {
                                     .range(GridSettings::SPACING_RANGE)
                                     .speed(1.0),
                             );
-                            ui.label(egui::RichText::new(tr("pixels")).color(theme::MUTED));
+                            ui.label(egui::RichText::new(tr("pixels")).color(ui.palette().muted));
                         });
                         ui.end_row();
 
@@ -162,9 +163,9 @@ impl EditorApp {
                 };
                 ui.add(
                     egui::Label::new(egui::RichText::new(note).color(if valid {
-                        theme::MUTED
+                        ui.palette().muted
                     } else {
-                        egui::Color32::from_rgb(255, 170, 60)
+                        ui.palette().warning
                     }))
                     .wrap(),
                 );

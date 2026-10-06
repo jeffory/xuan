@@ -1,4 +1,5 @@
-use super::{EditorApp, theme, widgets};
+use super::theme::PaletteExt as _;
+use super::{EditorApp, widgets};
 use xuan::{
     config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, TitleBar},
     i18n::{self, tr},
@@ -282,7 +283,7 @@ impl EditorApp {
                         .to_string(),
                 };
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(egui::RichText::new(text).color(theme::MUTED)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(text).color(ui.palette().muted)).wrap());
             }
         }
         ui.add_space(8.0);
@@ -291,7 +292,7 @@ impl EditorApp {
         } else {
             tr("Title bar changes apply immediately.")
         };
-        ui.add(egui::Label::new(egui::RichText::new(note).color(theme::MUTED)).wrap());
+        ui.add(egui::Label::new(egui::RichText::new(note).color(ui.palette().muted)).wrap());
         ui.add_space(24.0);
         ui.horizontal(|ui| {
             widgets::checkbox(ui, &mut config.pixel_grid, tr("Pixel Grid"));
@@ -317,7 +318,7 @@ impl EditorApp {
                 egui::RichText::new(tr(
                     "Outlines individual pixels when zoomed in past this level, between 200% and 6400%.",
                 ))
-                .color(theme::MUTED),
+                .color(ui.palette().muted),
             )
             .wrap(),
         );
@@ -366,7 +367,7 @@ fn selection_settings(
             egui::RichText::new(tr(
                 "Built-in uses Xuan's own classical segmentation, with no machine learning. A plugin that provides one of these, such as a segmentation model, can replace it; it runs under the plugin's usual permissions, and if it cannot run (disabled, or offline mode) the built-in algorithm is used with a notice.",
             ))
-            .color(theme::MUTED),
+            .color(ui.palette().muted),
         )
         .wrap(),
     );
@@ -398,7 +399,7 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
         egui::Label::new(
             egui::RichText::new(super::plugin_consent::offline_mode_note(config))
                 .small()
-                .color(theme::MUTED),
+                .color(ui.palette().muted),
         )
         .wrap(),
     );
@@ -427,12 +428,12 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
                 tr("Only available on Linux.")
             })
             .small()
-            .color(theme::MUTED),
+            .color(ui.palette().muted),
         )
         .wrap(),
     );
     ui.add_space(20.0);
-    ui.label(egui::RichText::new(tr("Configuration file")).color(theme::MUTED));
+    ui.label(egui::RichText::new(tr("Configuration file")).color(ui.palette().muted));
     if let Ok(path) = Config::path() {
         ui.add(egui::Label::new(path.display().to_string()).wrap());
     }

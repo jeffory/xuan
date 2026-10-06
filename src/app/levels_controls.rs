@@ -1,8 +1,9 @@
+use super::theme::PaletteExt as _;
 use egui::{Color32, Key, Rect, Sense, Stroke, Ui, pos2, vec2};
 use xuan::i18n::tr;
 use xuan::{document::Adjustment, effects};
 
-use super::{theme, widgets};
+use super::widgets;
 
 pub fn controls(
     ui: &mut Ui,
@@ -60,7 +61,7 @@ pub fn controls(
     ui.label(
         egui::RichText::new(tr("Original pixels · alpha-weighted histogram"))
             .size(11.0)
-            .color(theme::MUTED),
+            .color(ui.palette().muted),
     );
     before != *range
 }
@@ -77,7 +78,11 @@ fn field(
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
             ui.spacing_mut().item_spacing.y = 5.0;
-            ui.label(egui::RichText::new(label).size(11.0).color(theme::MUTED));
+            ui.label(
+                egui::RichText::new(label)
+                    .size(11.0)
+                    .color(ui.palette().muted),
+            );
             ui.add(
                 widgets::Number::new(value)
                     .range(range)
@@ -100,13 +105,14 @@ fn histogram(ui: &mut Ui, image: &image::RgbaImage, channel: usize) {
     }
     let peak = bins.iter().copied().fold(1.0_f32, f32::max);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 150.0), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, Color32::from_gray(27));
-    let color = match channel {
-        1 => Color32::from_rgb(220, 102, 99),
-        2 => Color32::from_rgb(110, 192, 117),
-        3 => Color32::from_rgb(106, 151, 229),
-        _ => Color32::from_gray(187),
-    };
+    let palette = ui.palette();
+    ui.painter().rect_filled(rect, 0.0, palette.histogram_plot);
+    let color = palette.levels_histogram[if (1..=3).contains(&channel) {
+        channel
+    } else {
+        0
+    }];
+
     for (index, count) in bins.into_iter().enumerate() {
         let x = rect.left() + (index as f32 + 0.5) / 256.0 * rect.width();
         ui.painter().line_segment(
@@ -208,9 +214,9 @@ fn handles(ui: &mut Ui, range: &mut [f32; 5], output: bool) {
             Stroke::new(
                 1.0_f32,
                 if response.has_focus() {
-                    theme::ACCENT
+                    ui.palette().accent
                 } else {
-                    theme::MUTED
+                    ui.palette().muted
                 },
             ),
         ));
@@ -268,7 +274,7 @@ mod tests {
     #[test]
     fn histogram_handles_drag_and_keep_input_bounds_ordered() {
         let context = egui::Context::default();
-        super::super::theme::apply(&context);
+        super::super::theme::apply(&context, &super::super::theme::Palette::DARK);
         let mut range = xuan::color::DEFAULT_LEVELS;
         let mut draw = |position: egui::Pos2, pressed: Option<bool>| {
             let mut events = vec![egui::Event::PointerMoved(position)];

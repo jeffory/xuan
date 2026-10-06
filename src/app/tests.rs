@@ -2420,7 +2420,7 @@ fn layer_drop_indicator_stays_on_the_shared_boundary_between_rows() {
             .into_iter()
             .filter_map(|shape| match shape.shape {
                 egui::Shape::LineSegment { points, stroke }
-                    if stroke.color == theme::ACCENT
+                    if stroke.color == theme::Palette::DARK.accent
                         && stroke.width == 2.0
                         && points[0].y == points[1].y
                         && (middle.y..bottom.y + 36.0).contains(&points[0].y) =>
@@ -4333,7 +4333,7 @@ fn titlebar_double_click_toggles_maximize_without_starting_a_drag() {
 #[test]
 fn custom_controls_keep_keyboard_input_and_disabled_behavior() {
     let context = egui::Context::default();
-    theme::apply(&context);
+    theme::apply(&context, &theme::Palette::DARK);
     let mut value = 0.5_f32;
     let mut enabled = true;
     let mut slider_id = egui::Id::NULL;

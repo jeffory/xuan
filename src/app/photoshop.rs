@@ -2,6 +2,7 @@
 //! `EditorSession.finishPSDReading`), what the import changes is shown before anything is
 //! applied, and Cancel leaves the open documents untouched. Files Xuan represents completely
 //! open without asking.
+use super::theme::PaletteExt as _;
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -17,7 +18,7 @@ use xuan::{
     },
 };
 
-use super::{EditorApp, Session, theme, widgets};
+use super::{EditorApp, Session, widgets};
 
 /// A read Photoshop file waiting for the user to accept its conversion report.
 pub(super) struct PendingImport {
@@ -117,7 +118,7 @@ impl EditorApp {
                 .max_height(260.0)
                 .show(ui, |ui| {
                     for line in pending.report.lines() {
-                        ui.label(RichText::new(format!("• {line}")).color(theme::TEXT));
+                        ui.label(RichText::new(format!("• {line}")).color(ui.palette().text));
                     }
                 });
             ui.add_space(12.0);

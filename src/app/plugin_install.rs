@@ -6,6 +6,7 @@
 //! first time it starts, where it shows the installed folder. An update keeps
 //! the grant only when the folder, command and permissions are unchanged, as
 //! any grant does, and the review says which applies.
+use super::theme::PaletteExt as _;
 use std::path::{Path, PathBuf};
 
 use egui::RichText;
@@ -21,7 +22,7 @@ use xuan::{
 use super::{
     Dialog, EditorApp,
     plugins::{grant_for, one_line},
-    theme, widgets,
+    widgets,
 };
 
 /// The install window: choosing a source, or reviewing a staged plugin.
@@ -184,7 +185,7 @@ impl EditorApp {
                         ui.label(
                             RichText::new(tr("You can also drop a folder or a .zip file here."))
                                 .small()
-                                .color(theme::MUTED),
+                                .color(ui.palette().muted),
                         );
                         ui.add_space(12.0);
                         ui.separator();
@@ -253,7 +254,7 @@ impl EditorApp {
                                 egui::Label::new(
                                     RichText::new(format!("{label} {value}"))
                                         .small()
-                                        .color(theme::MUTED),
+                                        .color(ui.palette().muted),
                                 )
                                 .wrap(),
                             );

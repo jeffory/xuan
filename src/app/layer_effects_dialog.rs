@@ -3,6 +3,7 @@
 //! canvas, are kept on the layer (never baked into its pixels) and can be reopened at any time.
 //! OK keeps them as one undo step; Cancel restores what the layer had.
 
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use uuid::Uuid;
 use xuan::{
@@ -10,7 +11,7 @@ use xuan::{
     layer_effects::{EffectKind, GlowEffect, LayerEffects, ShadowEffect},
 };
 
-use super::{Dialog, EditorApp, theme, widgets};
+use super::{Dialog, EditorApp, widgets};
 
 pub(super) struct LayerEffectsEdit {
     pub(super) layer: Uuid,
@@ -227,7 +228,7 @@ impl EditorApp {
                             ui.label(
                                 RichText::new(tr("Not on this layer"))
                                     .small()
-                                    .color(theme::MUTED),
+                                    .color(ui.palette().muted),
                             );
                             if widgets::button(ui, tr("Add Effect")).clicked() {
                                 edit.effects.add(edit.selected, background);
@@ -242,7 +243,7 @@ impl EditorApp {
                     ui.label(
                         RichText::new(tr("Effects stay editable; the pixels are not changed"))
                             .small()
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ok = widgets::primary_button(ui, tr("OK")).clicked();

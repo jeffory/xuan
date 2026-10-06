@@ -2,14 +2,14 @@ use super::widgets;
 use std::{io::Cursor, sync::Arc};
 use xuan::i18n::tr;
 
-use egui::{Color32, RichText, Stroke, vec2};
+use egui::{RichText, Stroke, vec2};
 use xuan::{
     document::{Adjustment, Layer, Point},
     effects::{self, Filter},
     io, operations, render,
 };
 
-use super::{Dialog, EditorApp, commands::Category, theme};
+use super::{Dialog, EditorApp, commands::Category, theme::PaletteExt};
 
 impl EditorApp {
     /// Help → Keyboard Shortcuts: the bindings in effect, from the command registry, and the
@@ -38,7 +38,8 @@ impl EditorApp {
                                         continue;
                                     }
                                     ui.label(
-                                        RichText::new(tr(category.name())).color(theme::MUTED),
+                                        RichText::new(tr(category.name()))
+                                            .color(ui.palette().muted),
                                     );
                                     ui.end_row();
                                     for entry in rows {
@@ -49,7 +50,7 @@ impl EditorApp {
                                         ui.end_row();
                                     }
                                 }
-                                ui.label(RichText::new(tr("Other")).color(theme::MUTED));
+                                ui.label(RichText::new(tr("Other")).color(ui.palette().muted));
                                 ui.end_row();
                                 for (key, label) in [
                                     (tr("Drag from a ruler"), tr("New guide")),
@@ -195,7 +196,7 @@ impl EditorApp {
                     } else {
                         tr("Scale the composition while preserving source pixels.")
                     })
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
                 );
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
@@ -254,9 +255,11 @@ impl EditorApp {
                 let valid = xuan::document::validate_size(self.dimensions[0], self.dimensions[1]);
                 ui.add_space(12.0);
                 if let Err(error) = &valid {
-                    ui.colored_label(Color32::LIGHT_RED, error.to_string());
+                    ui.colored_label(ui.palette().error, error.to_string());
                 } else {
-                    ui.label(RichText::new(tr("Transparent canvas · sRGB")).color(theme::MUTED));
+                    ui.label(
+                        RichText::new(tr("Transparent canvas · sRGB")).color(ui.palette().muted),
+                    );
                 }
                 ui.add_space(15.0);
                 ui.horizontal(|ui| {
@@ -729,7 +732,7 @@ impl EditorApp {
                     ui.label(
                         RichText::new(tr("Non-destructive effect layer"))
                             .small()
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                     );
                 }
             });
@@ -911,7 +914,7 @@ impl EditorApp {
                     ui.label(
                         RichText::new(tr("JPEG preview · transparency is flattened onto white"))
                             .small()
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                     );
                 }
                 ui.add_space(12.0);
@@ -1064,11 +1067,12 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
         RichText::new(tr(
             "Click to add a point · Drag points to reshape the curve",
         ))
-        .color(theme::MUTED),
+        .color(ui.palette().muted),
     );
     let (rect, response) =
         ui.allocate_exact_size(vec2(360.0, 220.0), egui::Sense::click_and_drag());
-    ui.painter().rect_filled(rect, 4.0, Color32::from_gray(28));
+    let palette = ui.palette();
+    ui.painter().rect_filled(rect, 4.0, palette.plot);
     for i in 1..4 {
         let t = i as f32 / 4.0;
         ui.painter().line_segment(
@@ -1076,14 +1080,14 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
                 rect.left_top() + vec2(rect.width() * t, 0.0),
                 rect.left_bottom() + vec2(rect.width() * t, 0.0),
             ],
-            Stroke::new(1.0_f32, Color32::from_gray(55)),
+            Stroke::new(1.0_f32, palette.plot_grid),
         );
         ui.painter().line_segment(
             [
                 rect.left_top() + vec2(0.0, rect.height() * t),
                 rect.right_top() + vec2(0.0, rect.height() * t),
             ],
-            Stroke::new(1.0_f32, Color32::from_gray(55)),
+            Stroke::new(1.0_f32, palette.plot_grid),
         );
     }
     let map = |p: Point| {
@@ -1094,7 +1098,7 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
     };
     ui.painter().line_segment(
         [rect.left_bottom(), rect.right_top()],
-        Stroke::new(1.0_f32, Color32::from_gray(75)),
+        Stroke::new(1.0_f32, palette.plot_diagonal),
     );
     ui.painter().add(egui::Shape::line(
         (0..=255)
@@ -1103,10 +1107,10 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
                 map(Point::new(x, effects::curve_value(points, x)))
             })
             .collect(),
-        Stroke::new(1.5_f32, theme::TEXT),
+        Stroke::new(1.5_f32, palette.text),
     ));
     for p in points.iter() {
-        ui.painter().circle_filled(map(*p), 3.0, theme::TEXT);
+        ui.painter().circle_filled(map(*p), 3.0, palette.text);
     }
     if let Some(p) = response.interact_pointer_pos() {
         let point = Point::new(

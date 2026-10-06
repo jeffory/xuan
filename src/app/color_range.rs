@@ -2,6 +2,7 @@
 //! colours clicked on the canvas, anywhere in the image. The selection updates on the
 //! canvas as the colours, Fuzziness and Invert change; OK keeps it as one undo step and
 //! Cancel puts back the selection there was.
+use super::theme::PaletteExt as _;
 use std::sync::Arc;
 
 use egui::{Color32, RichText};
@@ -9,7 +10,7 @@ use image::{GrayImage, RgbaImage};
 use uuid::Uuid;
 use xuan::{document::Point, i18n::tr, render, selection_ops::ColorRange};
 
-use super::{EditorApp, Tool, theme, widgets};
+use super::{EditorApp, Tool, widgets};
 
 /// The preview fits in this, in points.
 const PREVIEW: egui::Vec2 = egui::vec2(292.0, 200.0);
@@ -234,7 +235,7 @@ impl EditorApp {
                     } else {
                         tr("Shift-click adds a colour, Alt-click takes one away.")
                     })
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
                 );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {

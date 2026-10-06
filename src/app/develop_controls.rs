@@ -1,3 +1,4 @@
+use super::theme::PaletteExt as _;
 use std::{
     fs::File,
     io::{Read, Write},
@@ -5,12 +6,12 @@ use std::{
 };
 use xuan::i18n::tr;
 
-use egui::{Color32, Sense, Stroke, pos2, vec2};
+use egui::{Sense, Stroke, pos2, vec2};
 use xuan::raw::{self, DevelopSettings, Overlay, OverlayKind, WhiteBalance};
 
 use super::{
     develop::{CanvasTool, Develop},
-    theme, widgets,
+    widgets,
 };
 
 fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
@@ -465,7 +466,7 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
         &mut d.full_preview,
         tr("Always use full-resolution preview"),
     );
-    ui.label(egui::RichText::new(tr("Zooming in loads full detail automatically. Use 100% to judge sharpening and noise reduction. Always using full resolution also applies it to Fit view and takes longer to update.")).color(theme::MUTED));
+    ui.label(egui::RichText::new(tr("Zooming in loads full detail automatically. Use 100% to judge sharpening and noise reduction. Always using full resolution also applies it to Fit view and takes longer to update.")).color(ui.palette().muted));
 }
 
 fn lens(ui: &mut egui::Ui, d: &mut Develop) {
@@ -508,7 +509,7 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
     ui.label(
         egui::RichText::new(tr("Bounds as a fraction of the rotated image"))
             .small()
-            .color(theme::MUTED),
+            .color(ui.palette().muted),
     );
     let mut crop = d.settings.display_crop();
     let original_crop = crop;
@@ -653,7 +654,7 @@ fn metadata(ui: &mut egui::Ui, d: &Develop) {
                     ),
                 ),
             ] {
-                ui.label(egui::RichText::new(label).color(theme::MUTED));
+                ui.label(egui::RichText::new(label).color(ui.palette().muted));
                 ui.label(value);
                 ui.end_row();
             }
@@ -661,23 +662,23 @@ fn metadata(ui: &mut egui::Ui, d: &Develop) {
     heading(ui, tr("Output"));
     ui.label(tr("Embedded RAW layer with an sRGB photo render. Double-click the layer to return to Develop."));
     ui.add_space(8.0);
-    ui.label(egui::RichText::new(tr("Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.")).color(theme::MUTED));
+    ui.label(egui::RichText::new(tr("Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.")).color(ui.palette().muted));
 }
 
 fn histogram(ui: &mut egui::Ui, d: &Develop) {
     ui.horizontal(|ui| {
         ui.strong(tr("Histogram"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("RGB").small().color(theme::MUTED));
+            ui.label(egui::RichText::new("RGB").small().color(ui.palette().muted));
         });
     });
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 84.0), Sense::hover());
-    ui.painter().rect_filled(rect, 4.0, theme::FIELD);
+    ui.painter().rect_filled(rect, 4.0, ui.palette().field);
     for n in 1..4 {
         let x = rect.left() + rect.width() * n as f32 / 4.0;
         ui.painter().line_segment(
             [pos2(x, rect.top()), pos2(x, rect.bottom())],
-            Stroke::new(0.5_f32, theme::DIVIDER),
+            Stroke::new(0.5_f32, ui.palette().divider),
         );
     }
     let max = d
@@ -688,14 +689,7 @@ fn histogram(ui: &mut egui::Ui, d: &Develop) {
         .max()
         .unwrap_or(1)
         .max(1) as f32;
-    for (c, color) in [
-        Color32::from_rgb(235, 90, 98),
-        Color32::from_rgb(103, 208, 135),
-        Color32::from_rgb(90, 157, 255),
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (c, color) in ui.palette().histogram.iter().enumerate() {
         let points: Vec<_> = d.histogram[c]
             .iter()
             .enumerate()
@@ -713,13 +707,13 @@ fn histogram(ui: &mut egui::Ui, d: &Develop) {
         ui.label(
             egui::RichText::new(format!("{} {:.2}%", tr("Shadows"), d.clipping[0]))
                 .small()
-                .color(theme::MUTED),
+                .color(ui.palette().muted),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(format!("{} {:.2}%", tr("Highlights"), d.clipping[1]))
                     .small()
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
             );
         });
     });
@@ -730,7 +724,7 @@ fn curve(ui: &mut egui::Ui, knots: &mut [f32; 5], channel: usize) {
         ui.allocate_exact_size(vec2(ui.available_width(), 175.0), Sense::click_and_drag());
     let rect = rect.shrink(5.0);
     let painter = ui.painter();
-    painter.rect_filled(rect, 3.0, theme::FIELD);
+    painter.rect_filled(rect, 3.0, ui.palette().field);
     for i in 1..4 {
         let t = i as f32 / 4.0;
         painter.line_segment(
@@ -738,19 +732,19 @@ fn curve(ui: &mut egui::Ui, knots: &mut [f32; 5], channel: usize) {
                 pos2(rect.left() + t * rect.width(), rect.top()),
                 pos2(rect.left() + t * rect.width(), rect.bottom()),
             ],
-            Stroke::new(0.5_f32, theme::DIVIDER),
+            Stroke::new(0.5_f32, ui.palette().divider),
         );
         painter.line_segment(
             [
                 pos2(rect.left(), rect.top() + t * rect.height()),
                 pos2(rect.right(), rect.top() + t * rect.height()),
             ],
-            Stroke::new(0.5_f32, theme::DIVIDER),
+            Stroke::new(0.5_f32, ui.palette().divider),
         );
     }
     painter.line_segment(
         [rect.left_bottom(), rect.right_top()],
-        Stroke::new(0.5_f32, theme::MUTED),
+        Stroke::new(0.5_f32, ui.palette().muted),
     );
     if (response.dragged() || response.clicked())
         && let Some(point) = response.interact_pointer_pos()
@@ -770,12 +764,14 @@ fn curve(ui: &mut egui::Ui, knots: &mut [f32; 5], channel: usize) {
             )
         })
         .collect();
+    let palette = ui.palette();
     let color = [
-        Color32::WHITE,
-        Color32::LIGHT_RED,
-        Color32::LIGHT_GREEN,
-        Color32::LIGHT_BLUE,
+        palette.plot_line,
+        palette.plot_channels[0],
+        palette.plot_channels[1],
+        palette.plot_channels[2],
     ][channel];
+
     painter.add(egui::Shape::line(
         points.clone(),
         Stroke::new(1.5_f32, color),

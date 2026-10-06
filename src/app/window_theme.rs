@@ -403,26 +403,9 @@ impl Tints {
         let wanted = if backdrop { self.inactive } else { self.active };
         wanted
             .map(|[r, g, b]| Color32::from_rgb(r, g, b))
-            .filter(|c| contrast(*c, bg) >= 3.0)
+            .filter(|c| super::theme::contrast_ratio(*c, bg) >= 3.0)
             .unwrap_or(fallback)
     }
-}
-
-fn luminance(c: Color32) -> f32 {
-    let lin = |v: u8| {
-        let v = f32::from(v) / 255.0;
-        if v <= 0.04045 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
-}
-
-fn contrast(a: Color32, b: Color32) -> f32 {
-    let (la, lb) = (luminance(a), luminance(b));
-    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 // ---------------------------------------------------------------------------
