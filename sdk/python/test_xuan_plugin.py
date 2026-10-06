@@ -70,16 +70,16 @@ class HostRequests(unittest.TestCase):
         transport = FakeTransport({
             "document/edit": {"ok": True, "layers": ["a", 3, "b"]},
             "document/list": {"documents": [{"id": "d"}]},
-            "file/save_as": {"path": "/home/u/x.xuan"},
-            "file/export": {"path": "/home/u/x.png"},
+            "file/save_as": {"name": "x.xuan"},
+            "file/export": {"name": "x.png"},
             "file/open": {"ok": True, "document": "e"},
         })
         host = Host(transport)
         self.assertEqual(host.edit("Name", [{"op": "add_empty_layer"}]), ["a", "b"])
         self.assertEqual(host.list_documents(), [{"id": "d"}])
         host.activate_document("d")
-        self.assertEqual(host.save_as(suggested_name="x"), "/home/u/x.xuan")
-        self.assertEqual(host.export_file("png"), "/home/u/x.png")
+        self.assertEqual(host.save_as(suggested_name="x"), "x.xuan")
+        self.assertEqual(host.export_file("png"), "x.png")
         self.assertEqual(host.open_file("/home/u/x.png")["document"], "e")
         methods = [method for method, _ in transport.sent]
         self.assertEqual(

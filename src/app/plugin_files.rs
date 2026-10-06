@@ -325,7 +325,10 @@ impl EditorApp {
                 self.status = format!("{} · {source}", tr("Project saved"));
             }
         }
-        Ok(json!({"path": path}))
+        // Only the file name: where the user keeps files is not the
+        // plugin's business.
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        Ok(json!({"name": name}))
     }
 
     /// Apply the answer to the open `file/open` prompt.

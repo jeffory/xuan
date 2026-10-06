@@ -778,7 +778,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "save_document",
             title: "Save the project",
-            description: "Ask the user to save a document (the current one by default) as a .xuan project: Xuan shows its save dialog with `suggested_name`, and the user chooses where. Returns the path, or an error if the user cancelled.",
+            description: "Ask the user to save a document (the current one by default) as a .xuan project: Xuan shows its save dialog with `suggested_name`, and the user chooses where. Returns the file name, or an error if the user cancelled.",
             properties: json!({"document": {"type": "string"}, "suggested_name": {"type": "string"}}),
             required: &[],
             kind: Kind::File,
@@ -790,7 +790,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "export_document",
             title: "Export an image",
-            description: "Ask the user to export a document as png (default), jpg, tiff or webp: Xuan shows its save dialog and the user chooses where. Returns the path.",
+            description: "Ask the user to export a document as png (default), jpg, tiff or webp: Xuan shows its save dialog and the user chooses where. Returns the file name.",
             properties: json!({"document": {"type": "string"}, "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]}, "suggested_name": {"type": "string"}}),
             required: &[],
             kind: Kind::File,

@@ -313,30 +313,30 @@ impl Host {
     }
 
     /// Show the save dialog for a document (the current one with `None`) as
-    /// a `.xuan` project, prefilled with `suggested_name`. Returns the path
-    /// the user saved to; a cancelled dialog is an error with the code
-    /// [`codes::CANCELLED`].
-    pub fn save_as(&self, document: Option<&str>, suggested_name: Option<&str>) -> Result<PathBuf> {
+    /// a `.xuan` project, prefilled with `suggested_name`. Returns the name of
+    /// the file the user saved (not its folder); a cancelled dialog is an
+    /// error with the code [`codes::CANCELLED`].
+    pub fn save_as(&self, document: Option<&str>, suggested_name: Option<&str>) -> Result<String> {
         let value = self.request(
             "file/save_as",
             json!({"document": document, "suggested_name": suggested_name}),
         )?;
-        path_of(&value)
+        name_of(&value)
     }
 
     /// Show the save dialog to export a document as an image in `format`
-    /// (`png`, `jpg`, `tiff` or `webp`). Returns the path the user chose.
+    /// (`png`, `jpg`, `tiff` or `webp`). Returns the name of the file, not its folder.
     pub fn export_file(
         &self,
         document: Option<&str>,
         format: &str,
         suggested_name: Option<&str>,
-    ) -> Result<PathBuf> {
+    ) -> Result<String> {
         let value = self.request(
             "file/export",
             json!({"document": document, "format": format, "suggested_name": suggested_name}),
         )?;
-        path_of(&value)
+        name_of(&value)
     }
 
     /// Ask the user to open the file at the absolute `path` as a document.
@@ -361,11 +361,11 @@ impl Host {
     }
 }
 
-fn path_of(value: &Value) -> Result<PathBuf> {
+fn name_of(value: &Value) -> Result<String> {
     value
-        .get("path")
+        .get("name")
         .and_then(Value::as_str)
-        .map(PathBuf::from)
+        .map(str::to_owned)
         .ok_or_else(|| RpcError::internal("the editor did not say where it saved"))
 }
 

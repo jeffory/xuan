@@ -904,8 +904,8 @@ wait for the user's answer (see [Network](#network)).
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does |
 | `host/run` | `{action, inputs?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
-| `file/save_as` | `{document?, suggested_name?}` | `{path}` once the user saved the document as a project in the save dialog; see [Files the user chooses](#files-the-user-chooses) |
-| `file/export` | `{document?, format?, suggested_name?}` | `{path}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`) |
+| `file/save_as` | `{document?, suggested_name?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; see [Files the user chooses](#files-the-user-chooses) |
+| `file/export` | `{document?, format?, suggested_name?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`) |
 | `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
 
 `document/edit` edits, applied together as one undo step named `name`:
@@ -1050,12 +1050,14 @@ answer:
   be absolute and name a regular file or a project folder. It opens as a new
   document, as **File → Open…** would.
 
-Each answers with the path, or fails with `-32800` when the user cancels;
+`file/save_as` and `file/export` answer with the file's name only, never
+the folder the user chose; `file/open` with the new document's id. Each fails
+with `-32800` when the user cancels;
 for 30 seconds after a cancel, the plugin's file requests fail at once
 without a dialog.
 Requests wait until no other dialog is open; a plugin has at most one waiting,
 and a second fails at once. They need no `document = "edit"`, as they do not
-change the open document, and the plugin learns nothing more than the path the
+change the open document, and the plugin learns nothing more than the name of the file the
 user chose. To hand the user a file without a dialog, write it into the
 plugin's own folders (for example with `document/export`) and show it in a
 pane.

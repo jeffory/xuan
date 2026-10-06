@@ -139,7 +139,7 @@ permission for silent writes, which is exactly what F2 rules out.
 
 The requests wait until no other dialog is open, a plugin has at most one
 waiting, and a cancel is the error `-32800`, so a misbehaving client can
-neither stack up dialogs nor learn anything beyond the path the user chose.
+neither stack up dialogs nor learn anything beyond the name of the file the user chose.
 
 ## Edit permission per session
 

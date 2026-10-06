@@ -3941,7 +3941,7 @@ done
         app.queue_file_request("mock", file_request(102, "file/save_as", json!({})));
         let saved = wait(&context, &mut app, 102);
         let project = project.with_extension("xuan");
-        assert_eq!(saved["result"]["path"], json!(project));
+        assert_eq!(saved["result"], json!({"name": "agent.xuan"}), "no folder");
         assert!(project.exists());
         let session = app.session().unwrap();
         assert_eq!(session.path.as_deref(), Some(project.as_path()));
@@ -3960,7 +3960,7 @@ done
             ),
         );
         let exported = wait(&context, &mut app, 103);
-        assert_eq!(exported["result"]["path"], json!(image));
+        assert_eq!(exported["result"], json!({"name": "export.jpg"}));
         assert_eq!(
             xuan::io::import_image(&image).unwrap().dimensions(),
             (16, 12)

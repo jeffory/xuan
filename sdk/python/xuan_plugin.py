@@ -236,14 +236,14 @@ class Host:
         A cancelled dialog raises ``RpcError`` with the code ``CANCELLED``.
         """
         params = {"document": document, "suggested_name": suggested_name}
-        return self.request("file/save_as", params)["path"]
+        return self.request("file/save_as", params)["name"]
 
     def export_file(
         self, format: str = "png", document: Optional[str] = None, suggested_name: Optional[str] = None
     ) -> str:
         """Show the save dialog to export a document as png, jpg, tiff or webp; returns the path."""
         params = {"document": document, "format": format, "suggested_name": suggested_name}
-        return self.request("file/export", params)["path"]
+        return self.request("file/export", params)["name"]
 
     def open_file(self, path: str) -> Dict[str, Any]:
         """Ask the user to open the file at the absolute ``path`` as a document."""
