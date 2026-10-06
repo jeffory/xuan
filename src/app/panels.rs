@@ -321,6 +321,12 @@ impl EditorApp {
                                             );
                                         }
                                     }
+                                    Tool::Pen => {
+                                        ui.label(
+                                            RichText::new(self.pen_status())
+                                                .color(ui.palette().muted),
+                                        );
+                                    }
                                     Tool::Text => self.text_options(ui),
                                     Tool::Crop => {
                                         ui.label(

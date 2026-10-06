@@ -54,6 +54,7 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
         Tool::Clone => egui::include_image!("../../assets/svg/stamp.svg"),
         Tool::Blur => egui::include_image!("../../assets/svg/smudge.svg"),
         Tool::Shape => egui::include_image!("../../assets/svg/shape.svg"),
+        Tool::Pen => egui::include_image!("../../assets/svg/pen.svg"),
         Tool::Text => egui::include_image!("../../assets/svg/text.svg"),
         Tool::Dropper => egui::include_image!("../../assets/svg/color-picker.svg"),
         Tool::Hand => egui::include_image!("../../assets/svg/hand.svg"),

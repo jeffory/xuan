@@ -16,6 +16,7 @@ pub mod layer_effects;
 pub mod layout;
 pub mod operations;
 pub mod paint;
+pub mod path_edit;
 pub mod panes;
 pub mod plugins;
 pub mod provenance;

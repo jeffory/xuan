@@ -70,13 +70,24 @@ impl EditorApp {
         let Some(session) = self.session() else {
             return;
         };
-        let first = session.document.paths.first();
+        // The path the Pen shows, or else the first.
+        let shown = match self.pen_target() {
+            Some(super::pen_tool::PenTarget::Path(id)) => {
+                session.document.paths.iter().find(|p| p.id == id)
+            }
+            _ => None,
+        };
+        let first = shown.or(session.document.paths.first());
+        let selected = first.map(|p| p.id);
         self.paths_edit = Some(PathsEdit {
             selected: first.map(|p| p.id),
             name: first.map(|p| p.name.clone()).unwrap_or_default(),
             ..PathsEdit::default()
         });
         self.dialog = Some(Dialog::Paths);
+        if selected.is_some() {
+            self.pen_select(selected.map(super::pen_tool::PenTarget::Path));
+        }
     }
 
     /// Add `data` to the document's paths as a new path; its id.
@@ -186,6 +197,8 @@ impl EditorApp {
         let mut open = true;
         let mut action = None;
         let mut add = false;
+        let mut edit_on_canvas = false;
+        let before = edit.selected;
         widgets::Window::new(tr("Paths"))
             .id("paths")
             .open(&mut open)
@@ -216,6 +229,9 @@ impl EditorApp {
                         }
                         if widgets::button(ui, tr("Delete")).clicked() {
                             action = Some(PathAction::Delete);
+                        }
+                        if widgets::button(ui, tr("Edit with Pen")).clicked() {
+                            edit_on_canvas = true;
                         }
                     });
                     ui.separator();
@@ -294,6 +310,14 @@ impl EditorApp {
                 .path_action(id, action, &edit)
                 .err()
                 .map(|e| format!("{e:#}"));
+        }
+        // The selected path is shown on the canvas, and the Pen edits it.
+        if edit.selected != before || edit_on_canvas {
+            self.pen_select(edit.selected.map(super::pen_tool::PenTarget::Path));
+        }
+        if edit_on_canvas && edit.selected.is_some() {
+            self.set_tool(super::Tool::Pen);
+            open = false;
         }
         if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.dialog = None;
