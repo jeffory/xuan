@@ -926,7 +926,11 @@ pub fn list() -> Vec<Tool> {
 /// What the client is told while a call waits: the user sees it in clients
 /// that show progress.
 pub fn waiting_message(name: &str) -> &'static str {
-    match specs().into_iter().find(|spec| spec.name == name).map(|spec| spec.kind) {
+    match specs()
+        .into_iter()
+        .find(|spec| spec.name == name)
+        .map(|spec| spec.kind)
+    {
         Some(Kind::Edit) => "Waiting for the user to allow edits in Xuan",
         Some(Kind::File) => "Waiting for the user to answer in Xuan",
         _ => "Waiting for Xuan",

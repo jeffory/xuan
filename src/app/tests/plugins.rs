@@ -4716,7 +4716,9 @@ done
             "mock",
             file_request(505, "file/open", json!({"path": image})),
         );
-        run_until(&context, &mut app, |app| app.dialog == Some(Dialog::PluginFile));
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
         withdraw(&mut app, 505);
         assert!(app.plugins.file_prompt.is_none());
         assert_eq!(app.dialog, None);

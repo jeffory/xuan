@@ -1234,8 +1234,8 @@ impl EditorApp {
                 }
             }
             "request/cancel" => {
-                if let Some(id) = (params.get("id").cloned())
-                    .and_then(|id| serde_json::from_value::<Id>(id).ok())
+                if let Some(id) =
+                    (params.get("id").cloned()).and_then(|id| serde_json::from_value::<Id>(id).ok())
                 {
                     self.withdraw_request(plugin, &id);
                 }

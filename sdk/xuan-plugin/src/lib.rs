@@ -247,7 +247,9 @@ impl CancelToken {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, CancelState> {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Withdraw the token's requests. Calling it again does nothing more.

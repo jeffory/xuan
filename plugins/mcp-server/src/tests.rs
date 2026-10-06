@@ -72,17 +72,6 @@ impl FakeEditor {
         self.withdrawn.lock().unwrap().clone()
     }
 
-    /// Wait (in a test thread) until a request with this method arrived.
-    async fn wait_for(&self, method: &str) {
-        for _ in 0..500 {
-            if self.requests().iter().any(|(_, m, _)| m == method) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("{method} never reached the editor");
-    }
-
     fn requests(&self) -> Vec<(Option<String>, String, Value)> {
         self.log.lock().unwrap().clone()
     }
@@ -114,8 +103,16 @@ impl Editor for FakeEditor {
             params.clone(),
         ));
         if self.hold == Some(method) {
-            // Waiting for the user, as Xuan holds the request.
+            // Waiting for the user, as Xuan holds the request. A test that
+            // never answers nor withdraws fails rather than hangs.
+            let start = std::time::Instant::now();
             while !self.answer.load(Ordering::SeqCst) {
+                if start.elapsed() > Duration::from_secs(15) {
+                    return Err(EditorError {
+                        code: -32603,
+                        message: "never answered or withdrawn".into(),
+                    });
+                }
                 if cancel.is_cancelled() {
                     self.withdrawn.lock().unwrap().push(method.to_owned());
                     return Err(EditorError {
