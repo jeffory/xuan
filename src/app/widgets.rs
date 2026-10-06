@@ -110,11 +110,15 @@ impl Button {
 
 impl Widget for Button {
     fn ui(self, ui: &mut Ui) -> Response {
-        let galley = ui.painter().layout_no_wrap(
-            self.label.clone(),
-            FontId::proportional(12.0),
-            ui.palette().text,
-        );
+        let p = ui.palette();
+        let text = if self.primary {
+            p.on_accent_text
+        } else {
+            p.text
+        };
+        let galley =
+            ui.painter()
+                .layout_no_wrap(self.label.clone(), FontId::proportional(12.0), text);
         let size = vec2(galley.size().x + 24.0, 22.0).max(self.size);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         response.widget_info(|| {
@@ -122,11 +126,8 @@ impl Widget for Button {
         });
         if ui.is_rect_visible(rect) {
             bezel(ui, &response, theme::BUTTON_RADIUS as f32, self.primary);
-            ui.painter().galley(
-                rect.center() - galley.size() / 2.0,
-                galley,
-                ui.palette().text,
-            );
+            ui.painter()
+                .galley(rect.center() - galley.size() / 2.0, galley, text);
         }
         response
     }
@@ -1108,9 +1109,14 @@ pub fn selectable_value<T: PartialEq>(
             &label,
         )
     });
-    if response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, 4.0, ui.palette().accent);
-    }
+    let p = ui.palette();
+    let highlighted = response.hovered() || response.has_focus();
+    let text = if highlighted {
+        ui.painter().rect_filled(rect, 4.0, p.accent);
+        p.on_accent_text
+    } else {
+        p.text
+    };
     if selected {
         let center = pos2(rect.left() + 10.0, rect.center().y);
         ui.painter().add(egui::Shape::line(
@@ -1119,13 +1125,13 @@ pub fn selectable_value<T: PartialEq>(
                 center + vec2(-1.0, 2.5),
                 center + vec2(4.0, -3.0),
             ],
-            Stroke::new(1.3_f32, ui.palette().text),
+            Stroke::new(1.3_f32, text),
         ));
     }
-    ui.painter().galley(
+    ui.painter().galley_with_override_text_color(
         pos2(rect.left() + 23.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        ui.palette().text,
+        text,
     );
     if response.clicked() && !selected {
         *value = option;
@@ -1165,14 +1171,16 @@ pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Re
         )
     });
     let enabled = ui.is_enabled();
-    let text = if enabled {
-        ui.palette().text
+    let p = ui.palette();
+    let highlighted = enabled && (response.hovered() || response.has_focus());
+    let (text, hint_color) = if highlighted {
+        ui.painter().rect_filled(rect, 4.0, p.accent);
+        (p.on_accent_text, p.on_accent_muted)
+    } else if enabled {
+        (p.text, p.muted)
     } else {
-        ui.palette().muted
+        (p.muted, p.muted)
     };
-    if enabled && (response.hovered() || response.has_focus()) {
-        ui.painter().rect_filled(rect, 4.0, ui.palette().accent);
-    }
     if checked {
         let center = pos2(rect.left() + 10.0, rect.center().y);
         ui.painter().add(egui::Shape::line(
@@ -1184,18 +1192,19 @@ pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Re
             Stroke::new(1.3_f32, text),
         ));
     }
-    ui.painter().galley(
+    ui.painter().galley_with_override_text_color(
         pos2(rect.left() + 23.0, rect.center().y - galley.size().y / 2.0),
         galley,
         text,
     );
-    ui.painter().galley(
+    ui.painter().galley_with_override_text_color(
         pos2(
             rect.right() - 8.0 - hint.size().x,
             rect.center().y - hint.size().y / 2.0,
         ),
         hint,
-        ui.palette().muted,
+        hint_color,
     );
+
     response
 }

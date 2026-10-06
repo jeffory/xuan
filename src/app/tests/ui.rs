@@ -21,6 +21,9 @@ mod keybindings;
 #[path = "ui_palette.rs"]
 mod palette;
 
+#[path = "ui_appearance.rs"]
+mod appearance;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

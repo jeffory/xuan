@@ -1,7 +1,7 @@
 use super::theme::PaletteExt as _;
 use super::{EditorApp, widgets};
 use xuan::{
-    config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, TitleBar},
+    config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, Theme, TitleBar},
     i18n::{self, tr},
     plugins::{manifest::Capability, sandbox},
 };
@@ -208,6 +208,27 @@ impl EditorApp {
     fn appearance_settings(&self, ui: &mut egui::Ui, config: &mut Config) -> bool {
         let mut editing = false;
         ui.heading(tr("Appearance"));
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            ui.label(tr("Theme"));
+            widgets::PopUp::from_id_salt("settings_theme")
+                .selected_text(tr(config.theme.name()))
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for option in Theme::ALL {
+                        widgets::menu_choice(ui, &mut config.theme, option, tr(option.name()));
+                    }
+                });
+        });
+        ui.add_space(8.0);
+        ui.add(
+            egui::Label::new(match config.theme {
+                Theme::System => tr("Follow your desktop's light or dark setting."),
+                Theme::Light => tr("Always use light colours."),
+                Theme::Dark => tr("Always use dark colours."),
+            })
+            .wrap(),
+        );
         ui.add_space(16.0);
         ui.horizontal(|ui| {
             ui.label(tr("Window title bar"));

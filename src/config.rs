@@ -104,6 +104,32 @@ impl WindowButtons {
     }
 }
 
+/// Light or dark interface colours.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Theme {
+    /// Follow the desktop's light or dark preference; dark when it states none.
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "light")]
+    Light,
+    #[serde(rename = "dark")]
+    Dark,
+}
+
+impl Theme {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    /// Untranslated display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light mode",
+            Self::Dark => "Dark mode",
+        }
+    }
+}
+
 /// Lowest and highest zoom, in percent, at which the pixel grid may start to show.
 pub const PIXEL_GRID_PERCENT_RANGE: std::ops::RangeInclusive<u32> = 200..=6400;
 pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
@@ -112,6 +138,8 @@ pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
 #[serde(default)]
 pub struct Config {
     pub language: Language,
+    /// Settings → Appearance → Theme.
+    pub theme: Theme,
     pub title_bar: TitleBar,
     /// Where Compact's window buttons come from.
     pub window_buttons: WindowButtons,
@@ -211,6 +239,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: Language::default(),
+            theme: Theme::default(),
             title_bar: TitleBar::default(),
             window_buttons: WindowButtons::default(),
             pixel_grid: true,
@@ -410,6 +439,7 @@ impl Config {
             Err(error) => return Err(error.into()),
         };
         table.insert("language".into(), toml::Value::try_from(self.language)?);
+        table.insert("theme".into(), toml::Value::try_from(self.theme)?);
         table.insert("title_bar".into(), toml::Value::try_from(self.title_bar)?);
         table.insert(
             "window_buttons".into(),
@@ -568,6 +598,28 @@ mod tests {
         }
         let builtin: Config = toml::from_str("window_buttons = 'builtin'").unwrap();
         assert_eq!(builtin.window_buttons, WindowButtons::BuiltIn);
+    }
+
+    #[test]
+    fn theme_defaults_to_the_system_and_older_files_still_load() {
+        assert_eq!(Config::default().theme, Theme::System);
+        // A file from before the setting existed.
+        let old: Config =
+            toml::from_str("language = 'zh-CN'\r\ntitle_bar = 'compact'\r\n").unwrap();
+        assert_eq!(old.theme, Theme::System);
+        for choice in Theme::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            Config {
+                theme: choice,
+                ..Config::default()
+            }
+            .save(&path)
+            .unwrap();
+            assert_eq!(Config::load(&path).unwrap().theme, choice);
+        }
+        let light: Config = toml::from_str("theme = 'light'").unwrap();
+        assert_eq!(light.theme, Theme::Light);
     }
 
     #[test]

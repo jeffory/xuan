@@ -86,6 +86,10 @@ pub struct Palette {
     pub check: [Color32; 2],
     /// Marks drawn on the accent: check marks and highlighted menu text.
     pub on_accent: Color32,
+    /// Text on an accent-coloured highlight (menu rows under the pointer).
+    pub on_accent_text: Color32,
+    /// Secondary text (shortcut hints) on an accent highlight.
+    pub on_accent_muted: Color32,
 
     // egui's own widgets (combo boxes, text edits, buttons)
     pub widget_fill: Color32,
@@ -229,6 +233,8 @@ impl Palette {
         accent_pressed: [rgb(30, 103, 210), rgb(24, 89, 183)],
         check: [rgb(62, 151, 255), rgb(24, 113, 228)],
         on_accent: Color32::WHITE,
+        on_accent_text: rgb(235, 235, 237),
+        on_accent_muted: rgb(154, 154, 157),
 
         widget_fill: gray(72),
         widget_weak_fill: gray(62),
@@ -308,6 +314,117 @@ impl Palette {
             rgb(220, 102, 99),
             rgb(110, 192, 117),
             rgb(106, 151, 229),
+        ],
+    };
+
+    /// A light appearance after Firefox's light theme, KDE Breeze Light and GNOME Adwaita:
+    /// near-white surfaces, a slightly darker tab strip, near-black text and a deeper blue
+    /// accent that keeps white text readable.
+    pub const LIGHT: Self = Self {
+        dark: false,
+
+        panel: rgb(246, 246, 248),
+        canvas: rgb(206, 206, 210),
+        field: Color32::WHITE,
+        titlebar: rgb(234, 234, 238),
+        window: rgb(251, 251, 252),
+        faint: rgb(239, 239, 242),
+        ruler: rgb(236, 236, 239),
+        preview: rgb(206, 206, 210),
+
+        divider: rgb(218, 218, 223),
+        border: rgb(184, 184, 191),
+        header_rule: rgb(212, 212, 217),
+
+        text: rgb(28, 28, 31),
+        muted: rgb(84, 84, 92),
+        disabled: rgb(168, 168, 175),
+        error: rgb(192, 28, 40),
+        error_soft: rgb(176, 36, 48),
+        warning: rgb(150, 82, 0),
+
+        accent: rgb(0, 97, 224),
+        accent_gradient: [rgb(28, 120, 240), rgb(0, 92, 214)],
+        accent_pressed: [rgb(0, 78, 186), rgb(0, 68, 166)],
+        check: [rgb(24, 116, 238), rgb(0, 90, 212)],
+        on_accent: Color32::WHITE,
+        on_accent_text: Color32::WHITE,
+        on_accent_muted: rgb(226, 236, 253),
+
+        widget_fill: rgb(228, 228, 232),
+        widget_weak_fill: rgb(236, 236, 240),
+        widget_stroke: rgb(184, 184, 191),
+        widget_hover_fill: rgb(218, 218, 223),
+        widget_hover_weak_fill: rgb(226, 226, 231),
+        widget_hover_stroke: rgb(150, 150, 158),
+        widget_active_fill: rgb(206, 206, 212),
+        widget_open_fill: rgb(222, 222, 227),
+
+        control: [Color32::WHITE, rgb(244, 244, 247)],
+        control_hover: [Color32::WHITE, rgb(236, 236, 241)],
+        control_pressed: [rgb(226, 226, 231), rgb(216, 216, 222)],
+        control_edge: black(46),
+        control_shadow: black(22),
+        checkbox: [Color32::WHITE, rgb(246, 246, 248)],
+        checkbox_hover: [Color32::WHITE, rgb(236, 236, 241)],
+        checkbox_edge: black(120),
+        slider_rail: rgb(196, 196, 203),
+        slider_rail_edge: Color32::TRANSPARENT,
+        thumb: [Color32::WHITE, rgb(246, 246, 248)],
+        thumb_pressed: rgb(226, 226, 231),
+        thumb_edge: rgb(140, 140, 148),
+        thumb_shadow: black(40),
+        segment_track: [rgb(230, 230, 234), rgb(224, 224, 229)],
+        segment_edge: rgb(196, 196, 203),
+        segment_separator: rgb(196, 196, 203),
+
+        window_shadow: black(56),
+        popup_shadow: black(48),
+        modal_backdrop: black(40),
+
+        hover: black(16),
+        pressed: black(30),
+        row_hover: black(12),
+        row_rule: black(16),
+        row_selected: rgb(214, 228, 250),
+        pane_hover: rgb(232, 232, 237),
+        icon_hover: rgb(224, 224, 230),
+        tool_selected: rgb(220, 220, 227),
+        tool_hover: rgb(232, 232, 237),
+        tool_selected_edge: rgb(184, 184, 191),
+        thumbnail_edge: black(56),
+        thumbnail_placeholder: rgb(222, 222, 227),
+        close_dot: [rgb(178, 178, 185), rgb(120, 120, 128)],
+        traffic_inactive: rgb(206, 206, 211),
+
+        tab_fill: Color32::TRANSPARENT,
+        tab_hover: black(16),
+        tab_selected: Color32::WHITE,
+        tab_edge: Color32::TRANSPARENT,
+        tab_selected_edge: black(34),
+        tab_close_hover: black(22),
+
+        ruler_tick: rgb(118, 118, 126),
+        ruler_label: rgb(64, 64, 70),
+        ruler_edge: rgb(196, 196, 203),
+        ruler_corner: black(90),
+
+        checker: [Color32::WHITE, rgb(214, 214, 214)],
+        canvas_shadow: black(36),
+        canvas_edge: rgb(150, 150, 156),
+
+        plot: Color32::WHITE,
+        histogram_plot: Color32::WHITE,
+        plot_grid: rgb(226, 226, 231),
+        plot_diagonal: rgb(186, 186, 193),
+        plot_line: rgb(28, 28, 31),
+        plot_channels: [rgb(196, 36, 44), rgb(28, 132, 52), rgb(24, 92, 210)],
+        histogram: [rgb(206, 52, 62), rgb(36, 148, 78), rgb(40, 108, 228)],
+        levels_histogram: [
+            rgb(112, 112, 120),
+            rgb(196, 70, 66),
+            rgb(58, 148, 70),
+            rgb(58, 108, 200),
         ],
     };
 }
@@ -505,7 +622,22 @@ pub fn menu_style(style: &mut egui::Style, palette: &Palette) {
         widget.corner_radius = CornerRadius::same(4);
         widget.weak_bg_fill = palette.accent;
         widget.bg_fill = palette.accent;
+        widget.fg_stroke.color = palette.on_accent_text;
     }
+    // Let each row take its state's text colour, so a highlighted row's text sits on the
+    // accent in `on_accent_text`.
+    style.visuals.override_text_color = None;
+}
+
+/// Light or dark, as Settings → Appearance → Theme asks. `system_dark` is the desktop's
+/// preference, if known; without one Xuan stays dark.
+pub fn palette_for(choice: xuan::config::Theme, system_dark: Option<bool>) -> Palette {
+    let dark = match choice {
+        xuan::config::Theme::System => system_dark.unwrap_or(true),
+        xuan::config::Theme::Light => false,
+        xuan::config::Theme::Dark => true,
+    };
+    if dark { Palette::DARK } else { Palette::LIGHT }
 }
 
 #[cfg(test)]

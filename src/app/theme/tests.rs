@@ -101,3 +101,79 @@ fn palette_reads_back_what_apply_installed() {
         custom.accent.gamma_multiply(0.65)
     );
 }
+
+/// `fg` over `bg`, with `fg` blended first when it is translucent.
+fn ratio(fg: Color32, bg: Color32) -> f32 {
+    contrast_ratio(bg.blend(fg), bg)
+}
+
+#[test]
+fn text_meets_wcag_aa_in_both_palettes() {
+    for p in [Palette::DARK, Palette::LIGHT] {
+        let name = if p.dark { "dark" } else { "light" };
+        // Body text and secondary text: 4.5:1.
+        for (label, fg, bg) in [
+            ("text/panel", p.text, p.panel),
+            ("text/field", p.text, p.field),
+            ("text/titlebar", p.text, p.titlebar),
+            ("text/window", p.text, p.window),
+            ("text/faint", p.text, p.faint),
+            ("text/selected row", p.text, p.row_selected),
+            ("muted/panel", p.muted, p.panel),
+            ("muted/titlebar", p.muted, p.titlebar),
+            ("muted/window", p.muted, p.window),
+            ("muted/field", p.muted, p.field),
+            ("muted/canvas", p.muted, p.canvas),
+            ("error/panel", p.error, p.panel),
+            ("error/window", p.error, p.window),
+            ("error_soft/window", p.error_soft, p.window),
+            ("warning/window", p.warning, p.window),
+            ("ruler label/ruler", p.ruler_label, p.ruler),
+        ] {
+            let r = ratio(fg, bg);
+            assert!(r >= 4.5, "{name} {label}: {r:.2}");
+        }
+        // Controls, plot lines and the accent against surfaces: 3:1.
+        for (label, fg, bg) in [
+            ("accent/panel", p.accent, p.panel),
+            ("accent/window", p.accent, p.window),
+            ("plot line/plot", p.plot_line, p.plot),
+            ("ruler tick/ruler", p.ruler_tick, p.ruler),
+            ("on accent/accent", p.on_accent, p.accent),
+            (
+                "text/selected tab",
+                p.text,
+                p.titlebar.blend(p.tab_selected),
+            ),
+        ] {
+            let r = ratio(fg, bg);
+            assert!(r >= 3.0, "{name} {label}: {r:.2}");
+        }
+    }
+    // Highlighted menu rows. The dark palette keeps macOS's light-on-blue rows (about 3:1);
+    // the light palette's white on a deeper blue reaches 4.5:1.
+    let light = Palette::LIGHT;
+    assert!(ratio(light.on_accent_text, light.accent) >= 4.5);
+    assert!(ratio(light.on_accent_muted, light.accent) >= 4.5);
+    assert!(ratio(Palette::DARK.on_accent_text, Palette::DARK.accent) >= 3.0);
+}
+
+#[test]
+fn light_palette_uses_light_visuals() {
+    let v = visuals(&Palette::LIGHT);
+    assert!(!v.dark_mode);
+    assert_eq!(v.panel_fill, Palette::LIGHT.panel);
+    assert_eq!(v.override_text_color, Some(Palette::LIGHT.text));
+    assert!(visuals(&Palette::DARK).dark_mode);
+}
+
+#[test]
+fn the_theme_setting_picks_the_palette() {
+    use xuan::config::Theme;
+    assert_eq!(palette_for(Theme::Dark, Some(false)), Palette::DARK);
+    assert_eq!(palette_for(Theme::Light, Some(true)), Palette::LIGHT);
+    assert_eq!(palette_for(Theme::System, Some(false)), Palette::LIGHT);
+    assert_eq!(palette_for(Theme::System, Some(true)), Palette::DARK);
+    // Without an answer from the desktop, Xuan stays dark.
+    assert_eq!(palette_for(Theme::System, None), Palette::DARK);
+}

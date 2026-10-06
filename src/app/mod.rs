@@ -432,6 +432,8 @@ pub struct EditorApp {
     tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
+    /// The colours installed in the egui context, switched by `sync_palette`.
+    palette_applied: theme::Palette,
     job: Option<jobs::Job>,
     develop: Option<develop::Develop>,
     inactive_develop: Vec<develop::Develop>,
@@ -622,6 +624,7 @@ impl EditorApp {
             tablet: None,
             context: ctx.clone(),
             window_title: String::new(),
+            palette_applied: theme::Palette::DARK,
             job: None,
             develop: None,
             inactive_develop: Vec::new(),
@@ -1702,7 +1705,19 @@ impl EditorApp {
         xuan::gpu::scope(self.processor.clone(), || self.show_with_processor(ctx));
     }
 
+    /// Installs the palette the Theme setting asks for, when it changed.
+    fn sync_palette(&mut self, ctx: &egui::Context) {
+        let palette = theme::palette_for(self.config.theme, None);
+        if palette != self.palette_applied {
+            theme::set_palette(ctx, &palette);
+            self.palette_applied = palette;
+            ctx.request_repaint();
+        }
+    }
+
     fn show_with_processor(&mut self, ctx: &egui::Context) {
+        self.sync_palette(ctx);
+
         self.poll_job();
         self.poll_develop(ctx);
         self.frames += 1;

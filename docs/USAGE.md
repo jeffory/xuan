@@ -77,7 +77,7 @@ To compile the application or produce a release archive, see the [development gu
 
 ## Workspace
 
-Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
+Xuan has charcoal and light themes (Settings → Appearance → Theme), contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
 
 The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
@@ -330,7 +330,17 @@ Open **Edit → Settings…** (Ctrl+,). The sidebar's **General** category conta
 language selector: **English** or **简体中文**. Changes apply immediately and are
 saved automatically. Chinese glyphs are bundled with the application.
 
-The **Appearance** category sets the **Window title bar**:
+The **Appearance** category's **Theme** chooses the interface colours:
+
+- **System** (the default) follows your desktop's light or dark preference, and
+  stays dark when the desktop states none.
+- **Light mode** and **Dark mode** always use those colours.
+
+The change applies immediately. Only the interface changes colour: your document,
+exports and the colours of selection outlines, guides and handles drawn over it are
+the same in both themes.
+
+It also sets the **Window title bar**:
 
 - **Compact** (the default): the menus share the title bar with minimize,
   maximize, and close buttons on the right. Under GNOME the buttons follow the

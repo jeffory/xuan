@@ -916,3 +916,9 @@ Choose the algorithm behind Select Subject and Remove Background	选择“选择
 provider	提供者
 Select an unlocked image layer	请选择未锁定的图像图层
 Built-in uses Xuan's own classical segmentation, with no machine learning. A plugin that provides one of these, such as a segmentation model, can replace it; it runs under the plugin's usual permissions, and if it cannot run (disabled, or offline mode) the built-in algorithm is used with a notice.	内置选项使用 Xuan 自带的经典分割算法，不含机器学习。提供这些功能的插件（例如分割模型）可以替代它；插件按其通常的权限运行，若无法运行（已停用或处于离线模式），则改用内置算法并给出提示。
+Theme	主题
+Light mode	浅色模式
+Dark mode	深色模式
+Follow your desktop's light or dark setting.	跟随桌面的浅色或深色设置。
+Always use light colours.	始终使用浅色。
+Always use dark colours.	始终使用深色。
