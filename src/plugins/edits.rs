@@ -555,6 +555,20 @@ pub enum Edit {
     SelectLayers {
         layers: Vec<Uuid>,
     },
+    /// Layer → Merge on these layers: one layer merges down, several merge
+    /// together. The merged layer counts as added.
+    MergeLayers {
+        layers: Vec<Uuid>,
+    },
+    /// Layer → Group on these layers (siblings of the first); the new group
+    /// counts as added.
+    GroupLayers {
+        layers: Vec<Uuid>,
+    },
+    /// Layer → Ungroup: the group's layers move to its parent.
+    UngroupLayers {
+        layer: Uuid,
+    },
     /// Move, scale or rotate a layer (with its children, for a group) to
     /// this box, in document units; missing fields keep their value.
     Transform {
@@ -1028,14 +1042,39 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
             } => {
                 crate::operations::extend_canvas(document, *left, *top, *right, *bottom)?;
             }
-            Edit::SelectLayers { layers } => {
-                ensure!(!layers.is_empty(), "List at least one layer");
-                ensure!(layers.len() <= 1000, "Too many layers");
-                for id in layers {
-                    find(document, *id)?;
-                }
-                document.selected = layers.iter().copied().collect();
-                document.active = layers.last().copied();
+            Edit::SelectLayers { layers } => select_layers(document, layers)?,
+            Edit::MergeLayers { layers } => {
+                select_layers(document, layers)?;
+                ensure!(
+                    !document
+                        .layers
+                        .iter()
+                        .any(|l| document.selected.contains(&l.id) && l.locked),
+                    "Unlock the layers to merge them"
+                );
+                let before = document.layers.len();
+                crate::operations::merge_selected(document, true)?;
+                ensure!(
+                    document.layers.len() < before,
+                    "There is nothing below the layer to merge it with"
+                );
+                added.extend(document.active);
+            }
+            Edit::GroupLayers { layers } => {
+                select_layers(document, layers)?;
+                let before = document.layers.len();
+                crate::operations::group(document);
+                ensure!(
+                    document.layers.len() > before,
+                    "These layers cannot be grouped"
+                );
+                reader.add_layer()?;
+                added.extend(document.active);
+            }
+            Edit::UngroupLayers { layer } => {
+                ensure!(find(document, *layer)?.group, "The layer is not a group");
+                document.select(*layer, false);
+                crate::operations::ungroup(document);
             }
             Edit::Transform {
                 layer,
@@ -1392,6 +1431,18 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
     }
     document.validate()?;
     Ok(added)
+}
+
+/// Select these layers, the last one active.
+fn select_layers(document: &mut Document, layers: &[Uuid]) -> Result<()> {
+    ensure!(!layers.is_empty(), "List at least one layer");
+    ensure!(layers.len() <= 1000, "Too many layers");
+    for id in layers {
+        find(document, *id)?;
+    }
+    document.selected = layers.iter().copied().collect();
+    document.active = layers.last().copied();
+    Ok(())
 }
 
 /// Make `layer` the active layer when given; there must be an active layer.
@@ -2371,6 +2422,58 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn layers_merge_group_and_ungroup_in_one_edit() {
+        let (mut document, base) = grey_document();
+        let red = run(
+            &mut document,
+            &[edit(json!({"op": "add_shape_layer", "shape": "Rectangle", "x": 0, "y": 0, "width": 4, "height": 4, "color": "#ff0000"}))],
+        )
+        .unwrap()[0];
+        let empty = run(&mut document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0];
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [red, empty]}))],
+        )
+        .unwrap()[0];
+        let layer =
+            |document: &Document, id: Uuid| document.layers.iter().find(|l| l.id == id).cloned();
+        assert!(layer(&document, group).unwrap().group);
+        assert_eq!(layer(&document, red).unwrap().parent, Some(group));
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(json!({"op": "ungroup_layers", "layer": base}))]
+            )
+            .is_err()
+        );
+        run(
+            &mut document,
+            &[edit(json!({"op": "ungroup_layers", "layer": group}))],
+        )
+        .unwrap();
+        assert!(layer(&document, group).is_none());
+        assert_eq!(layer(&document, red).unwrap().parent, None);
+        // One layer merges down; the merged layer is reported.
+        let merged = run(
+            &mut document,
+            &[edit(json!({"op": "merge_layers", "layers": [red]}))],
+        )
+        .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert!(layer(&document, red).is_none() && layer(&document, base).is_none());
+        let pixels = crate::render::render(&document);
+        assert_eq!(pixels.get_pixel(1, 1).0, [255, 0, 0, 255]);
+        // The bottom layer has nothing to merge into.
+        let bottom = document.layers[0].id;
+        let error = run(
+            &mut document,
+            &[edit(json!({"op": "merge_layers", "layers": [bottom]}))],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("layer"), "{error}");
     }
 
     #[test]

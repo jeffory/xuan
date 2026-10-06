@@ -1211,6 +1211,10 @@ pub mod ui {
     pub fn primary_button(id: &str, label: &str) -> Value {
         json!({"type": "button", "id": id, "label": label, "primary": true})
     }
+    /// A button that also copies `text` to the clipboard when clicked.
+    pub fn copy_button(id: &str, label: &str, text: &str) -> Value {
+        json!({"type": "button", "id": id, "label": label, "copy": text})
+    }
     pub fn checkbox(id: &str, label: &str, value: bool) -> Value {
         json!({"type": "checkbox", "id": id, "label": label, "value": value})
     }

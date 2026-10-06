@@ -210,6 +210,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
             label,
             primary,
             enabled,
+            copy,
         } => {
             let response = ui.add_enabled_ui(*enabled, |ui| {
                 if *primary {
@@ -219,6 +220,10 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                 }
             });
             if response.inner.clicked() {
+                // Only on the user's click, never on the plugin's own.
+                if let Some(text) = copy {
+                    ui.ctx().copy_text(text.clone());
+                }
                 send(pane, id, Value::Bool(true));
             }
         }

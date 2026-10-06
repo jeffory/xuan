@@ -918,6 +918,11 @@ Layers and their properties:
 - `{"op": "select_layers", "layers": [id, …]}`: make these the selected
   layers (the last is active), for the `host/run` commands that work on the
   selected layers, such as `merge`, `group` and `duplicate`.
+- `{"op": "merge_layers", "layers": [id, …]}`, `{"op": "group_layers",
+  "layers": [id, …]}` and `{"op": "ungroup_layers", "layer"}`: **Layer →
+  Merge** (one layer merges down, several merge together), **Group** and
+  **Ungroup** on those layers in a single step; the merged layer and the new
+  group are reported as added.
 - `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?}`:
   move, scale or rotate a layer (a group with its layers) to this box in
   document units, as **Free Transform** does; missing fields keep their value.
@@ -1064,7 +1069,7 @@ Widget tree nodes (`type` plus fields):
 | `heading`, `label` | `text`, `muted?`, `small?`, `wrap?` |
 | `separator` | — |
 | `space` | `size` |
-| `button` | `id`, `label`, `primary?`, `enabled?` |
+| `button` | `id`, `label`, `primary?`, `enabled?`, `copy?` (text Xuan copies to the clipboard when the user clicks it) |
 | `checkbox` | `id`, `label`, `value` |
 | `text` | `id`, `value`, `placeholder?`, `multiline?`, `width?` |
 | `number` | `id`, `value`, `min?`, `max?`, `step?`, `suffix?`, `integer?` |

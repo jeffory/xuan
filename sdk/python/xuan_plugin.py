@@ -742,8 +742,14 @@ class ui:
         return {"type": "space", "size": size}
 
     @staticmethod
-    def button(id: str, label: str, primary: bool = False, enabled: bool = True) -> Dict[str, Any]:
-        return {"type": "button", "id": id, "label": label, "primary": primary, "enabled": enabled}
+    def button(
+        id: str, label: str, primary: bool = False, enabled: bool = True, copy: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """A button; with ``copy``, Xuan also copies that text to the clipboard when it is clicked."""
+        node = {"type": "button", "id": id, "label": label, "primary": primary, "enabled": enabled}
+        if copy is not None:
+            node["copy"] = copy
+        return node
 
     @staticmethod
     def checkbox(id: str, label: str, value: bool = False) -> Dict[str, Any]:

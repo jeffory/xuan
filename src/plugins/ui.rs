@@ -56,6 +56,9 @@ pub enum Node {
         primary: bool,
         #[serde(default = "yes")]
         enabled: bool,
+        /// Text the host copies to the clipboard when the user clicks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        copy: Option<String>,
     },
     Checkbox {
         id: String,
@@ -219,7 +222,16 @@ impl Node {
             Self::Heading { text } | Self::Label { text, .. } => clip(text, MAX_TEXT),
             Self::Separator => {}
             Self::Space { size } => *size = clamp(*size),
-            Self::Button { id, label, .. } | Self::Checkbox { id, label, .. } => {
+            Self::Button {
+                id, label, copy, ..
+            } => {
+                clip(id, MAX_ID);
+                clip(label, MAX_TEXT);
+                if let Some(copy) = copy {
+                    clip(copy, MAX_TEXT);
+                }
+            }
+            Self::Checkbox { id, label, .. } => {
                 clip(id, MAX_ID);
                 clip(label, MAX_TEXT);
             }
@@ -481,7 +493,7 @@ mod tests {
             {"type": "select", "id": "s", "options": options},
             {"type": "swatches", "colors": colors},
             {"type": "label", "text": "é".repeat(MAX_TEXT)},
-            {"type": "button", "id": "b".repeat(5000), "label": "go"},
+            {"type": "button", "id": "b".repeat(5000), "label": "go", "copy": "c".repeat(9000)},
             {"type": "image", "src": "a.png", "width": 1e9, "height": -5},
             {"type": "space", "size": 1e30},
             {"type": "link", "label": "l", "url": format!("https://x.example/{}", "a".repeat(9000))},
@@ -505,7 +517,10 @@ mod tests {
         assert!(
             matches!(&children[3], Node::Label { text, .. } if text.len() <= MAX_TEXT && text.len() > MAX_TEXT - 2)
         );
-        assert!(matches!(&children[4], Node::Button { id, .. } if id.len() == MAX_ID));
+        assert!(
+            matches!(&children[4], Node::Button { id, copy: Some(copy), .. }
+            if id.len() == MAX_ID && copy.len() == MAX_TEXT)
+        );
         assert!(matches!(
             &children[5],
             Node::Image { width: Some(w), height: Some(h), .. } if *w == MAX_SIZE && *h == 0.0

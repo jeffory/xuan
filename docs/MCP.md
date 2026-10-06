@@ -55,7 +55,7 @@ the document takes effect on the next frame and is drawn at once.
 | paint via strokes | `document/edit` `stroke`, `fill` (new) |
 | selections: rect, ellipse, polygon, by colour | `document/edit` `select_rect`, `select_polygon`, `select_color`, `select_color_range`, `grow_selection`, `feather_selection` (new); `host/run` `select_all`, `deselect`, `invert_selection`, `select_subject`, `select_layer_pixels` |
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
-| merge / group | `document/edit` `select_layers` (new), then `host/run` `merge`, `group`, `ungroup`, `flatten` |
+| merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
 | crop / resize canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas` |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
@@ -87,8 +87,13 @@ like the existing ones, rather than anything specific to MCP:
   `feather_selection` modify it. They change only the selection, so a
   `document = "read"` plugin may also return them as a proposal, like
   `set_selection`.
-- **Several layers at once.** `select_layers` selects layers for the commands
-  that work on the selection of layers (merge, group, duplicate, delete).
+- **Several layers at once.** `merge_layers`, `group_layers` and
+  `ungroup_layers` work on the layers they name in one undo step; the
+  `host/run` commands would need a separate step to select the layers first.
+  `select_layers` selects layers for the other commands that work on the
+  selection of layers (duplicate, delete).
+- **Copying from a pane.** A pane `button` may carry `copy` text that Xuan
+  puts on the clipboard when the user clicks it, for the connection details.
 - **Canvas.** `crop`, `resize_canvas` and `resize_image`. They are accepted
   only in `document/edit`, not in action results, whose images are placed on
   the canvas as it was sent.
