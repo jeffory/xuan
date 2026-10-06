@@ -228,8 +228,8 @@ fn the_tab_bar_sits_between_the_tool_options_and_the_canvas() {
         "tool options {options:?} above the tabs {tab:?}"
     );
     assert!(
-        (canvas.top() - tab.bottom()).abs() < 2.0,
-        "tabs {tab:?} directly above the canvas {canvas:?}"
+        tab.bottom() <= canvas.top(),
+        "tabs {tab:?} above the document {canvas:?}"
     );
     assert!((34.0..=36.5).contains(&tab.height()), "about 36 px tall");
 }

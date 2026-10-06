@@ -545,9 +545,7 @@ impl EditorApp {
         let selected = self.selected_tab();
         let documents = self.sessions.len();
         let new_button = TAB_HEIGHT;
-        let available =
-            (ui.available_width() - ZOOM_BUTTONS - new_button)
-                .max(MIN_TAB);
+        let available = (ui.available_width() - ZOOM_BUTTONS - new_button).max(MIN_TAB);
         let strip = Strip::new(keys.len(), available);
         let overflow = strip.overflows(available);
         let visible = if overflow {
@@ -660,10 +658,7 @@ impl EditorApp {
                 // The 1 px separator in the gap after this tab, not after the last.
                 let x = rect.right() + GAP / 2.0;
                 ui.painter().with_clip_rect(clip).line_segment(
-                    [
-                        pos2(x, rect.top() + 8.0),
-                        pos2(x, rect.bottom() - 8.0),
-                    ],
+                    [pos2(x, rect.top() + 8.0), pos2(x, rect.bottom() - 8.0)],
                     Stroke::new(GAP, p.divider),
                 );
             }
