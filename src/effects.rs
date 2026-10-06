@@ -330,7 +330,6 @@ pub fn apply_adjustment(
     mask_target: bool,
 ) -> Result<()> {
     let selection = document.selection.clone();
-    let canvas = [document.width, document.height];
     let layer = document
         .active_mut()
         .ok_or_else(|| anyhow::anyhow!("Select a layer first"))?;
@@ -628,6 +627,7 @@ fn apply_filter_impl(
 ) -> Result<()> {
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
     let selection = document.selection.clone();
+    let canvas = [document.width, document.height];
     let layer = document
         .active_mut()
         .ok_or_else(|| anyhow::anyhow!("Select a layer first"))?;
@@ -1349,13 +1349,24 @@ mod tests {
 
     #[test]
     fn blur_repeats_only_the_sides_that_reach_the_canvas_edge() {
-        for filter in edge_filters() {
-            let mut doc = Document::new(64, 48).unwrap();
+        let filters = [
+            Filter::GaussianBlur { radius: 8.0 },
+            Filter::MotionBlur {
+                distance: 24.0,
+                angle: 0.0,
+            },
+            Filter::MotionBlur {
+                distance: 37.5,
+                angle: 35.0,
+            },
+        ];
+        for filter in filters {
+            let mut doc = Document::new(256, 192).unwrap();
             // Passes the left edge and touches the top; stops short on the right
             // and bottom.
             let mut layer = crate::document::Layer::image(
                 "corner",
-                RgbaImage::from_pixel(40, 30, Rgba([200, 40, 10, 255])),
+                RgbaImage::from_pixel(160, 120, Rgba([200, 40, 10, 255])),
             );
             layer.transform.x = -6.0;
             doc.insert(layer);
@@ -1368,18 +1379,18 @@ mod tests {
                 // The layer grows right and down only.
                 assert!((corners[0].x + 6.0).abs() < 1e-3, "{filter:?} {pass}");
                 assert!(corners[0].y.abs() < 1e-3, "{filter:?} {pass}");
-                assert!(pixels.width() > 40 && pixels.height() > 30, "{filter:?}");
+                assert!(pixels.width() > 160 && pixels.height() > 120, "{filter:?}");
                 assert_eq!(pixels.get_pixel(0, 0).0, [200, 40, 10, 255], "{filter:?}");
                 let image = render::render(&doc);
-                for (x, y) in [(0, 0), (0, 10), (10, 0)] {
+                for (x, y) in [(0, 0), (0, 60), (60, 0)] {
                     assert_eq!(image.get_pixel(x, y).0, [200, 40, 10, 255], "{filter:?}");
                 }
                 // Content fades into transparency where it stops short of the canvas.
-                assert!(image.get_pixel(33, 10)[3] < 255, "{filter:?} {pass}");
-                assert!(image.get_pixel(35, 10)[3] > 0, "{filter:?} {pass}");
+                assert!(image.get_pixel(153, 60)[3] < 255, "{filter:?} {pass}");
+                assert!(image.get_pixel(155, 60)[3] > 0, "{filter:?} {pass}");
                 if matches!(filter, Filter::GaussianBlur { .. }) {
-                    assert!(image.get_pixel(10, 29)[3] < 255);
-                    assert!(image.get_pixel(10, 31)[3] > 0);
+                    assert!(image.get_pixel(60, 119)[3] < 255);
+                    assert!(image.get_pixel(60, 121)[3] > 0);
                 }
             }
             doc.validate().unwrap();
