@@ -333,8 +333,16 @@ saved automatically. Chinese glyphs are bundled with the application.
 The **Appearance** category's **Theme** chooses the interface colours:
 
 - **System** (the default) follows your desktop's light or dark preference, and
-  stays dark when the desktop states none.
+  stays dark when the desktop states none. On Linux, Xuan asks the desktop portal
+  (KDE Plasma, GNOME and Flatpak), then KDE's colour scheme, GNOME's
+  `color-scheme` setting and the GTK theme name; on Windows, the "Choose your app
+  mode" setting. A change on the desktop reaches Xuan within a few seconds.
 - **Light mode** and **Dark mode** always use those colours.
+
+Xuan also takes your desktop's accent colour for highlights, selected menu rows,
+default buttons and sliders (the portal's or KDE's accent, GNOME 47's accent colour,
+or Windows' accent colour), made a little lighter or darker where needed so text on it
+stays readable. Without one it uses its own blue.
 
 The change applies immediately. Only the interface changes colour: your document,
 exports and the colours of selection outlines, guides and handles drawn over it are

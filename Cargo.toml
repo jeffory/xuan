@@ -43,6 +43,9 @@ zip = { version = "2.4", default-features = false, features = ["deflate"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Rasterising SVG window buttons through egui_extras (the version egui_extras already uses).
 resvg = { version = "0.45", default-features = false }
+# The desktop portal's appearance settings (src/app/system_theme/linux.rs). Already built for
+# rfd's portal dialogs; only the blocking API is added.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 calloop = "0.13"
 calloop-wayland-source = "0.3"
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }

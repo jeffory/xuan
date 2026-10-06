@@ -170,10 +170,55 @@ fn light_palette_uses_light_visuals() {
 #[test]
 fn the_theme_setting_picks_the_palette() {
     use xuan::config::Theme;
-    assert_eq!(palette_for(Theme::Dark, Some(false)), Palette::DARK);
-    assert_eq!(palette_for(Theme::Light, Some(true)), Palette::LIGHT);
-    assert_eq!(palette_for(Theme::System, Some(false)), Palette::LIGHT);
-    assert_eq!(palette_for(Theme::System, Some(true)), Palette::DARK);
+    assert_eq!(palette_for(Theme::Dark, Some(false), None), Palette::DARK);
+    assert_eq!(palette_for(Theme::Light, Some(true), None), Palette::LIGHT);
+    assert_eq!(
+        palette_for(Theme::System, Some(false), None),
+        Palette::LIGHT
+    );
+    assert_eq!(palette_for(Theme::System, Some(true), None), Palette::DARK);
     // Without an answer from the desktop, Xuan stays dark.
-    assert_eq!(palette_for(Theme::System, None), Palette::DARK);
+    assert_eq!(palette_for(Theme::System, None, None), Palette::DARK);
+}
+
+#[test]
+fn a_system_accent_replaces_the_blue_and_stays_readable() {
+    let accents = [
+        Color32::from_rgb(0x35, 0x84, 0xe4), // GNOME blue
+        Color32::from_rgb(0xc8, 0x88, 0x00), // GNOME yellow
+        Color32::from_rgb(0x3a, 0x94, 0x4a), // GNOME green
+        Color32::from_rgb(61, 174, 233),     // Breeze
+        Color32::from_rgb(233, 84, 32),      // Ubuntu orange
+        Color32::from_rgb(0, 120, 215),      // Windows blue
+        Color32::from_rgb(255, 255, 0),
+        Color32::from_rgb(20, 20, 60),
+        Color32::WHITE,
+        Color32::BLACK,
+    ];
+    for base in [Palette::DARK, Palette::LIGHT] {
+        for accent in accents {
+            let p = base.with_accent(accent);
+            let text = if p.dark { 3.0 } else { 4.5 };
+            assert!(
+                ratio(p.on_accent_text, p.accent) >= text,
+                "{accent:?} on {}",
+                p.dark
+            );
+            assert!(ratio(p.accent, p.panel) >= 3.0, "{accent:?} on {}", p.dark);
+            assert!(ratio(p.text, p.row_selected) >= 4.5);
+            assert_ne!(p.accent_gradient, base.accent_gradient);
+        }
+    }
+    // A colour that already fits is kept as it is.
+    let windows_blue = Color32::from_rgb(0, 103, 192);
+    assert_eq!(
+        Palette::LIGHT.with_accent(windows_blue).accent,
+        windows_blue
+    );
+    let breeze = Palette::DARK.with_accent(Color32::from_rgb(61, 174, 233));
+    assert_ne!(breeze.accent, Palette::DARK.accent);
+    assert_eq!(
+        palette_for(xuan::config::Theme::Dark, None, Some(windows_blue)),
+        Palette::DARK.with_accent(windows_blue)
+    );
 }

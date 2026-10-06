@@ -43,6 +43,7 @@ mod settings;
 mod shortcuts;
 mod snap;
 mod stroke_smoothing;
+mod system_theme;
 mod tablet;
 #[cfg(test)]
 mod tests;
@@ -434,6 +435,11 @@ pub struct EditorApp {
     window_title: String,
     /// The colours installed in the egui context, switched by `sync_palette`.
     palette_applied: theme::Palette,
+    /// Reads the desktop's light/dark preference and accent colour in the background.
+    /// `None` in tests, which never look at the developer's desktop.
+    system_theme: Option<system_theme::Watcher>,
+    /// The desktop's theme as last read.
+    system: system_theme::SystemTheme,
     job: Option<jobs::Job>,
     develop: Option<develop::Develop>,
     inactive_develop: Vec<develop::Develop>,
@@ -569,6 +575,7 @@ impl EditorApp {
         app.load_config();
         app.load_plugins();
         app.button_layout = chrome::ButtonLayout::from_desktop();
+        app.watch_system_theme(system_theme::detect(), Some(cc.egui_ctx.clone()));
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
@@ -625,6 +632,8 @@ impl EditorApp {
             context: ctx.clone(),
             window_title: String::new(),
             palette_applied: theme::Palette::DARK,
+            system_theme: None,
+            system: Default::default(),
             job: None,
             develop: None,
             inactive_develop: Vec::new(),
@@ -1705,9 +1714,30 @@ impl EditorApp {
         xuan::gpu::scope(self.processor.clone(), || self.show_with_processor(ctx));
     }
 
-    /// Installs the palette the Theme setting asks for, when it changed.
+    /// Starts following the desktop's theme as `source` reports it. Waits briefly for the first
+    /// answer, so the first frame already has the right colours.
+    fn watch_system_theme(
+        &mut self,
+        source: Box<dyn system_theme::Source>,
+        repaint: Option<egui::Context>,
+    ) {
+        let mut watcher = system_theme::Watcher::spawn(
+            source,
+            system_theme::POLL_INTERVAL,
+            system_theme::FIRST_READ_TIMEOUT,
+            repaint,
+        );
+        self.system = watcher.poll().0;
+        self.system_theme = Some(watcher);
+    }
+
+    /// Installs the palette the Theme setting and the desktop ask for, when it changed.
     fn sync_palette(&mut self, ctx: &egui::Context) {
-        let palette = theme::palette_for(self.config.theme, None);
+        if let Some(watcher) = &mut self.system_theme {
+            self.system = watcher.poll().0;
+        }
+        let palette = theme::palette_for(self.config.theme, self.system.dark, self.system.accent);
+
         if palette != self.palette_applied {
             theme::set_palette(ctx, &palette);
             self.palette_applied = palette;

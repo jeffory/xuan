@@ -631,13 +631,62 @@ pub fn menu_style(style: &mut egui::Style, palette: &Palette) {
 
 /// Light or dark, as Settings → Appearance → Theme asks. `system_dark` is the desktop's
 /// preference, if known; without one Xuan stays dark.
-pub fn palette_for(choice: xuan::config::Theme, system_dark: Option<bool>) -> Palette {
+///
+/// `accent`, when given (the desktop's accent colour), replaces Xuan's blue.
+pub fn palette_for(
+    choice: xuan::config::Theme,
+    system_dark: Option<bool>,
+    accent: Option<Color32>,
+) -> Palette {
     let dark = match choice {
         xuan::config::Theme::System => system_dark.unwrap_or(true),
         xuan::config::Theme::Light => false,
         xuan::config::Theme::Dark => true,
     };
-    if dark { Palette::DARK } else { Palette::LIGHT }
+    let palette = if dark { Palette::DARK } else { Palette::LIGHT };
+    match accent {
+        Some(accent) => palette.with_accent(accent),
+        None => palette,
+    }
+}
+
+impl Palette {
+    /// This palette with `accent` in place of Xuan's blue. The colour is first made lighter or
+    /// darker until it reads as a control on the panels and text on it stays readable (4.5:1
+    /// for the light palette's white text, 3:1 for the dark palette's light grey, as with
+    /// Xuan's own blue); the gradient, pressed and checkbox shades are derived from it.
+    pub fn with_accent(mut self, accent: Color32) -> Self {
+        let accent = Color32::from_rgb(accent.r(), accent.g(), accent.b());
+        let fits = |c: Color32| {
+            let text = contrast_ratio(self.on_accent_text, c);
+            let surface = contrast_ratio(c, self.panel);
+            if self.dark {
+                text >= 3.0 && surface >= 3.0
+            } else {
+                text >= 4.5 && surface >= 3.0
+            }
+        };
+        // Too light for its text: darken. Too dark against a dark panel: lighten.
+        let toward = if !self.dark || contrast_ratio(self.on_accent_text, accent) < 3.0 {
+            Color32::BLACK
+        } else {
+            Color32::WHITE
+        };
+        let accent = (0..=20)
+            .map(|step| accent.lerp_to_gamma(toward, step as f32 / 20.0))
+            .find(|c| fits(*c))
+            .unwrap_or(self.accent);
+        let lighter = |t| accent.lerp_to_gamma(Color32::WHITE, t);
+        let darker = |t| accent.lerp_to_gamma(Color32::BLACK, t);
+        self.accent = accent;
+        self.accent_gradient = [lighter(0.2), darker(0.1)];
+        self.accent_pressed = [darker(0.18), darker(0.3)];
+        self.check = [lighter(0.18), darker(0.1)];
+        if !self.dark {
+            self.row_selected = self.panel.lerp_to_gamma(accent, 0.16);
+        }
+        self
+    }
 }
 
 #[cfg(test)]

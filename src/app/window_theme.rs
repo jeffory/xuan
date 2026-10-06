@@ -132,10 +132,10 @@ impl Env {
             .filter(|p| p.is_absolute())
             .collect();
         let kde = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| desktop_is(&d, "KDE"));
-        let (gtk, icons) = if kde {
-            (None, None)
+        let [gtk, icons] = if kde {
+            [None, None]
         } else {
-            gsettings_themes()
+            gsettings(["gtk-theme", "icon-theme"])
         };
         Self {
             config_home: process_config_home(),
@@ -177,31 +177,37 @@ impl Env {
     }
 }
 
-/// The GNOME GTK theme and icon theme, asked of `gsettings` with one shared timeout.
+/// A string as `gsettings get` prints it (`'prefer-dark'` and a newline), unquoted.
+/// `None` when empty.
+pub(super) fn gsettings_value(output: &str) -> Option<String> {
+    let value = output.trim();
+    let value = value
+        .strip_prefix('\'')
+        .and_then(|v| v.strip_suffix('\''))
+        .unwrap_or(value);
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// `keys` of `org.gnome.desktop.interface`, asked of `gsettings` with one shared 300 ms
+/// timeout; a key that is unknown, empty or late is `None`.
 #[cfg_attr(test, allow(dead_code))]
-fn gsettings_themes() -> (Option<String>, Option<String>) {
+pub(super) fn gsettings<const N: usize>(keys: [&'static str; N]) -> [Option<String>; N] {
     let (send, receive) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let get = |key: &str| {
+        let values = keys.map(|key| {
             std::process::Command::new("gsettings")
                 .args(["get", "org.gnome.desktop.interface", key])
                 .stderr(std::process::Stdio::null())
                 .output()
                 .ok()
                 .filter(|o| o.status.success())
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .trim()
-                        .trim_matches('\'')
-                        .to_owned()
-                })
-                .filter(|v| !v.is_empty())
-        };
-        let _ = send.send((get("gtk-theme"), get("icon-theme")));
+                .and_then(|o| gsettings_value(&String::from_utf8_lossy(&o.stdout)))
+        });
+        let _ = send.send(values);
     });
     receive
         .recv_timeout(Duration::from_millis(300))
-        .unwrap_or_default()
+        .unwrap_or_else(|_| std::array::from_fn(|_| None))
 }
 
 /// Removes `.` and resolves `..` without touching the disk.

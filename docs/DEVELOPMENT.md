@@ -118,6 +118,49 @@ image at the display's pixel scale.
 Monochrome SVGs use `color="white"` with `stroke="currentColor"` so the icon can be
 tinted with the toolbar's text color. Rebuild the app after editing an embedded SVG.
 
+## Interface colours
+
+Every colour the interface paints comes from `theme::Palette` in
+[`src/app/theme.rs`](../src/app/theme.rs): semantic roles such as `panel`, `text`,
+`muted`, `accent`, `control`, `hover` and `tab_selected`, with a `DARK` and a `LIGHT`
+instance. Widgets read the installed palette with `ui.palette()` (or `ctx.palette()`); do
+not write colour literals in interface code, and do not assume a dark background for
+`from_white_alpha` overlays. Add a role to both palettes instead. Colours painted over the
+document (selection outlines, handles, guides) are the exception and stay fixed.
+`src/app/theme/tests.rs` checks that the dark palette matches the original look and that
+key text and control pairs meet WCAG AA in both palettes.
+
+### Platform theme backends
+
+`src/app/system_theme.rs` reads the desktop's light/dark preference and accent colour into
+a plain `SystemTheme { dark, accent }`. Each platform has one backend, chosen in
+`system_theme::detect()`, the only place with `cfg(target_os = …)`:
+
+- Linux (`system_theme/linux.rs`): the xdg-desktop-portal
+  `org.freedesktop.appearance` `color-scheme` and `accent-color` over D-Bus (`zbus`,
+  300 ms timeout), then KDE's `kdeglobals`, GNOME's `gsettings` `color-scheme` and
+  `accent-color`, then the GTK theme name. Parsing reuses `window_theme.rs`.
+- Windows (`system_theme/windows.rs`): `AppsUseLightTheme` and the DWM `AccentColor`
+  (ABGR) or `ColorizationColor` (ARGB) from the registry.
+- macOS: a stub that answers nothing.
+
+To add a platform (macOS next):
+
+1. Add `src/app/system_theme/<platform>.rs` with a `read() -> SystemTheme` (or a type
+   implementing `system_theme::Source` if it keeps state, like the Linux D-Bus
+   connection). Keep the parsing of what the OS returns in pure functions and test them
+   in `system_theme/tests.rs`; compile those functions for `any(<platform>, test)` so they
+   are tested on Linux too, as `windows.rs` does.
+2. Return it from the platform's branch of `detect()`. For macOS, read
+   `NSApp.effectiveAppearance` (DarkAqua or Aqua) and `NSColor.controlAccentColor`.
+3. Nothing else changes: `system_theme::Watcher` polls the backend on its own thread every
+   three seconds, and `EditorApp::sync_palette` turns the answer into a palette.
+
+A backend must never block for long: the first answer is awaited for at most 300 ms at
+startup, and later ones arrive in the background. Return `None` for anything that cannot
+be read; Xuan then keeps its dark palette and blue accent. Tests never call `detect()`:
+they inject a `Source` with `EditorApp::watch_system_theme`.
+
 ## Checks
 
 ```sh
