@@ -2121,6 +2121,19 @@ fn plugins_list_and_switch_documents_and_greyed_out_commands_are_refused() {
     for bad in [json!({}), json!({"document": uuid::Uuid::new_v4()})] {
         assert!(plugin_request(&mut app, "document/activate", bad).is_err());
     }
+    // One switch a second: a client cannot make the tabs flicker.
+    let second = app.sessions[1].document.id;
+    let error =
+        plugin_request(&mut app, "document/activate", json!({"document": second})).unwrap_err();
+    assert_eq!(error.code, xuan::plugins::protocol::RATE_LIMITED);
+    assert!(error.data["retry_after"].as_f64().unwrap() > 0.0);
+    assert_eq!(app.current, 0, "not switched");
+    // Asking for the current document is free.
+    plugin_request(&mut app, "document/activate", json!({"document": first})).unwrap();
+    let past = std::time::Instant::now() - crate::app::plugins::ACTIVATE_INTERVAL;
+    app.plugins.activated_at.insert("mock".into(), past);
+    plugin_request(&mut app, "document/activate", json!({"document": second})).unwrap();
+    assert_eq!(app.current, 1);
     // A command greyed out in its menu is refused rather than ignored.
     install_mock(&mut app, dir.path());
     let request = |action: &str| xuan::plugins::protocol::Request {
@@ -3936,11 +3949,10 @@ done
         app.plugins.file_refused_at.insert("mock".into(), past);
 
         // Saving where the user chose: the project now lives there.
-        let project = out.path().join("agent");
+        let project = out.path().join("agent.xuan");
         *choice.lock().unwrap() = Some(project.clone());
         app.queue_file_request("mock", file_request(102, "file/save_as", json!({})));
         let saved = wait(&context, &mut app, 102);
-        let project = project.with_extension("xuan");
         assert_eq!(saved["result"], json!({"name": "agent.xuan"}), "no folder");
         assert!(project.exists());
         let session = app.session().unwrap();
@@ -4067,6 +4079,145 @@ done
             );
         }
         assert!(app.dialog.is_none());
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn plugin_saves_land_only_where_the_user_confirmed_and_errors_name_no_folders() {
+        use crate::app::plugin_files::SaveDialog;
+        use serde_json::json;
+        use std::sync::{Arc, Mutex};
+        use xuan::plugins::protocol::{CANCELLED, INTERNAL_ERROR, INVALID_PARAMS};
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_read_mock(&mut app, dir.path());
+        app.dimensions = [8, 6];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        // The dialog's answers, in turn.
+        let shown: Arc<Mutex<Vec<SaveDialog>>> = Arc::default();
+        let answers: Arc<Mutex<Vec<Option<PathBuf>>>> = Arc::default();
+        let (seen, queue) = (shown.clone(), answers.clone());
+        app.plugins.save_dialog = Some(Arc::new(move |dialog: &SaveDialog| {
+            seen.lock().unwrap().push(dialog.clone());
+            queue.lock().unwrap().remove(0)
+        }));
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        let ask = |app: &mut EditorApp, id: i64, method: &str, choices: Vec<Option<PathBuf>>| {
+            app.plugins.file_refused_at.clear();
+            shown.lock().unwrap().clear();
+            *answers.lock().unwrap() = choices;
+            app.queue_file_request("mock", file_request(id, method, json!({"format": "png"})));
+            let answer = wait(&context, app, id);
+            assert!(answers.lock().unwrap().is_empty(), "every answer used");
+            (answer, shown.lock().unwrap().clone())
+        };
+        let files = || {
+            let mut names: Vec<String> = std::fs::read_dir(out.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+
+        // A name without the extension is not changed silently: the dialog
+        // asks again, in the same folder, with the extension added, and the
+        // file is written where that answer says.
+        let (saved, dialogs) = ask(
+            &mut app,
+            301,
+            "file/save_as",
+            vec![
+                Some(out.path().join("agent")),
+                Some(out.path().join("agent.xuan")),
+            ],
+        );
+        assert_eq!(saved["result"], json!({"name": "agent.xuan"}), "{saved}");
+        assert_eq!(dialogs.len(), 2);
+        assert_eq!(dialogs[1].file_name, "agent.xuan");
+        assert_eq!(dialogs[1].directory.as_deref(), Some(out.path()));
+        assert_eq!(files(), ["agent.xuan"]);
+
+        // Choosing a name without it twice writes nothing.
+        let (refused, _) = ask(
+            &mut app,
+            302,
+            "file/save_as",
+            vec![
+                Some(out.path().join("plain")),
+                Some(out.path().join("plain")),
+            ],
+        );
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{refused}");
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(message.contains(".xuan"), "{message}");
+        assert!(!message.contains(out.path().to_str().unwrap()), "{message}");
+        assert_eq!(files(), ["agent.xuan"]);
+
+        // An export under an unknown extension asks again too; cancelling
+        // that writes nothing.
+        let (cancelled, dialogs) = ask(
+            &mut app,
+            303,
+            "file/export",
+            vec![Some(out.path().join("shot.bmp")), None],
+        );
+        assert_eq!(cancelled["error"]["code"], CANCELLED);
+        assert_eq!(dialogs[1].file_name, "shot.bmp.png");
+        assert_eq!(files(), ["agent.xuan"]);
+
+        // A known extension in any case is written exactly there.
+        let (exported, dialogs) = ask(
+            &mut app,
+            304,
+            "file/export",
+            vec![Some(out.path().join("shot.PNG"))],
+        );
+        assert_eq!(exported["result"], json!({"name": "shot.PNG"}));
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(files(), ["agent.xuan", "shot.PNG"]);
+
+        // Errors from writing name the file, never its folders.
+        let missing = out.path().join("private folder").join("deeper");
+        let (failed, _) = ask(
+            &mut app,
+            305,
+            "file/export",
+            vec![Some(missing.join("lost.png"))],
+        );
+        assert_eq!(failed["error"]["code"], INTERNAL_ERROR, "{failed}");
+        let message = failed["error"]["message"].as_str().unwrap();
+        assert!(!message.contains("private folder"), "{message}");
+        assert!(!message.contains(out.path().to_str().unwrap()), "{message}");
+
+        // Nor does an open that fails show where a link led.
+        let hidden = out.path().join("secret place");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("broken.png"), b"not a png").unwrap();
+        let link = dir.path().join("link.png");
+        std::os::unix::fs::symlink(hidden.join("broken.png"), &link).unwrap();
+        app.plugins.file_refused_at.clear();
+        app.queue_file_request(
+            "mock",
+            file_request(306, "file/open", json!({"path": link})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        app.answer_file_prompt(true);
+        let opened = wait(&context, &mut app, 306);
+        let message = opened["error"]["message"].as_str().unwrap();
+        assert!(message.contains("broken.png"), "{message}");
+        assert!(!message.contains("secret place"), "{message}");
+        app.error = None;
         app.stop_plugin("mock");
     }
 

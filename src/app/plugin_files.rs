@@ -68,36 +68,139 @@ pub(super) struct SaveDialog {
     pub file_name: String,
     pub filter_name: String,
     pub extensions: Vec<String>,
+    /// The folder to open in: the one the user chose, when the dialog asks
+    /// again because the name lacked the extension.
+    pub directory: Option<PathBuf>,
 }
 
 /// Shows the save dialog. The editor uses the system's; tests answer it.
 pub(super) type SaveDialogHook = Arc<dyn Fn(&SaveDialog) -> Option<PathBuf>>;
 
 /// The file name a plugin suggests, made safe for a save dialog: only the
-/// last path component, without its extension, control characters or path
-/// separators, and at most 100 characters.
+/// last path component, without its extension, control, bidi or invisible
+/// characters or path separators, at most 100 characters, and never a name
+/// Windows reserves for a device. The fallback (the document's title) is
+/// cleaned the same way.
 fn suggested_name(suggested: Option<&str>, fallback: &str) -> String {
-    let name = suggested
-        .map(|text| text.rsplit(['/', '\\']).next().unwrap_or_default())
-        .map(|text| {
-            Path::new(text)
-                .file_stem()
-                .map_or(String::new(), |stem| stem.to_string_lossy().into_owned())
-        })
-        .unwrap_or_default();
+    let stem = |text: &str| {
+        let last = text.rsplit(['/', '\\']).next().unwrap_or_default();
+        Path::new(last)
+            .file_stem()
+            .map_or(String::new(), |stem| stem.to_string_lossy().into_owned())
+    };
+    suggested
+        .and_then(|text| plain_file_name(&stem(text)))
+        .or_else(|| plain_file_name(fallback))
+        .unwrap_or_else(|| "Untitled".to_owned())
+}
+
+/// Characters that are invisible or reorder text: bidi embeddings,
+/// overrides, isolates and marks (which can make `gpj.exe` read as
+/// `exe.jpg`), zero-width characters and the byte order mark.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
+}
+
+/// Whether Windows treats a name as a device (`CON`, `NUL`, `COM1`, …),
+/// whatever its extension and case, which would write to the device.
+fn windows_device(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or_default().trim_end();
+    let base = base.to_ascii_uppercase();
+    if matches!(
+        base.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) {
+        return true;
+    }
+    let mut chars = base.chars();
+    let prefix: String = chars.by_ref().take(3).collect();
+    let rest: String = chars.collect();
+    matches!(prefix.as_str(), "COM" | "LPT")
+        && matches!(
+            rest.as_str(),
+            "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+        )
+}
+
+/// A name cleaned for a save dialog, or `None` when nothing is left.
+fn plain_file_name(name: &str) -> Option<String> {
     let clean: String = name
         .chars()
-        .filter(|c| {
-            !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        .filter(|&c| {
+            !c.is_control()
+                && !invisible(c)
+                && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
         })
         .take(100)
         .collect();
-    let clean = clean.trim().trim_start_matches('.').trim();
+    // Windows drops trailing dots and spaces, and a leading dot hides a file.
+    let clean = clean
+        .trim()
+        .trim_start_matches('.')
+        .trim_end_matches(['.', ' '])
+        .trim();
     if clean.is_empty() {
-        fallback.to_owned()
+        None
+    } else if windows_device(clean) {
+        Some(format!("_{clean}"))
     } else {
-        clean.to_owned()
+        Some(clean.to_owned())
     }
+}
+
+/// Image extensions `file/export` accepts in the name the user chose.
+const EXPORT_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "tif", "tiff", "webp"];
+
+/// Whether a path the user chose names the kind of file being written: a
+/// `.xuan` project, or an image with an extension Xuan exports.
+fn saves_as(path: &Path, export: Option<&str>) -> bool {
+    let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    let extension = extension.to_ascii_lowercase();
+    match export {
+        Some(_) => EXPORT_EXTENSIONS.contains(&extension.as_str()),
+        None => extension == "xuan",
+    }
+}
+
+/// A message for a plugin with the folders of `path` taken out: the plugin
+/// learns the name of the file the user chose, never where it is. Errors
+/// from writing the file (a temporary file next to it, say) name the folder.
+fn without_folders(message: &str, path: &Path) -> String {
+    let mut message = message.to_owned();
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    // As `Display` shows paths, and as `Debug` quotes them (`\\` doubled).
+    let forms = |p: &Path| {
+        let debug = format!("{p:?}");
+        let debug = debug.trim_matches('"').to_owned();
+        [p.display().to_string(), debug]
+    };
+    for form in forms(path) {
+        message = message.replace(&form, &name);
+    }
+    // Not the root: taking out `/` would mangle the whole message.
+    let parent = (path.parent()).filter(|p| p.parent().is_some() && !p.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        for form in forms(parent) {
+            // Longest first, so an escaped separator is not left half there.
+            for separator in ["\\\\", "\\", "/"] {
+                message = message.replace(&format!("{form}{separator}"), "");
+            }
+            message = message.replace(&form, "the chosen folder");
+        }
+    }
+    message
 }
 
 /// Whether the requested path still resolves to the file the prompt showed,
@@ -259,14 +362,12 @@ impl EditorApp {
         export: Option<&str>,
         name: &str,
     ) -> Result<Value, RpcError> {
-        let failed =
-            |error: anyhow::Error| RpcError::new(protocol::INTERNAL_ERROR, format!("{error:#}"));
         let Some(index) = self.sessions.iter().position(|s| s.document.id == document) else {
             return Err(RpcError::invalid_params("The document was closed"));
         };
         let source = self.plugins.source(plugin);
         let extension = export.unwrap_or("xuan");
-        let dialog = SaveDialog {
+        let mut dialog = SaveDialog {
             title: match export {
                 Some(_) => format!("{} · {source}", tr("Export Image")),
                 None => format!("{} · {source}", tr("Save Project")),
@@ -278,37 +379,51 @@ impl EditorApp {
                 "xuan project".to_owned()
             },
             extensions: vec![extension.to_owned()],
+            directory: None,
         };
-        let chosen = match &self.plugins.save_dialog {
-            Some(hook) => hook(&dialog),
-            None => rfd::FileDialog::new()
-                .set_title(&dialog.title)
-                .add_filter(&dialog.filter_name, &dialog.extensions)
-                .set_file_name(&dialog.file_name)
-                .save_file(),
-        };
-        let Some(mut path) = chosen else {
-            (self.plugins.file_refused_at).insert(plugin.to_owned(), std::time::Instant::now());
-            return Err(RpcError::new(
+        let cancelled = |app: &mut Self| {
+            (app.plugins.file_refused_at).insert(plugin.to_owned(), std::time::Instant::now());
+            Err(RpcError::new(
                 protocol::CANCELLED,
                 "The user cancelled the save dialog",
-            ));
+            ))
         };
-        if path.extension().is_none() {
-            path.set_extension(extension);
+        let Some(mut path) = self.show_save_dialog(&dialog) else {
+            return cancelled(self);
+        };
+        // The file is written exactly where the user confirmed, so the
+        // system dialog's overwrite question was about this file. A name
+        // without the right extension is never changed behind the user's
+        // back: the dialog asks again with the extension added.
+        if !saves_as(&path, export) {
+            let chosen = path.file_name().unwrap_or_default().to_string_lossy();
+            dialog.file_name = format!("{chosen}.{extension}");
+            dialog.directory = path.parent().map(Path::to_path_buf);
+            let Some(again) = self.show_save_dialog(&dialog) else {
+                return cancelled(self);
+            };
+            if !saves_as(&again, export) {
+                let name = again.file_name().unwrap_or_default().to_string_lossy();
+                return Err(RpcError::invalid_params(match export {
+                    Some(_) => format!(
+                        "Cannot export as {name}; choose a name ending in .png, .jpg, .tiff or .webp. Nothing was written"
+                    ),
+                    None => format!(
+                        "Cannot save the project as {name}; choose a name ending in .xuan. Nothing was written"
+                    ),
+                }));
+            }
+            path = again;
         }
+        let failed = |error: anyhow::Error| {
+            RpcError::new(
+                protocol::INTERNAL_ERROR,
+                without_folders(&format!("{error:#}"), &path),
+            )
+        };
         let session = &mut self.sessions[index];
         match export {
             Some(_) => {
-                let chosen = (path.extension().and_then(|e| e.to_str()))
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                let known = ["png", "jpg", "jpeg", "tif", "tiff", "webp"];
-                if !known.contains(&chosen.as_str()) {
-                    return Err(RpcError::invalid_params(format!(
-                        "Cannot export as .{chosen}; choose PNG, JPEG, TIFF or WebP"
-                    )));
-                }
                 io::export(&session.document, &path, self.jpeg_quality).map_err(failed)?;
                 self.status = format!("{} {} · {source}", tr("Exported"), path.display());
             }
@@ -329,6 +444,23 @@ impl EditorApp {
         // plugin's business.
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         Ok(json!({"name": name}))
+    }
+
+    /// The save dialog: the system's, or the tests' answer.
+    fn show_save_dialog(&self, dialog: &SaveDialog) -> Option<PathBuf> {
+        match &self.plugins.save_dialog {
+            Some(hook) => hook(dialog),
+            None => {
+                let mut native = rfd::FileDialog::new()
+                    .set_title(&dialog.title)
+                    .add_filter(&dialog.filter_name, &dialog.extensions)
+                    .set_file_name(&dialog.file_name);
+                if let Some(directory) = &dialog.directory {
+                    native = native.set_directory(directory);
+                }
+                native.save_file()
+            }
+        }
     }
 
     /// Apply the answer to the open `file/open` prompt.
@@ -363,6 +495,10 @@ impl EditorApp {
             self.open_path(path, false);
             match self.error.clone() {
                 Some(message) if self.sessions.len() == before => {
+                    // The plugin named the file, but not where its links
+                    // lead: only file names go back.
+                    let message = without_folders(&message, path);
+                    let message = without_folders(&message, requested);
                     Err(RpcError::new(protocol::INTERNAL_ERROR, message))
                 }
                 _ => {
@@ -460,5 +596,97 @@ mod tests {
         assert_eq!(suggested_name(Some("   "), "Untitled"), "Untitled");
         assert_eq!(suggested_name(None, "Untitled"), "Untitled");
         assert_eq!(suggested_name(Some(&"y".repeat(300)), "x").len(), 100);
+    }
+
+    #[test]
+    fn suggested_names_lose_bidi_and_invisible_characters() {
+        // "photo", U+202E, "gnp.exe" would show as "photoexe.png".
+        assert_eq!(
+            suggested_name(Some("photo\u{202E}gnp.exe.png"), "x"),
+            "photognp.exe"
+        );
+        for c in [
+            '\u{200B}', '\u{200E}', '\u{2066}', '\u{2069}', '\u{061C}', '\u{FEFF}',
+        ] {
+            assert_eq!(suggested_name(Some(&format!("a{c}b")), "x"), "ab", "{c:?}");
+        }
+        assert_eq!(
+            suggested_name(Some("\u{202E}\u{200B}"), "Untitled"),
+            "Untitled"
+        );
+        // Windows drops trailing dots and spaces itself.
+        assert_eq!(suggested_name(Some("name. .png"), "x"), "name");
+        // The fallback, a document's title, is cleaned too.
+        assert_eq!(suggested_name(None, "a\u{202E}b"), "ab");
+        assert_eq!(suggested_name(None, "\u{200B}"), "Untitled");
+    }
+
+    #[test]
+    fn suggested_names_are_never_windows_devices() {
+        for name in [
+            "CON",
+            "con",
+            "Prn",
+            "AUX",
+            "nul",
+            "COM1",
+            "com9",
+            "LPT1",
+            "lpt0",
+            "COM¹",
+            "CONIN$",
+            "conout$",
+            "NUL .txt",
+            "con.tar.gz",
+        ] {
+            let suggested = suggested_name(Some(name), "x");
+            assert!(suggested.starts_with('_'), "{name}: {suggested}");
+        }
+        assert_eq!(suggested_name(Some("con.png"), "x"), "_con");
+        assert_eq!(suggested_name(None, "NUL"), "_NUL");
+        for name in ["CONSOLE", "COM10", "LPT", "nullable", "Aux2", "icon"] {
+            assert_eq!(suggested_name(Some(name), "x"), name);
+        }
+    }
+
+    #[test]
+    fn plugin_errors_keep_the_file_name_and_drop_its_folders() {
+        use super::without_folders;
+        use std::path::Path;
+        let path = Path::new("/home/user/Private Stuff/out.png");
+        let message =
+            "No such file or directory (os error 2) at path \"/home/user/Private Stuff/.tmpAbC1\"";
+        assert_eq!(
+            without_folders(message, path),
+            "No such file or directory (os error 2) at path \".tmpAbC1\""
+        );
+        assert_eq!(
+            without_folders("Could not open /home/user/Private Stuff/out.png", path),
+            "Could not open out.png"
+        );
+        assert_eq!(
+            without_folders("in /home/user/Private Stuff", path),
+            "in the chosen folder"
+        );
+        // A file in the root keeps the message whole.
+        assert_eq!(
+            without_folders("a/b /x.png", Path::new("/x.png")),
+            "a/b x.png"
+        );
+    }
+
+    #[test]
+    fn only_the_expected_extension_is_written() {
+        use super::saves_as;
+        use std::path::Path;
+        assert!(saves_as(Path::new("/a/b.xuan"), None));
+        assert!(saves_as(Path::new("/a/b.XUAN"), None));
+        assert!(!saves_as(Path::new("/a/b"), None));
+        assert!(!saves_as(Path::new("/a/b.png"), None));
+        for name in ["b.png", "b.JPG", "b.jpeg", "b.tif", "b.tiff", "b.webp"] {
+            assert!(saves_as(&Path::new("/a").join(name), Some("png")), "{name}");
+        }
+        assert!(!saves_as(Path::new("/a/b.bmp"), Some("png")));
+        assert!(!saves_as(Path::new("/a/b"), Some("png")));
     }
 }

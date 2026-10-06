@@ -36,6 +36,9 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
 /// Shortest time between two links a plugin opens.
 const LINK_INTERVAL: Duration = Duration::from_secs(1);
+/// Shortest time between two document switches of a plugin, so a plugin
+/// (or the MCP client behind one) cannot flip the user's tabs rapidly.
+pub(super) const ACTIVATE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Identifier of a plugin pane in the sidebar layout.
 pub(super) fn pane_key(plugin: &str, pane: &str) -> String {
@@ -120,6 +123,9 @@ pub(super) struct PluginState {
     pub edit_refused_at: HashMap<String, std::time::Instant>,
     /// When the user last cancelled a plugin's file request.
     pub file_refused_at: HashMap<String, std::time::Instant>,
+    /// When a plugin last switched the current document; see
+    /// `ACTIVATE_INTERVAL`.
+    pub activated_at: HashMap<String, std::time::Instant>,
 }
 
 enum Pending {
@@ -972,6 +978,22 @@ impl EditorApp {
                     .position(|s| s.document.id == id)
                     .ok_or_else(|| RpcError::invalid_params("No such open document"))?;
                 if index != self.current {
+                    // At most one switch a second, so the tabs cannot be
+                    // made to flicker under the user's hands. Asking for the
+                    // current document is free.
+                    let now = std::time::Instant::now();
+                    if let Some(last) = self.plugins.activated_at.get(plugin)
+                        && now.duration_since(*last) < ACTIVATE_INTERVAL
+                    {
+                        let wait = ACTIVATE_INTERVAL - now.duration_since(*last);
+                        let mut error = RpcError::new(
+                            protocol::RATE_LIMITED,
+                            "Switched documents less than a second ago; wait a moment before switching again",
+                        );
+                        error.data = json!({"retry_after": wait.as_secs_f64()});
+                        return Err(error);
+                    }
+                    self.plugins.activated_at.insert(plugin.to_owned(), now);
                     // As clicking its tab does.
                     self.cancel_gesture();
                     self.current = index;
