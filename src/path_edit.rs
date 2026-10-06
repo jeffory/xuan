@@ -268,9 +268,9 @@ impl EditPath {
     /// then the nearest segment. `handles` limits handle hits to those shown.
     pub fn hit(&self, point: Point, radius: f64, handles: impl Fn(usize, usize) -> bool) -> Option<Hit> {
         let mut best: Option<(f64, Hit)> = None;
-        let mut consider = |distance: f64, hit: Hit| {
+        let consider = |best: &mut Option<(f64, Hit)>, distance: f64, hit: Hit| {
             if distance <= radius && best.is_none_or(|(d, _)| distance < d) {
-                best = Some((distance, hit));
+                *best = Some((distance, hit));
             }
         };
         for (s, sub) in self.subpaths.iter().enumerate() {
@@ -282,6 +282,7 @@ impl EditPath {
                     let handle = anchor.handle(side);
                     if handle != anchor.point {
                         consider(
+                            &mut best,
                             handle.distance(point),
                             Hit::Handle {
                                 subpath: s,
@@ -299,6 +300,7 @@ impl EditPath {
         for (s, sub) in self.subpaths.iter().enumerate() {
             for (a, anchor) in sub.anchors.iter().enumerate() {
                 consider(
+                    &mut best,
                     anchor.point.distance(point),
                     Hit::Anchor {
                         subpath: s,
@@ -319,6 +321,7 @@ impl EditPath {
                     sub.segment(segment).nearest(point, 1e-6)
                 };
                 consider(
+                    &mut best,
                     nearest.distance_sq.sqrt(),
                     Hit::Segment {
                         subpath: s,
@@ -455,9 +458,168 @@ fn is_smooth(anchor: &Anchor) -> bool {
     cross <= SMOOTH_TOLERANCE * a.hypot() * b.hypot() && a.dot(b) < 0.0
 }
 
+/// The outline of a selection mask's selected half (values of 128 and up), as Photoshop's
+/// Make Work Path: closed polygons along the pixel edges, simplified so that they stray at most
+/// `tolerance` pixels from them. Holes wind the other way, so the nonzero rule keeps them open.
+/// The tolerance doubles until the path fits [`crate::vector::MAX_SEGMENTS`]. `None` when
+/// nothing is selected.
+pub fn trace_mask(mask: &image::GrayImage, tolerance: f64) -> Option<VectorPath> {
+    let (width, height) = (mask.width() as i64, mask.height() as i64);
+    let inside = |x: i64, y: i64| {
+        x >= 0 && y >= 0 && x < width && y < height && mask.get_pixel(x as u32, y as u32)[0] >= 128
+    };
+    // Directed pixel edges with the selection on their right (clockwise on screen).
+    let mut edges: std::collections::HashMap<(i64, i64), Vec<(i64, i64)>> =
+        std::collections::HashMap::new();
+    for y in 0..height {
+        for x in 0..width {
+            if !inside(x, y) {
+                continue;
+            }
+            let mut edge = |from, to| edges.entry(from).or_default().push(to);
+            if !inside(x, y - 1) {
+                edge((x, y), (x + 1, y));
+            }
+            if !inside(x + 1, y) {
+                edge((x + 1, y), (x + 1, y + 1));
+            }
+            if !inside(x, y + 1) {
+                edge((x + 1, y + 1), (x, y + 1));
+            }
+            if !inside(x - 1, y) {
+                edge((x, y + 1), (x, y));
+            }
+        }
+    }
+    // Chain the edges into loops; every corner has as many edges in as out, so each closes.
+    let mut starts: Vec<(i64, i64)> = edges.keys().copied().collect();
+    starts.sort_unstable_by_key(|&(x, y)| (y, x));
+    let mut loops: Vec<Vec<Point>> = Vec::new();
+    for start in starts {
+        while edges.get(&start).is_some_and(|e| !e.is_empty()) {
+            let mut points = vec![start];
+            let mut at = start;
+            loop {
+                let Some(next) = edges.get_mut(&at).and_then(|e| e.pop()) else {
+                    break;
+                };
+                at = next;
+                if at == start {
+                    break;
+                }
+                points.push(at);
+            }
+            loops.push(
+                points
+                    .into_iter()
+                    .map(|(x, y)| Point::new(x as f64, y as f64))
+                    .collect(),
+            );
+        }
+    }
+    if loops.is_empty() {
+        return None;
+    }
+    let mut tolerance = tolerance.max(0.0);
+    loop {
+        let mut path = BezPath::new();
+        let mut segments = 0;
+        for points in &loops {
+            let simple = simplify_loop(points, tolerance);
+            if simple.len() < 3 {
+                continue;
+            }
+            segments += simple.len();
+            path.move_to(simple[0]);
+            for &p in &simple[1..] {
+                path.line_to(p);
+            }
+            path.close_path();
+        }
+        if segments <= crate::vector::MAX_SEGMENTS || tolerance > 1e6 {
+            return VectorPath::from_bez(path).ok().filter(|p| !p.is_empty());
+        }
+        tolerance = (tolerance * 2.0).max(1.0);
+    }
+}
+
+/// A closed polygon with points removed while it stays within `tolerance` of the original
+/// (Ramer–Douglas–Peucker, split at the point farthest from the first).
+fn simplify_loop(points: &[Point], tolerance: f64) -> Vec<Point> {
+    if points.len() < 4 {
+        return points.to_vec();
+    }
+    let far = (1..points.len())
+        .max_by(|&a, &b| {
+            let da = points[a].distance_squared(points[0]);
+            let db = points[b].distance_squared(points[0]);
+            da.total_cmp(&db)
+        })
+        .unwrap_or(1);
+    let mut kept = vec![false; points.len() + 1];
+    kept[0] = true;
+    kept[far] = true;
+    kept[points.len()] = true;
+    let at = |i: usize| points[i % points.len()];
+    let mut stack = vec![(0, far), (far, points.len())];
+    while let Some((a, b)) = stack.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let line = Line::new(at(a), at(b));
+        let (index, distance) = (a + 1..b)
+            .map(|i| {
+                let p = at(i);
+                let d = if line.p0 == line.p1 {
+                    p.distance(line.p0)
+                } else {
+                    line.nearest(p, 1e-9).distance_sq.sqrt()
+                };
+                (i, d)
+            })
+            .max_by(|x, y| x.1.total_cmp(&y.1))
+            .unwrap();
+        if distance > tolerance {
+            kept[index] = true;
+            stack.push((a, index));
+            stack.push((index, b));
+        }
+    }
+    (0..points.len()).filter(|&i| kept[i]).map(at).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masks_trace_to_outlines_with_holes() {
+        let mut mask = image::GrayImage::new(20, 20);
+        for y in 2..18 {
+            for x in 2..18 {
+                let hole = (8..12).contains(&x) && (8..12).contains(&y);
+                if !hole {
+                    mask.put_pixel(x, y, image::Luma([255]));
+                }
+            }
+        }
+        let path = trace_mask(&mask, 0.5).unwrap();
+        let edit = EditPath::from_vector(&path);
+        assert_eq!(edit.subpaths.len(), 2);
+        assert!(edit.subpaths.iter().all(|s| s.closed && s.anchors.len() == 4));
+        // Filled back, it is the same selection.
+        let filled = path.mask(crate::vector::FillRule::Nonzero, 20, 20);
+        assert_eq!(filled.as_raw(), mask.as_raw());
+        assert!(trace_mask(&image::GrayImage::new(4, 4), 1.0).is_none());
+        // A circle simplifies to far fewer points than its pixel steps.
+        let circle = image::GrayImage::from_fn(64, 64, |x, y| {
+            let d = (x as f32 - 31.5).hypot(y as f32 - 31.5);
+            image::Luma([if d < 25.0 { 255 } else { 0 }])
+        });
+        let traced = EditPath::from_vector(&trace_mask(&circle, 1.0).unwrap());
+        assert_eq!(traced.subpaths.len(), 1);
+        assert!(traced.subpaths[0].anchors.len() < 60, "{}", traced.subpaths[0].anchors.len());
+    }
 
     fn sample(path: &BezPath, n: usize) -> Vec<Point> {
         let mut points = Vec::new();

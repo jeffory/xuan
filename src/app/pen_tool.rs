@@ -132,10 +132,12 @@ pub(super) fn set_layer_outline(layer: &mut Layer, path: &EditPath) -> Result<()
         "A path shape needs at least one segment"
     );
     let bounds = local.bounding_box();
-    let x0 = bounds.x0.floor();
-    let y0 = bounds.y0.floor();
-    let x1 = bounds.x1.ceil().max(x0 + 1.0);
-    let y1 = bounds.y1.ceil().max(y0 + 1.0);
+    // Rounding error must not grow the box by a whole unit.
+    const SLACK: f64 = 1e-6;
+    let x0 = (bounds.x0 + SLACK).floor();
+    let y0 = (bounds.y0 + SLACK).floor();
+    let x1 = (bounds.x1 - SLACK).ceil().max(x0 + 1.0);
+    let y1 = (bounds.y1 - SLACK).ceil().max(y0 + 1.0);
     let t = layer.transform;
     let center = t.point(Point::new(
         ((x0 + x1) * 0.5 / w) as f32,
@@ -671,7 +673,7 @@ impl EditorApp {
 fn draw_bez(painter: &egui::Painter, path: &BezPath, stroke: Stroke) {
     let mut points: Vec<Pos2> = Vec::new();
     let mut start = None;
-    let mut flush = |points: &mut Vec<Pos2>| {
+    let flush = |points: &mut Vec<Pos2>| {
         if points.len() > 1 {
             painter.add(egui::Shape::line(std::mem::take(points), stroke));
         }
