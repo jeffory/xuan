@@ -889,6 +889,7 @@ pub(super) const COMMANDS: &[Command] = &[
         &[shift(Key::U)],
         Run::App(shape_kind),
     ),
+    tool("tool_pen", "Pen", &[bare(Key::P)], Run::Tool(Tool::Pen)).aliases(&["bezier", "path"]),
     tool("tool_text", "Text", &[bare(Key::T)], Run::Tool(Tool::Text)),
     tool(
         "tool_eyedropper",
@@ -1028,6 +1029,7 @@ pub(super) fn tool_command(tool: Tool) -> Option<&'static str> {
         Tool::Blur => "tool_blur",
         Tool::Gradient => "tool_gradient",
         Tool::Shape => "tool_shape",
+        Tool::Pen => "tool_pen",
         Tool::Text => "tool_text",
         Tool::Dropper => "tool_eyedropper",
         Tool::Hand => "tool_hand",

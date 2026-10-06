@@ -1017,6 +1017,20 @@ This writes a new file.	这将写入一个新文件。
 Always Allow lets this plugin save and export without asking until you turn it off in Plugins → Manage Plugins…. It still asks before replacing a file Xuan did not write since it started.	“始终允许”让此插件不经询问直接保存和导出，直到你在“插件 → 管理插件…”中将其关闭。替换 Xuan 自启动以来未写入过的文件时仍会询问。
 Save and export without asking	不经询问直接保存和导出
 Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files Xuan wrote since it started, without asking; the status bar shows each one. Replacing any other file still asks.	关闭：插件指定要保存或导出的文件时，Xuan 会先询问。开启：插件不经询问直接写入新文件以及 Xuan 自启动以来写入过的文件，状态栏会显示每一个文件。替换其他文件时仍会询问。
+Pen	钢笔
+Click for a corner, drag for a curve · Click the first anchor to close · Enter finishes · Drag anchors and handles · Alt-drag a handle breaks it · Click a segment to add an anchor, an anchor to delete it · Alt-click converts	单击添加角点，拖动添加曲线 · 单击第一个锚点闭合 · Enter 完成 · 拖动锚点和手柄 · Alt 拖动手柄可将其断开 · 单击线段添加锚点，单击锚点删除 · Alt 单击转换
+Convert Anchor	转换锚点
+Move Anchor	移动锚点
+Delete Anchor	删除锚点
+Move Handle	移动手柄
+Add Anchor	添加锚点
+Click the first anchor to close the path · Enter finishes it	单击第一个锚点闭合路径 · Enter 完成路径
+Editing “{}”	正在编辑“{}”
+Editing the outline of “{}”	正在编辑“{}”的轮廓
+Click to start a path · Click a path to edit it	单击开始绘制路径 · 单击路径进行编辑
+Edit with Pen	用钢笔编辑
+Stroke with	描边工具
+Make Path from Selection	从选区建立路径
 Symmetry	对称
 Off	关闭
 Vertical mirrors left and right across the axis, Horizontal mirrors top and bottom, Radial turns the stroke around the centre.	垂直沿轴左右镜像，水平上下镜像，径向绕中心旋转笔画。

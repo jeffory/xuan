@@ -17,6 +17,7 @@ pub mod layout;
 pub mod operations;
 pub mod paint;
 pub mod panes;
+pub mod path_edit;
 pub mod plugins;
 pub mod provenance;
 pub mod raw;

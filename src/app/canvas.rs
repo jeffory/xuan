@@ -744,6 +744,9 @@ impl EditorApp {
                         Stroke::new(1.0_f32, Color32::WHITE),
                     ));
                 }
+                if self.tool == Tool::Pen || self.dialog == Some(super::Dialog::Paths) {
+                    self.pen_overlay(&painter, origin, zoom, response.hover_pos());
+                }
                 let blocked = self.job.is_some()
                     || self.develop.is_some()
                     || self.dialog.is_some()
@@ -924,6 +927,12 @@ impl EditorApp {
                             super::eyedropper::paint_bubble(&painter, rect, new, current);
                         }
                     }
+                } else if self.tool == Tool::Pen
+                    && !panning
+                    && self.gesture.is_none()
+                    && self.guide_drag.is_none()
+                {
+                    self.pen_pointer(ctx, response.hovered(), doc_point, pointer, zoom);
                 } else if self.guide_drag.is_none() {
                     let started = response.drag_started()
                         || response.drag_started_by(egui::PointerButton::Middle);

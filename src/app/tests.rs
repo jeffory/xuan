@@ -42,6 +42,9 @@ mod selection;
 #[path = "tests/paths.rs"]
 mod paths;
 
+#[path = "tests/pen.rs"]
+mod pen;
+
 #[path = "tests/providers.rs"]
 mod providers;
 
