@@ -321,7 +321,9 @@ impl EditorApp {
                         .to_string(),
                 };
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(egui::RichText::new(text).color(ui.palette().muted)).wrap());
+                ui.add(
+                    egui::Label::new(egui::RichText::new(text).color(ui.palette().muted)).wrap(),
+                );
             }
         }
         ui.add_space(8.0);

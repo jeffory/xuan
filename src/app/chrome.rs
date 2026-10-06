@@ -388,7 +388,6 @@ impl EditorApp {
         } else if highlight != Highlight::None {
             let fill = if highlight == Highlight::Pressed {
                 p.pressed
-
             } else {
                 p.hover
             };
