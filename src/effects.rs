@@ -8,7 +8,7 @@ use image::{Rgba, RgbaImage};
 use rayon::prelude::*;
 
 use crate::{
-    document::{Adjustment, Document, Point},
+    document::{Adjustment, Document, Point, Transform},
     paint::ensure_pixels,
     render, selection,
 };
@@ -330,6 +330,7 @@ pub fn apply_adjustment(
     mask_target: bool,
 ) -> Result<()> {
     let selection = document.selection.clone();
+    let canvas = [document.width, document.height];
     let layer = document
         .active_mut()
         .ok_or_else(|| anyhow::anyhow!("Select a layer first"))?;
@@ -682,29 +683,31 @@ fn apply_filter_impl(
         Filter::MotionBlur { distance, .. } => (distance * 0.5).ceil() as u32 + 1,
         _ => 0,
     };
+    // Sides that reach the canvas edge repeat their edge pixels and do not grow,
+    // so a layer that fills the canvas stays opaque up to its edges.
+    let edges = if padding > 0 {
+        canvas_edges(original_transform, canvas)
+    } else {
+        [false; 4]
+    };
     let (w, h) = (
         original.width() + padding * 2,
         original.height() + padding * 2,
     );
     crate::document::validate_size(w, h)?;
-    let mut transform = original_transform;
-    if padding > 0 {
-        let width = original.width() as f32;
-        let height = original.height() as f32;
-        let pad = padding as f32;
-        transform = original_transform.expanded(
-            -pad / width,
-            -pad / height,
-            1.0 + pad / width,
-            1.0 + pad / height,
-        );
-    }
+    // The filter and selection blend run on a buffer padded on every side;
+    // clamped sides are cropped away afterwards.
+    let transform = if padding > 0 {
+        expand(original_transform, original.dimensions(), [padding; 4])
+    } else {
+        original_transform
+    };
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
     let accelerated = if let (Some(gpu), Filter::MotionBlur { distance, angle }) = (gpu, filter) {
         // WGPU can report allocation/validation failures through its panic handler.
         // An unsuccessful GPU attempt must not discard the user's pending edit.
         let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            gpu.render(original, *distance, *angle, padding, cancel)
+            gpu.render(original, *distance, *angle, padding, edges, cancel)
         }))
         .unwrap_or_else(|_| Err(anyhow::anyhow!("GPU filter failed unexpectedly")));
         ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
@@ -721,8 +724,7 @@ fn apply_filter_impl(
     let mut result = if let Some(result) = accelerated {
         result
     } else {
-        let mut expanded = RgbaImage::new(w, h);
-        image::imageops::replace(&mut expanded, &**original, padding as i64, padding as i64);
+        let expanded = padded(original, padding, edges);
         match filter {
             Filter::MotionBlur { distance, angle } => {
                 motion_blur(&expanded, *distance, *angle, cancel)?
@@ -769,7 +771,28 @@ fn apply_filter_impl(
             }
         }
     }
-    if padding > 0
+    let mut transform = transform;
+    if edges.contains(&true) {
+        let [left, top, right, bottom] = edges.map(|clamped| if clamped { 0 } else { padding });
+        result = image::imageops::crop_imm(
+            &result,
+            padding - left,
+            padding - top,
+            original.width() + left + right,
+            original.height() + top + bottom,
+        )
+        .to_image();
+        transform = if [left, top, right, bottom] == [0; 4] {
+            original_transform
+        } else {
+            expand(
+                original_transform,
+                original.dimensions(),
+                [left, top, right, bottom],
+            )
+        };
+    }
+    if transform != original_transform
         && let Some(mask) = &mut layer.mask
     {
         mask.placement = Some(mask.placement.unwrap_or(original_transform));
@@ -777,6 +800,77 @@ fn apply_filter_impl(
     layer.transform = transform;
     layer.pixels = Some(Arc::new(result));
     Ok(())
+}
+
+/// Grow a layer's source grid by whole pixels on each side (left, top, right, bottom).
+fn expand(transform: Transform, (width, height): (u32, u32), padding: [u32; 4]) -> Transform {
+    let [left, top, right, bottom] = padding.map(|p| p as f32);
+    let (width, height) = (width as f32, height as f32);
+    transform.expanded(
+        -left / width,
+        -top / height,
+        1.0 + right / width,
+        1.0 + bottom / height,
+    )
+}
+
+/// The source sides (left, top, right, bottom) of a layer that reach or pass
+/// the canvas edge. Blurs repeat edge pixels there instead of fading to
+/// transparency, as content beyond the canvas would continue the image.
+pub fn canvas_edges(transform: Transform, canvas: [u32; 2]) -> [bool; 4] {
+    // Allow for rounding in layer placement, but not a visible gap.
+    const TOLERANCE: f32 = 0.5;
+    let [width, height] = canvas.map(|side| side as f32);
+    let beyond = |a: Point, b: Point| {
+        (a.x <= TOLERANCE && b.x <= TOLERANCE)
+            || (a.y <= TOLERANCE && b.y <= TOLERANCE)
+            || (a.x >= width - TOLERANCE && b.x >= width - TOLERANCE)
+            || (a.y >= height - TOLERANCE && b.y >= height - TOLERANCE)
+    };
+    let [top_left, top_right, bottom_right, bottom_left] = transform.corners();
+    [
+        beyond(top_left, bottom_left),
+        beyond(top_left, top_right),
+        beyond(top_right, bottom_right),
+        beyond(bottom_left, bottom_right),
+    ]
+}
+
+/// Pad an image by `padding` on every side: with transparency, or by repeating
+/// edge pixels on the sides flagged in `edges` (left, top, right, bottom).
+pub(crate) fn padded(image: &RgbaImage, padding: u32, edges: [bool; 4]) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    let mut result = RgbaImage::new(width + padding * 2, height + padding * 2);
+    if !edges.contains(&true) || width == 0 || height == 0 {
+        image::imageops::replace(&mut result, image, padding as i64, padding as i64);
+        return result;
+    }
+    let source = |position: u32, size: u32, low: bool, high: bool| {
+        let position = position as i64 - padding as i64;
+        if position < 0 {
+            low.then_some(0)
+        } else if position >= size as i64 {
+            high.then_some(size - 1)
+        } else {
+            Some(position as u32)
+        }
+    };
+    let [left, top, right, bottom] = edges;
+    result
+        .as_mut()
+        .par_chunks_exact_mut((width + padding * 2) as usize * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let Some(sy) = source(y as u32, height, top, bottom) else {
+                return;
+            };
+            for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                if let Some(sx) = source(x as u32, width, left, right) {
+                    *pixel = image.get_pixel(sx, sy).0;
+                }
+            }
+        });
+    result
 }
 
 pub fn histogram(image: &RgbaImage) -> [u32; 256] {
@@ -1209,6 +1303,111 @@ mod tests {
         assert_eq!(image.get_pixel(7, 9)[0], 255);
         assert!(image.get_pixel(9, 9)[3] < 255);
         doc.validate().unwrap();
+    }
+
+    fn edge_filters() -> [Filter; 3] {
+        [
+            Filter::GaussianBlur { radius: 30.0 },
+            Filter::MotionBlur {
+                distance: 24.0,
+                angle: 0.0,
+            },
+            Filter::MotionBlur {
+                distance: 37.5,
+                angle: 35.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn blur_keeps_a_layer_that_fills_the_canvas_opaque_and_in_bounds() {
+        for filter in edge_filters() {
+            let mut doc = Document::new(64, 48).unwrap();
+            doc.insert(crate::document::Layer::image(
+                "sky",
+                RgbaImage::from_pixel(64, 48, Rgba([48, 96, 192, 255])),
+            ));
+            let transform = doc.active().unwrap().transform;
+            // A second pass checks that the first left the layer where it was.
+            for _ in 0..2 {
+                apply_filter(&mut doc, &filter, false).unwrap();
+                let layer = doc.active().unwrap();
+                assert_eq!(layer.transform, transform, "{filter:?}");
+                let pixels = layer.pixels.as_ref().unwrap();
+                assert_eq!(pixels.dimensions(), (64, 48), "{filter:?}");
+                for (x, y, pixel) in pixels.enumerate_pixels() {
+                    assert_eq!(pixel.0, [48, 96, 192, 255], "{filter:?} at ({x}, {y})");
+                }
+            }
+            let image = render::render(&doc);
+            for (x, y) in [(0, 0), (63, 0), (0, 47), (63, 47), (32, 0), (0, 24)] {
+                assert_eq!(image.get_pixel(x, y)[3], 255, "{filter:?} at ({x}, {y})");
+            }
+            doc.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn blur_repeats_only_the_sides_that_reach_the_canvas_edge() {
+        for filter in edge_filters() {
+            let mut doc = Document::new(64, 48).unwrap();
+            // Passes the left edge and touches the top; stops short on the right
+            // and bottom.
+            let mut layer = crate::document::Layer::image(
+                "corner",
+                RgbaImage::from_pixel(40, 30, Rgba([200, 40, 10, 255])),
+            );
+            layer.transform.x = -6.0;
+            doc.insert(layer);
+            // The second pass runs on the warped transform the first one leaves.
+            for pass in 0..2 {
+                apply_filter(&mut doc, &filter, false).unwrap();
+                let layer = doc.active().unwrap();
+                let pixels = layer.pixels.as_ref().unwrap();
+                let corners = layer.transform.corners();
+                // The layer grows right and down only.
+                assert!((corners[0].x + 6.0).abs() < 1e-3, "{filter:?} {pass}");
+                assert!(corners[0].y.abs() < 1e-3, "{filter:?} {pass}");
+                assert!(pixels.width() > 40 && pixels.height() > 30, "{filter:?}");
+                assert_eq!(pixels.get_pixel(0, 0).0, [200, 40, 10, 255], "{filter:?}");
+                let image = render::render(&doc);
+                for (x, y) in [(0, 0), (0, 10), (10, 0)] {
+                    assert_eq!(image.get_pixel(x, y).0, [200, 40, 10, 255], "{filter:?}");
+                }
+                // Content fades into transparency where it stops short of the canvas.
+                assert!(image.get_pixel(33, 10)[3] < 255, "{filter:?} {pass}");
+                assert!(image.get_pixel(35, 10)[3] > 0, "{filter:?} {pass}");
+                if matches!(filter, Filter::GaussianBlur { .. }) {
+                    assert!(image.get_pixel(10, 29)[3] < 255);
+                    assert!(image.get_pixel(10, 31)[3] > 0);
+                }
+            }
+            doc.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn canvas_edges_follow_flips_and_ignore_layers_inside_the_canvas() {
+        let mut transform = Transform::new(40, 30);
+        assert_eq!(
+            canvas_edges(transform, [64, 48]),
+            [true, true, false, false]
+        );
+        transform.flip_x = true;
+        assert_eq!(
+            canvas_edges(transform, [64, 48]),
+            [false, true, true, false]
+        );
+        transform.x = 10.0;
+        transform.y = 10.0;
+        transform.rotation = 20.0;
+        assert_eq!(canvas_edges(transform, [64, 48]), [false; 4]);
+        let filled = Transform::new(64, 48);
+        assert_eq!(canvas_edges(filled, [64, 48]), [true; 4]);
+        assert_eq!(
+            canvas_edges(filled.expanded(-0.5, -0.5, 1.5, 1.5), [64, 48]),
+            [true; 4]
+        );
     }
 
     #[test]

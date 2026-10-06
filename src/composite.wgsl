@@ -22,9 +22,15 @@ fn sample_source(uv: vec2<f32>) -> vec4<f32> {
     return vec4(select(vec3(0.0), p.rgb / max(p.a, 0.000001), p.a > 0.0), p.a);
 }
 
-fn motion_pixel(pixel: vec2<i32>) -> vec4<f32> {
+fn motion_pixel(requested: vec2<i32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(source));
-    // Filtering a padded layer uses transparent texels outside the original image.
+    // Sides at the canvas edge repeat edge texels (params.first: left, top,
+    // right, bottom); the others are padded with transparent texels.
+    var pixel = requested;
+    if params.first.x > 0.5 { pixel.x = max(pixel.x, 0); }
+    if params.first.y > 0.5 { pixel.y = max(pixel.y, 0); }
+    if params.first.z > 0.5 { pixel.x = min(pixel.x, size.x - 1); }
+    if params.first.w > 0.5 { pixel.y = min(pixel.y, size.y - 1); }
     if any(pixel < vec2(0)) || any(pixel >= size) { return vec4(0.0); }
     let p = textureLoad(source, pixel, 0);
     return vec4(p.rgb * p.a, p.a);

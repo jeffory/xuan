@@ -54,6 +54,7 @@ pub fn filter(image: &RgbaImage, filter: &crate::effects::Filter) -> Option<Rgba
                         *distance,
                         *angle,
                         0,
+                        [false; 4],
                         &std::sync::atomic::AtomicBool::new(false),
                     )?
                     .ok_or_else(|| anyhow::anyhow!("Image exceeds GPU texture limits"));

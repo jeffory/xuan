@@ -414,6 +414,12 @@ impl GpuCompositor {
                 params.appearance[1] = (distance * scale).ceil().clamp(1.0, 256.0);
                 params.appearance[2] = distance * cos / pixels.width() as f32;
                 params.appearance[3] = distance * sin / pixels.height() as f32;
+                // Raster layers leave `first` unused; it carries the repeated sides.
+                params.first = crate::effects::canvas_edges(
+                    layer.transform,
+                    [document.width, document.height],
+                )
+                .map(|repeat| if repeat { 1.0 } else { 0.0 });
             }
             self.dispatch(
                 &mut encoder,

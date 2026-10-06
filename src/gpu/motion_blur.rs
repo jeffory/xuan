@@ -23,6 +23,8 @@ struct Sample {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Parameters {
     size: [u32; 4],
+    // Nonzero for source sides (left, top, right, bottom) that repeat edge pixels.
+    edges: [u32; 4],
     samples: [Sample; 256],
 }
 
@@ -59,6 +61,7 @@ impl GpuMotionBlur {
         distance: f32,
         angle: f32,
         padding: u32,
+        edges: [bool; 4],
         cancel: &AtomicBool,
     ) -> Result<Option<RgbaImage>> {
         ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
@@ -137,6 +140,7 @@ impl GpuMotionBlur {
         let mut params = Parameters::zeroed();
         let steps = distance.ceil().clamp(1.0, 256.0) as u32;
         params.size = [width, height, padding, steps];
+        params.edges = edges.map(u32::from);
         let (sin, cos) = angle.to_radians().sin_cos();
         for i in 0..steps {
             let offset = ((i as f32 + 0.5) / steps as f32 - 0.5) * distance;
@@ -306,21 +310,38 @@ mod tests {
             }));
             for distance in [1.0, 4.0, 15.0, 23.7, 200.0] {
                 for angle in [0.0, 35.0, -35.0, 90.0, -180.0] {
-                    let padding = (distance * 0.5_f32).ceil() as u32 + 1;
-                    let actual = gpu
-                        .render(&pixels, distance, angle, padding, &AtomicBool::new(false))
-                        .unwrap()
-                        .unwrap();
-                    let mut expanded = RgbaImage::new(width + padding * 2, height + padding * 2);
-                    image::imageops::replace(
-                        &mut expanded,
-                        &*pixels,
-                        padding as i64,
-                        padding as i64,
-                    );
-                    let expected =
-                        effects::filtered(&expanded, &Filter::MotionBlur { distance, angle });
-                    compare(&actual, &expected);
+                    for edges in [[false; 4], [true, false, false, true], [true; 4]] {
+                        let padding = (distance * 0.5_f32).ceil() as u32 + 1;
+                        let actual = gpu
+                            .render(
+                                &pixels,
+                                distance,
+                                angle,
+                                padding,
+                                edges,
+                                &AtomicBool::new(false),
+                            )
+                            .unwrap()
+                            .unwrap();
+                        let expanded = effects::padded(&pixels, padding, edges);
+                        let expected =
+                            effects::filtered(&expanded, &Filter::MotionBlur { distance, angle });
+                        // Apply crops the padding of repeated sides, where the CPU
+                        // reference runs out of padded pixels.
+                        let [left, top, right, bottom] =
+                            edges.map(|repeat| if repeat { padding } else { 0 });
+                        let crop = |image: &RgbaImage| {
+                            image::imageops::crop_imm(
+                                image,
+                                left,
+                                top,
+                                image.width() - left - right,
+                                image.height() - top - bottom,
+                            )
+                            .to_image()
+                        };
+                        compare(&crop(&actual), &crop(&expected));
+                    }
                 }
             }
         }
@@ -413,7 +434,7 @@ mod tests {
             angle: 35.0,
         };
         assert!(
-            gpu.render(pixels, 20.0, 35.0, 11, &AtomicBool::new(false))
+            gpu.render(pixels, 20.0, 35.0, 11, [false; 4], &AtomicBool::new(false))
                 .unwrap()
                 .is_none()
         );
