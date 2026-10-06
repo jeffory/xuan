@@ -372,7 +372,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Create Layer",
                     vec![Value::Object(op(kind, &args, &["name", "above"]))],
-                Reply::Added))
+                    Reply::Added,
+                ))
             }),
         },
         Spec {
@@ -406,7 +407,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Create Text Layer",
                     vec![Value::Object(op("add_text_layer", &args, &keys))],
-                Reply::Added))
+                    Reply::Added,
+                ))
             }),
         },
         Spec {
@@ -445,7 +447,11 @@ fn specs() -> Vec<Spec> {
                     }
                 };
                 edit.insert("shape".into(), json!(shape));
-                Ok(Plan::new("Create Shape Layer", vec![Value::Object(edit)], Reply::Added))
+                Ok(Plan::new(
+                    "Create Shape Layer",
+                    vec![Value::Object(edit)],
+                    Reply::Added,
+                ))
             }),
         },
         Spec {
@@ -484,7 +490,8 @@ fn specs() -> Vec<Spec> {
                     ],
                 );
                 edit.insert("image".into(), json!(path));
-                let mut plan = Plan::new("Add Image Layer", vec![Value::Object(edit)], Reply::Added);
+                let mut plan =
+                    Plan::new("Add Image Layer", vec![Value::Object(edit)], Reply::Added);
                 // Removed with the plan, once Xuan has read it or on failure.
                 plan.files.0.push(path.clone());
                 std::fs::write(&path, bytes).map_err(|e| format!("Cannot write the image: {e}"))?;
@@ -503,7 +510,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Delete Layer",
                     vec![Value::Object(op("remove_layer", &args, &["layer"]))],
-                Reply::Ok))
+                    Reply::Ok,
+                ))
             }),
         },
         Spec {
@@ -518,7 +526,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Merge Layers",
                     vec![Value::Object(op("merge_layers", &args, &["layers"]))],
-                Reply::Added))
+                    Reply::Added,
+                ))
             }),
         },
         Spec {
@@ -533,7 +542,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Group Layers",
                     vec![Value::Object(op("group_layers", &args, &["layers"]))],
-                Reply::Added))
+                    Reply::Added,
+                ))
             }),
         },
         Spec {
@@ -548,7 +558,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Ungroup Layers",
                     vec![Value::Object(op("ungroup_layers", &args, &["layer"]))],
-                Reply::Ok))
+                    Reply::Ok,
+                ))
             }),
         },
         Spec {
@@ -572,7 +583,8 @@ fn specs() -> Vec<Spec> {
                         &args,
                         &["layer", "above", "below", "parent"],
                     ))],
-                Reply::Ok))
+                    Reply::Ok,
+                ))
             }),
         },
         // Selections.
@@ -605,7 +617,11 @@ fn specs() -> Vec<Spec> {
                     Some("polygon") => op("select_polygon", &args, &["points", "mode"]),
                     _ => return Err("`shape` must be rectangle, ellipse or polygon".into()),
                 };
-                Ok(Plan::new("Select", vec![Value::Object(edit)], Reply::Selection))
+                Ok(Plan::new(
+                    "Select",
+                    vec![Value::Object(edit)],
+                    Reply::Selection,
+                ))
             }),
         },
         Spec {
@@ -648,7 +664,11 @@ fn specs() -> Vec<Spec> {
                         &["x", "y", "tolerance", "contiguous", "mode"],
                     )
                 };
-                Ok(Plan::new("Select Color", vec![Value::Object(edit)], Reply::Selection))
+                Ok(Plan::new(
+                    "Select Color",
+                    vec![Value::Object(edit)],
+                    Reply::Selection,
+                ))
             }),
         },
         Spec {
@@ -690,9 +710,11 @@ fn specs() -> Vec<Spec> {
                             vec![json!({"op": "set_selection"})],
                             Reply::Selection,
                         )),
-                        Some(action @ ("all" | "invert" | "subject" | "layer_pixels")) => Err(format!(
-                            "modify_selection `{action}` runs a command in Xuan, so it cannot be part of a batch; call it on its own"
-                        )),
+                        Some(action @ ("all" | "invert" | "subject" | "layer_pixels")) => {
+                            Err(format!(
+                                "modify_selection `{action}` runs a command in Xuan, so it cannot be part of a batch; call it on its own"
+                            ))
+                        }
                         _ => selection_edit(&args),
                     }
                 },
@@ -740,7 +762,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Fill",
                     vec![Value::Object(op("fill", &args, &["layer", "color"]))],
-                Reply::Ok))
+                    Reply::Ok,
+                ))
             }),
         },
         Spec {
@@ -775,7 +798,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Gradient",
                     vec![Value::Object(op("gradient", &args, &keys))],
-                Reply::Ok))
+                    Reply::Ok,
+                ))
             }),
         },
         Spec {
@@ -792,7 +816,11 @@ fn specs() -> Vec<Spec> {
                 } else {
                     op("apply_filter", &args, &["filter", "layer"])
                 };
-                Ok(Plan::new("Apply Filter", vec![Value::Object(edit)], Reply::Added))
+                Ok(Plan::new(
+                    "Apply Filter",
+                    vec![Value::Object(edit)],
+                    Reply::Added,
+                ))
             }),
         },
         Spec {
@@ -809,7 +837,11 @@ fn specs() -> Vec<Spec> {
                 } else {
                     op("apply_adjustment", &args, &["adjustment", "layer"])
                 };
-                Ok(Plan::new("Apply Adjustment", vec![Value::Object(edit)], Reply::Added))
+                Ok(Plan::new(
+                    "Apply Adjustment",
+                    vec![Value::Object(edit)],
+                    Reply::Added,
+                ))
             }),
         },
         // The canvas.
@@ -823,7 +855,11 @@ fn specs() -> Vec<Spec> {
             run: Action::Edit(|_, args| {
                 let keys = ["x", "y", "width", "height"];
                 let args = pick(args, &keys)?;
-                Ok(Plan::new("Crop", vec![Value::Object(op("crop", &args, &keys))], Reply::Size))
+                Ok(Plan::new(
+                    "Crop",
+                    vec![Value::Object(op("crop", &args, &keys))],
+                    Reply::Size,
+                ))
             }),
         },
         Spec {
@@ -839,7 +875,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Canvas Size",
                     vec![Value::Object(op("resize_canvas", &args, &keys))],
-                Reply::Size))
+                    Reply::Size,
+                ))
             }),
         },
         Spec {
@@ -855,7 +892,8 @@ fn specs() -> Vec<Spec> {
                 Ok(Plan::new(
                     "Image Size",
                     vec![Value::Object(op("resize_image", &args, &keys))],
-                Reply::Size))
+                    Reply::Size,
+                ))
             }),
         },
         // History and commands.
@@ -1114,7 +1152,9 @@ fn batch(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, St
         let step = step
             .as_object()
             .ok_or_else(|| format!("Step {number} must be {{\"tool\", \"arguments\"}}"))?;
-        if let Some(unknown) = (step.keys()).find(|key| !matches!(key.as_str(), "tool" | "arguments")) {
+        if let Some(unknown) =
+            (step.keys()).find(|key| !matches!(key.as_str(), "tool" | "arguments"))
+        {
             return Err(format!(
                 "Step {number}: unknown key `{unknown}`; a step is {{\"tool\", \"arguments\"}}"
             ));
@@ -1138,8 +1178,12 @@ fn batch(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, St
                 ));
             }
         };
-        let plan = planner(cx, arguments)
-            .map_err(|error| format!("Step {number} ({}): {error}. Nothing was changed.", spec.name))?;
+        let plan = planner(cx, arguments).map_err(|error| {
+            format!(
+                "Step {number} ({}): {error}. Nothing was changed.",
+                spec.name
+            )
+        })?;
         plans.push((spec.name, plan));
     }
     // Which step each edit came from, to say which one Xuan refused.
@@ -1238,11 +1282,13 @@ const BRUSH: [&str; 5] = ["color", "size", "hardness", "opacity", "erase"];
 /// `paint_stroke`'s `stroke` edits: one for `points`, or one per item of
 /// `strokes` with the top-level brush for what it leaves out.
 fn strokes(args: &Map<String, Value>) -> Result<Vec<Value>, String> {
-    let given = |key| args.get(key).filter(|value| !value.is_null());
+    let given = |key: &str| args.get(key).filter(|value| !value.is_null());
     let mut shared = op("stroke", args, &["layer"]);
     shared.extend(op("stroke", args, &BRUSH));
     match (given("points"), given("strokes")) {
-        (Some(_), Some(_)) => Err("Give `points` for one stroke or `strokes` for several, not both".into()),
+        (Some(_), Some(_)) => {
+            Err("Give `points` for one stroke or `strokes` for several, not both".into())
+        }
         (None, None) => Err("Give `points` for one stroke or `strokes` for several".into()),
         (Some(points), None) => {
             shared.insert("points".into(), points.clone());

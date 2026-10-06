@@ -1121,10 +1121,17 @@ pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
         let Some(edit) = edit.as_object_mut() else {
             continue;
         };
-        let fields = edit.iter_mut().flat_map(|(key, value)| match value {
-            Value::Array(items) if key == "layers" => items.iter_mut().collect(),
-            _ if LAYER_KEYS.contains(&key.as_str()) => vec![value],
-            _ => Vec::new(),
+        let fields = edit.iter_mut().flat_map(|(key, value)| {
+            if key == "layers" {
+                match value {
+                    Value::Array(items) => items.iter_mut().collect(),
+                    _ => Vec::new(),
+                }
+            } else if LAYER_KEYS.contains(&key.as_str()) {
+                vec![value]
+            } else {
+                Vec::new()
+            }
         });
         for field in fields {
             let Some(text) = field.as_str().and_then(|t| t.strip_prefix('$')) else {
@@ -2753,13 +2760,18 @@ mod tests {
         assert!(error.contains("added 0 so far"), "{error}");
         for bad in ["$0", "$", "$one", "$-1"] {
             let error = parse_edits(json!([{"op": "select", "layer": bad}])).unwrap_err();
-            assert!(format!("{error:#}").contains("not a layer reference"), "{bad}: {error:#}");
+            assert!(
+                format!("{error:#}").contains("not a layer reference"),
+                "{bad}: {error:#}"
+            );
         }
         // Text is never taken for a reference; a single failing edit is
         // reported as before, without an edit number.
         let text = parse_edits(json!([{"op": "add_text_layer", "text": "$1"}])).unwrap();
         assert!(matches!(&text[0], Edit::AddTextLayer { text, .. } if text == "$1"));
-        let lone = [edit(json!({"op": "fill", "layer": Uuid::new_v4(), "color": "#000000"}))];
+        let lone = [edit(
+            json!({"op": "fill", "layer": Uuid::new_v4(), "color": "#000000"}),
+        )];
         let error = run(&mut document.clone(), &lone).unwrap_err().to_string();
         assert!(!error.contains("Edit 1"), "{error}");
     }

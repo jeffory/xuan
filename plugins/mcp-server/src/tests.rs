@@ -1401,12 +1401,15 @@ fn a_failing_batch_step_is_named_and_nothing_is_applied() {
         "batch",
         json!({"steps": [
             {"tool": "create_image_layer", "arguments": {"png_base64": PNG}},
-            {"tool": "fill", "arguments": {"layer": "base"}},
+            {"tool": "fill", "arguments": {"layer": "base", "colour": "#000000"}},
         ]}),
     );
     assert_eq!(bad.is_error, Some(true));
     let text = text_of(&bad);
-    assert!(text.starts_with("Step 2 (fill): "), "{text}");
+    assert!(
+        text.starts_with("Step 2 (fill): Unknown argument `colour`"),
+        "{text}"
+    );
     assert!(text.contains("Nothing was changed"), "{text}");
     assert!(edit_requests(&editor).is_empty());
     assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
@@ -1495,14 +1498,10 @@ fn a_batch_takes_only_edit_tools() {
     let batchable = tools::batchable();
     for tool in &tools {
         let name = tool.name.as_ref();
-        let listed = [",", " (", " and", ";"]
+        let listed = [",", " (", " and", "."]
             .iter()
             .any(|after| description.contains(&format!(" {name}{after}")));
-        assert_eq!(
-            listed,
-            batchable.contains(&name),
-            "{name}: {description}"
-        );
+        assert_eq!(listed, batchable.contains(&name), "{name}: {description}");
     }
     assert_eq!(
         batch.annotations.as_ref().unwrap().destructive_hint,
