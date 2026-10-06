@@ -979,7 +979,7 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
                         tr("Asks you before its first edit in each session, unless you turn on auto mode.")
                     ))
                     .small()
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
                 )
                 .wrap(),
             );

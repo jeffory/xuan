@@ -319,7 +319,7 @@ mod unix {
                     break;
                 }
                 body.push_str(&after[..size]);
-                rest = &after[size..].trim_start_matches("\r\n");
+                rest = after[size..].trim_start_matches("\r\n");
             }
         } else {
             body = rest.to_owned();

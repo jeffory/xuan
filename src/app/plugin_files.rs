@@ -21,7 +21,8 @@ use xuan::{
     plugins::protocol::{self, Id, Request, RpcError},
 };
 
-use super::{Dialog, EditorApp, plugins::one_line, theme, widgets};
+use super::theme::PaletteExt as _;
+use super::{Dialog, EditorApp, plugins::one_line, widgets};
 
 /// Requests that wait for the user's choice of a file.
 pub(super) const FILE_METHODS: [&str; 3] = ["file/save_as", "file/export", "file/open"];
@@ -381,7 +382,7 @@ impl EditorApp {
                             "It opens as a new document. Open it only if you expected this.",
                         ))
                         .small()
-                        .color(theme::MUTED),
+                        .color(ui.palette().muted),
                     )
                     .wrap(),
                 );

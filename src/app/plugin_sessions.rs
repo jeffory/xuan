@@ -10,6 +10,7 @@
 //! dropped with the grant when the plugin's folder, command or permissions
 //! change. Results of actions keep their own Accept/Discard proposals. See
 //! "Edit sessions" in `docs/PLUGINS.md`.
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use serde_json::{Value, json};
 use xuan::{
@@ -24,7 +25,7 @@ use super::{
     Dialog, EditorApp,
     commands::{self, HostRun},
     plugins::one_line,
-    theme, widgets,
+    widgets,
 };
 
 /// Edits one plugin may have waiting for the answer.
@@ -287,7 +288,7 @@ impl EditorApp {
                     egui::Label::new(
                         RichText::new(format!("{} {}", tr("Session:"), request.session))
                             .small()
-                            .color(theme::MUTED),
+                            .color(ui.palette().muted),
                     )
                     .wrap(),
                 );
@@ -299,7 +300,7 @@ impl EditorApp {
                         "Each change is one step you can undo, and shows at once. Your answer holds until the plugin stops or starts a new session.",
                     ))
                     .small()
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
                 )
                 .wrap(),
             );
@@ -309,7 +310,7 @@ impl EditorApp {
                         "Always Allow turns on auto mode: the plugin edits without asking until you turn it off in Plugins → Manage Plugins….",
                     ))
                     .small()
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
                 )
                 .wrap(),
             );
