@@ -1050,18 +1050,22 @@ mod tests {
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let processor = Processor::new(device.clone(), queue.clone());
         let mut compositor = GpuCompositor::new(device, queue);
+        // ×8 makes 384×320, past the 65 536 pixels below which coverage stays on the CPU.
+        const SCALE: u32 = 8;
         let mut original = coverage::tests::folder_base();
-        original.width *= 4;
-        original.height *= 4;
+        original.width *= SCALE;
+        original.height *= SCALE;
+        assert!(original.width * original.height >= 65_536);
+        let s = SCALE as f32;
         for layer in &mut original.layers {
             let t = &mut layer.transform;
-            (t.x, t.y, t.width, t.height) = (t.x * 4.0, t.y * 4.0, t.width * 4.0, t.height * 4.0);
+            (t.x, t.y, t.width, t.height) = (t.x * s, t.y * s, t.width * s, t.height * s);
         }
         original.layers.insert(
             0,
             Layer::image(
                 "Backdrop",
-                RgbaImage::from_fn(192, 160, |x, y| {
+                RgbaImage::from_fn(original.width, original.height, |x, y| {
                     Rgba([(x + 40) as u8, (y + 60) as u8, 150, 255])
                 }),
             ),
