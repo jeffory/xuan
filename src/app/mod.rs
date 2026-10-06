@@ -549,7 +549,7 @@ pub struct EditorApp {
     button_layout: chrome::ButtonLayout,
     /// Window-button artwork from the desktop theme, loaded on first use.
     #[cfg(target_os = "linux")]
-    window_theme: Option<window_theme::WindowTheme>,
+    window_theme: chrome::SharedWindowTheme,
     clipboard: Option<(RgbaImage, Point)>,
     system_clipboard: Option<arboard::Clipboard>,
     jpeg_quality: u8,
@@ -729,7 +729,7 @@ impl EditorApp {
             decorated: false,
             button_layout: Default::default(),
             #[cfg(target_os = "linux")]
-            window_theme: None,
+            window_theme: Default::default(),
             clipboard: None,
             system_clipboard: None,
             jpeg_quality: 90,
@@ -1809,6 +1809,7 @@ impl EditorApp {
             ctx.palette().panel,
         );
         self.sync_decorations(ctx);
+        self.publish_dialog_chrome(ctx);
         self.window_resize(ctx);
         self.poll_plugins();
         self.menus(ctx);

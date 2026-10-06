@@ -1,5 +1,4 @@
 use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, emath::GuiRounding as _, pos2, vec2};
-#[cfg(target_os = "linux")]
 use xuan::config::WindowButtons;
 use xuan::{config::TitleBar, i18n::tr};
 
@@ -9,7 +8,7 @@ use super::{
 };
 
 /// Size of one compact-style window button.
-const BUTTON_SIZE: egui::Vec2 = vec2(30.0, 22.0);
+pub(super) const BUTTON_SIZE: egui::Vec2 = vec2(30.0, 22.0);
 
 pub(super) fn title_bar(
     palette: &theme::Palette,
@@ -164,6 +163,202 @@ impl ButtonLayout {
     }
 }
 
+/// A window theme shared between the main title bar and the dialogs.
+pub(super) type SharedWindowTheme = std::sync::Arc<std::sync::Mutex<Option<super::window_theme::WindowTheme>>>;
+
+/// What a compact-style button needs to be drawn: the desktop theme's images, unless
+/// the user chose the built-in glyphs.
+#[derive(Clone)]
+pub(super) struct ButtonStyle {
+    pub buttons: WindowButtons,
+    pub theme: SharedWindowTheme,
+}
+
+/// The title bar settings the dialogs in `widgets::Window` follow, published every frame.
+#[derive(Clone)]
+pub(super) struct DialogChrome {
+    pub title_bar: TitleBar,
+    pub layout: ButtonLayout,
+    pub style: ButtonStyle,
+}
+
+/// Paints one compact-style window button: the theme's image when there is one, else
+/// the built-in monochrome glyph, with the hover and pressed states.
+pub(super) fn paint_window_button(
+    ui: &egui::Ui,
+    style: &ButtonStyle,
+    rect: Rect,
+    button: WindowButton,
+    maximized: bool,
+    response: &egui::Response,
+    focused: bool,
+) {
+    #[cfg(target_os = "linux")]
+    if paint_theme_button(style, ui, rect, button, maximized, response, focused) {
+        return;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (style.buttons, &style.theme);
+        let painter = ui.painter();
+        let p = ui.palette();
+        if response.hovered() || response.has_focus() {
+            let fill = if response.is_pointer_button_down_on() {
+                p.pressed
+            } else {
+                p.hover
+            };
+            painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
+        }
+        let color = if focused || response.hovered() {
+            p.text
+        } else {
+            p.muted
+        };
+        let stroke = Stroke::new(1.0_f32, color);
+        // Pixel-centered 1 px strokes stay crisp at integer offsets.
+        let c = rect
+            .center()
+            .round_to_pixel_center(painter.pixels_per_point());
+        match button {
+            WindowButton::Minimize => {
+                painter.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], stroke);
+            }
+            WindowButton::Maximize if maximized => {
+                // Two overlapping windows: the front one, then the visible
+                // top and right edges of the one behind it.
+                painter.rect_stroke(
+                    Rect::from_min_max(c + vec2(-4.0, -2.0), c + vec2(2.0, 4.0)),
+                    0.0,
+                    stroke,
+                    StrokeKind::Middle,
+                );
+                painter.add(egui::Shape::line(
+                    vec![
+                        c + vec2(-2.0, -2.0),
+                        c + vec2(-2.0, -4.0),
+                        c + vec2(4.0, -4.0),
+                        c + vec2(4.0, 2.0),
+                        c + vec2(2.0, 2.0),
+                    ],
+                    stroke,
+                ));
+            }
+            WindowButton::Maximize => {
+                painter.rect_stroke(
+                    Rect::from_center_size(c, vec2(8.0, 8.0)),
+                    0.0,
+                    stroke,
+                    StrokeKind::Middle,
+                );
+            }
+            WindowButton::Close => {
+                painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
+                painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
+            }
+        }
+    
+}
+
+
+/// Draws the button with the desktop theme's image. `false` means none was found (or
+/// the setting is Built-in) and the caller draws its own glyph.
+#[cfg(target_os = "linux")]
+fn paint_theme_button(
+    style: &ButtonStyle,
+    ui: &egui::Ui,
+    rect: Rect,
+    button: WindowButton,
+    maximized: bool,
+    response: &egui::Response,
+    focused: bool,
+) -> bool {
+    use super::window_theme::{Env, Highlight, Kind, State, WindowTheme};
+    if style.buttons != WindowButtons::Theme {
+        return false;
+    }
+    let mut guard = style.theme.lock().unwrap_or_else(|e| e.into_inner());
+    let theme = guard.get_or_insert_with(|| {
+        // Tests never read the developer's own configuration.
+        #[cfg(test)]
+        let env = Env::default();
+        #[cfg(not(test))]
+        let env = Env::from_process();
+        WindowTheme::new(env)
+    });
+    theme.refresh(std::time::Instant::now());
+    let ppp = ui.ctx().pixels_per_point();
+    let kind = match button {
+        WindowButton::Minimize => Kind::Minimize,
+        WindowButton::Maximize if maximized => Kind::Restore,
+        WindowButton::Maximize => Kind::Maximize,
+        WindowButton::Close => Kind::Close,
+    };
+    let state = if response.is_pointer_button_down_on() {
+        State::Active
+    } else if response.hovered() || response.has_focus() {
+        State::Hover
+    } else if !focused {
+        State::Backdrop
+    } else {
+        State::Normal
+    };
+    let Some(resolved) = theme.resolved() else {
+        return false;
+    };
+    let Some(pick) = resolved.pick(kind, state, ppp) else {
+        return false;
+    };
+    let (asset, highlight, dim) = (pick.asset.clone(), pick.highlight, pick.dim);
+    let p = ui.palette();
+    // A monochrome close icon without a hover image of its own is drawn as Breeze does:
+    // a circle in the scheme's negative colour with the glyph in the title bar colour.
+    let close_fill = (kind == Kind::Close && asset.symbolic)
+        .then(|| resolved.tints.close_fill(highlight, p.titlebar))
+        .flatten();
+    let tint = asset.symbolic.then(|| {
+        if let Some((_, glyph)) = close_fill {
+            return glyph;
+        }
+        let fallback = if state == State::Backdrop {
+            p.muted
+        } else {
+            p.text
+        };
+        resolved
+            .tints
+            .color(state == State::Backdrop, p.titlebar, fallback)
+    });
+    let Some((texture, size)) = theme.texture(ui.ctx(), &asset, ppp, tint) else {
+        return false;
+    };
+    let painter = ui.painter();
+    if let Some((fill, _)) = close_fill {
+        let radius = (rect.width().min(rect.height()) / 2.0 - 1.0).max(6.0);
+        painter.circle_filled(rect.center(), radius, fill);
+    } else if highlight != Highlight::None {
+        let fill = if highlight == Highlight::Pressed {
+            p.pressed
+        } else {
+            p.hover
+        };
+        painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
+    }
+    let fit = (rect.width() / size.x).min(rect.height() / size.y).min(1.0);
+    let image = Rect::from_center_size(rect.center().round_to_pixel_center(ppp), size * fit);
+    let color = if dim && !asset.symbolic {
+        Color32::WHITE.gamma_multiply(0.6)
+    } else {
+        Color32::WHITE
+    };
+    painter.image(
+        texture,
+        image,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        color,
+    );
+    true
+}
+
 impl EditorApp {
     /// The window draws rounded corners only with a client-side title bar on a
     /// window that was created transparent, and never when it fills the screen.
@@ -224,10 +419,28 @@ impl EditorApp {
         self.window_buttons(ui, &buttons);
     }
 
+    pub(super) fn button_style(&self) -> ButtonStyle {
+        ButtonStyle {
+            buttons: self.config.window_buttons,
+            theme: self.window_theme.clone(),
+        }
+    }
+
+    /// Hands the title bar style to the dialogs, which are drawn without access to the app.
+    pub(super) fn publish_dialog_chrome(&self, ctx: &egui::Context) {
+        let chrome = DialogChrome {
+            title_bar: self.config.title_bar,
+            layout: self.button_layout.clone(),
+            style: self.button_style(),
+        };
+        ctx.data_mut(|data| data.insert_temp(egui::Id::NULL, chrome));
+    }
+
     /// Compact-style monochrome minimize, maximize and close buttons.
     fn window_buttons(&mut self, ui: &mut egui::Ui, buttons: &[WindowButton]) {
         let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
         let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+        let style = self.button_style();
         let spacing = ui.spacing().item_spacing.x;
         ui.spacing_mut().item_spacing.x = 0.0;
         for &button in buttons {
@@ -240,173 +453,13 @@ impl EditorApp {
             };
             response
                 .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-            #[cfg(target_os = "linux")]
-            let themed = self.paint_theme_button(ui, rect, button, maximized, &response, focused);
-            #[cfg(not(target_os = "linux"))]
-            let themed = false;
-            if !themed {
-                let painter = ui.painter();
-                let p = ui.palette();
-                if response.hovered() || response.has_focus() {
-                    let fill = if response.is_pointer_button_down_on() {
-                        p.pressed
-                    } else {
-                        p.hover
-                    };
-                    painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
-                }
-                let color = if focused || response.hovered() {
-                    p.text
-                } else {
-                    p.muted
-                };
-                let stroke = Stroke::new(1.0_f32, color);
-                // Pixel-centered 1 px strokes stay crisp at integer offsets.
-                let c = rect
-                    .center()
-                    .round_to_pixel_center(painter.pixels_per_point());
-                match button {
-                    WindowButton::Minimize => {
-                        painter.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], stroke);
-                    }
-                    WindowButton::Maximize if maximized => {
-                        // Two overlapping windows: the front one, then the visible
-                        // top and right edges of the one behind it.
-                        painter.rect_stroke(
-                            Rect::from_min_max(c + vec2(-4.0, -2.0), c + vec2(2.0, 4.0)),
-                            0.0,
-                            stroke,
-                            StrokeKind::Middle,
-                        );
-                        painter.add(egui::Shape::line(
-                            vec![
-                                c + vec2(-2.0, -2.0),
-                                c + vec2(-2.0, -4.0),
-                                c + vec2(4.0, -4.0),
-                                c + vec2(4.0, 2.0),
-                                c + vec2(2.0, 2.0),
-                            ],
-                            stroke,
-                        ));
-                    }
-                    WindowButton::Maximize => {
-                        painter.rect_stroke(
-                            Rect::from_center_size(c, vec2(8.0, 8.0)),
-                            0.0,
-                            stroke,
-                            StrokeKind::Middle,
-                        );
-                    }
-                    WindowButton::Close => {
-                        painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
-                        painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
-                    }
-                }
-            }
+            paint_window_button(ui, &style, rect, button, maximized, &response, focused);
             if response.clicked() {
                 self.window_button_action(ui.ctx(), button, maximized);
             }
             response.on_hover_text(label);
         }
         ui.spacing_mut().item_spacing.x = spacing;
-    }
-
-    /// Draws the button with the desktop theme's image. `false` means none was found (or
-    /// the setting is Built-in) and the caller draws its own glyph.
-    #[cfg(target_os = "linux")]
-    fn paint_theme_button(
-        &mut self,
-        ui: &egui::Ui,
-        rect: Rect,
-        button: WindowButton,
-        maximized: bool,
-        response: &egui::Response,
-        focused: bool,
-    ) -> bool {
-        use super::window_theme::{Env, Highlight, Kind, State, WindowTheme};
-        if self.config.window_buttons != WindowButtons::Theme {
-            return false;
-        }
-        let theme = self.window_theme.get_or_insert_with(|| {
-            // Tests never read the developer's own configuration.
-            #[cfg(test)]
-            let env = Env::default();
-            #[cfg(not(test))]
-            let env = Env::from_process();
-            WindowTheme::new(env)
-        });
-        theme.refresh(std::time::Instant::now());
-        let ppp = ui.ctx().pixels_per_point();
-        let kind = match button {
-            WindowButton::Minimize => Kind::Minimize,
-            WindowButton::Maximize if maximized => Kind::Restore,
-            WindowButton::Maximize => Kind::Maximize,
-            WindowButton::Close => Kind::Close,
-        };
-        let state = if response.is_pointer_button_down_on() {
-            State::Active
-        } else if response.hovered() || response.has_focus() {
-            State::Hover
-        } else if !focused {
-            State::Backdrop
-        } else {
-            State::Normal
-        };
-        let Some(resolved) = theme.resolved() else {
-            return false;
-        };
-        let Some(pick) = resolved.pick(kind, state, ppp) else {
-            return false;
-        };
-        let (asset, highlight, dim) = (pick.asset.clone(), pick.highlight, pick.dim);
-        let p = ui.palette();
-        // A monochrome close icon without a hover image of its own is drawn as Breeze does:
-        // a circle in the scheme's negative colour with the glyph in the title bar colour.
-        let close_fill = (kind == Kind::Close && asset.symbolic)
-            .then(|| resolved.tints.close_fill(highlight, p.titlebar))
-            .flatten();
-        let tint = asset.symbolic.then(|| {
-            if let Some((_, glyph)) = close_fill {
-                return glyph;
-            }
-            let fallback = if state == State::Backdrop {
-                p.muted
-            } else {
-                p.text
-            };
-            resolved
-                .tints
-                .color(state == State::Backdrop, p.titlebar, fallback)
-        });
-        let Some((texture, size)) = theme.texture(ui.ctx(), &asset, ppp, tint) else {
-            return false;
-        };
-        let painter = ui.painter();
-        if let Some((fill, _)) = close_fill {
-            let radius = (rect.width().min(rect.height()) / 2.0 - 1.0).max(6.0);
-            painter.circle_filled(rect.center(), radius, fill);
-        } else if highlight != Highlight::None {
-            let fill = if highlight == Highlight::Pressed {
-                p.pressed
-            } else {
-                p.hover
-            };
-            painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), theme::BUTTON_RADIUS, fill);
-        }
-        let fit = (rect.width() / size.x).min(rect.height() / size.y).min(1.0);
-        let image = Rect::from_center_size(rect.center().round_to_pixel_center(ppp), size * fit);
-        let color = if dim && !asset.symbolic {
-            Color32::WHITE.gamma_multiply(0.6)
-        } else {
-            Color32::WHITE
-        };
-        painter.image(
-            texture,
-            image,
-            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-            color,
-        );
-        true
     }
 
     fn window_button_action(&mut self, ctx: &egui::Context, button: WindowButton, maximized: bool) {

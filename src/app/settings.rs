@@ -305,6 +305,8 @@ impl EditorApp {
             if config.window_buttons == xuan::config::WindowButtons::Theme {
                 let found = self
                     .window_theme
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .as_ref()
                     .and_then(|theme| theme.resolved())
                     .map(|resolved| resolved.describe());

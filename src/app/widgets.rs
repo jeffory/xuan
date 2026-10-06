@@ -799,8 +799,69 @@ pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
     }
 }
 
-/// Floating utility panel: compact centered title, a close control on the left,
-/// and 24-point content insets, as in FloatingPanelController / the SwiftUI sheets.
+/// The dialog's close control, drawn in the main window's title bar style: a traffic-light
+/// dot on the left for macOS, else the compact window button on the side the button layout
+/// puts it. Returns whether it was clicked.
+fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
+    use super::chrome::{BUTTON_SIZE, DialogChrome, WindowButton, paint_window_button};
+    let chrome: Option<DialogChrome> = ui.data(|data| data.get_temp(egui::Id::NULL));
+    let label = tr("Close panel");
+    let compact = chrome
+        .as_ref()
+        .filter(|chrome| chrome.title_bar != xuan::config::TitleBar::MacOs);
+    let Some(chrome) = compact else {
+        let center = pos2(bar.left() + 15.0, bar.center().y);
+        let response = ui.interact(
+            Rect::from_center_size(center, vec2(22.0, 22.0)),
+            id,
+            Sense::click(),
+        );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        ui.painter().circle_filled(
+            center,
+            5.0,
+            ui.palette().close_dot[usize::from(response.hovered())],
+        );
+        if response.hovered() {
+            let stroke = Stroke::new(1.0_f32, ui.palette().panel);
+            ui.painter()
+                .line_segment([center - vec2(2.0, 2.0), center + vec2(2.0, 2.0)], stroke);
+            ui.painter()
+                .line_segment([center + vec2(-2.0, 2.0), center + vec2(2.0, -2.0)], stroke);
+        }
+        return response.on_hover_text(&label).clicked();
+    };
+    let on_left = !chrome.layout.right.contains(&WindowButton::Close)
+        && chrome.layout.left.contains(&WindowButton::Close);
+    let margin = 6.0;
+    let rect = Rect::from_center_size(
+        pos2(
+            if on_left {
+                bar.left() + margin + BUTTON_SIZE.x / 2.0
+            } else {
+                bar.right() - margin - BUTTON_SIZE.x / 2.0
+            },
+            bar.center().y,
+        ),
+        BUTTON_SIZE,
+    );
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
+    paint_window_button(
+        ui,
+        &chrome.style,
+        rect,
+        WindowButton::Close,
+        false,
+        &response,
+        focused,
+    );
+    response.on_hover_text(&label).clicked()
+}
+
+/// Floating utility panel: compact centered title, a close control placed as in the
+/// main title bar, and 24-point content insets, as in FloatingPanelController / the SwiftUI sheets.
 pub struct Window<'a> {
     title: String,
     open: Option<&'a mut bool>,
@@ -854,7 +915,7 @@ impl<'a> Window<'a> {
                 ui.set_width(self.width);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let (rect, response) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+                    ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
                 ui.painter().rect_filled(
                     rect,
                     CornerRadius {
@@ -869,36 +930,16 @@ impl<'a> Window<'a> {
                     [rect.left_bottom(), rect.right_bottom()],
                     Stroke::new(1.0_f32, ui.palette().header_rule),
                 );
+                // The same title text as the main title bar's.
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     &self.title,
                     FontId::proportional(12.0),
-                    ui.palette().text,
+                    ui.palette().muted,
                 );
                 if self.open.is_some() {
-                    let center = pos2(rect.left() + 15.0, rect.center().y);
-                    let response = ui.interact(
-                        Rect::from_center_size(center, vec2(22.0, 22.0)),
-                        response.id.with("close"),
-                        Sense::click(),
-                    );
-                    ui.painter().circle_filled(
-                        center,
-                        5.0,
-                        ui.palette().close_dot[usize::from(response.hovered())],
-                    );
-                    if response.hovered() {
-                        ui.painter().line_segment(
-                            [center - vec2(2.0, 2.0), center + vec2(2.0, 2.0)],
-                            Stroke::new(1.0_f32, ui.palette().panel),
-                        );
-                        ui.painter().line_segment(
-                            [center + vec2(-2.0, 2.0), center + vec2(2.0, -2.0)],
-                            Stroke::new(1.0_f32, ui.palette().panel),
-                        );
-                    }
-                    close = response.on_hover_text(tr("Close panel")).clicked();
+                    close = close_control(ui, rect, response.id.with("close"));
                 }
                 egui::Frame::new().inner_margin(24).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 12.0;

@@ -26,9 +26,18 @@ fn compact(layout: ButtonLayout) -> (tempfile::TempDir, Fixture, UiTest) {
     ui.isolate_config(directory.path());
     ui.app_mut().config.title_bar = xuan::config::TitleBar::Compact;
     ui.app_mut().button_layout = layout;
-    ui.app_mut().window_theme = Some(WindowTheme::new(env));
+    ui.app_mut().window_theme = shared(WindowTheme::new(env));
     ui.settle();
     (directory, fixture, ui)
+}
+
+fn shared(theme: WindowTheme) -> crate::app::chrome::SharedWindowTheme {
+    std::sync::Arc::new(std::sync::Mutex::new(Some(theme)))
+}
+
+fn textures(ui: &UiTest) -> usize {
+    let guard = ui.app().window_theme.lock().unwrap();
+    guard.as_ref().unwrap().loaded_textures()
 }
 
 fn x_of(ui: &UiTest, label: &str) -> f32 {
@@ -54,31 +63,87 @@ fn compact_buttons_follow_the_configured_order_and_use_the_theme_images() {
         "{maximize} {minimize}"
     );
     // The three buttons come from the theme's PNGs; nothing fell back to the glyphs.
-    assert_eq!(ui.app().window_theme.as_ref().unwrap().loaded_textures(), 3);
+    assert_eq!(textures(&ui), 3);
 }
 
 #[test]
 fn builtin_setting_and_missing_assets_draw_the_glyphs() {
     let (_directory, _fixture, mut ui) = compact(ButtonLayout::default());
-    assert_eq!(ui.app().window_theme.as_ref().unwrap().loaded_textures(), 3);
+    assert_eq!(textures(&ui), 3);
     // "Built-in": no theme texture is needed.
     let (_directory, _fixture, mut builtin) = compact(ButtonLayout::default());
     builtin.app_mut().config.window_buttons = xuan::config::WindowButtons::BuiltIn;
-    builtin.app_mut().window_theme = Some(WindowTheme::new(Env::default()));
+    builtin.app_mut().window_theme = shared(WindowTheme::new(Env::default()));
     builtin.settle();
     assert_eq!(
-        builtin
-            .app()
-            .window_theme
-            .as_ref()
-            .unwrap()
-            .loaded_textures(),
+        textures(&builtin),
         0
     );
     assert!(builtin.has("Close window"));
     // Match desktop theme with nothing installed: the glyphs, and still clickable.
-    ui.app_mut().window_theme = Some(WindowTheme::new(Env::default()));
+    ui.app_mut().window_theme = shared(WindowTheme::new(Env::default()));
     ui.settle();
-    assert_eq!(ui.app().window_theme.as_ref().unwrap().loaded_textures(), 0);
+    assert_eq!(textures(&ui), 0);
     assert!(ui.has("Minimize window") && ui.has("Maximize window") && ui.has("Close window"));
+}
+
+/// The x of a dialog's close button relative to the centre of the centred dialog.
+fn dialog_close_side(ui: &UiTest) -> f32 {
+    let centre = ui.ctx().content_rect().center().x;
+    let x = x_of(ui, "Close panel");
+    assert!(
+        (x - centre).abs() < 220.0,
+        "the button is on the dialog: {x} vs {centre}"
+    );
+    x - centre
+}
+
+fn dialog(style: xuan::config::TitleBar, layout: ButtonLayout) -> (tempfile::TempDir, UiTest) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::new();
+    ui.isolate_config(directory.path());
+    ui.app_mut().config.title_bar = style;
+    ui.app_mut().button_layout = layout;
+    ui.press(egui::Modifiers::CTRL, egui::Key::Comma);
+    (directory, ui)
+}
+
+#[test]
+fn dialog_close_button_follows_the_button_layout_side() {
+    use WindowButton::*;
+    use xuan::config::TitleBar;
+    let right = ButtonLayout::default();
+    let left = ButtonLayout {
+        left: vec![Close, Minimize],
+        right: vec![Maximize],
+    };
+    for style in [TitleBar::Compact, TitleBar::System] {
+        let (_directory, ui) = dialog(style, right.clone());
+        assert!(dialog_close_side(&ui) > 0.0, "{style:?} right layout");
+        let (_directory, mut ui) = dialog(style, left.clone());
+        assert!(dialog_close_side(&ui) < 0.0, "{style:?} left layout");
+        // The close button works and keeps its accessible name.
+        assert!(ui.has_role(egui::accesskit::Role::Button, "Close panel"));
+        ui.click("Close panel");
+        assert!(!ui.has("Close panel"));
+    }
+}
+
+#[test]
+fn macos_dialog_close_dot_stays_on_the_left_whatever_the_layout() {
+    let (_directory, mut ui) = dialog(xuan::config::TitleBar::MacOs, ButtonLayout::default());
+    assert!(dialog_close_side(&ui) < 0.0);
+    assert!(ui.has_role(egui::accesskit::Role::Button, "Close panel"));
+    ui.click("Close panel");
+    assert!(!ui.has("Close panel"));
+}
+
+#[test]
+fn changing_the_title_bar_style_updates_an_open_dialog() {
+    use xuan::config::TitleBar;
+    let (_directory, mut ui) = dialog(TitleBar::MacOs, ButtonLayout::default());
+    assert!(dialog_close_side(&ui) < 0.0);
+    ui.app_mut().config.title_bar = TitleBar::Compact;
+    ui.settle();
+    assert!(dialog_close_side(&ui) > 0.0);
 }
