@@ -5334,6 +5334,7 @@ dependencies = [
  "flate2",
  "heic-rs",
  "image",
+ "kurbo",
  "libc",
  "png 0.18.1",
  "pollster",

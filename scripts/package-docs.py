@@ -21,6 +21,7 @@ LOCAL_LINKS = {
     "licenses/rawler-LGPL-2.1.txt": "../../licenses/xuan/rawler-LGPL-2.1.txt",
     "licenses/heic-rs-MIT.txt": "../../licenses/xuan/heic-rs-MIT.txt",
     "licenses/seccompiler-BSD-3-Clause.txt": "../../licenses/xuan/seccompiler-BSD-3-Clause.txt",
+    "licenses/kurbo-MIT.txt": "../../licenses/xuan/kurbo-MIT.txt",
     "licenses/tabler-icons-MIT.txt": "../../licenses/xuan/tabler-icons-MIT.txt",
     "assets/fonts/Inter-LICENSE.txt": "../../licenses/xuan/Inter-LICENSE.txt",
     "assets/fonts/DroidSansFallback-LICENSE.txt": "../../licenses/xuan/DroidSansFallback-LICENSE.txt",
