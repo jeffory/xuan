@@ -4045,6 +4045,17 @@ done
         let refused = wait(&context, &mut app, 111);
         assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{refused}");
         assert_eq!(app.sessions.len(), sessions);
+        // Missing and unsuitable paths get the same answer: no probing.
+        let mut messages = Vec::new();
+        for (id, path) in [
+            (112, out.path().join("missing.png")),
+            (113, "/dev/null".into()),
+        ] {
+            app.queue_file_request("mock", file_request(id, "file/open", json!({"path": path})));
+            messages.push(wait(&context, &mut app, id)["error"]["message"].clone());
+        }
+        assert_eq!(messages[0], messages[1]);
+        assert!(!messages[0].to_string().contains("missing.png"));
         for (id, path) in [
             (108, json!("relative.png")),
             (109, json!(out.path().join("missing.png"))),

@@ -24,6 +24,10 @@ use xuan::{
 use super::theme::PaletteExt as _;
 use super::{Dialog, EditorApp, plugins::one_line, widgets};
 
+/// The one answer to a `file/open` path that cannot be offered.
+const CANNOT_OPEN: &str =
+    "This path cannot be opened: it is missing, unreadable, or not an image file or project";
+
 /// Requests that wait for the user's choice of a file.
 pub(super) const FILE_METHODS: [&str; 3] = ["file/save_as", "file/export", "file/open"];
 
@@ -117,15 +121,13 @@ impl EditorApp {
                 if !path.is_absolute() {
                     return Err(RpcError::invalid_params("`path` must be absolute"));
                 }
-                // The prompt names the file that will really be opened.
-                let resolved = std::fs::canonicalize(path).map_err(|error| {
-                    RpcError::invalid_params(format!("Cannot open {}: {error}", path.display()))
-                })?;
+                // The prompt names the file that will really be opened. One
+                // answer for a missing, unreadable or unsuitable path, so a
+                // plugin cannot probe what exists.
+                let refused = || RpcError::invalid_params(CANNOT_OPEN);
+                let resolved = std::fs::canonicalize(path).map_err(|_| refused())?;
                 if !std::fs::metadata(&resolved).is_ok_and(|m| m.is_file() || m.is_dir()) {
-                    return Err(RpcError::invalid_params(format!(
-                        "{} is not a regular file or a project folder",
-                        resolved.display()
-                    )));
+                    return Err(refused());
                 }
                 Ok(FileAction::Open {
                     requested: path.to_path_buf(),
@@ -188,20 +190,19 @@ impl EditorApp {
             self.respond_to_plugin(plugin, request.id, Err(error));
             return;
         }
-        let action = self.file_action(&request).and_then(|action| {
-            // One at a time per plugin, so a plugin cannot stack up dialogs.
-            let waiting = (self.plugins.file_requests.iter())
-                .chain(&self.plugins.file_prompt)
-                .any(|r| r.plugin == plugin);
-            if waiting {
-                Err(RpcError::new(
-                    protocol::INVALID_REQUEST,
-                    "Another file request of this plugin is waiting for the user",
-                ))
-            } else {
-                Ok(action)
-            }
-        });
+        // One at a time per plugin, so a plugin cannot stack up dialogs;
+        // checked before the path is looked at.
+        let waiting = (self.plugins.file_requests.iter())
+            .chain(&self.plugins.file_prompt)
+            .any(|r| r.plugin == plugin);
+        let action = if waiting {
+            Err(RpcError::new(
+                protocol::INVALID_REQUEST,
+                "Another file request of this plugin is waiting for the user",
+            ))
+        } else {
+            self.file_action(&request)
+        };
         match action {
             Ok(action) => self.plugins.file_requests.push_back(FileRequest {
                 plugin: plugin.to_owned(),
