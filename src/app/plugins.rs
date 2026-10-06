@@ -100,6 +100,13 @@ pub(super) struct PluginState {
     pub provider_pending: Option<super::providers::ProviderRun>,
     /// How models are downloaded: https, or a fake in tests.
     pub transport: Option<Arc<dyn plugins::models::Transport>>,
+    /// `file/save_as`, `file/export` and `file/open` requests waiting for
+    /// their turn; see `plugin_files.rs`.
+    pub file_requests: std::collections::VecDeque<super::plugin_files::FileRequest>,
+    /// The `file/open` request whose prompt is open.
+    pub file_prompt: Option<super::plugin_files::FileRequest>,
+    /// Shows the save dialog for plugins: the system's, or a fake in tests.
+    pub save_dialog: Option<super::plugin_files::SaveDialogHook>,
 }
 
 enum Pending {
@@ -267,6 +274,8 @@ impl PluginState {
     fn forget_session(&mut self, plugin: &str) {
         self.export_answers.remove(plugin);
         self.held.retain(|(id, _)| id != plugin);
+        self.file_requests
+            .retain(|request| request.plugin != plugin);
     }
 
     pub fn log(&self, plugin: &str) -> Vec<String> {
@@ -729,6 +738,7 @@ impl EditorApp {
             self.dispatch_plugin_message(&plugin, message);
         }
         self.release_held_requests();
+        self.release_file_requests();
         self.check_starting_plugins();
         self.check_format_jobs();
         self.apply_completed_results();
@@ -753,6 +763,11 @@ impl EditorApp {
     fn dispatch_plugin_message(&mut self, plugin: &str, message: Incoming) {
         match message {
             Incoming::Message(Message::Request(request)) => {
+                // Saving and opening files wait for the user's choice.
+                if super::plugin_files::FILE_METHODS.contains(&request.method.as_str()) {
+                    self.queue_file_request(plugin, request);
+                    return;
+                }
                 // Exports wait while the user is asked whether to send them.
                 if super::plugin_consent::EXPORT_METHODS.contains(&request.method.as_str())
                     && self.export_answer(plugin).is_none()
@@ -896,6 +911,48 @@ impl EditorApp {
             "document/get" => Ok(self
                 .session()
                 .map_or(Value::Null, |session| edits::describe(&session.document))),
+            // The open tabs, without their paths.
+            "document/list" => Ok(json!({
+                "documents": (self.sessions.iter().enumerate())
+                    .map(|(index, session)| json!({
+                        "id": session.document.id,
+                        "title": session.title,
+                        "width": session.document.width,
+                        "height": session.document.height,
+                        "layers": session.document.layers.len(),
+                        "current": index == self.current,
+                        "modified": session.history.dirty(),
+                        "saved": session.path.is_some(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })),
+            // Switching tabs only changes the view, like `host/run` `fit`.
+            "document/activate" => {
+                let id = string("document")
+                    .and_then(|s| Uuid::parse_str(&s).ok())
+                    .ok_or_else(|| RpcError::invalid_params("`document` must be a document id"))?;
+                if self.dialog.is_some() || self.job.is_some() || self.develop.is_some() {
+                    return Err(RpcError::new(
+                        protocol::INVALID_REQUEST,
+                        "The editor is busy",
+                    ));
+                }
+                let index = (self.sessions.iter())
+                    .position(|s| s.document.id == id)
+                    .ok_or_else(|| RpcError::invalid_params("No such open document"))?;
+                if index != self.current {
+                    // As clicking its tab does.
+                    self.cancel_gesture();
+                    self.current = index;
+                    self.mask_target = false;
+                }
+                Ok(json!({"ok": true}))
+            }
+            // Answered once the user chose; see `plugin_files.rs`.
+            "file/save_as" | "file/export" | "file/open" => Err(RpcError::new(
+                protocol::INVALID_REQUEST,
+                "File requests are answered after the user's choice",
+            )),
             "layer/export" | "document/export" | "selection/export" => {
                 if let Some(error) = self.export_refused(plugin) {
                     return Err(error);
@@ -967,15 +1024,22 @@ impl EditorApp {
                         "The editor is busy",
                     ));
                 }
-                let mut reader = edits::Reader::new(self.plugins.access(plugin), edits::MAX_LAYERS);
-                let Some(session) = self.session_mut() else {
+                if self.session().is_none() {
                     return Err(RpcError::new(
                         protocol::INVALID_PARAMS,
                         "No document is open",
                     ));
-                };
+                }
+                // Text is drawn with the editor's renderer, whose fonts are
+                // loaded once.
+                let mut reader = edits::Reader::new(self.plugins.access(plugin), edits::MAX_LAYERS)
+                    .with_text_renderer(self.text_renderer.take());
+                let session = self.session_mut().expect("checked above");
                 let mut document = session.document.clone();
-                edits::apply(&mut document, &edits, &mut reader).map_err(internal)?;
+                let applied = edits::apply(&mut document, &edits, &mut reader);
+                self.text_renderer = reader.take_text_renderer();
+                let added = applied.map_err(internal)?;
+                let session = self.session_mut().expect("checked above");
                 session.history.begin(&name, &session.document);
                 session.fit |= (document.width, document.height)
                     != (session.document.width, session.document.height);
@@ -983,7 +1047,7 @@ impl EditorApp {
                 session.document.promote_image_masks();
                 session.history.commit();
                 session.invalidate();
-                Ok(json!({"ok": true}))
+                Ok(json!({"ok": true, "layers": added}))
             }
             "host/run" => {
                 let action = string("action")
@@ -1013,6 +1077,16 @@ impl EditorApp {
                     None if commands::host_run(&action) == HostRun::View
                         || (edit && commands::host_run(&action) == HostRun::Edit) =>
                     {
+                        // As its menu item would be: greyed out commands do nothing.
+                        if !self.command_enabled(&action) {
+                            return Err(RpcError::new(
+                                protocol::INVALID_REQUEST,
+                                format!(
+                                    "`{action}` is not available now, for example because \
+                                     nothing is selected or the active layer does not suit it"
+                                ),
+                            ));
+                        }
                         self.command(&action)
                     }
                     None if commands::host_run(&action) == HostRun::Edit => {
@@ -1784,6 +1858,13 @@ impl EditorApp {
                 _ => &[],
             })
         };
+        if let Some(edit) = result_edits().find(|edit| edit.direct_only()) {
+            bail!(
+                "The plugin returned a {} edit, which changes the canvas; send it with \
+                 document/edit instead of in a result",
+                edit.op()
+            );
+        }
         if result_edits().any(edits::Edit::needs_edit_access) {
             ensure!(
                 manifest

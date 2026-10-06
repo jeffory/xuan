@@ -243,8 +243,77 @@ impl Host {
 
     /// Apply edits as one undo step. Needs `document = "edit"` in the manifest.
     pub fn edit(&self, name: &str, edits: Vec<Value>) -> Result<()> {
-        self.request("document/edit", json!({"name": name, "edits": edits}))?;
+        self.edit_layers(name, edits)?;
         Ok(())
+    }
+
+    /// Apply edits as one undo step and return the ids of the layers they
+    /// added, in order. Needs `document = "edit"` in the manifest.
+    pub fn edit_layers(&self, name: &str, edits: Vec<Value>) -> Result<Vec<String>> {
+        let value = self.request("document/edit", json!({"name": name, "edits": edits}))?;
+        Ok(value
+            .get("layers")
+            .and_then(Value::as_array)
+            .map(|layers| {
+                layers
+                    .iter()
+                    .filter_map(|id| id.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// A copy whose requests wait up to `timeout` for the editor, for
+    /// requests that wait for the user, such as the save dialog.
+    pub fn with_timeout(&self, timeout: Duration) -> Self {
+        Self {
+            timeout,
+            ..self.clone()
+        }
+    }
+
+    /// The open documents: `{"documents": [{id, title, width, height,
+    /// layers, current, modified, saved}]}`.
+    pub fn list_documents(&self) -> Result<Value> {
+        self.request("document/list", Value::Null)
+    }
+
+    /// Make an open document the current one, as clicking its tab does.
+    pub fn activate_document(&self, id: &str) -> Result<()> {
+        self.request("document/activate", json!({"document": id}))?;
+        Ok(())
+    }
+
+    /// Show the save dialog for a document (the current one with `None`) as
+    /// a `.xuan` project, prefilled with `suggested_name`. Returns the path
+    /// the user saved to; a cancelled dialog is an error with the code
+    /// [`codes::CANCELLED`].
+    pub fn save_as(&self, document: Option<&str>, suggested_name: Option<&str>) -> Result<PathBuf> {
+        let value = self.request(
+            "file/save_as",
+            json!({"document": document, "suggested_name": suggested_name}),
+        )?;
+        path_of(&value)
+    }
+
+    /// Show the save dialog to export a document as an image in `format`
+    /// (`png`, `jpg`, `tiff` or `webp`). Returns the path the user chose.
+    pub fn export_file(
+        &self,
+        document: Option<&str>,
+        format: &str,
+        suggested_name: Option<&str>,
+    ) -> Result<PathBuf> {
+        let value = self.request(
+            "file/export",
+            json!({"document": document, "format": format, "suggested_name": suggested_name}),
+        )?;
+        path_of(&value)
+    }
+
+    /// Ask the user to open the file at the absolute `path` as a document.
+    pub fn open_file(&self, path: &Path) -> Result<Value> {
+        self.request("file/open", json!({"path": path}))
     }
 
     /// Run an allowed host command, or one of this plugin's own `plugin/action`.
@@ -262,6 +331,14 @@ impl Host {
         self.request("host/open", json!({"url": url}))?;
         Ok(())
     }
+}
+
+fn path_of(value: &Value) -> Result<PathBuf> {
+    value
+        .get("path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| RpcError::internal("the editor did not say where it saved"))
 }
 
 /// A PNG the editor wrote for the plugin.
@@ -748,7 +825,12 @@ pub struct Plugin {
     importers: HashMap<String, ImportHandler>,
     exporters: HashMap<String, ExportHandler>,
     on_settings: Option<SettingsHandler>,
+    on_start: Option<StartHandler>,
+    on_document_changed: Option<DocumentHandler>,
 }
+
+type StartHandler = Arc<dyn Fn(Host, Settings) + Send + Sync>;
+type DocumentHandler = Arc<dyn Fn(&Value) + Send + Sync>;
 
 impl Plugin {
     pub fn new() -> Self {
@@ -806,6 +888,20 @@ impl Plugin {
     /// Called after `initialize` and whenever settings change.
     pub fn on_settings(mut self, handler: impl Fn(&Settings) + Send + Sync + 'static) -> Self {
         self.on_settings = Some(Arc::new(handler));
+        self
+    }
+
+    /// Called once on its own thread after `initialize` was answered, with a
+    /// [`Host`] the plugin may keep, for plugins that work in the background,
+    /// such as a server. It may run for as long as the plugin does.
+    pub fn on_start(mut self, handler: impl Fn(Host, Settings) + Send + Sync + 'static) -> Self {
+        self.on_start = Some(Arc::new(handler));
+        self
+    }
+
+    /// Called with `{id, revision}` after each edit of the current document.
+    pub fn on_document_changed(mut self, handler: impl Fn(&Value) + Send + Sync + 'static) -> Self {
+        self.on_document_changed = Some(Arc::new(handler));
         self
     }
 
@@ -883,9 +979,17 @@ impl Runtime {
             Ok(value) => json!({"jsonrpc": "2.0", "id": id, "result": value}),
             Err(error) => json!({"jsonrpc": "2.0", "id": id, "error": error}),
         };
+        let started = method == "initialize" && response.get("result").is_some();
         self.host.transport.send(&response);
         if method == "shutdown" {
             std::process::exit(0);
+        }
+        if started {
+            if let (Some(handler), Ok(settings)) = (&self.plugin.on_start, self.settings.lock()) {
+                let (handler, host, settings) =
+                    (handler.clone(), self.host.clone(), settings.clone());
+                std::thread::spawn(move || handler(host, settings));
+            }
         }
     }
 
@@ -1026,6 +1130,11 @@ impl Runtime {
                     if let Some(handler) = &self.plugin.on_settings {
                         handler(&settings);
                     }
+                }
+            }
+            Some("document/changed") => {
+                if let Some(handler) = &self.plugin.on_document_changed {
+                    handler(&params);
                 }
             }
             Some("settings/changed") => {

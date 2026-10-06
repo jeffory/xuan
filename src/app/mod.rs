@@ -32,6 +32,7 @@ mod photoshop;
 mod pixel_grid;
 mod plugin_consent;
 mod plugin_dialogs;
+mod plugin_files;
 mod plugin_install;
 mod plugin_models;
 mod plugin_panes;
@@ -338,6 +339,8 @@ enum Dialog {
     PluginPermissions,
     /// Confirm sending document data to a plugin that declares network hosts.
     PluginConsent,
+    /// Confirm opening a file a plugin names.
+    PluginFile,
     Plugins,
     /// Plugins → Install from Folder or Zip…: choose, review and install.
     PluginInstall,

@@ -600,6 +600,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .aliases(&["delete", "erase"]),
     cmd("content_fill", "Content-Aware Fill", C::Edit)
         .keys(&[shift(Key::F5)])
+        .host(Edit)
         .aliases(&["remove object", "heal"]),
     cmd("show_transform", "Free Transform", C::Edit)
         .keys(&[ctrl(Key::T)])
@@ -670,10 +671,14 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("load_selection", "Load Layer / Mask", C::Select),
     cmd("select_layer_pixels", "Select Layer's Pixels", C::Select)
         .when(image_layer)
+        .host(Edit)
         .aliases(&["alpha", "opacity", "transparency"]),
-    cmd("select_mask_black", "Select Mask's Black Areas", C::Select).when(masked_layer),
+    cmd("select_mask_black", "Select Mask's Black Areas", C::Select)
+        .when(masked_layer)
+        .host(Edit),
     cmd("select_subject", "Select Subject", C::Select)
         .keys(&[ctrl_alt(Key::A)])
+        .host(Edit)
         .aliases(&["foreground", "cutout", "grabcut"]),
     cmd("color_range", "Color Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
     cmd("expand_selection", "Expand Selection…", C::Select)
@@ -682,10 +687,11 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("contract_selection", "Contract Selection…", C::Select)
         .when(has_selection)
         .aliases(&["shrink", "erode"]),
-    cmd("feather", "Feather 3 px", C::Select),
+    cmd("feather", "Feather 3 px", C::Select).host(Edit),
     // Filter
     cmd("remove_background", "Remove Background", C::Filter)
         .when(image_layer)
+        .host(Edit)
         .aliases(&["cutout", "transparent", "subject", "grabcut"]),
     cmd(
         "remove_flat_background",
@@ -693,6 +699,7 @@ pub(super) const COMMANDS: &[Command] = &[
         C::Filter,
     )
     .when(image_layer)
+    .host(Edit)
     .aliases(&["cutout", "transparent", "white background"]),
     // View
     cmd("fit", "Fit Canvas", C::View)

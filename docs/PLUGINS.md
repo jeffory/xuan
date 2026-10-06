@@ -8,7 +8,8 @@ in a manifest, and Xuan draws the controls, runs the on-canvas tools, keeps
 undo history, and asks for permissions. A plugin never touches the document
 directly; it asks the host for pixels and returns results.
 
-See [GENERATIVE.md](GENERATIVE.md) for how generative and ML features fit this system.
+See [GENERATIVE.md](GENERATIVE.md) for how generative and ML features fit this system,
+and [MCP.md](MCP.md) for the MCP server plugin that lets LLM clients drive Xuan.
 
 Any language works. The repository ships a Rust SDK crate (`sdk/xuan-plugin`), a
 Python module with no dependencies (`sdk/python/xuan_plugin.py`), and example
@@ -170,6 +171,7 @@ from connecting either. Install plugins you trust.
 | `document/edit`, including its `set_selection` op | no | yes |
 | `extend_canvas`, in `document/edit` or in a result's `edit` output | no | yes |
 | `host/run` commands that edit the document | no | yes |
+| `document/list`, `document/activate`, and `file/save_as`, `file/export` and `file/open` after the user's choice | yes | yes |
 
 A plugin with `document = "read"` can read the document and propose
 selections or new documents, but it can't change your image. A `mask` result
@@ -852,9 +854,14 @@ wait for the user's answer (see [Network](#network)).
 | `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale}` |
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
-| `document/edit` | `{name, edits: [ … ]}` | `{ok: true}`; needs `document = "edit"` |
+| `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
+| `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
+| `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does |
 | `host/run` | `{action, inputs?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
+| `file/save_as` | `{document?, suggested_name?}` | `{path}` once the user saved the document as a project in the save dialog; see [Files the user chooses](#files-the-user-chooses) |
+| `file/export` | `{document?, format?, suggested_name?}` | `{path}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`) |
+| `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
 
 `document/edit` edits, applied together as one undo step named `name`:
 
@@ -873,8 +880,125 @@ wait for the user's answer (see [Network](#network)).
   size must stay within 30,000 pixels a side and 100 megapixels. Needs
   `document = "edit"`, also in a result's `edit` output.
 
+Layers and their properties:
+
+- `{"op": "select_layers", "layers": [id, …]}`: make these the selected
+  layers (the last is active), for the `host/run` commands that work on the
+  selected layers, such as `merge`, `group` and `duplicate`.
+- `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?}`:
+  move, scale or rotate a layer (a group with its layers) to this box in
+  document units, as **Free Transform** does; missing fields keep their value.
+  The layer must not be locked.
+- `{"op": "add_empty_layer", "name"?, "above"?}` and `{"op": "add_mask_layer",
+  "name"?, "above"?}`: an empty pixel layer, or a mask layer made from the
+  selection (all white without one), the size of the canvas.
+- `{"op": "add_text_layer", "text", "x"?, "y"?, "family"?, "size"?, "color"?,
+  "bold"?, "italic"?, "underline"?, "strikethrough"?, "name"?, "above"?}`: an
+  editable text layer with its top-left corner at `x`, `y`. `size` is in pixels
+  (1–1024, default 48), the text at most 16 KiB; an unknown `family` falls back
+  to Xuan's bundled font.
+- `{"op": "add_shape_layer", "shape": "Rectangle" | "Ellipse" |
+  "RoundedRectangle", "x", "y", "width", "height", "color"?,
+  "corner_radius"?, "name"?, "above"?}`: an editable shape layer.
+- `{"op": "add_adjustment_layer", "adjustment" | "filter", "name"?,
+  "above"?}`: a non-destructive adjustment or filter layer, masked by the
+  selection when there is one.
+
+Pixels, inside the selection when there is one (on the given `layer`, which
+becomes the active layer, or the active layer; it must be an unlocked pixel
+layer, so text and shape layers become pixel layers):
+
+- `{"op": "fill", "layer"?, "color"}`.
+- `{"op": "stroke", "layer"?, "points": [[x, y], …], "color"?, "size"?,
+  "hardness"?, "opacity"?, "erase"?}`: one brush stroke through the points (at
+  most 10,000) in document coordinates; `size` is the brush diameter (1–2000,
+  default 20), `hardness` and `opacity` 0–1 (defaults 0.8 and 1), and `erase`
+  erases instead of painting. The layer grows to hold the stroke, as with the
+  Brush tool.
+- `{"op": "apply_filter", "layer"?, "filter"}` and `{"op":
+  "apply_adjustment", "layer"?, "adjustment"}`.
+
+Filters and adjustments are written as `.xuan` files store them on filter and
+adjustment layers. Filters: `{"GaussianBlur": {"radius"}}` (0–100),
+`{"MotionBlur": {"distance", "angle"}}` (0–200, ±180°), `{"Noise": {"amount",
+"monochrome"}}` (0–100) and `{"LensCorrection": {"distortion", "vignette"}}`
+(±50, ±100). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",
+"lightness", "colorize"}}`, `{"Levels": {"black", "gamma", "white",
+"output_black", "output_white"}}` (levels 0–255), `{"Curves": {"points": [{"x",
+"y"}, …]}}` (0–1), `{"Exposure": {"exposure", "offset", "gamma"}}`,
+`{"GradientMap": {"shadows": [r, g, b, a], "highlights": [r, g, b, a]}}`,
+`{"Grain": {"amount", "monochrome", "seed"}}`, `{"FilmGrain": {"amount", "size",
+"roughness", "seed"}}`, `{"BlackWhite": {"weights": [6 numbers], "tint",
+"tint_hue", "tint_saturation"}}`, `{"ColorBalance": {"shadows": [3 numbers],
+"midtones", "highlights", "preserve_luminosity"}}`, and the per-channel
+`{"LevelsChannels": …}`, `{"CurvesChannels": …}` and `{"HueRanges": …}`. Every
+field must be given; values outside the ranges the dialogs allow are refused.
+Colours are `"#rrggbb"` or `"#rrggbbaa"` (default black).
+
+The selection, combined with the current one by `mode` (`replace`, the
+default, `add`, `subtract` or `intersect`):
+
+- `{"op": "select_rect", "x", "y", "width", "height", "ellipse"?, "mode"?}`.
+- `{"op": "select_polygon", "points": [[x, y], …], "mode"?}`: at least three
+  and at most 10,000 points.
+- `{"op": "select_color", "x", "y", "tolerance"?, "contiguous"?, "mode"?}`:
+  the Magic Wand at a point of the flattened image (`tolerance` 0–255,
+  default 32; `contiguous` default `true`).
+- `{"op": "select_color_range", "colors": ["#rrggbb", …], "exclude"?,
+  "fuzziness"?, "invert"?, "mode"?}`: **Select → Color Range…** over the
+  flattened image (`fuzziness` 0–200, default 40).
+- `{"op": "grow_selection", "by"}` grows (positive) or shrinks (negative) the
+  selection by whole pixels, and `{"op": "feather_selection", "radius"}`
+  softens its edge; both at most 256.
+
+These change only the selection, so, like `set_selection`, a plugin with
+`document = "read"` may return them in a result's `edit` output as a
+proposal; sending them with `document/edit` needs `document = "edit"`.
+
+The canvas (only with `document/edit`, never in a result, whose images are
+placed on the canvas as it was sent; the selection is cleared or rescaled as
+the menu commands do):
+
+- `{"op": "crop", "x", "y", "width", "height"}`: as the Crop tool.
+- `{"op": "resize_canvas", "width", "height", "anchor"?}`: **Image → Canvas
+  Size…**, which may also shrink; `anchor` `[0, 0]` keeps the top-left corner,
+  `[0.5, 0.5]` (the default) the centre.
+- `{"op": "resize_image", "width", "height"}`: **Image → Image Size…**.
+
 Edits apply in order, each in the document's coordinates at that point: an
-`add_layer` after an `extend_canvas` is placed on the grown canvas.
+`add_layer` after an `extend_canvas` is placed on the grown canvas. A batch
+that fails anywhere changes nothing, and every edit respects the same limits
+as the editor: locked layers, 30,000 pixels a side and 100 megapixels per
+image, at most 1,000 edits and 32 new layers per batch, and the 100-megapixel
+budget for the images it reads and the text and shapes it draws.
+
+### Files the user chooses
+
+A plugin cannot save, export or overwrite a file on its own, and cannot open
+one behind the user's back: `host/run` refuses `save`, `save_as`, `export`,
+`open` and `close`. Three requests ask the user instead, and wait for the
+answer:
+
+- `file/save_as` shows the system's save dialog for the document (the
+  current one, or `document`), titled with the plugin's name and id and
+  prefilled with `suggested_name` (reduced to a plain file name) and `.xuan`.
+  The user chooses the folder and name, and the system dialog asks before
+  replacing a file. The project is saved there and from then on lives there,
+  as with **File → Save As…**.
+- `file/export` does the same for an image in `format` (`png`, `jpg`, `tiff`
+  or `webp`); the document itself is not changed.
+- `file/open` shows **Open a file?**, naming the plugin and the file's full
+  path (symbolic links resolved), with **Open** and **Cancel**. The path must
+  be absolute and name a regular file or a project folder. It opens as a new
+  document, as **File → Open…** would.
+
+Each answers with the path, or fails with `-32800` when the user cancels.
+Requests wait until no other dialog is open; a plugin has at most one waiting,
+and a second fails at once. They need no `document = "edit"`, as they do not
+change the open document, and the plugin learns nothing more than the path the
+user chose. To hand the user a file without a dialog, write it into the
+plugin's own folders (for example with `document/export`) and show it in a
+pane.
 
 Notifications from the plugin: `host/log` `{level, message}` and `host/status`
 `{message}`. The status bar shows a plugin's message, like the `text` output of
@@ -983,6 +1107,13 @@ plugin's settings), `-32002` insufficient credits, `-32003` rate limited (`data.
   `flatten`, `mask`, `new_mask_layer`, `delete_mask`, `disable_mask`,
   `link_mask`, `clip`, `select_all`, `deselect`, `invert_selection`,
   `fill_fg`, `fill_bg`, `clear`, `invert`, `flip_h`, `flip_v`,
-  `flip_canvas_h` and `flip_canvas_v`. Commands that open, save, export or
+  `flip_canvas_h`, `flip_canvas_v`, `select_layer_pixels`,
+  `select_mask_black`, `feather`, `select_subject`, `content_fill`,
+  `remove_background` and `remove_flat_background`. The last four run in the
+  background like their menu items and become one undo step when they finish;
+  `select_subject` and `remove_background` use the provider the user chose
+  (see [Providers](#providers)). A command that is greyed out in its menu, for
+  example `merge` with a single layer, is refused. Commands that open, save, export or
   close files, use the clipboard, change settings or manage plugins are
-  refused, and a plugin can start only its own actions.
+  refused (see [Files the user chooses](#files-the-user-chooses) for saving
+  and opening), and a plugin can start only its own actions.

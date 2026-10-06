@@ -197,9 +197,40 @@ class Host:
         """Write the selection mask cropped to its bounds, or None; ``dir`` as for ``export_layer``."""
         return self.request("selection/export", {"dir": dir} if dir else {})
 
-    def edit(self, name: str, edits: List[Dict[str, Any]]) -> None:
-        """Apply edits as one undo step. Needs ``document = "edit"`` in the manifest."""
-        self.request("document/edit", {"name": name, "edits": edits})
+    def edit(self, name: str, edits: List[Dict[str, Any]]) -> List[str]:
+        """Apply edits as one undo step and return the ids of the layers they added.
+
+        Needs ``document = "edit"`` in the manifest.
+        """
+        result = self.request("document/edit", {"name": name, "edits": edits}) or {}
+        return [layer for layer in result.get("layers", []) if isinstance(layer, str)]
+
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """The open documents: id, title, width, height, layers, current, modified, saved."""
+        return (self.request("document/list") or {}).get("documents", [])
+
+    def activate_document(self, id: str) -> None:
+        """Make an open document the current one, as clicking its tab does."""
+        self.request("document/activate", {"document": id})
+
+    def save_as(self, document: Optional[str] = None, suggested_name: Optional[str] = None) -> str:
+        """Show the save dialog for a document as a ``.xuan`` project; returns the chosen path.
+
+        A cancelled dialog raises ``RpcError`` with the code ``CANCELLED``.
+        """
+        params = {"document": document, "suggested_name": suggested_name}
+        return self.request("file/save_as", params)["path"]
+
+    def export_file(
+        self, format: str = "png", document: Optional[str] = None, suggested_name: Optional[str] = None
+    ) -> str:
+        """Show the save dialog to export a document as png, jpg, tiff or webp; returns the path."""
+        params = {"document": document, "format": format, "suggested_name": suggested_name}
+        return self.request("file/export", params)["path"]
+
+    def open_file(self, path: str) -> Dict[str, Any]:
+        """Ask the user to open the file at the absolute ``path`` as a document."""
+        return self.request("file/open", {"path": path})
 
     def run(self, action: str, inputs: Optional[Dict[str, Any]] = None) -> None:
         """Run an allowed host command, or one of this plugin's own ``plugin/action``."""

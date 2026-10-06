@@ -130,6 +130,13 @@ fn host_run_flags_keep_the_plugin_allow_lists() {
         "flip_v",
         "flip_canvas_h",
         "flip_canvas_v",
+        "content_fill",
+        "select_layer_pixels",
+        "select_mask_black",
+        "select_subject",
+        "feather",
+        "remove_background",
+        "remove_flat_background",
     ];
     let with = |host: HostRun| {
         let mut ids: Vec<&str> = COMMANDS

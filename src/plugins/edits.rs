@@ -14,7 +14,11 @@ use uuid::Uuid;
 use super::manifest::FilesystemAccess;
 use crate::{
     blend::BlendMode,
-    document::{Document, Layer, MAX_PIXELS, MAX_SIDE, Mask, Transform},
+    document::{Adjustment, Document, Layer, MAX_PIXELS, MAX_SIDE, Mask, Point, Transform},
+    effects::Filter,
+    paint::ShapeKind,
+    selection::SelectionMode,
+    text::{TextRenderer, TextStyle},
 };
 
 /// Describe a document for `document/get` and the `document` field of jobs.
@@ -214,13 +218,26 @@ impl Access {
 /// [`MAX_PIXELS`] pixels, or create more layers than allowed, for one answer.
 /// Each image is checked against the budget from its header, before it is
 /// decoded.
-#[derive(Debug)]
 pub struct Reader {
     access: Access,
     pixels: u64,
     layers: usize,
     max_layers: usize,
     edits: usize,
+    /// Draws `add_text_layer` edits; made when first needed.
+    text: Option<TextRenderer>,
+}
+
+impl std::fmt::Debug for Reader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reader")
+            .field("access", &self.access)
+            .field("pixels", &self.pixels)
+            .field("layers", &self.layers)
+            .field("max_layers", &self.max_layers)
+            .field("edits", &self.edits)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Reader {
@@ -231,7 +248,34 @@ impl Reader {
             layers: 0,
             max_layers,
             edits: 0,
+            text: None,
         }
+    }
+
+    /// Draw text with this renderer (the editor's, whose fonts are loaded)
+    /// instead of making one.
+    pub fn with_text_renderer(mut self, renderer: Option<TextRenderer>) -> Self {
+        self.text = renderer;
+        self
+    }
+
+    /// The text renderer, to keep for the next time.
+    pub fn take_text_renderer(&mut self) -> Option<TextRenderer> {
+        self.text.take()
+    }
+
+    /// Count `count` more pixels against the budget, for images the host
+    /// makes itself (text, shapes, strokes that grow a layer).
+    fn add_pixels(&mut self, width: u32, height: u32) -> Result<()> {
+        let pixels = self
+            .pixels
+            .saturating_add(u64::from(width) * u64::from(height));
+        ensure!(
+            pixels <= MAX_PIXELS,
+            "The plugin's images exceed 100 megapixels in total"
+        );
+        self.pixels = pixels;
+        Ok(())
     }
 
     pub fn rgba(&mut self, path: &Path) -> Result<RgbaImage> {
@@ -506,7 +550,258 @@ pub enum Edit {
         #[serde(default)]
         bottom: u32,
     },
+    /// Make these layers the selected ones (the last is active), for the
+    /// `host/run` commands that work on the selected layers, like `merge`.
+    SelectLayers {
+        layers: Vec<Uuid>,
+    },
+    /// Move, scale or rotate a layer (with its children, for a group) to
+    /// this box, in document units; missing fields keep their value.
+    Transform {
+        layer: Uuid,
+        #[serde(default)]
+        x: Option<f32>,
+        #[serde(default)]
+        y: Option<f32>,
+        #[serde(default)]
+        width: Option<f32>,
+        #[serde(default)]
+        height: Option<f32>,
+        #[serde(default)]
+        rotation: Option<f32>,
+    },
+    /// A rectangle or ellipse combined with the selection.
+    SelectRect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        #[serde(default)]
+        ellipse: bool,
+        #[serde(default)]
+        mode: SelectionMode,
+    },
+    /// A polygon (at least three points) combined with the selection.
+    SelectPolygon {
+        points: Vec<[f32; 2]>,
+        #[serde(default)]
+        mode: SelectionMode,
+    },
+    /// The Magic Wand at a point of the flattened image.
+    SelectColor {
+        x: f32,
+        y: f32,
+        #[serde(default = "default_tolerance")]
+        tolerance: u8,
+        #[serde(default = "yes")]
+        contiguous: bool,
+        #[serde(default)]
+        mode: SelectionMode,
+    },
+    /// Select → Color Range over the flattened image.
+    SelectColorRange {
+        colors: Vec<Color>,
+        #[serde(default)]
+        exclude: Vec<Color>,
+        #[serde(default = "default_fuzziness")]
+        fuzziness: u32,
+        #[serde(default)]
+        invert: bool,
+        #[serde(default)]
+        mode: SelectionMode,
+    },
+    /// Grow (positive) or shrink (negative) the selection by whole pixels.
+    GrowSelection {
+        by: i32,
+    },
+    /// Soften the selection's edge with a blur of this radius.
+    FeatherSelection {
+        radius: f32,
+    },
+    /// Fill the selection (or the whole layer) with a colour.
+    Fill {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        color: Color,
+    },
+    /// Paint a brush stroke through the points, in document coordinates.
+    Stroke {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        points: Vec<[f32; 2]>,
+        #[serde(default = "black")]
+        color: Color,
+        #[serde(default = "default_brush_size")]
+        size: f32,
+        #[serde(default = "default_hardness")]
+        hardness: f32,
+        #[serde(default = "one")]
+        opacity: f32,
+        #[serde(default)]
+        erase: bool,
+    },
+    /// A filter applied to a layer's pixels inside the selection, written as
+    /// in `.xuan` files, e.g. `{"GaussianBlur": {"radius": 4}}`.
+    ApplyFilter {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        filter: Filter,
+    },
+    /// An adjustment applied to a layer's pixels inside the selection,
+    /// written as in `.xuan` files, e.g. `"Invert"`.
+    ApplyAdjustment {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        adjustment: Adjustment,
+    },
+    /// A non-destructive adjustment or filter layer, masked by the selection.
+    AddAdjustmentLayer {
+        #[serde(default)]
+        adjustment: Option<Adjustment>,
+        #[serde(default)]
+        filter: Option<Filter>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// An empty pixel layer the size of the canvas.
+    AddEmptyLayer {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// A mask layer made from the selection (all white without one).
+    AddMaskLayer {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// An editable text layer with its top-left corner at `x`, `y`.
+    AddTextLayer {
+        text: String,
+        #[serde(default)]
+        x: f32,
+        #[serde(default)]
+        y: f32,
+        #[serde(default)]
+        family: Option<String>,
+        #[serde(default)]
+        size: Option<f32>,
+        #[serde(default = "black")]
+        color: Color,
+        #[serde(default)]
+        bold: bool,
+        #[serde(default)]
+        italic: bool,
+        #[serde(default)]
+        underline: bool,
+        #[serde(default)]
+        strikethrough: bool,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// An editable shape layer covering the box.
+    AddShapeLayer {
+        shape: ShapeKind,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        #[serde(default = "black")]
+        color: Color,
+        #[serde(default)]
+        corner_radius: f32,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// Crop the canvas to a rectangle of the document, as the Crop tool does.
+    Crop {
+        x: f32,
+        y: f32,
+        width: u32,
+        height: u32,
+    },
+    /// Image → Canvas Size: a new canvas size with the content placed by
+    /// `anchor` (`[0, 0]` top-left, `[0.5, 0.5]` centred, the default).
+    ResizeCanvas {
+        width: u32,
+        height: u32,
+        #[serde(default = "centre")]
+        anchor: [f32; 2],
+    },
+    /// Image → Image Size: scale the whole document to this size.
+    ResizeImage {
+        width: u32,
+        height: u32,
+    },
 }
+
+/// A colour written `#rrggbb` or `#rrggbbaa`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Color(pub [u8; 4]);
+
+impl Color {
+    pub fn parse(text: &str) -> Result<Self> {
+        let hex = text
+            .strip_prefix('#')
+            .filter(|hex| matches!(hex.len(), 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            .with_context(|| format!("`{text}` is not a colour like #rrggbb or #rrggbbaa"))?;
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
+        let alpha = if hex.len() == 8 { byte(6) } else { 255 };
+        Ok(Self([byte(0), byte(2), byte(4), alpha]))
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let [r, g, b, a] = self.0;
+        serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
+    }
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+fn default_tolerance() -> u8 {
+    32
+}
+fn default_fuzziness() -> u32 {
+    crate::selection_ops::ColorRange::DEFAULT_FUZZINESS
+}
+fn default_brush_size() -> f32 {
+    20.0
+}
+fn default_hardness() -> f32 {
+    0.8
+}
+fn one() -> f32 {
+    1.0
+}
+fn yes() -> bool {
+    true
+}
+fn black() -> Color {
+    Color([0, 0, 0, 255])
+}
+fn centre() -> [f32; 2] {
+    [0.5, 0.5]
+}
+
+/// Points one `select_polygon` or `stroke` edit may have.
+pub const MAX_POINTS: usize = 10_000;
+/// The largest `grow_selection` and `feather_selection` amount, in pixels.
+pub const MAX_SELECTION_AMOUNT: f32 = 256.0;
 
 impl Edit {
     /// Whether the edit changes the document beyond what a read-only plugin
@@ -520,7 +815,35 @@ impl Edit {
     /// Whether the edit changes only the selection, like a `mask` output, and
     /// so may be proposed by a plugin that has `document = "read"`.
     pub fn is_selection_only(&self) -> bool {
-        matches!(self, Self::SetSelection { .. })
+        matches!(
+            self,
+            Self::SetSelection { .. }
+                | Self::SelectRect { .. }
+                | Self::SelectPolygon { .. }
+                | Self::SelectColor { .. }
+                | Self::SelectColorRange { .. }
+                | Self::GrowSelection { .. }
+                | Self::FeatherSelection { .. }
+        )
+    }
+
+    /// Whether the edit may only be sent with `document/edit`, not returned
+    /// in a result: it changes the canvas, and a result's images and masks
+    /// are placed on the canvas as it was sent. (`extend_canvas` is the
+    /// exception, as results account for it.)
+    pub fn direct_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Crop { .. } | Self::ResizeCanvas { .. } | Self::ResizeImage { .. }
+        )
+    }
+
+    /// The op's name, as plugins write it.
+    pub fn op(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.get("op")?.as_str().map(str::to_owned))
+            .unwrap_or_default()
     }
 }
 
@@ -705,10 +1028,416 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
             } => {
                 crate::operations::extend_canvas(document, *left, *top, *right, *bottom)?;
             }
+            Edit::SelectLayers { layers } => {
+                ensure!(!layers.is_empty(), "List at least one layer");
+                ensure!(layers.len() <= 1000, "Too many layers");
+                for id in layers {
+                    find(document, *id)?;
+                }
+                document.selected = layers.iter().copied().collect();
+                document.active = layers.last().copied();
+            }
+            Edit::Transform {
+                layer,
+                x,
+                y,
+                width,
+                height,
+                rotation,
+            } => {
+                let target = find(document, *layer)?;
+                ensure!(!target.locked, "Layer {} is locked", target.name);
+                document.select(*layer, false);
+                let mut transform = crate::operations::transform_box(document, false)
+                    .context("The layer cannot be transformed")?;
+                for (value, field) in [
+                    (x, &mut transform.x),
+                    (y, &mut transform.y),
+                    (width, &mut transform.width),
+                    (height, &mut transform.height),
+                    (rotation, &mut transform.rotation),
+                ] {
+                    if let Some(value) = value {
+                        *field = *value;
+                    }
+                }
+                ensure!(transform.valid(), "Invalid layer placement");
+                crate::operations::apply_transform(document, transform, false)?;
+                crate::paint::refresh_shapes(document)?;
+            }
+            Edit::SelectRect {
+                x,
+                y,
+                width,
+                height,
+                ellipse,
+                mode,
+            } => {
+                ensure!(
+                    [x, y, width, height].iter().all(|v| v.is_finite())
+                        && *width > 0.0
+                        && *height > 0.0,
+                    "The rectangle needs a finite position and a positive size"
+                );
+                let mask = crate::selection::rectangle(
+                    document.width,
+                    document.height,
+                    Point::new(*x, *y),
+                    Point::new(x + width, y + height),
+                    *ellipse,
+                );
+                crate::selection::combine(document, mask, *mode);
+            }
+            Edit::SelectPolygon { points, mode } => {
+                let points = valid_points(points)?;
+                ensure!(points.len() >= 3, "A polygon needs at least three points");
+                let mask = crate::selection::polygon(document.width, document.height, &points);
+                crate::selection::combine(document, mask, *mode);
+            }
+            Edit::SelectColor {
+                x,
+                y,
+                tolerance,
+                contiguous,
+                mode,
+            } => {
+                ensure!(
+                    x.is_finite()
+                        && y.is_finite()
+                        && (0.0..document.width as f32).contains(x)
+                        && (0.0..document.height as f32).contains(y),
+                    "The point must be inside the canvas"
+                );
+                let pixels = crate::render::render(document);
+                let mask =
+                    crate::selection::wand(&pixels, Point::new(*x, *y), *tolerance, *contiguous);
+                crate::selection::combine(document, mask, *mode);
+            }
+            Edit::SelectColorRange {
+                colors,
+                exclude,
+                fuzziness,
+                invert,
+                mode,
+            } => {
+                ensure!(
+                    !colors.is_empty() && colors.len() + exclude.len() <= 256,
+                    "List between 1 and 256 colours"
+                );
+                let rgb = |c: &Color| [c.0[0], c.0[1], c.0[2]];
+                let range = crate::selection_ops::ColorRange {
+                    include: colors.iter().map(rgb).collect(),
+                    exclude: exclude.iter().map(rgb).collect(),
+                    fuzziness: (*fuzziness).min(crate::selection_ops::ColorRange::MAX_FUZZINESS),
+                    invert: *invert,
+                };
+                let mask = range.mask(&crate::render::render(document));
+                crate::selection::combine(document, mask, *mode);
+            }
+            Edit::GrowSelection { by } => {
+                ensure!(
+                    by.unsigned_abs() as f32 <= MAX_SELECTION_AMOUNT,
+                    "Grow or shrink by at most {MAX_SELECTION_AMOUNT} pixels"
+                );
+                if let Some(selection) = document.selection.clone() {
+                    let cancel = std::sync::atomic::AtomicBool::new(false);
+                    let radius = by.unsigned_abs();
+                    let grown = if *by >= 0 {
+                        crate::selection_ops::expand(&selection, radius, &cancel)
+                    } else {
+                        crate::selection_ops::contract(&selection, radius, &cancel)
+                    };
+                    document.selection = grown.map(Arc::new);
+                }
+            }
+            Edit::FeatherSelection { radius } => {
+                ensure!(
+                    radius.is_finite() && (0.0..=MAX_SELECTION_AMOUNT).contains(radius),
+                    "The feather radius must be between 0 and {MAX_SELECTION_AMOUNT}"
+                );
+                if let Some(selection) = &document.selection
+                    && *radius > 0.0
+                {
+                    document.selection = Some(Arc::new(crate::gpu::blur_gray(selection, *radius)));
+                }
+            }
+            Edit::Fill { layer, color } => {
+                activate(document, *layer)?;
+                crate::paint::fill(document, color.0, false, false)?;
+            }
+            Edit::Stroke {
+                layer,
+                points,
+                color,
+                size,
+                hardness,
+                opacity,
+                erase,
+            } => {
+                let points = valid_points(points)?;
+                ensure!(!points.is_empty(), "A stroke needs at least one point");
+                ensure!(
+                    size.is_finite() && (1.0..=2000.0).contains(size),
+                    "The brush size must be between 1 and 2000"
+                );
+                ensure!(
+                    hardness.is_finite() && (0.0..=1.0).contains(hardness),
+                    "The hardness must be between 0 and 1"
+                );
+                valid_opacity(*opacity)?;
+                activate(document, *layer)?;
+                let brush = crate::paint::Brush {
+                    diameter: *size,
+                    hardness: *hardness,
+                    opacity: *opacity,
+                    color: color.0,
+                    ..crate::paint::Brush::default()
+                };
+                let mode = if *erase {
+                    crate::paint::PaintMode::Erase
+                } else {
+                    crate::paint::PaintMode::Paint
+                };
+                let mut stroke = crate::paint::Stroke::default();
+                let pairs = points
+                    .windows(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .chain((points.len() == 1).then(|| (points[0], points[0])));
+                for (from, to) in pairs {
+                    stroke.segment(
+                        document,
+                        from,
+                        to,
+                        &brush,
+                        &brush,
+                        crate::paint::StrokeOptions {
+                            mode,
+                            mask_target: false,
+                            source: None,
+                            clone_offset: Point::default(),
+                        },
+                    )?;
+                }
+            }
+            Edit::ApplyFilter { layer, filter } => {
+                filter.validate()?;
+                activate(document, *layer)?;
+                crate::effects::apply_filter(document, filter, false)?;
+            }
+            Edit::ApplyAdjustment { layer, adjustment } => {
+                crate::effects::validate_adjustment(adjustment)?;
+                activate(document, *layer)?;
+                crate::effects::apply_adjustment(document, adjustment, false)?;
+            }
+            Edit::AddAdjustmentLayer {
+                adjustment,
+                filter,
+                name,
+                above,
+            } => {
+                ensure!(
+                    adjustment.is_some() != filter.is_some(),
+                    "Give either an adjustment or a filter"
+                );
+                if let Some(adjustment) = adjustment {
+                    crate::effects::validate_adjustment(adjustment)?;
+                }
+                if let Some(filter) = filter {
+                    filter.validate()?;
+                }
+                reader.add_layer()?;
+                let default = adjustment
+                    .as_ref()
+                    .map(Adjustment::name)
+                    .or_else(|| filter.as_ref().map(Filter::name))
+                    .unwrap_or_default();
+                let mut layer =
+                    Layer::blank(layer_name(name, default)?, document.width, document.height);
+                layer.adjustment = adjustment.clone();
+                layer.filter = filter.clone();
+                if document.selection.is_some() {
+                    layer.mask = Some(Mask {
+                        pixels: Arc::new(crate::paint::mask_from_selection(document, &layer)),
+                        ..Mask::white()
+                    });
+                }
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AddEmptyLayer { name, above } => {
+                reader.add_layer()?;
+                let layer =
+                    Layer::blank(layer_name(name, "Layer")?, document.width, document.height);
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AddMaskLayer { name, above } => {
+                reader.add_layer()?;
+                let mut layer =
+                    Layer::mask(layer_name(name, "Mask")?, document.width, document.height);
+                layer.mask.as_mut().unwrap().pixels =
+                    Arc::new(crate::paint::mask_from_selection(document, &layer));
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AddTextLayer {
+                text,
+                x,
+                y,
+                family,
+                size,
+                color,
+                bold,
+                italic,
+                underline,
+                strikethrough,
+                name,
+                above,
+            } => {
+                reader.add_layer()?;
+                let defaults = TextStyle::default();
+                let style = TextStyle {
+                    content: text.clone(),
+                    family: family.clone().unwrap_or(defaults.family),
+                    size: size.unwrap_or(defaults.size),
+                    color: color.0,
+                    bold: *bold,
+                    italic: *italic,
+                    underline: *underline,
+                    strikethrough: *strikethrough,
+                };
+                style.validate()?;
+                ensure!(!text.trim().is_empty(), "The text is empty");
+                let pixels = reader
+                    .text
+                    .get_or_insert_with(TextRenderer::default)
+                    .render(&style)?;
+                reader.add_pixels(pixels.width(), pixels.height())?;
+                let mut layer = Layer::image(
+                    match name {
+                        Some(_) => layer_name(name, "")?,
+                        None => style.layer_name(),
+                    },
+                    pixels,
+                );
+                layer.text = Some(style);
+                layer.transform.x = *x;
+                layer.transform.y = *y;
+                ensure!(layer.transform.valid(), "Invalid layer placement");
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AddShapeLayer {
+                shape,
+                x,
+                y,
+                width,
+                height,
+                color,
+                corner_radius,
+                name,
+                above,
+            } => {
+                reader.add_layer()?;
+                ensure!(
+                    [x, y, width, height, corner_radius]
+                        .iter()
+                        .all(|v| v.is_finite())
+                        && *width >= 1.0
+                        && *height >= 1.0
+                        && *corner_radius >= 0.0,
+                    "The shape needs a finite position and a size of at least 1"
+                );
+                reader.add_pixels(width.round() as u32, height.round() as u32)?;
+                let mut layer = crate::paint::shape(
+                    Point::new(*x, *y),
+                    Point::new(x + width, y + height),
+                    *shape,
+                    color.0,
+                    *corner_radius,
+                )?;
+                if name.is_some() {
+                    layer.name = layer_name(name, "")?;
+                }
+                ensure!(layer.transform.valid(), "Invalid layer placement");
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::Crop {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                ensure!(
+                    x.is_finite() && y.is_finite(),
+                    "The crop needs a finite position"
+                );
+                crate::operations::crop(
+                    document,
+                    Point::new(*x, *y),
+                    Point::new(x + *width as f32, y + *height as f32),
+                )?;
+            }
+            Edit::ResizeCanvas {
+                width,
+                height,
+                anchor,
+            } => {
+                ensure!(
+                    anchor.iter().all(|a| (0.0..=1.0).contains(a)),
+                    "The anchor's values must be between 0 and 1"
+                );
+                crate::operations::canvas_size(document, *width, *height, *anchor)?;
+            }
+            Edit::ResizeImage { width, height } => {
+                crate::operations::image_size(document, *width, *height)?;
+            }
         }
     }
     document.validate()?;
     Ok(added)
+}
+
+/// Make `layer` the active layer when given; there must be an active layer.
+fn activate(document: &mut Document, layer: Option<Uuid>) -> Result<()> {
+    if let Some(layer) = layer {
+        find(document, layer)?;
+        document.select(layer, false);
+    }
+    ensure!(document.active().is_some(), "Select a layer first");
+    Ok(())
+}
+
+/// Insert a new layer above `above`, or above the active layer.
+fn insert_above(document: &mut Document, layer: Layer, above: Option<Uuid>) -> Result<Uuid> {
+    if let Some(above) = above {
+        find(document, above)?;
+        document.select(above, false);
+    }
+    let id = layer.id;
+    document.insert(layer);
+    Ok(id)
+}
+
+fn layer_name(name: &Option<String>, default: &str) -> Result<String> {
+    match name {
+        Some(name) => {
+            ensure!(name.len() <= 256, "Layer name too long");
+            Ok(name.clone())
+        }
+        None => Ok(default.to_owned()),
+    }
+}
+
+fn valid_points(points: &[[f32; 2]]) -> Result<Vec<Point>> {
+    ensure!(
+        points.len() <= MAX_POINTS,
+        "At most {MAX_POINTS} points are allowed"
+    );
+    ensure!(
+        points
+            .iter()
+            .flatten()
+            .all(|v| v.is_finite() && v.abs() <= 1_000_000.0),
+        "Points must be finite"
+    );
+    Ok(points.iter().map(|[x, y]| Point::new(*x, *y)).collect())
 }
 
 fn valid_opacity(opacity: f32) -> Result<f32> {
@@ -1222,6 +1951,426 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("30000"), "{error}");
+    }
+
+    fn edit(value: Value) -> Edit {
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// A 40 × 30 document with one opaque grey pixel layer.
+    fn grey_document() -> (Document, Uuid) {
+        let mut document = Document::new(40, 30).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            40,
+            30,
+            image::Rgba([100, 100, 100, 255]),
+        )));
+        let id = document.layers[0].id;
+        (document, id)
+    }
+
+    #[test]
+    fn colours_parse_and_print() {
+        assert_eq!(Color::parse("#ff8000").unwrap(), Color([255, 128, 0, 255]));
+        assert_eq!(
+            Color::parse("#FF800080").unwrap(),
+            Color([255, 128, 0, 128])
+        );
+        for bad in ["ff8000", "#ff80", "#gg8000", "#ff8000ff00", ""] {
+            assert!(Color::parse(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            serde_json::to_value(Color([1, 2, 3, 4])).unwrap(),
+            json!("#01020304")
+        );
+        assert!(serde_json::from_value::<Edit>(json!({"op": "fill", "color": "red"})).is_err());
+    }
+
+    #[test]
+    fn selection_ops_combine_with_the_selection() {
+        let (mut document, _) = grey_document();
+        let ops = [
+            json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10}),
+            json!({"op": "select_rect", "x": 20, "y": 0, "width": 10, "height": 10, "ellipse": true, "mode": "add"}),
+            json!({"op": "select_polygon", "points": [[0, 20], [10, 20], [0, 30]], "mode": "add"}),
+        ];
+        let edits: Vec<Edit> = ops.into_iter().map(edit).collect();
+        assert!(edits.iter().all(Edit::is_selection_only));
+        assert!(!edits.iter().any(Edit::direct_only));
+        run(&mut document, &edits).unwrap();
+        let selection = document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(5, 5)[0], 255);
+        assert_eq!(selection.get_pixel(25, 5)[0], 255);
+        assert_eq!(selection.get_pixel(20, 0)[0], 0, "outside the ellipse");
+        assert_eq!(selection.get_pixel(2, 25)[0], 255);
+        assert_eq!(selection.get_pixel(35, 25)[0], 0);
+        // Subtract, grow and feather.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 40, "height": 15, "mode": "subtract"}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(document.selection.as_ref().unwrap().get_pixel(5, 5)[0], 0);
+        run(
+            &mut document,
+            &[edit(json!({"op": "grow_selection", "by": 2}))],
+        )
+        .unwrap();
+        assert_eq!(
+            document.selection.as_ref().unwrap().get_pixel(2, 18)[0],
+            255
+        );
+        run(
+            &mut document,
+            &[edit(json!({"op": "grow_selection", "by": -40}))],
+        )
+        .unwrap();
+        assert!(crate::selection::bounds(document.selection.as_ref().unwrap()).is_none());
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 10, "y": 10, "width": 20, "height": 10})),
+                edit(json!({"op": "feather_selection", "radius": 3})),
+            ],
+        )
+        .unwrap();
+        let edge = document.selection.as_ref().unwrap().get_pixel(10, 15)[0];
+        assert!(edge > 0 && edge < 255, "{edge}");
+        for bad in [
+            json!({"op": "select_polygon", "points": [[0, 0], [1, 1]]}),
+            json!({"op": "select_rect", "x": 0, "y": 0, "width": 0, "height": 4}),
+            json!({"op": "grow_selection", "by": 1000}),
+            json!({"op": "feather_selection", "radius": -1}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
+        let too_many = vec![[1.0f32, 1.0]; MAX_POINTS + 1];
+        let error = run(
+            &mut document,
+            &[Edit::SelectPolygon {
+                points: too_many,
+                mode: SelectionMode::Replace,
+            }],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("points"), "{error}");
+    }
+
+    #[test]
+    fn colour_selections_read_the_flattened_image() {
+        let (mut document, base) = grey_document();
+        let pixels = Arc::make_mut(document.layers[0].pixels.as_mut().unwrap());
+        for y in 0..30 {
+            for x in 20..40 {
+                pixels.put_pixel(x, y, image::Rgba([220, 30, 30, 255]));
+            }
+        }
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_color", "x": 30, "y": 5, "tolerance": 10}),
+            )],
+        )
+        .unwrap();
+        let selection = document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(25, 10)[0], 255);
+        assert_eq!(selection.get_pixel(5, 10)[0], 0);
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_color_range", "colors": ["#646464"], "fuzziness": 10}),
+            )],
+        )
+        .unwrap();
+        let selection = document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(5, 10)[0], 255);
+        assert_eq!(selection.get_pixel(25, 10)[0], 0);
+        assert!(
+            run(
+                &mut document,
+                &[edit(json!({"op": "select_color", "x": 50, "y": 5}))]
+            )
+            .is_err()
+        );
+        assert!(
+            run(
+                &mut document,
+                &[edit(json!({"op": "select_color_range", "colors": []}))]
+            )
+            .is_err()
+        );
+        assert_eq!(document.active, Some(base));
+    }
+
+    #[test]
+    fn pixel_ops_respect_the_selection_and_locks() {
+        let (mut document, base) = grey_document();
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 0, "y": 0, "width": 20, "height": 30})),
+                edit(json!({"op": "fill", "layer": base, "color": "#ff0000"})),
+            ],
+        )
+        .unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        assert_eq!(pixels.get_pixel(5, 5).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(30, 5).0, [100, 100, 100, 255]);
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "apply_adjustment", "adjustment": "Invert"}),
+            )],
+        )
+        .unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        assert_eq!(pixels.get_pixel(5, 5).0, [0, 255, 255, 255]);
+        assert_eq!(pixels.get_pixel(30, 5).0, [100, 100, 100, 255]);
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 0, "y": 0, "width": 40, "height": 30})),
+                edit(json!({"op": "apply_filter", "filter": {"GaussianBlur": {"radius": 3}}})),
+            ],
+        )
+        .unwrap();
+        // The blur pads the layer, so read the flattened image.
+        let pixels = crate::render::render(&document);
+        let edge = pixels.get_pixel(20, 15).0;
+        assert!(edge[0] > 0 && edge[0] < 100, "{edge:?}");
+        // A stroke paints along its points and stays one change.
+        run(
+            &mut document,
+            &[
+                Edit::SetSelection { mask: None },
+                edit(json!({"op": "stroke", "points": [[2, 25], [38, 25]], "color": "#0000ff", "size": 4, "hardness": 1})),
+            ],
+        )
+        .unwrap();
+        let pixels = crate::render::render(&document);
+        assert_eq!(pixels.get_pixel(20, 25).0, [0, 0, 255, 255]);
+        assert_ne!(pixels.get_pixel(20, 15).0, [0, 0, 255, 255]);
+        run(
+            &mut document,
+            &[edit(json!({"op": "stroke", "points": [[20, 25]], "size": 6, "erase": true, "hardness": 1}))],
+        )
+        .unwrap();
+        // Erased down to the white canvas the flattened image shows through.
+        assert_ne!(
+            crate::render::render(&document).get_pixel(20, 25).0,
+            [0, 0, 255, 255]
+        );
+        // Bad values and locked layers are refused.
+        for bad in [
+            json!({"op": "apply_filter", "filter": {"GaussianBlur": {"radius": 1000}}}),
+            json!({"op": "apply_filter", "filter": {"Sharpen": {}}}),
+            json!({"op": "stroke", "points": [], "size": 4}),
+            json!({"op": "stroke", "points": [[1, 1]], "size": 0}),
+            json!({"op": "stroke", "points": [[1, 1]], "opacity": 2}),
+            json!({"op": "fill", "layer": Uuid::new_v4(), "color": "#000000"}),
+        ] {
+            let parsed = serde_json::from_value::<Edit>(bad.clone());
+            assert!(
+                parsed.is_err() || run(&mut document.clone(), &[parsed.unwrap()]).is_err(),
+                "{bad}"
+            );
+        }
+        document.layers[0].locked = true;
+        for locked in [
+            json!({"op": "fill", "color": "#000000"}),
+            json!({"op": "stroke", "points": [[1, 1]]}),
+            json!({"op": "apply_adjustment", "adjustment": "Invert"}),
+            json!({"op": "apply_filter", "filter": {"GaussianBlur": {"radius": 2}}}),
+            json!({"op": "transform", "layer": base, "x": 3}),
+        ] {
+            let error = run(&mut document.clone(), &[edit(locked.clone())]).unwrap_err();
+            assert!(error.to_string().contains("lock"), "{locked}: {error}");
+        }
+    }
+
+    #[test]
+    fn new_layers_are_editable_and_counted() {
+        let (mut document, base) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10}),
+            )],
+        )
+        .unwrap();
+        let added = run(
+            &mut document,
+            &[
+                edit(json!({"op": "add_adjustment_layer", "adjustment": {"HueSaturation": {"hue": 30, "saturation": 0, "lightness": 0, "colorize": false}}})),
+                edit(json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 2}}, "name": "Soft"})),
+                edit(json!({"op": "add_empty_layer", "name": "Paint", "above": base})),
+                edit(json!({"op": "add_mask_layer"})),
+                edit(json!({"op": "add_shape_layer", "shape": "Ellipse", "x": 4, "y": 6, "width": 12, "height": 8, "color": "#00ff00"})),
+            ],
+        )
+        .unwrap();
+        assert_eq!(added.len(), 5);
+        let layer = |id: Uuid| document.layers.iter().find(|l| l.id == id).unwrap();
+        assert!(layer(added[0]).adjustment.is_some());
+        assert!(layer(added[0]).mask.is_some(), "masked by the selection");
+        assert_eq!(layer(added[1]).name, "Soft");
+        assert!(layer(added[1]).filter.is_some());
+        assert!(layer(added[2]).pixels.is_none());
+        assert_eq!(layer(added[2]).name, "Paint");
+        // Added right above the base layer.
+        let index = |id: Uuid| document.layers.iter().position(|l| l.id == id).unwrap();
+        assert_eq!(index(added[2]), index(base) + 1);
+        assert!(layer(added[3]).standalone_mask);
+        let shape = layer(added[4]);
+        assert_eq!(shape.shape.as_ref().unwrap().color, [0, 255, 0, 255]);
+        assert_eq!((shape.transform.x, shape.transform.y), (4.0, 6.0));
+        assert_eq!(document.active, Some(added[4]));
+        for bad in [
+            json!({"op": "add_adjustment_layer"}),
+            json!({"op": "add_adjustment_layer", "adjustment": "Invert", "filter": {"GaussianBlur": {"radius": 2}}}),
+            json!({"op": "add_shape_layer", "shape": "Ellipse", "x": 0, "y": 0, "width": 0, "height": 5}),
+            json!({"op": "add_empty_layer", "above": Uuid::new_v4()}),
+            json!({"op": "add_empty_layer", "name": "x".repeat(300)}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
+        // New layers count against the batch's layer limit.
+        let empty = edit(json!({"op": "add_empty_layer"}));
+        assert!(run(&mut document.clone(), &vec![empty; MAX_LAYERS + 1]).is_err());
+    }
+
+    #[test]
+    fn text_layers_are_drawn_and_keep_their_style() {
+        let (mut document, _) = grey_document();
+        let added = run(
+            &mut document,
+            &[edit(json!({"op": "add_text_layer", "text": "Hi", "x": 3, "y": 4, "size": 12, "color": "#ff0000", "bold": true}))],
+        )
+        .unwrap();
+        let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+        let style = layer.text.as_ref().unwrap();
+        assert_eq!(
+            (style.content.as_str(), style.size, style.bold),
+            ("Hi", 12.0, true)
+        );
+        assert_eq!(layer.name, "Hi");
+        assert_eq!((layer.transform.x, layer.transform.y), (3.0, 4.0));
+        assert!(layer.pixels.as_ref().unwrap().pixels().any(|p| p.0[3] > 0));
+        for bad in [
+            json!({"op": "add_text_layer", "text": "  "}),
+            json!({"op": "add_text_layer", "text": "x", "size": 5000}),
+            json!({"op": "add_text_layer", "text": "x".repeat(20_000)}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn transforms_layer_selection_and_canvas_ops() {
+        let (mut document, base) = grey_document();
+        let second = run(&mut document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0];
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": base, "x": 5, "y": 6, "width": 20, "rotation": 15}))],
+        )
+        .unwrap();
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == base)
+            .unwrap()
+            .transform;
+        assert_eq!(
+            (
+                transform.x,
+                transform.y,
+                transform.width,
+                transform.height,
+                transform.rotation
+            ),
+            (5.0, 6.0, 20.0, 30.0, 15.0)
+        );
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(json!({"op": "transform", "layer": base, "width": -3}))]
+            )
+            .is_err()
+        );
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_layers", "layers": [base, second]}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(document.selected.len(), 2);
+        assert_eq!(document.active, Some(second));
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(json!({"op": "select_layers", "layers": []}))]
+            )
+            .is_err()
+        );
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(
+                    json!({"op": "select_layers", "layers": [Uuid::new_v4()]})
+                )]
+            )
+            .is_err()
+        );
+
+        let canvas = [
+            edit(json!({"op": "crop", "x": 2, "y": 3, "width": 20, "height": 10})),
+            edit(json!({"op": "resize_canvas", "width": 30, "height": 20, "anchor": [0, 0]})),
+            edit(json!({"op": "resize_image", "width": 60, "height": 40})),
+        ];
+        assert!(canvas.iter().all(Edit::direct_only));
+        assert!(!canvas.iter().any(Edit::is_selection_only));
+        assert_eq!(canvas[0].op(), "crop");
+        run(&mut document, &canvas[..1]).unwrap();
+        assert_eq!((document.width, document.height), (20, 10));
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == base)
+            .unwrap()
+            .transform;
+        assert_eq!((transform.x, transform.y), (3.0, 3.0));
+        run(&mut document, &canvas[1..]).unwrap();
+        assert_eq!((document.width, document.height), (60, 40));
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == base)
+            .unwrap()
+            .transform;
+        assert_eq!((transform.x, transform.y), (6.0, 6.0));
+        for bad in [
+            json!({"op": "crop", "x": 0, "y": 0, "width": 0, "height": 5}),
+            json!({"op": "resize_canvas", "width": 40_000, "height": 5}),
+            json!({"op": "resize_canvas", "width": 10, "height": 5, "anchor": [2, 0]}),
+            json!({"op": "resize_image", "width": 0, "height": 5}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

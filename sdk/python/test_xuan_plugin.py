@@ -53,5 +53,41 @@ class Models(unittest.TestCase):
         self.assertIsNone(plugin.model_path("net"))
 
 
+class FakeTransport:
+    def __init__(self, answers):
+        self.answers = answers
+        self.sent = []
+
+    def request(self, method, params, timeout):
+        self.sent.append((method, params))
+        return self.answers.get(method)
+
+
+class HostRequests(unittest.TestCase):
+    def test_edits_documents_and_files_use_the_documented_methods(self):
+        from xuan_plugin import Host
+
+        transport = FakeTransport({
+            "document/edit": {"ok": True, "layers": ["a", 3, "b"]},
+            "document/list": {"documents": [{"id": "d"}]},
+            "file/save_as": {"path": "/home/u/x.xuan"},
+            "file/export": {"path": "/home/u/x.png"},
+            "file/open": {"ok": True, "document": "e"},
+        })
+        host = Host(transport)
+        self.assertEqual(host.edit("Name", [{"op": "add_empty_layer"}]), ["a", "b"])
+        self.assertEqual(host.list_documents(), [{"id": "d"}])
+        host.activate_document("d")
+        self.assertEqual(host.save_as(suggested_name="x"), "/home/u/x.xuan")
+        self.assertEqual(host.export_file("png"), "/home/u/x.png")
+        self.assertEqual(host.open_file("/home/u/x.png")["document"], "e")
+        methods = [method for method, _ in transport.sent]
+        self.assertEqual(
+            methods,
+            ["document/edit", "document/list", "document/activate", "file/save_as", "file/export", "file/open"],
+        )
+        self.assertEqual(transport.sent[4][1]["format"], "png")
+
+
 if __name__ == "__main__":
     unittest.main()

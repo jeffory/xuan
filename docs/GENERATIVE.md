@@ -8,7 +8,8 @@ says what exists, what is missing, and what to do. The plugin protocol itself is
 in [PLUGINS.md](PLUGINS.md); the stored metadata is in [FORMAT.md](FORMAT.md).
 
 Related tickets: **#5** (Select Subject, Color Range, ML background removal)
-and **#7** (MCP server and client).
+and **#7** (MCP server and client; its design, the host API it added and how
+its tools map onto the plugin protocol are in [MCP.md](MCP.md)).
 
 ## Summary of recommendations
 
