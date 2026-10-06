@@ -1589,15 +1589,19 @@ mod tests {
                 angle: 20.0,
             },
         ] {
-            let mut doc = Document::new(896, 1152).unwrap();
-            doc.insert(crate::document::Layer::image(
+            // The layer sits inside a larger canvas, so no side is clamped.
+            let mut doc = Document::new(1000, 1300).unwrap();
+            let mut layer = crate::document::Layer::image(
                 "base",
                 RgbaImage::from_fn(896, 1152, |x, y| {
                     Rgba([(x % 251) as u8, (y % 241) as u8, 90, 255])
                 }),
-            ));
+            );
+            layer.transform.x = 52.0;
+            layer.transform.y = 74.0;
+            doc.insert(layer);
             let transform = doc.active().unwrap().transform;
-            select_rect(&mut doc, [200.0, 300.0, 600.0, 800.0]);
+            select_rect(&mut doc, [250.0, 400.0, 650.0, 900.0]);
             apply_filter(&mut doc, &filter, false).unwrap();
             let layer = doc.active().unwrap();
             let size = layer.pixels.as_ref().unwrap().dimensions();
