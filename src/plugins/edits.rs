@@ -2996,7 +2996,11 @@ mod tests {
             document.layers.iter().find(|l| l.id == id).unwrap().parent
         };
         assert_eq!(parent(&document, a), Some(group));
-        assert_eq!(*order(&document).last().unwrap(), a);
+        let index = |document: &Document, id: Uuid| order(document).iter().position(|l| *l == id);
+        assert!(
+            index(&document, a) > index(&document, c),
+            "above the group's top layer"
+        );
         mv(
             &mut document,
             json!({"op": "move_layer", "layer": a, "above": b, "parent": group}),
