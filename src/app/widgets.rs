@@ -73,14 +73,50 @@ pub fn bezel(ui: &Ui, response: &Response, radius: f32, primary: bool) {
     focus_ring(ui, response, radius);
 }
 
-fn focus_ring(ui: &Ui, response: &Response, radius: f32) {
+/// The keyboard focus ring's width, in points.
+pub const FOCUS_RING_WIDTH: f32 = 2.0;
+
+/// Where a keyboard focus ring goes round `rect`, a control whose corners have `radius`.
+///
+/// - [`FocusRing::Around`]: 2 points clear of the control, the usual ring.
+/// - [`FocusRing::Inside`]: flush with the control's edge, for controls packed edge to edge or
+///   clipped by a scroll area (document tabs, the tool rail), so it neither spills onto a
+///   neighbour nor gets cut off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusRing {
+    Around,
+    Inside,
+}
+
+impl FocusRing {
+    /// The ring's shape, in `color`.
+    pub fn shape(self, rect: Rect, radius: f32, color: Color32) -> egui::epaint::RectShape {
+        let stroke = Stroke::new(FOCUS_RING_WIDTH, color);
+        match self {
+            Self::Around => egui::epaint::RectShape::stroke(
+                rect.expand(2.0),
+                radius + 2.0,
+                stroke,
+                StrokeKind::Outside,
+            ),
+            Self::Inside => {
+                egui::epaint::RectShape::stroke(rect, radius, stroke, StrokeKind::Inside)
+            }
+        }
+    }
+}
+
+/// Draws the keyboard focus ring round `response`'s rect when it has the focus: the 2-point
+/// accent ring every focusable Xuan control shows.
+pub fn focus_ring(ui: &Ui, response: &Response, radius: f32) {
+    focus_ring_at(ui, response, response.rect, radius, FocusRing::Around);
+}
+
+/// Like [`focus_ring`], round `rect` rather than the response's own rect.
+pub fn focus_ring_at(ui: &Ui, response: &Response, rect: Rect, radius: f32, ring: FocusRing) {
     if response.has_focus() {
-        ui.painter().rect_stroke(
-            response.rect.expand(2.0),
-            radius + 2.0,
-            Stroke::new(2.0_f32, ui.palette().accent),
-            StrokeKind::Outside,
-        );
+        ui.painter()
+            .add(ring.shape(rect, radius, ui.palette().accent));
     }
 }
 
@@ -302,6 +338,8 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
                 self.speed,
                 self.max_decimals,
             );
+            // The field looks the same in every state, so focus shows as the shared ring.
+            focus_ring(ui, &response, 4.0);
             response
         })
         .inner
@@ -610,6 +648,10 @@ pub fn segmented<T: Copy + PartialEq>(
                     Stroke::new(1.0_f32, p.segment_separator),
                 );
             }
+            if !selected {
+                // Inside the track, so it does not run over the neighbouring segments.
+                focus_ring_at(ui, &response, rect.shrink(1.0), 4.0, FocusRing::Inside);
+            }
             ui.painter()
                 .galley(rect.center() - galley.size() / 2.0, galley, p.text);
             combined = combined.union(response);
@@ -711,7 +753,7 @@ pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tr("Color"))
     });
-    paint_well(ui, rect, 4.0, color);
+    paint_well(ui, rect, 4.0, color, response.hovered());
     focus_ring(ui, &response, 4.0);
     egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -726,13 +768,20 @@ pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
 /// A colour framed for the panel it sits on: an outline that stands out from the surface, a
 /// thin ring of the panel colour, then the colour over the transparency checker, so black,
 /// white and translucent colours all read in either theme.
-fn paint_well(ui: &Ui, rect: Rect, radius: f32, color: &[u8; 4]) {
+fn paint_well(ui: &Ui, rect: Rect, radius: f32, color: &[u8; 4], hovered: bool) {
     let p = ui.palette();
     ui.painter().rect(
         rect,
         radius,
         p.panel,
-        Stroke::new(1.0_f32, p.widget_stroke),
+        Stroke::new(
+            1.0_f32,
+            if hovered {
+                p.widget_hover_stroke
+            } else {
+                p.widget_stroke
+            },
+        ),
         StrokeKind::Inside,
     );
     let inner = rect.shrink(2.5);
@@ -799,6 +848,10 @@ fn color_picker(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
 #[path = "tests/color_picker.rs"]
 mod color_picker_tests;
 
+#[cfg(test)]
+#[path = "tests/widgets.rs"]
+mod widget_tests;
+
 /// The transparency checkerboard behind layer thumbnails and colour wells, in the canvas's
 /// `checker` colours so it matches the document's in both themes.
 pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
@@ -844,7 +897,14 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
             5.0,
             ui.palette().close_dot[usize::from(response.hovered())],
         );
-        if response.hovered() {
+        focus_ring_at(
+            ui,
+            &response,
+            Rect::from_center_size(center, vec2(10.0, 10.0)),
+            5.0,
+            FocusRing::Around,
+        );
+        if response.hovered() || response.has_focus() {
             let stroke = Stroke::new(1.0_f32, ui.palette().panel);
             ui.painter()
                 .line_segment([center - vec2(2.0, 2.0), center + vec2(2.0, 2.0)], stroke);
@@ -879,6 +939,7 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
         &response,
         focused,
     );
+    focus_ring(ui, &response, theme::BUTTON_RADIUS as f32);
     response.on_hover_text(label).clicked()
 }
 
@@ -1244,8 +1305,25 @@ fn overflow_fades<R>(ui: &Ui, output: &egui::scroll_area::ScrollAreaOutput<R>) {
     }
 }
 
+/// A small clickable icon next to the swatches (swap, reset): named `label` for assistive
+/// technology and the tooltip, with a hover highlight and a focus ring.
+fn small_icon_button(ui: &Ui, rect: Rect, id: &str, label: &str) -> Response {
+    let response = ui.interact(rect, ui.id().with(id), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect.expand(1.0), 3.0, ui.palette().icon_hover);
+    }
+    focus_ring(ui, &response, 3.0);
+    response.on_hover_text(label)
+}
+
 pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) {
     let (rect, _) = ui.allocate_exact_size(vec2(36.0, 40.0), Sense::hover());
+    // The swatches overlap, so their focus rings go on top once both are drawn.
+    let mut rings = Vec::new();
     for (offset, color, label) in [
         (
             vec2(12.0, 12.0),
@@ -1265,7 +1343,8 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), label)
         });
-        paint_well(ui, swatch, 6.0, color);
+        paint_well(ui, swatch, 6.0, color, response.hovered());
+        rings.push(response.clone());
         egui::Popup::menu(&response)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
@@ -1274,11 +1353,16 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
             });
     }
     let swap_rect = Rect::from_min_size(rect.min + vec2(26.0, -4.0), vec2(13.0, 13.0));
-    let swap = ui
-        .interact(swap_rect, ui.id().with("swap_colors"), Sense::click())
-        .on_hover_text(tr("Swap colors (X)"));
+    let swap = small_icon_button(ui, swap_rect, "swap_colors", tr("Swap colors (X)"));
     let c = swap_rect.center();
-    let stroke = Stroke::new(1.0_f32, ui.palette().muted);
+    let stroke = Stroke::new(
+        1.0_f32,
+        if swap.hovered() {
+            ui.palette().text
+        } else {
+            ui.palette().muted
+        },
+    );
     ui.painter().add(egui::Shape::line(
         vec![
             c + vec2(-4.0, -2.0),
@@ -1295,9 +1379,15 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
         std::mem::swap(foreground, background);
     }
     let reset_rect = Rect::from_min_size(rect.min + vec2(-1.0, 27.0), vec2(12.0, 12.0));
-    let reset = ui
-        .interact(reset_rect, ui.id().with("reset_colors"), Sense::click())
-        .on_hover_text(tr("Default colors (D)"));
+    let reset = small_icon_button(ui, reset_rect, "reset_colors", tr("Default colors (D)"));
+    let stroke = Stroke::new(
+        1.0_f32,
+        if reset.hovered() {
+            ui.palette().text
+        } else {
+            ui.palette().muted
+        },
+    );
     // White behind black, the default colours, each outlined so the white square shows on a
     // light panel and the black one on a dark panel.
     ui.painter().rect(
@@ -1317,6 +1407,9 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
     if reset.clicked() {
         *foreground = [0, 0, 0, 255];
         *background = [255; 4];
+    }
+    for response in rings {
+        focus_ring(ui, &response, 6.0);
     }
 }
 

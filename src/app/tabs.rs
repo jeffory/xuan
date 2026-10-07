@@ -654,10 +654,26 @@ impl EditorApp {
                 selected: selected == Some(key),
                 dirty: self.tab_dirty(key),
                 hovered: response.hovered() || dragging,
-                close_hovered: close.hovered(),
+                // A focused close button shows, as under the pointer.
+                close_hovered: close.hovered() || close.has_focus(),
                 dragging,
             };
             paint_tab(ui, &ui.painter().with_clip_rect(clip), &p, rect, &look);
+            // Inside the tab: tabs sit edge to edge and the strip clips them.
+            widgets::focus_ring_at(
+                ui,
+                &response,
+                rect.intersect(viewport),
+                0.0,
+                widgets::FocusRing::Inside,
+            );
+            widgets::focus_ring_at(
+                ui,
+                &close,
+                close_rect(rect).intersect(viewport).shrink(1.0),
+                9.0,
+                widgets::FocusRing::Inside,
+            );
             if index + 1 < keys.len() {
                 // The 1 px separator in the gap after this tab, not after the last.
                 let x = rect.right() + GAP / 2.0;
@@ -679,6 +695,7 @@ impl EditorApp {
                     );
                 }
             }
+            let close = close.on_hover_text(tr("Close Tab"));
             if close.clicked() || (response.clicked_by(egui::PointerButton::Middle)) {
                 actions.close.push(key);
             } else if response.clicked() {
@@ -756,11 +773,12 @@ impl EditorApp {
 
         let (rect, new) = ui.allocate_exact_size(vec2(TAB_HEIGHT, TAB_HEIGHT), Sense::click());
         new.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "+")
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tr("New canvas"))
         });
         if new.hovered() {
             ui.painter().rect_filled(rect, 0.0, p.tab_hover);
         }
+        widgets::focus_ring_at(ui, &new, rect, 0.0, widgets::FocusRing::Inside);
         let c = rect.center();
         let stroke = Stroke::new(1.4_f32, p.text);
         ui.painter()

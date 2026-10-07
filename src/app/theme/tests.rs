@@ -238,6 +238,23 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
             pairs.push((format!("{label}/{surface}"), r, 3.0));
         }
     }
+    // Keyboard focus rings on the controls that lacked one (#81), against what each ring
+    // borders. Rings round number fields, swatches, layer actions and the dialog close dot sit
+    // on the panel or the window, checked above as "keyboard focus ring".
+    for (label, bg) in [
+        // The tool rail's ring is flush with the button's edge, bordering the panel.
+        ("tool rail focus ring/panel", p.panel),
+        // Unselected document tabs, the New canvas button, a dialog's close control.
+        ("tab focus ring/titlebar", p.titlebar),
+        ("tab focus ring/selected tab", p.panel),
+        // Eye, lock and thumbnail rings in the selected layer row.
+        ("layer icon focus ring/selected row", p.row_selected),
+        // An unselected segment's ring, inside the track.
+        ("segment focus ring/track top", p.segment_track[0]),
+        ("segment focus ring/track bottom", p.segment_track[1]),
+    ] {
+        pairs.push((label.into(), ratio(p.accent, bg), 3.0));
+    }
     // The reset-colours icon's outline, round its white and black squares (#79).
     pairs.push((
         "reset colours outline/panel".into(),

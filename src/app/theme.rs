@@ -78,7 +78,8 @@ pub struct Palette {
 
     // Accent
     /// Accent lines and marks drawn on the surfaces: focus rings, drop indicators, the filled
-    /// part of a slider. At least 3:1 against the panel and the window.
+    /// part of a slider. At least 3:1 against the panel and the window, and against the tab
+    /// strip, segment tracks and selected layer row that focus rings also sit on.
     pub accent: Color32,
     /// Accent fills that carry text: menu rows under the pointer. `on_accent_text` and
     /// `on_accent_muted` reach 4.5:1 on it.
@@ -702,6 +703,16 @@ impl Palette {
         let stands_out = |c: Color32| {
             contrast_ratio(c, self.panel) >= ACCENT_SURFACE_RATIO
                 && contrast_ratio(c, self.window) >= ACCENT_SURFACE_RATIO
+                // Focus rings also sit on the tab strip, segmented controls' tracks and the
+                // selected layer row.
+                && [
+                    self.titlebar,
+                    self.segment_track[0],
+                    self.segment_track[1],
+                    self.row_selected,
+                ]
+                .iter()
+                .all(|surface| contrast_ratio(c, *surface) >= ACCENT_SURFACE_RATIO)
         };
         let away = if self.dark {
             Color32::WHITE
