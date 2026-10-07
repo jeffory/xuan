@@ -1299,6 +1299,7 @@ mod status_bar {
             consented: false,
             provider: None,
             surface: None,
+            ai_boxes: Vec::new(),
         }
     }
 
@@ -1527,6 +1528,57 @@ fields = [{ id = "desc", type = "text", label = "Instruction" }]
     }
 
     #[test]
+    fn the_action_dialog_shows_only_inputs_shown_on_the_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[[actions]]
+id = "new"
+label = "Generate Image…"
+kind = "generate"
+surfaces = ["document"]
+result = { into = "document" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Prompt"
+
+[[actions.inputs]]
+id = "style"
+type = "text"
+label = "Style for New Image"
+surfaces = ["document"]
+
+[[actions.inputs]]
+id = "shape"
+type = "text"
+label = "Shape"
+surfaces = ["menu"]
+"#,
+        )
+        .unwrap();
+        ui.app_mut().install_plugins(
+            vec![xuan::plugins::Manifest::load(dir.path()).unwrap()],
+            vec![],
+        );
+        ui.app_mut().grant_plugin("ai", true);
+        ui.app_mut().start_plugin_action("ai", "new");
+        ui.settle();
+        assert!(ui.has("Prompt"));
+        assert!(ui.harness.query_all_by_label("Shape").next().is_some());
+        assert!(!ui.has("Style for New Image"));
+    }
+
+    #[test]
     fn new_image_offers_a_generate_tab_only_with_a_document_action() {
         let dir = tempfile::tempdir().unwrap();
         let mut ui = UiTest::new();
@@ -1566,7 +1618,11 @@ label = "Prompt"
         assert!(ui.has("Exact size"));
         // Whose action it is, and the prompt takes typing straight away.
         assert!(ui.has("Generate Image · AI"));
-        assert!(ui.harness.get_by_role(Role::MultilineTextInput).is_focused());
+        assert!(
+            ui.harness
+                .get_by_role(Role::MultilineTextInput)
+                .is_focused()
+        );
         assert!(ui.harness.query_all_by_label("Width").next().is_some());
         assert!(!ui.enabled("Generate image"));
         ui.harness

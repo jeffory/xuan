@@ -6,7 +6,7 @@ use serde_json::Value;
 use xuan::{
     i18n::tr,
     plugins::{
-        manifest::{Input, InputKind, Manifest, ResultInto},
+        manifest::{Input, InputKind, Manifest, ResultInto, Surface},
         sandbox,
         ui::Node,
     },
@@ -235,7 +235,8 @@ impl EditorApp {
                     ui.add(egui::Label::new(RichText::new(&spec.description).color(ui.palette().muted)).wrap());
                     ui.add_space(8.0);
                 }
-                for input in &spec.inputs {
+                // Inputs with `surfaces` show only where listed; "menu" is this dialog.
+                for input in spec.inputs.iter().filter(|i| i.shown_on(Surface::Menu)) {
                     if input.kind == InputKind::Regions {
                         ui.add_space(4.0);
                         ui.label(RichText::new(input.label()).strong());
@@ -273,7 +274,7 @@ impl EditorApp {
                             });
                             if selected {
                                 ui.indent(("region_fields", index), |ui| {
-                                    for field in &input.fields {
+                                    for field in input.fields.iter().filter(|f| f.shown_on(Surface::Menu)) {
                                         let value = edit.regions[index]
                                             .fields
                                             .entry(field.id.clone())

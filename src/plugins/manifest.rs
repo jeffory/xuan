@@ -310,6 +310,14 @@ impl Input {
 
     fn validate(&self, nested: bool) -> Result<()> {
         validate_id(&self.id).with_context(|| format!("input `{}`", self.id))?;
+        let mut listed = std::collections::HashSet::new();
+        for surface in &self.surfaces {
+            ensure!(
+                listed.insert(surface),
+                "input `{}` lists a surface twice",
+                self.id
+            );
+        }
         match self.kind {
             InputKind::Enum => {
                 ensure!(!self.values.is_empty(), "enum `{}` has no values", self.id);
@@ -955,6 +963,28 @@ pub fn check_xuan_version(range: &str, version: &str) -> Result<()> {
     Ok(())
 }
 
+/// Characters that are invisible or reorder text: bidi embeddings,
+/// overrides, isolates and marks (which can make `gpj.exe` read as
+/// `exe.jpg`), zero-width characters and the byte order mark.
+pub fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
+}
+
+/// Input ids Xuan sets itself on some runs (`surface` and `target` on
+/// surface runs, `capability`, `point` and `rect` on provider runs), so a
+/// plugin's own input of that id would be overwritten.
+pub const RESERVED_INPUTS: [&str; 5] = ["surface", "target", "capability", "point", "rect"];
+
 pub fn validate_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
@@ -1030,6 +1060,10 @@ impl Manifest {
                     ensure!(
                         action.verb.chars().count() <= 24,
                         "action `{id}`: the verb must be at most 24 characters"
+                    );
+                    ensure!(
+                        !action.verb.chars().any(|c| c.is_control() || invisible(c)),
+                        "action `{id}`: the verb must be plain text, without control or invisible characters"
                     );
                 }
                 Surface::Document => ensure!(
@@ -1149,6 +1183,24 @@ impl Manifest {
                     action.id,
                     input.id
                 );
+                ensure!(
+                    !RESERVED_INPUTS.contains(&input.id.as_str()),
+                    "action `{}`: `{}` is an input id Xuan sets itself; reserved are {}",
+                    action.id,
+                    input.id,
+                    RESERVED_INPUTS.join(", ")
+                );
+                let fields = input.fields.iter();
+                for shown in std::iter::once(input).chain(fields) {
+                    for surface in &shown.surfaces {
+                        ensure!(
+                            *surface == Surface::Menu || action.on(*surface),
+                            "action `{}`: input `{}` is shown on a surface the action does not list",
+                            action.id,
+                            shown.id
+                        );
+                    }
+                }
                 regions += usize::from(input.kind == InputKind::Regions);
             }
             ensure!(
@@ -1936,5 +1988,49 @@ import = true
         // menu is not an action surface; no repeats
         assert!(refused("[[actions]]\nid = \"a\"\nlabel = \"A\"\nkind = \"generate\"\nsurfaces = [\"menu\"]", "edit").contains("menu"));
         assert!(refused("[[actions]]\nid = \"a\"\nlabel = \"A\"\nkind = \"generate\"\nsurfaces = [\"document\", \"document\"]\nresult = { into = \"document\" }", "edit").contains("twice"));
+        // A verb is plain text: no control, bidi or invisible characters.
+        for verb in ["Ed\\u0007it", "Ed\\u202Eit", "Ed\\u200Bit"] {
+            let action = format!(
+                "[[actions]]\nid = \"a\"\nlabel = \"A\"\nsurfaces = [\"region\"]\nverb = \"{verb}\"{regions}"
+            );
+            assert!(refused(&action, "edit").contains("plain text"), "{verb}");
+        }
+        // Inputs: shown only on surfaces the action lists, each once, and
+        // never under an id Xuan sets itself.
+        let generate = "[[actions]]\nid = \"a\"\nlabel = \"A\"\nkind = \"generate\"\nsurfaces = [\"document\"]\nresult = { into = \"document\" }\n\n[[actions.inputs]]\ntype = \"text\"\n";
+        assert!(
+            refused(
+                &format!("{generate}id = \"p\"\nsurfaces = [\"layer\"]"),
+                "edit"
+            )
+            .contains("does not list")
+        );
+        assert!(
+            refused(
+                &format!("{generate}id = \"p\"\nsurfaces = [\"menu\", \"menu\"]"),
+                "edit"
+            )
+            .contains("twice")
+        );
+        assert!(
+            Manifest::parse(
+                &base(
+                    &format!("{generate}id = \"p\"\nsurfaces = [\"menu\", \"document\"]"),
+                    "edit"
+                ),
+                dir
+            )
+            .is_ok()
+        );
+        for id in RESERVED_INPUTS {
+            assert!(
+                refused(&format!("{generate}id = \"{id}\""), "edit").contains("reserved"),
+                "{id}"
+            );
+        }
+        let field = format!(
+            "[[actions]]\nid = \"a\"\nlabel = \"A\"\nsurfaces = [\"region\"]\nverb = \"Edit\"{regions}\nfields = [{{ id = \"d\", type = \"text\", surfaces = [\"layer\"] }}]"
+        );
+        assert!(refused(&field, "edit").contains("does not list"));
     }
 }
