@@ -191,7 +191,7 @@ id = "generate-layer"
 label = "Generate Layer…"
 menu = "Layer"
 kind = "edit"
-description = "Generate an object on a transparent background with GPT Image 2.5 and add it as a new layer the size of the canvas. With Match the picture on, the flattened image goes along so the new layer fits its colours, light and layout."
+description = "Generate an object on a transparent background with GPT Image 2.5 and add it as a new layer the size of the canvas. With Match the picture on, GPT draws it into the flattened image and Seedream lifts it back out, so it fits the picture (two Comfy steps)."
 source = { from = "composite", max_side = 1536 }
 result = { into = "layer" }
 
@@ -205,7 +205,7 @@ placeholder = "A red kite with a long ribbon tail, flying above the lighthouse"
 id = "reference"
 type = "bool"
 label = "Match the picture"
-help = "Send the flattened image along so the new layer fits its colours, lighting and layout."
+help = "Draw it into the flattened image, then lift it out with Seedream, so it fits the picture's colours, lighting and layout. Costs a second Comfy step."
 default = true
 
 [[actions.inputs]]
