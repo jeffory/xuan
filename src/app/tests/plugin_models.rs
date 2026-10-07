@@ -410,7 +410,7 @@ fn the_models_section_downloads_shows_and_deletes_models() {
     ui.click("Manage Plugins…");
     // The only plugin is selected; its permissions mention the models.
     assert!(
-        ui.has("• Uses models that Xuan downloads, after asking you: net (1.5 KB, models.example)")
+        ui.has("Uses models that Xuan downloads, after asking you: net (1.5 KB, models.example)")
     );
     assert!(ui.has("Models"));
     assert!(ui.has("net"));

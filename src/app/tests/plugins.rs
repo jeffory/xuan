@@ -1352,9 +1352,9 @@ fn the_permission_review_says_what_a_read_only_plugin_can_do() {
     ui.drop_files(&[&folder]);
     assert!(ui.has("Id: inst"));
     assert!(ui.has(
-        "• Can read the document and propose selections or new documents, but can't change your image"
+        "Can read the document and propose selections or new documents, but can't change your image"
     ));
-    assert!(!ui.has("• Edits documents directly (as undoable steps)"));
+    assert!(!ui.has("Edits documents directly (as undoable steps)"));
 }
 
 #[test]
@@ -1962,10 +1962,10 @@ fn the_install_review_shows_the_plugin_before_anything_is_copied() {
     assert!(ui.has(&format!("From: {}", folder.display())));
     assert!(ui.has(&format!("Installs to: {}", target.display())));
     assert!(ui.has("Runs: sh plugin.sh"));
-    assert!(ui.has("• Says it connects to: example.com"));
-    assert!(ui.has("• Edits documents directly (as undoable steps)"));
+    assert!(ui.has("Says it connects to: example.com"));
+    assert!(ui.has("Edits documents directly (as undoable steps)"));
     assert!(ui.has(
-        "• Installing does not allow it to run: Xuan asks for that the first time it starts."
+        "Installing does not allow it to run: Xuan asks for that the first time it starts."
     ));
     assert!(!target.exists());
     ui.click("Cancel");
@@ -1993,7 +1993,7 @@ fn the_install_review_shows_the_plugin_before_anything_is_copied() {
     ui.drop_files(&[&folder]);
     assert!(ui.has("• Replaces the installed version 1.2.3"));
     assert!(ui.has(
-        "• It stays allowed: you allowed it before with the same folder, command and permissions."
+        "It stays allowed: you allowed it before with the same folder, command and permissions."
     ));
     ui.click("Update");
     assert!(ui.app().plugin_granted("inst"));
