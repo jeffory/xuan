@@ -203,12 +203,15 @@ impl EditorApp {
                                         edit.selected = kind;
                                         changed = true;
                                     }
-                                    widgets::selectable_value(
+                                    if widgets::selected_row(
                                         ui,
-                                        &mut edit.selected,
-                                        kind,
+                                        edit.selected == kind,
                                         tr(kind.name()),
-                                    );
+                                    )
+                                    .clicked()
+                                    {
+                                        edit.selected = kind;
+                                    }
                                 });
                             }
                         });
@@ -217,7 +220,7 @@ impl EditorApp {
                             // Room for the tallest effect, so the window keeps its size (and its
                             // buttons their place) as effects are switched or added.
                             ui.set_min_height(250.0);
-                            ui.label(RichText::new(tr(edit.selected.name())).strong());
+                            widgets::subheading(ui, tr(edit.selected.name()));
                             ui.add_space(4.0);
                             if edit.effects.contains(edit.selected) {
                                 changed |= controls(ui, &mut edit.effects, edit.selected);

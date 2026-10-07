@@ -50,8 +50,52 @@ pub fn gradient(ui: &Ui, rect: Rect, radius: f32, top: Color32, bottom: Color32)
     ui.painter().add(mesh);
 }
 
+/// The opacity Xuan's own controls paint at in `ui`. egui fades everything in a disabled `Ui` to
+/// `disabled_alpha`; Xuan's controls draw a distinct disabled style instead (#89), whose colours
+/// are chosen to stay readable, so that fade is undone for them.
+pub fn control_opacity(ui: &Ui) -> f32 {
+    if ui.is_enabled() {
+        ui.opacity()
+    } else {
+        (ui.opacity() / ui.visuals().disabled_alpha().max(0.01)).min(1.0)
+    }
+}
+
+/// `ui`'s painter at [`control_opacity`].
+pub fn control_painter(ui: &Ui) -> egui::Painter {
+    let mut painter = ui.painter().clone();
+    painter.set_opacity(control_opacity(ui));
+    painter
+}
+
+/// The colour of a control's label: `color` while enabled, else the palette's disabled text.
+pub fn label_color(ui: &Ui, enabled: bool, color: Color32) -> Color32 {
+    if enabled {
+        color
+    } else {
+        ui.palette().disabled_text
+    }
+}
+
+/// A disabled control's face: a flat fill and a quiet outline, with no gradient, highlight or
+/// shadow, painted at full opacity.
+fn disabled_face(ui: &Ui, rect: Rect, radius: f32) {
+    let p = ui.palette();
+    control_painter(ui).rect(
+        rect,
+        radius,
+        p.control_disabled,
+        Stroke::new(1.0_f32, p.control_disabled_edge),
+        StrokeKind::Inside,
+    );
+}
+
 pub fn bezel(ui: &Ui, response: &Response, radius: f32, primary: bool) {
     let rect = response.rect;
+    if !response.enabled() {
+        disabled_face(ui, rect, radius);
+        return;
+    }
     let pressed = response.is_pointer_button_down_on();
     let p = ui.palette();
     let [top, bottom] = match (primary, pressed) {
@@ -73,14 +117,50 @@ pub fn bezel(ui: &Ui, response: &Response, radius: f32, primary: bool) {
     focus_ring(ui, response, radius);
 }
 
-fn focus_ring(ui: &Ui, response: &Response, radius: f32) {
+/// The keyboard focus ring's width, in points.
+pub const FOCUS_RING_WIDTH: f32 = 2.0;
+
+/// Where a keyboard focus ring goes round `rect`, a control whose corners have `radius`.
+///
+/// - [`FocusRing::Around`]: 2 points clear of the control, the usual ring.
+/// - [`FocusRing::Inside`]: flush with the control's edge, for controls packed edge to edge or
+///   clipped by a scroll area (document tabs, the tool rail), so it neither spills onto a
+///   neighbour nor gets cut off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusRing {
+    Around,
+    Inside,
+}
+
+impl FocusRing {
+    /// The ring's shape, in `color`.
+    pub fn shape(self, rect: Rect, radius: f32, color: Color32) -> egui::epaint::RectShape {
+        let stroke = Stroke::new(FOCUS_RING_WIDTH, color);
+        match self {
+            Self::Around => egui::epaint::RectShape::stroke(
+                rect.expand(2.0),
+                radius + 2.0,
+                stroke,
+                StrokeKind::Outside,
+            ),
+            Self::Inside => {
+                egui::epaint::RectShape::stroke(rect, radius, stroke, StrokeKind::Inside)
+            }
+        }
+    }
+}
+
+/// Draws the keyboard focus ring round `response`'s rect when it has the focus: the 2-point
+/// accent ring every focusable Xuan control shows.
+pub fn focus_ring(ui: &Ui, response: &Response, radius: f32) {
+    focus_ring_at(ui, response, response.rect, radius, FocusRing::Around);
+}
+
+/// Like [`focus_ring`], round `rect` rather than the response's own rect.
+pub fn focus_ring_at(ui: &Ui, response: &Response, rect: Rect, radius: f32, ring: FocusRing) {
     if response.has_focus() {
-        ui.painter().rect_stroke(
-            response.rect.expand(2.0),
-            radius + 2.0,
-            Stroke::new(2.0_f32, ui.palette().accent),
-            StrokeKind::Outside,
-        );
+        ui.painter()
+            .add(ring.shape(rect, radius, ui.palette().accent));
     }
 }
 
@@ -119,13 +199,17 @@ impl Button {
 impl Widget for Button {
     fn ui(self, ui: &mut Ui) -> Response {
         let p = ui.palette();
-        let text = if self.primary {
-            p.on_accent_text
-        } else if self.destructive && ui.is_enabled() {
-            p.error
-        } else {
-            p.text
-        };
+        let text = label_color(
+            ui,
+            ui.is_enabled(),
+            if self.primary {
+                p.on_accent_text
+            } else if self.destructive {
+                p.error
+            } else {
+                p.text
+            },
+        );
         let galley =
             ui.painter()
                 .layout_no_wrap(self.label.clone(), FontId::proportional(12.0), text);
@@ -136,8 +220,7 @@ impl Widget for Button {
         });
         if ui.is_rect_visible(rect) {
             bezel(ui, &response, theme::BUTTON_RADIUS as f32, self.primary);
-            ui.painter()
-                .galley(rect.center() - galley.size() / 2.0, galley, text);
+            control_painter(ui).galley(rect.center() - galley.size() / 2.0, galley, text);
         }
         response
     }
@@ -272,18 +355,36 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
             ui.spacing_mut().button_padding = vec2(6.0, 3.0);
             ui.spacing_mut().interact_size = self.size;
             let p = ui.palette();
+            let enabled = ui.is_enabled();
+            // Disabled: a flat field with muted text at full opacity, not egui's fade (#89).
+            ui.set_opacity(control_opacity(ui));
+            let (fill, edge) = if enabled {
+                (p.field, p.widget_stroke)
+            } else {
+                (p.control_disabled, p.control_disabled_edge)
+            };
             let visuals = ui.visuals_mut();
             visuals.selection.bg_fill = p.accent.gamma_multiply(0.5);
+            if !enabled {
+                visuals.override_text_color = Some(p.disabled_text);
+            }
             for widget in [
+                &mut visuals.widgets.noninteractive,
                 &mut visuals.widgets.inactive,
                 &mut visuals.widgets.hovered,
                 &mut visuals.widgets.active,
-            ] {
+            ]
+            .into_iter()
+            .skip(usize::from(enabled))
+            {
                 widget.corner_radius = CornerRadius::same(4);
-                widget.bg_fill = p.field;
-                widget.weak_bg_fill = p.field;
-                widget.bg_stroke = Stroke::new(1.0_f32, p.widget_stroke);
+                widget.bg_fill = fill;
+                widget.weak_bg_fill = fill;
+                widget.bg_stroke = Stroke::new(1.0_f32, edge);
                 widget.expansion = 0.0;
+                if !enabled {
+                    widget.fg_stroke.color = p.disabled_text;
+                }
             }
             let mut number = egui::DragValue::new(&mut *self.value)
                 .speed(self.speed)
@@ -302,6 +403,8 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
                 self.speed,
                 self.max_decimals,
             );
+            // The field looks the same in every state, so focus shows as the shared ring.
+            focus_ring(ui, &response, 4.0);
             response
         })
         .inner
@@ -386,6 +489,7 @@ pub struct Slider<'a, N> {
     max_decimals: Option<usize>,
     clamp_existing_to_range: bool,
     value_size: egui::Vec2,
+    centered: bool,
 }
 impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
     pub fn new(value: &'a mut N, range: RangeInclusive<N>) -> Self {
@@ -399,7 +503,15 @@ impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
             max_decimals: None,
             clamp_existing_to_range: true,
             value_size: vec2(NUMBER_WIDTH, 22.0),
+            centered: false,
         }
+    }
+    /// A bipolar slider whose neutral value is 0 inside the range (Hue, Exposure, Contrast):
+    /// the rail fills from the zero position to the thumb, so it looks empty at its default
+    /// rather than half on. Ranges without 0 inside fill from the left as usual.
+    pub fn centered(mut self) -> Self {
+        self.centered = true;
+        self
     }
     pub fn text(mut self, label: impl ToString) -> Self {
         self.label = label.to_string();
@@ -488,26 +600,25 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
             );
             let r = response.rect;
             let radius = r.height() / 2.5;
-            let x_range = (r.left() + radius)..=(r.right() - radius);
-            let t = if self.logarithmic && *range.start() > 0.0 {
-                (value.ln() - range.start().ln()) / (range.end().ln() - range.start().ln())
-            } else {
-                (value - range.start()) / (range.end() - range.start())
-            };
-            let x = egui::lerp(x_range.clone(), t.clamp(0.0, 1.0) as f32);
             let rail = Rect::from_min_max(
-                pos2(*x_range.start(), r.center().y - 1.5),
-                pos2(*x_range.end(), r.center().y + 1.5),
+                pos2(r.left() + radius, r.center().y - 1.5),
+                pos2(r.right() - radius, r.center().y + 1.5),
             );
+            let track = SliderTrack {
+                rail,
+                range: range.clone(),
+                logarithmic: self.logarithmic,
+                centered: self.centered,
+            };
+            let x = track.x(value);
             let p = ui.palette();
             ui.painter()
                 .rect_filled(rail.translate(vec2(0.0, 1.0)), 2.0, p.slider_rail_edge);
             ui.painter().rect_filled(rail, 2.0, p.slider_rail);
-            ui.painter().rect_filled(
-                Rect::from_min_max(rail.min, pos2(x, rail.bottom())),
-                2.0,
-                p.accent,
-            );
+            let fill = track.fill(value);
+            if fill.width() > 0.0 {
+                ui.painter().rect_filled(fill, 2.0, p.accent);
+            }
             let thumb = Rect::from_center_size(pos2(x, r.center().y), vec2(14.0, 14.0));
             ui.painter()
                 .circle_filled(thumb.center() + vec2(0.0, 1.0), 7.5, p.thumb_shadow);
@@ -548,6 +659,42 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
     }
 }
 
+/// Where a slider's value sits along its rail, and the part of the rail it fills.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SliderTrack {
+    /// The rail, from the thumb's leftmost to its rightmost centre.
+    pub rail: Rect,
+    pub range: RangeInclusive<f64>,
+    pub logarithmic: bool,
+    /// Fill from 0 rather than from the left end; see [`Slider::centered`].
+    pub centered: bool,
+}
+
+impl SliderTrack {
+    /// The x of `value` along the rail, clamped to its ends.
+    pub fn x(&self, value: f64) -> f32 {
+        let (start, end) = (*self.range.start(), *self.range.end());
+        let t = if self.logarithmic && start > 0.0 {
+            (value.ln() - start.ln()) / (end.ln() - start.ln())
+        } else {
+            (value - start) / (end - start)
+        };
+        egui::lerp(self.rail.x_range(), t.clamp(0.0, 1.0) as f32)
+    }
+
+    /// The filled part of the rail for `value`: from the left end to the thumb or, for a
+    /// centred slider, between the zero position and the thumb. Empty (zero width) at 0.
+    pub fn fill(&self, value: f64) -> Rect {
+        let thumb = self.x(value);
+        let origin = if self.centered {
+            self.x(0.0)
+        } else {
+            self.rail.left()
+        };
+        Rect::from_x_y_ranges(origin.min(thumb)..=origin.max(thumb), self.rail.y_range())
+    }
+}
+
 pub fn segmented<T: Copy + PartialEq>(
     ui: &mut Ui,
     value: &mut T,
@@ -582,16 +729,31 @@ pub fn segmented<T: Copy + PartialEq>(
             .iter()
             .fold(Rect::NOTHING, |rect, (r, ..)| rect.union(*r));
         let p = ui.palette();
-        gradient(ui, rect, 5.0, p.segment_track[0], p.segment_track[1]);
-        ui.painter().rect_stroke(
-            rect,
-            5.0,
-            Stroke::new(1.0_f32, p.segment_edge),
-            StrokeKind::Inside,
-        );
+        let enabled = ui.is_enabled();
+        let painter = control_painter(ui);
+        if enabled {
+            gradient(ui, rect, 5.0, p.segment_track[0], p.segment_track[1]);
+            ui.painter().rect_stroke(
+                rect,
+                5.0,
+                Stroke::new(1.0_f32, p.segment_edge),
+                StrokeKind::Inside,
+            );
+        } else {
+            disabled_face(ui, rect, 5.0);
+        }
+        let text = label_color(ui, enabled, p.text);
         let mut combined = ui.interact(rect, ui.next_auto_id(), Sense::hover());
         for (index, (rect, response, galley, selected)) in responses.into_iter().enumerate() {
-            if selected {
+            if selected && !enabled {
+                // The choice still shows, as a quiet outline rather than a raised bezel.
+                painter.rect_stroke(
+                    rect.shrink(2.0),
+                    4.0,
+                    Stroke::new(1.0_f32, p.disabled_text),
+                    StrokeKind::Inside,
+                );
+            } else if selected {
                 bezel(
                     ui,
                     &Response {
@@ -602,16 +764,30 @@ pub fn segmented<T: Copy + PartialEq>(
                     false,
                 );
             } else if index > 0 {
-                ui.painter().line_segment(
+                painter.line_segment(
                     [
                         rect.left_top() + vec2(0.0, 5.0),
                         rect.left_bottom() - vec2(0.0, 5.0),
                     ],
-                    Stroke::new(1.0_f32, p.segment_separator),
+                    Stroke::new(
+                        1.0_f32,
+                        if enabled {
+                            p.segment_separator
+                        } else {
+                            p.control_disabled_edge
+                        },
+                    ),
                 );
             }
-            ui.painter()
-                .galley(rect.center() - galley.size() / 2.0, galley, p.text);
+            if !selected {
+                // Inside the track, so it does not run over the neighbouring segments.
+                focus_ring_at(ui, &response, rect.shrink(1.0), 4.0, FocusRing::Inside);
+            }
+            painter.galley_with_override_text_color(
+                rect.center() - galley.size() / 2.0,
+                galley,
+                text,
+            );
             combined = combined.union(response);
         }
         combined
@@ -680,7 +856,9 @@ impl PopUp {
             egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), &self.text)
         });
         bezel(ui, &response, theme::BUTTON_RADIUS as f32, false);
-        let painter = ui.painter().with_clip_rect(Rect::from_min_max(
+        let text = label_color(ui, response.enabled(), ui.palette().text);
+        let full = control_painter(ui);
+        let painter = full.with_clip_rect(Rect::from_min_max(
             rect.min + vec2(10.0, 0.0),
             rect.max - vec2(26.0, 0.0),
         ));
@@ -689,17 +867,17 @@ impl PopUp {
             egui::Align2::LEFT_CENTER,
             &self.text,
             FontId::proportional(12.0),
-            ui.palette().text,
+            text,
         );
         let center = pos2(rect.right() - 12.0, rect.center().y);
         for direction in [-1.0, 1.0] {
-            ui.painter().add(egui::Shape::line(
+            full.add(egui::Shape::line(
                 vec![
                     center + vec2(-3.0, direction * 1.5),
                     center + vec2(0.0, direction * 4.0),
                     center + vec2(3.0, direction * 1.5),
                 ],
-                Stroke::new(1.2_f32, ui.palette().text),
+                Stroke::new(1.2_f32, text),
             ));
         }
         response
@@ -711,19 +889,7 @@ pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tr("Color"))
     });
-    ui.painter().rect_filled(rect, 4.0, Color32::BLACK);
-    checkerboard(ui, rect.shrink(2.0), 4.0);
-    ui.painter().rect_filled(
-        rect.shrink(2.0),
-        2.0,
-        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
-    );
-    ui.painter().rect_stroke(
-        rect.shrink(1.5),
-        3.0,
-        Stroke::new(1.0_f32, Color32::from_gray(225)),
-        StrokeKind::Inside,
-    );
+    paint_well(ui, rect, 4.0, color, response.hovered());
     focus_ring(ui, &response, 4.0);
     egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -733,6 +899,34 @@ pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
             }
         });
     response
+}
+
+/// A colour framed for the panel it sits on: an outline that stands out from the surface, a
+/// thin ring of the panel colour, then the colour over the transparency checker, so black,
+/// white and translucent colours all read in either theme.
+fn paint_well(ui: &Ui, rect: Rect, radius: f32, color: &[u8; 4], hovered: bool) {
+    let p = ui.palette();
+    ui.painter().rect(
+        rect,
+        radius,
+        p.panel,
+        Stroke::new(
+            1.0_f32,
+            if hovered {
+                p.widget_hover_stroke
+            } else {
+                p.widget_stroke
+            },
+        ),
+        StrokeKind::Inside,
+    );
+    let inner = rect.shrink(2.5);
+    checkerboard(ui, inner, 4.0);
+    ui.painter().rect_filled(
+        inner,
+        (radius - 2.0).max(1.0),
+        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
+    );
 }
 
 fn color_picker(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
@@ -790,8 +984,15 @@ fn color_picker(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
 #[path = "tests/color_picker.rs"]
 mod color_picker_tests;
 
+#[cfg(test)]
+#[path = "tests/widgets.rs"]
+mod widget_tests;
+
+/// The transparency checkerboard behind layer thumbnails and colour wells, in the canvas's
+/// `checker` colours so it matches the document's in both themes.
 pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
-    ui.painter().rect_filled(rect, 2.0, Color32::from_gray(115));
+    let [even, odd] = ui.palette().checker;
+    ui.painter().rect_filled(rect, 2.0, odd);
     for row in 0..(rect.height() / cell).ceil() as usize {
         for col in 0..(rect.width() / cell).ceil() as usize {
             if (row + col) % 2 == 0 {
@@ -802,7 +1003,7 @@ pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
                     )
                     .intersect(rect),
                     0.0,
-                    Color32::from_gray(160),
+                    even,
                 );
             }
         }
@@ -832,7 +1033,14 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
             5.0,
             ui.palette().close_dot[usize::from(response.hovered())],
         );
-        if response.hovered() {
+        focus_ring_at(
+            ui,
+            &response,
+            Rect::from_center_size(center, vec2(10.0, 10.0)),
+            5.0,
+            FocusRing::Around,
+        );
+        if response.hovered() || response.has_focus() {
             let stroke = Stroke::new(1.0_f32, ui.palette().panel);
             ui.painter()
                 .line_segment([center - vec2(2.0, 2.0), center + vec2(2.0, 2.0)], stroke);
@@ -867,6 +1075,7 @@ fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
         &response,
         focused,
     );
+    focus_ring(ui, &response, theme::BUTTON_RADIUS as f32);
     response.on_hover_text(label).clicked()
 }
 
@@ -1232,8 +1441,25 @@ fn overflow_fades<R>(ui: &Ui, output: &egui::scroll_area::ScrollAreaOutput<R>) {
     }
 }
 
+/// A small clickable icon next to the swatches (swap, reset): named `label` for assistive
+/// technology and the tooltip, with a hover highlight and a focus ring.
+fn small_icon_button(ui: &Ui, rect: Rect, id: &str, label: &str) -> Response {
+    let response = ui.interact(rect, ui.id().with(id), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect.expand(1.0), 3.0, ui.palette().icon_hover);
+    }
+    focus_ring(ui, &response, 3.0);
+    response.on_hover_text(label)
+}
+
 pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) {
     let (rect, _) = ui.allocate_exact_size(vec2(36.0, 40.0), Sense::hover());
+    // The swatches overlap, so their focus rings go on top once both are drawn.
+    let mut rings = Vec::new();
     for (offset, color, label) in [
         (
             vec2(12.0, 12.0),
@@ -1253,14 +1479,8 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), label)
         });
-        ui.painter().rect_filled(swatch, 6.0, Color32::BLACK);
-        ui.painter()
-            .rect_filled(swatch.shrink(1.0), 5.0, Color32::WHITE);
-        ui.painter().rect_filled(
-            swatch.shrink(2.5),
-            3.5,
-            Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
-        );
+        paint_well(ui, swatch, 6.0, color, response.hovered());
+        rings.push(response.clone());
         egui::Popup::menu(&response)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
@@ -1269,11 +1489,16 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
             });
     }
     let swap_rect = Rect::from_min_size(rect.min + vec2(26.0, -4.0), vec2(13.0, 13.0));
-    let swap = ui
-        .interact(swap_rect, ui.id().with("swap_colors"), Sense::click())
-        .on_hover_text(tr("Swap colors (X)"));
+    let swap = small_icon_button(ui, swap_rect, "swap_colors", tr("Swap colors (X)"));
     let c = swap_rect.center();
-    let stroke = Stroke::new(1.0_f32, ui.palette().muted);
+    let stroke = Stroke::new(
+        1.0_f32,
+        if swap.hovered() {
+            ui.palette().text
+        } else {
+            ui.palette().muted
+        },
+    );
     ui.painter().add(egui::Shape::line(
         vec![
             c + vec2(-4.0, -2.0),
@@ -1290,13 +1515,23 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
         std::mem::swap(foreground, background);
     }
     let reset_rect = Rect::from_min_size(rect.min + vec2(-1.0, 27.0), vec2(12.0, 12.0));
-    let reset = ui
-        .interact(reset_rect, ui.id().with("reset_colors"), Sense::click())
-        .on_hover_text(tr("Default colors (D)"));
-    ui.painter().rect_filled(
+    let reset = small_icon_button(ui, reset_rect, "reset_colors", tr("Default colors (D)"));
+    let stroke = Stroke::new(
+        1.0_f32,
+        if reset.hovered() {
+            ui.palette().text
+        } else {
+            ui.palette().muted
+        },
+    );
+    // White behind black, the default colours, each outlined so the white square shows on a
+    // light panel and the black one on a dark panel.
+    ui.painter().rect(
         reset_rect.shrink(3.0).translate(vec2(1.5, 1.5)),
         1.0,
         Color32::WHITE,
+        stroke,
+        StrokeKind::Inside,
     );
     ui.painter().rect(
         reset_rect.shrink(3.0).translate(vec2(-1.5, -1.5)),
@@ -1308,6 +1543,9 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
     if reset.clicked() {
         *foreground = [0, 0, 0, 255];
         *background = [255; 4];
+    }
+    for response in rings {
+        focus_ring(ui, &response, 6.0);
     }
 }
 
@@ -1321,6 +1559,37 @@ pub fn menu_choice<T: PartialEq>(
     if response.clicked() {
         ui.close();
     }
+    response
+}
+
+/// A section heading inside a dialog or pane: the subheading text style in the palette text colour.
+pub fn subheading(ui: &mut Ui, text: impl Into<String>) -> Response {
+    let color = ui.palette().text;
+    ui.label(
+        egui::RichText::new(text)
+            .text_style(theme::subheading_style())
+            .color(color),
+    )
+}
+
+/// A list row that is highlighted while it is the one being edited, like the Settings pages and the
+/// Plugins list: the selection fill, no check mark. Fills the width left in the row.
+pub fn selected_row(ui: &mut Ui, selected: bool, label: impl Into<String>) -> Response {
+    let label = label.into();
+    let width = ui.available_width();
+    let response = ui.add(
+        egui::Button::selectable(selected, (label.clone(), egui::Atom::grow()))
+            .min_size(vec2(width, ui.spacing().interact_size.y)),
+    );
+    // Tell assistive technology which row is the selected one.
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            &label,
+        )
+    });
     response
 }
 

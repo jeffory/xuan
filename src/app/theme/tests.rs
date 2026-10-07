@@ -232,10 +232,55 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
             ("number field border", ratio(p.widget_stroke, bg)),
             ("slider rail", ratio(p.slider_rail, bg)),
             ("keyboard focus ring", ratio(p.accent, bg)),
+            // Colour wells and the tool rail's swatches (#79).
+            ("colour well and swatch outline", ratio(p.widget_stroke, bg)),
         ] {
             pairs.push((format!("{label}/{surface}"), r, 3.0));
         }
     }
+    // Keyboard focus rings on the controls that lacked one (#81), against what each ring
+    // borders. Rings round number fields, swatches, layer actions and the dialog close dot sit
+    // on the panel or the window, checked above as "keyboard focus ring".
+    for (label, bg) in [
+        // The tool rail's ring is flush with the button's edge, bordering the panel.
+        ("tool rail focus ring/panel", p.panel),
+        // Unselected document tabs, the New canvas button, a dialog's close control.
+        ("tab focus ring/titlebar", p.titlebar),
+        ("tab focus ring/selected tab", p.panel),
+        // Eye, lock and thumbnail rings in the selected layer row.
+        ("layer icon focus ring/selected row", p.row_selected),
+        // An unselected segment's ring, inside the track.
+        ("segment focus ring/track top", p.segment_track[0]),
+        ("segment focus ring/track bottom", p.segment_track[1]),
+    ] {
+        pairs.push((label.into(), ratio(p.accent, bg), 3.0));
+    }
+    // Disabled buttons, segments, pop-ups and number fields (#89): a flat fill with text that
+    // stays readable at 3:1 but is clearly dimmer than secondary text. Painted at full opacity,
+    // so these are the colours on screen.
+    for (label, bg) in [
+        ("disabled text/disabled fill", p.control_disabled),
+        ("disabled text/panel", p.panel),
+        ("disabled text/window", p.window),
+    ] {
+        pairs.push((label.into(), ratio(p.disabled_text, bg), 3.0));
+    }
+    pairs.push((
+        "disabled text dimmer than muted (ratio of ratios)".into(),
+        ratio(p.muted, p.control_disabled) / ratio(p.disabled_text, p.control_disabled),
+        1.25,
+    ));
+    // The reset-colours icon's outline, round its white and black squares (#79).
+    pairs.push((
+        "reset colours outline/panel".into(),
+        ratio(p.muted, p.panel),
+        3.0,
+    ));
+    // The checker behind layer thumbnails and colour wells is the canvas's (#79): its squares
+    // tell apart, but stay quiet (under 2:1) behind the image.
+    let checker = contrast_ratio(p.checker[0], p.checker[1]);
+    pairs.push(("checker squares tell apart".into(), checker, 1.2));
+    pairs.push(("checker squares stay quiet".into(), 2.0 / checker, 1.0));
     pairs
 }
 
@@ -407,4 +452,46 @@ fn a_system_accent_replaces_the_blue_and_stays_readable() {
         palette_for(xuan::config::Theme::Dark, None, Some(windows_blue)),
         Palette::DARK.with_accent(windows_blue)
     );
+}
+
+/// The row being edited in a list (Layer Effects, Settings, Plugins) is the selection fill under
+/// the selected text (#87). Checked on Xuan's own palettes, not on arbitrary system accents: the
+/// fill is egui's translucent accent, which also paints text selections.
+#[test]
+fn selected_list_rows_are_readable_in_both_palettes() {
+    for p in [Palette::DARK, Palette::LIGHT] {
+        let v = visuals(&p);
+        for (surface, bg) in [("window", p.window), ("panel", p.panel)] {
+            let r = ratio(v.selection.stroke.color, bg.blend(v.selection.bg_fill));
+            assert!(r >= 4.5, "dark={} selected row/{surface}: {r:.2}", p.dark);
+        }
+    }
+}
+
+#[test]
+fn the_subheading_style_sits_between_body_and_heading() {
+    let ctx = egui::Context::default();
+    apply(&ctx, &Palette::DARK);
+    let style = ctx.style();
+    let size = |text: &TextStyle| style.text_styles[text].size;
+    let sub = size(&subheading_style());
+    assert!(
+        size(&TextStyle::Body) < sub && sub < size(&TextStyle::Heading),
+        "{sub}"
+    );
+}
+
+#[test]
+fn the_monospace_style_resolves_to_a_monospace_family() {
+    let ctx = egui::Context::default();
+    apply(&ctx, &Palette::LIGHT);
+    let font = ctx.style().text_styles[&TextStyle::Monospace].clone();
+    assert_eq!(font.family, egui::FontFamily::Monospace);
+    // Narrow and wide letters take the same width: the font is Hack, not Inter.
+    let mut widths = (0.0, 0.0);
+    let _ = ctx.run(Default::default(), |ctx| {
+        widths = ctx.fonts_mut(|f| (f.glyph_width(&font, 'i'), f.glyph_width(&font, 'W')));
+    });
+    assert!(widths.0 > 0.0);
+    assert_eq!(widths.0, widths.1);
 }

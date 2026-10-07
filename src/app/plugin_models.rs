@@ -597,7 +597,7 @@ impl EditorApp {
         let mut delete_all = false;
         let mut cancel = None;
         let mut verify = None;
-        ui.label(RichText::new(tr("Models")).strong());
+        widgets::subheading(ui, tr("Models"));
         let busy = self.plugins.model_jobs.iter().any(|job| &job.plugin == id);
         egui::Grid::new(("plugin_models", id))
             .num_columns(4)

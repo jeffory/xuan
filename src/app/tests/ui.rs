@@ -36,6 +36,9 @@ mod dialogs;
 #[path = "ui_tool_rail.rs"]
 mod tool_rail;
 
+#[path = "ui_focus.rs"]
+mod focus;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;
@@ -837,6 +840,47 @@ mod layer_appearance {
         ui.app_mut().command("undo");
         ui.settle();
         assert_eq!(active(&ui).effects, None);
+    }
+
+    #[test]
+    fn the_layer_effects_list_highlights_the_row_being_edited_without_a_check_glyph() {
+        use xuan::layer_effects::EffectKind;
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        ui.open_menu("Layer");
+        ui.click("Layer Effects…");
+        let selected = |ui: &UiTest, name: &str| {
+            ui.harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, name)
+                .accesskit_node()
+                .toggled()
+        };
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Drop Shadow"),
+            Some(egui::accesskit::Toggled::False)
+        );
+        // Clicking a name selects the row; it does not turn the effect on.
+        ui.click("Inner Glow");
+        assert_eq!(
+            selected(&ui, "Inner Glow"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::False)
+        );
+        let edit = ui.app().layer_effects.as_ref().unwrap();
+        assert_eq!(edit.selected, EffectKind::InnerGlow);
+        assert!(edit.effects.is_empty());
+        assert!(active(&ui).effects.is_none());
+        // The check mark is gone: nothing in the list is labelled with one.
+        assert!(ui.harness.query_all_by_label_contains("✓").next().is_none());
+        ui.click("Cancel");
     }
 
     #[test]
