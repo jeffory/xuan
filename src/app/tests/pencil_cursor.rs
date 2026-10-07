@@ -33,14 +33,8 @@ fn bracket_keys_step_the_pencil_back_up_one_pixel_at_a_time() {
 
 #[test]
 fn brush_keys_keep_the_geometric_steps_and_also_reach_one_pixel() {
-    assert_eq!(
-        key_sizes(Tool::Brush, 100.0, Key::OpenBracket, 1),
-        [87.0]
-    );
-    assert_eq!(
-        key_sizes(Tool::Brush, 100.0, Key::CloseBracket, 1),
-        [115.0]
-    );
+    assert_eq!(key_sizes(Tool::Brush, 100.0, Key::OpenBracket, 1), [87.0]);
+    assert_eq!(key_sizes(Tool::Brush, 100.0, Key::CloseBracket, 1), [115.0]);
     assert_eq!(
         key_sizes(Tool::Brush, 3.0, Key::OpenBracket, 3),
         [2.0, 1.0, 1.0]
@@ -72,12 +66,24 @@ fn square_outline_covers_the_dab_pixels_for_odd_and_even_sizes() {
     // Odd: centred on the pixel under the pointer (document pixel 5, 7).
     let odd = pencil_outline(3, true, Point::new(5.3, 7.9), origin, zoom);
     let (min, max) = bounds(&odd);
-    assert_eq!((min, max), (pos2(100.0 + 4.0 * 8.0, 50.0 + 6.0 * 8.0), pos2(100.0 + 7.0 * 8.0, 50.0 + 9.0 * 8.0)));
+    assert_eq!(
+        (min, max),
+        (
+            pos2(100.0 + 4.0 * 8.0, 50.0 + 6.0 * 8.0),
+            pos2(100.0 + 7.0 * 8.0, 50.0 + 9.0 * 8.0)
+        )
+    );
     assert_eq!(odd.len(), 4);
     // Even: centred on the nearest pixel corner (6, 8).
     let even = pencil_outline(4, true, Point::new(5.6, 7.7), origin, zoom);
     let (min, max) = bounds(&even);
-    assert_eq!((min, max), (pos2(100.0 + 4.0 * 8.0, 50.0 + 6.0 * 8.0), pos2(100.0 + 8.0 * 8.0, 50.0 + 10.0 * 8.0)));
+    assert_eq!(
+        (min, max),
+        (
+            pos2(100.0 + 4.0 * 8.0, 50.0 + 6.0 * 8.0),
+            pos2(100.0 + 8.0 * 8.0, 50.0 + 10.0 * 8.0)
+        )
+    );
     // One pixel.
     let one = pencil_outline(1, true, Point::new(0.2, 0.2), origin, zoom);
     assert_eq!(bounds(&one), (origin, origin + egui::vec2(8.0, 8.0)));

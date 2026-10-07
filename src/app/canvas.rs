@@ -65,9 +65,16 @@ pub(super) fn pencil_outline(
     let at = |x: i32, y: i32| origin + vec2(x as f32, y as f32) * zoom;
     let mut outline: Vec<Pos2> = Vec::new();
     let mut push = |point: Pos2| {
-        if outline.last() != Some(&point) {
-            outline.push(point);
+        if outline.last() == Some(&point) {
+            return;
         }
+        // Drop a vertex that sits in the middle of a straight run.
+        if let [.., a, b] = outline[..]
+            && ((a.x == b.x && b.x == point.x) || (a.y == b.y && b.y == point.y))
+        {
+            outline.pop();
+        }
+        outline.push(point);
     };
     // Down the right edge, then back up the left (tips are convex per row).
     for (&y, &(_, right)) in &rows {
@@ -77,6 +84,13 @@ pub(super) fn pencil_outline(
     for (&y, &(left, _)) in rows.iter().rev() {
         push(at(left, y + 1));
         push(at(left, y));
+    }
+    // Close the loop: the first vertex may also be mid-run.
+    if let [first, .., last] = outline[..]
+        && let [.., before] = outline[..outline.len() - 1]
+        && ((before.x == last.x && last.x == first.x) || (before.y == last.y && last.y == first.y))
+    {
+        outline.pop();
     }
     outline
 }
