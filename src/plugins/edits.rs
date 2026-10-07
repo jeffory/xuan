@@ -18,7 +18,7 @@ use crate::{
     effects::Filter,
     paint::ShapeKind,
     selection::SelectionMode,
-    text::{TextRenderer, TextStyle},
+    text::{PathTextOptions, TextPath, TextRenderer, TextStyle},
     vector::{FillRule, VectorPath},
 };
 
@@ -86,6 +86,27 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         }
         described
     });
+    let text = layer.text.as_ref().map(|style| {
+        let mut described = json!({
+            "text": style.content,
+            "family": style.family,
+            "size": style.size,
+            "color": Color(style.color),
+            "bold": style.bold,
+            "italic": style.italic,
+            "underline": style.underline,
+            "strikethrough": style.strikethrough,
+        });
+        if let Some(path) = &style.path {
+            // As for path shapes: where the path is now, in document coordinates (null once
+            // the layer is warped), and as stored, in the layer's own box.
+            described["path"] = json!(path.in_document(layer.transform).map(|p| p.to_svg()));
+            described["path_options"] = json!(path.options);
+            described["local_path"] = json!(path.d);
+            described["local_size"] = json!([path.width, path.height]);
+        }
+        described
+    });
     let masks = masks(document, layer);
     // An effect layer inside an image's stack applies to that image only.
     let attached_to = document
@@ -118,6 +139,7 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         "masks": masks,
         "attached_to": attached_to,
         "shape": shape,
+        "text": text,
         "generated": layer.generated,
         "provenance": layer.provenance,
     })
@@ -939,13 +961,19 @@ pub enum Edit {
         #[serde(default)]
         above: Option<Uuid>,
     },
-    /// An editable text layer with its top-left corner at `x`, `y`.
+    /// An editable text layer with its top-left corner at `x`, `y`; or, with `path` (SVG path
+    /// data in document coordinates, which also places it), set along that path, laid out by
+    /// `path_options`.
     AddTextLayer {
         text: String,
-        #[serde(default)]
-        x: f32,
-        #[serde(default)]
-        y: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_options: Option<PathTextOptions>,
         #[serde(default)]
         family: Option<String>,
         #[serde(default)]
@@ -964,6 +992,36 @@ pub enum Edit {
         name: Option<String>,
         #[serde(default)]
         above: Option<Uuid>,
+    },
+    /// Change a text layer's text and style. `path` (SVG path data in document coordinates)
+    /// sets the text along a path, and `null` returns it to a box; `path_options` changes how
+    /// it follows the path, keeping the options it leaves out. Left out, nothing changes.
+    SetText {
+        layer: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        family: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<Color>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bold: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        italic: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        underline: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strikethrough: Option<bool>,
+        #[serde(
+            default,
+            deserialize_with = "nullable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        path: Option<Option<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_options: Option<Value>,
     },
     /// An editable shape layer covering the box, or for `Path` the shape of
     /// `path` (SVG path data in document coordinates), which places it.
@@ -1565,7 +1623,8 @@ macro_rules! layer_ids {
             | Edit::SetMask { layer, .. }
             | Edit::Select { layer }
             | Edit::UngroupLayers { layer }
-            | Edit::Transform { layer, .. } => vec![layer],
+            | Edit::Transform { layer, .. }
+            | Edit::SetText { layer, .. } => vec![layer],
             Edit::SelectLayers { layers }
             | Edit::MergeLayers { layers }
             | Edit::GroupLayers { layers } => layers.$list().collect(),
@@ -2292,6 +2351,8 @@ fn apply_each(
                 text,
                 x,
                 y,
+                path,
+                path_options,
                 family,
                 size,
                 color,
@@ -2313,26 +2374,135 @@ fn apply_each(
                     italic: *italic,
                     underline: *underline,
                     strikethrough: *strikethrough,
+                    path: None,
                 };
                 style.validate()?;
                 ensure!(!text.trim().is_empty(), "The text is empty");
-                let pixels = reader
-                    .text
-                    .get_or_insert_with(TextRenderer::default)
-                    .render(&style)?;
-                reader.add_pixels(pixels.width(), pixels.height())?;
-                let mut layer = Layer::image(
-                    match name {
-                        Some(_) => layer_name(name, "")?,
-                        None => style.layer_name(),
-                    },
-                    pixels,
-                );
-                layer.text = Some(style);
-                layer.transform.x = *x;
-                layer.transform.y = *y;
+                let renderer = reader.text.get_or_insert_with(TextRenderer::default);
+                let mut layer = if let Some(path) = path {
+                    ensure!(
+                        x.is_none() && y.is_none(),
+                        "Text on a path is placed by its path's coordinates; leave out x and y"
+                    );
+                    let path = VectorPath::parse(path)?;
+                    crate::text::path_layer(
+                        renderer,
+                        style,
+                        &path,
+                        path_options.clone().unwrap_or_default(),
+                    )?
+                } else {
+                    ensure!(path_options.is_none(), "`path_options` go only with `path`");
+                    let pixels = renderer.render(&style)?;
+                    let mut layer = Layer::image(style.layer_name(), pixels);
+                    layer.text = Some(style);
+                    layer.transform.x = x.unwrap_or(0.0);
+                    layer.transform.y = y.unwrap_or(0.0);
+                    layer
+                };
+                let (w, h) = layer.pixels.as_ref().unwrap().dimensions();
+                reader.add_pixels(w, h)?;
+                if name.is_some() {
+                    layer.name = layer_name(name, "")?;
+                }
                 ensure!(layer.transform.valid(), "Invalid layer placement");
                 added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::SetText {
+                layer,
+                text,
+                family,
+                size,
+                color,
+                bold,
+                italic,
+                underline,
+                strikethrough,
+                path,
+                path_options,
+            } => {
+                let target = find(document, *layer)?;
+                ensure!(!target.locked, "Layer {} is locked", target.name);
+                let mut style = target
+                    .text
+                    .clone()
+                    .with_context(|| format!("Layer {} is not a text layer", target.name))?;
+                if let Some(text) = text {
+                    ensure!(!text.trim().is_empty(), "The text is empty");
+                    style.content = text.clone();
+                }
+                if let Some(family) = family {
+                    style.family = family.clone();
+                }
+                if let Some(size) = size {
+                    style.size = *size;
+                }
+                if let Some(color) = color {
+                    style.color = color.0;
+                }
+                for (value, field) in [
+                    (bold, &mut style.bold),
+                    (italic, &mut style.italic),
+                    (underline, &mut style.underline),
+                    (strikethrough, &mut style.strikethrough),
+                ] {
+                    if let Some(value) = value {
+                        *field = *value;
+                    }
+                }
+                let options = match (path_options, &style.path) {
+                    (None, Some(old)) => old.options.clone(),
+                    (None, None) => PathTextOptions::default(),
+                    (Some(changes), old) => {
+                        // Keep the options the request leaves out.
+                        let mut options = serde_json::to_value(
+                            old.as_ref().map(|p| p.options.clone()).unwrap_or_default(),
+                        )?;
+                        let changes = changes
+                            .as_object()
+                            .context("`path_options` must be an object")?;
+                        for (key, value) in changes {
+                            options[key] = value.clone();
+                        }
+                        serde_json::from_value(options)
+                            .map_err(|e| anyhow::anyhow!("Invalid `path_options`: {e}"))?
+                    }
+                };
+                match path {
+                    Some(None) => {
+                        ensure!(
+                            path_options.is_none(),
+                            "`path_options` cannot go with `path: null`"
+                        );
+                        style.path = None;
+                    }
+                    Some(Some(d)) => {
+                        let d = VectorPath::parse(d)?;
+                        style.path = Some(TextPath::from_document(
+                            &d,
+                            target.transform,
+                            target
+                                .pixels
+                                .as_ref()
+                                .context("Text layer has no pixels")?
+                                .dimensions(),
+                            options,
+                        )?);
+                    }
+                    None => match &mut style.path {
+                        Some(stored) => stored.options = options,
+                        None => ensure!(
+                            path_options.is_none(),
+                            "The text is not on a path; give `path` with `path_options`"
+                        ),
+                    },
+                }
+                style.validate()?;
+                let renderer = reader.text.get_or_insert_with(TextRenderer::default);
+                let target = find_mut(document, *layer)?;
+                crate::text::restyle_layer(renderer, target, style)?;
+                let (w, h) = target.pixels.as_ref().unwrap().dimensions();
+                reader.add_pixels(w, h)?;
             }
             Edit::AddShapeLayer {
                 shape,

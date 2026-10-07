@@ -1029,6 +1029,17 @@ Layers and their properties:
   editable text layer with its top-left corner at `x`, `y`. `size` is in pixels
   (1–1024, default 48), the text at most 16 KiB; an unknown `family` falls back
   to Xuan's bundled font.
+- `{"op": "add_text_layer", "text", "path", "path_options"?, …}`: text set
+  along `path`, [SVG path data](#svg-path-data) in document coordinates, which
+  also places the layer (give no `x` or `y`); the other fields are as above.
+  See [Text on a path](#text-on-a-path).
+- `{"op": "set_text", "layer", "text"?, "family"?, "size"?, "color"?, "bold"?,
+  "italic"?, "underline"?, "strikethrough"?, "path"?: d | null,
+  "path_options"?}`: change a text layer, keeping what is left out. `path`
+  (document coordinates) sets the text along a path, `null` returns it to a
+  box at the layer's top-left corner, and `path_options` changes how it
+  follows the path, keeping the options it leaves out. The layer must not be
+  locked.
 - `{"op": "add_shape_layer", "shape": "Rectangle" | "Ellipse" |
   "RoundedRectangle", "x", "y", "width", "height", "color"?,
   "corner_radius"?, "name"?, "above"?}`: an editable shape layer.
@@ -1182,6 +1193,37 @@ as SVG does, and take `fill_rule` `nonzero` (the default, SVG's) or `evenodd`
 (an inner subpath always cuts a hole). Errors say what was expected and at
 which character, e.g. `SVG path: expected the y of the line's end for `L` at
 character 11, found the end of the path`.
+
+### Text on a path
+
+A text layer can follow a path instead of sitting in a box (format 11). Each
+glyph keeps the position and advance it has on a straight line, which becomes
+its distance along the path's first subpath; it is drawn there turned to the
+path's direction. The path is kept in the layer's own box, as a path shape's
+outline is, so moving, scaling or rotating the layer takes it along, and
+changing the text keeps it where it is in the document. Glyphs whose middle
+falls before the start or past the end of an open path are hidden, as in
+Photoshop; on a closed path the text wraps around. Later lines run beside the
+first, a line height further from the path each.
+
+`path_options`, every key optional:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `start_offset` | `0` | Where the text is anchored, in percent of the path's length (−100–100) |
+| `align` | `"start"` | `"start"`, `"center"` or `"end"`: the text starts, is centred or ends at the start offset |
+| `side` | `"left"` | `"left"`: letters stand on the left of the path's direction (on top of a path drawn left to right); `"right"`: flipped to its other side, running the other way |
+| `letter_spacing` | `0` | Extra pixels after each letter (−1000–1000) |
+| `rotate` | `true` | Letters turn to follow the path; `false` keeps them upright |
+| `baseline_shift` | `0` | Pixels to raise the letters off the path, negative to lower them |
+| `size_end` | none | Font size of the last letter (1–1024), ramping from `size` at the first; the letters close up as they shrink |
+| `opacity_start`, `opacity_end` | `1` | Opacity of the first and last letter (0–1), blending between them and multiplying the colour's alpha |
+
+A text layer's description has `text`: `{text, family, size, color, bold,
+italic, underline, strikethrough}`, and for text on a path also `path` (where
+the path is now, in document coordinates; `null` once the layer is warped),
+`path_options`, and `local_path` and `local_size`, the path as stored in the
+layer's own box. Other layers have `text: null`.
 
 Edits apply in order, each in the document's coordinates at that point: an
 `add_layer` after an `extend_canvas` is placed on the grown canvas. A batch

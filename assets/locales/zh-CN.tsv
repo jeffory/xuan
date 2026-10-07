@@ -1002,6 +1002,18 @@ Even-odd fill (inner subpaths cut holes)	奇偶填充（内部子路径形成镂
 New	新建
 New path from SVG path data, e.g. M 0 70 C 12 64 38 64 51 70 Z	从 SVG 路径数据新建路径，例如 M 0 70 C 12 64 38 64 51 70 Z
 Add Path	添加路径
+Path	路径
+Text on a path	路径文字
+None (text box)	无（文本框）
+Save a path with Select → Paths… to set text along it.	用“选择 → 路径…”保存路径后，可让文字沿路径排列。
+Start	起点
+End	终点
+Letter spacing	字距
+Baseline shift	基线偏移
+Flip to the other side	翻转到另一侧
+Turn letters with the path	字母随路径旋转
+End size	结尾字号
+Letters past the end of an open path are hidden; on a closed path the text wraps around.	超出开放路径末端的字母会被隐藏；在闭合路径上文字会环绕。
 Pen	钢笔
 Click for a corner, drag for a curve · Click the first anchor to close · Enter finishes · Drag anchors and handles · Alt-drag a handle breaks it · Click a segment to add an anchor, an anchor to delete it · Alt-click converts	单击添加角点，拖动添加曲线 · 单击第一个锚点闭合 · Enter 完成 · 拖动锚点和手柄 · Alt 拖动手柄可将其断开 · 单击线段添加锚点，单击锚点删除 · Alt 单击转换
 Convert Anchor	转换锚点

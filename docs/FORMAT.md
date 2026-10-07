@@ -4,7 +4,7 @@ A `.xuan` file is a ZIP archive containing `manifest.json` and lossless PNG asse
 
 The document records canvas dimensions, DPI, layer order, IDs, parent groups, clipping references, opacity, blending, visibility, locks, transforms, adjustment parameters, and optional live shape styles. Layers are stored bottom to top; each folder's subtree is composited together in hierarchy order. A folder's `opacity` multiplies into every layer inside it (nested folders multiply too); folders are pass-through, so their `blend` is not used. Every version stores and renders folder opacity, so setting it needs no newer version. Masks have enabled/linked flags and an optional independent placement transform.
 
-Text layers also record an optional `text` object with UTF-8 content, font family, pixel size, RGBA color, and bold, italic, underline, and strikethrough flags. Their PNG assets preserve the rendered appearance when fonts are unavailable on another machine. Fonts are discovered from the system and are not embedded in the project; editing unavailable fonts uses the bundled Inter Variable fallback. Text is limited to 16 KiB and font sizes to 1–1024 pixels. Older version 1 files without text metadata remain supported.
+Text layers also record an optional `text` object with UTF-8 content, font family, pixel size, RGBA color, and bold, italic, underline, and strikethrough flags. Their PNG assets preserve the rendered appearance when fonts are unavailable on another machine. Fonts are discovered from the system and are not embedded in the project; editing unavailable fonts uses the bundled Inter Variable fallback. Text is limited to 16 KiB and font sizes to 1–1024 pixels. Older version 1 files without text metadata remain supported. Text can also follow a path ([version 11](#text-on-a-path-version-11)).
 
 Transforms retain original source pixels. Optional perspective corners are normalized coordinates before affine scale/rotation/flip. Channel adjustments retain separate RGB curves/levels and seven hue ranges. Selections, current multi-selection, clipboard contents, and undo/redo snapshots are not serialized.
 
@@ -251,3 +251,36 @@ most 256 KiB, with at most 10,000 segments and every coordinate finite and withi
   that do not redraw shapes still show it.
 
 Invalid path data, names or boxes fail validation on load and save.
+
+## Text on a path (version 11)
+
+A document with a text layer set along a path is written as version 11; everything else
+keeps the lowest version its content needs (1-10), so older builds report an unsupported
+version instead of dropping the path and setting the text in a box the next time it is
+edited. A version 11 document may also carry anything the earlier versions can. The reader
+accepts versions 1-11.
+
+A layer's `text` object may have a `path` object:
+
+```json
+{"d": "M0,40 C50,-30 180,-30 230,40", "width": 236, "height": 64,
+ "start_offset": 50, "align": "center", "side": "left", "letter_spacing": 0,
+ "rotate": true, "baseline_shift": 0, "size_end": 7, "opacity_start": 0.95,
+ "opacity_end": 0.55}
+```
+
+- `d` is SVG path data in the coordinates of a `width` × `height` box (each 1-300,000),
+  which the layer's pixels cover, as for a path shape's outline, so the path moves,
+  stretches and turns with the layer's transform. Only its first subpath is followed.
+  Xuan rewrites the path and box whenever it redraws the text, so the box is the layer's
+  pixel size.
+- `start_offset` (percent of the path's length, −100-100), `align` (`start`, `center` or
+  `end`), `side` (`left` or `right`), `letter_spacing` (pixels, −1,000-1,000), `rotate`,
+  `baseline_shift` (pixels, −10,000-10,000), `size_end` (1-1,024, optional) and
+  `opacity_start` / `opacity_end` (0-1) are as in
+  [PLUGINS.md](PLUGINS.md#text-on-a-path); each defaults when left out (0, `start`,
+  `left`, 0, true, 0, none, 1, 1).
+
+The layer's PNG holds the text as drawn along the path (glyph outlines filled with 16
+sample rows per pixel), so readers that cannot lay text along a path still show it.
+Invalid path data, boxes or options fail validation on load and save.
