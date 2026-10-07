@@ -450,6 +450,7 @@ type = "seed"                     # integer with a "random" button
 id = "comfy"
 title = "Comfy Cloud"
 refresh = "manual"                # or "document" to re-render after edits
+placement = "sidebar"             # or "settings": on the plugin's page in Manage Plugins
 
 [[formats]]
 id = "jxl"
@@ -1301,6 +1302,15 @@ editor's own widgets, in the editor's theme:
 A plugin may also notify `pane/update` `{pane, tree}` at any time, for example
 when a background job finishes.
 
+A pane is shown in the sidebar unless it sets `placement = "settings"`. Such a
+pane is drawn on the plugin's page in **Plugins → Manage Plugins…**, below its
+settings, as tall as its contents (up to a limit, then it scrolls). It suits
+status and controls that belong with the plugin's settings, such as an account
+or a **Check for updates** button, rather than something used while editing.
+It is never added to the sidebar or the **Window** menu, and it is rendered
+only while that page is open. Xuan versions without `placement` show it in the
+sidebar.
+
 Widget tree nodes (`type` plus fields):
 
 | Type | Fields |
@@ -1367,8 +1377,15 @@ request](#withdrawing-a-request)).
   process group on Unix, its Job Object on Windows) shortly after.
 - The host answers plugin requests on the UI thread between frames; a plugin
   must not expect sub-frame latency.
-- Jobs run in the background and the editor remains usable. Only one job per
-  document is in flight; a job is cancelled if its document tab closes.
+- Jobs run in the background and the editor remains usable. Several jobs may
+  run on one document at once. Their results are applied one at a time in the
+  order the jobs finish: while one is shown as a proposal, the next waits until
+  it is accepted or discarded. A job is cancelled if its document tab closes.
+- Running jobs are shown in the status bar, with Cancel: the job's label and
+  its latest `job/progress` message, a progress bar once it reports a
+  `fraction` (a spinner until then), and a count such as **1 of 3** that lists
+  every running job. A plugin that cannot measure its progress should send
+  messages without a `fraction` rather than a made-up one.
 - Wherever a plugin's own words appear, Xuan says which plugin they come
   from: menu items and the shortcut list show `Action label · Plugin name`
   (hover a menu item for the plugin's id and folder), and permission

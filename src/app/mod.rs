@@ -545,7 +545,10 @@ pub struct EditorApp {
     notice: Option<String>,
     /// Photoshop files read and waiting for their conversion report to be accepted.
     photoshop_imports: photoshop::PendingImports,
+    /// The latest status message, shown in the status bar for a few seconds.
     status: String,
+    /// The status text the status bar last saw and when it changed (UI time).
+    status_shown: (String, f64),
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
     /// The tab bar's scroll position, closed-tab history and pending closes.
@@ -733,6 +736,7 @@ impl EditorApp {
             notice: None,
             photoshop_imports: Default::default(),
             status: String::new(),
+            status_shown: (String::new(), 0.0),
             rename: None,
             close_tab: None,
             tab_strip: Default::default(),
@@ -1847,7 +1851,6 @@ impl EditorApp {
             self.canvas(ctx);
             self.plugin_action_dialog(ctx);
             self.color_range_dialog(ctx);
-            self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
         self.command_palette(ctx);

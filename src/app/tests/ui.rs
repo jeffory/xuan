@@ -1128,3 +1128,70 @@ mod selection_providers {
         assert_eq!(saved.providers.get(Capability::SelectSubject), Some("seg"));
     }
 }
+
+/// Background jobs and status messages share the right of the status bar.
+mod status_bar {
+    use super::*;
+
+    fn job(
+        app: &EditorApp,
+        label: &str,
+        progress: Option<f32>,
+        message: &str,
+    ) -> crate::app::plugins::PluginJob {
+        crate::app::plugins::PluginJob {
+            id: uuid::Uuid::new_v4(),
+            plugin: "mock".into(),
+            action: "echo".into(),
+            label: label.into(),
+            document: app.session().unwrap().document.id,
+            _work_dir: xuan::plugins::private_dir("xuan-job-").unwrap(),
+            prepared: xuan::plugins::jobs::Prepared::none(),
+            regions: Vec::new(),
+            inputs: serde_json::json!({}),
+            into: xuan::plugins::manifest::ResultInto::Layer,
+            mask_to_regions: false,
+            progress,
+            message: message.into(),
+            cancelled: false,
+            consented: false,
+            provider: None,
+        }
+    }
+
+    #[test]
+    fn running_jobs_show_in_the_status_bar_with_a_count() {
+        let mut ui = UiTest::with_document();
+        let first = job(ui.app(), "Generate Image…", None, "Running on Comfy Cloud");
+        ui.app_mut().plugins.jobs.push(first);
+        ui.settle();
+        // No floating window: the job is a line in the status bar.
+        assert!(ui.has("Generate Image · Running on Comfy Cloud"));
+        assert!(!ui.has("1 of 1"));
+        let second = job(ui.app(), "Edit Image…", Some(0.5), "");
+        ui.app_mut().plugins.jobs.push(second);
+        ui.settle();
+        assert!(ui.has("1 of 2"));
+        // The count lists every job, each with its own Cancel.
+        ui.click("1 of 2");
+        assert!(ui.has_role(Role::Label, "Generate Image"));
+        assert!(ui.has_role(Role::Label, "Edit Image"));
+        assert_eq!(ui.harness.query_all_by_label("Cancel").count(), 3);
+    }
+
+    #[test]
+    fn status_messages_show_for_a_few_seconds_then_the_tool_hint_returns() {
+        let mut ui = UiTest::with_document();
+        let hint = ui.app().tool.hint().to_owned();
+        assert!(ui.has(&hint));
+        ui.app_mut().status = "Mock (plugin mock): Saved\nsecond line".into();
+        ui.settle();
+        assert!(ui.has("Mock (plugin mock): Saved"));
+        assert!(!ui.has(&hint));
+        // Once the message is old, the hint is back.
+        ui.app_mut().status_shown.1 = -100.0;
+        ui.settle();
+        assert!(!ui.has("Mock (plugin mock): Saved"));
+        assert!(ui.has(&hint));
+    }
+}

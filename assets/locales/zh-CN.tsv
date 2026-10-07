@@ -1024,3 +1024,5 @@ Copies of the stroke around the centre.	笔画绕中心的副本数。
 Centre X	中心 X
 Centre Y	中心 Y
 Centre on canvas	居中于画布
+{index} of {count}	第 {index} 个，共 {count} 个
+Show all running jobs	显示所有正在运行的任务

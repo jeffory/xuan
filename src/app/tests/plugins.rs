@@ -2559,6 +2559,71 @@ mod unix {
     }
 
     #[test]
+    fn a_settings_pane_is_drawn_in_manage_plugins_not_the_sidebar() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        let manifest = MANIFEST.replace("refresh = \"document\"", "placement = \"settings\"");
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        let key = "plugin:mock/info";
+        assert!(app.config.panes.get(key).is_none());
+        assert!(app.pane_title(key).is_none());
+        assert!(!app.pane_entries().iter().any(|(id, _, _)| id == key));
+        app.command("reset_panels");
+        assert!(app.config.panes.get(key).is_none());
+        // Its plugin's page in Manage Plugins opens it.
+        app.plugins.manager_selected = Some("mock".into());
+        app.dialog = Some(Dialog::Plugins);
+        run_until(&context, &mut app, |app| {
+            app.plugins
+                .panes
+                .get(key)
+                .is_some_and(|state| state.tree.is_some())
+        });
+    }
+
+    #[test]
+    fn several_jobs_run_on_one_document_and_their_results_wait_their_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for _ in 0..2 {
+            app.start_plugin_action("mock", "echo");
+            app.add_region(Point::new(2.0, 2.0), Point::new(10.0, 10.0));
+            app.run_plugin_action();
+            assert!(app.error.is_none(), "{:?}", app.error);
+        }
+        assert_eq!(app.plugins.jobs.len(), 2);
+        assert_eq!(app.running_jobs().len(), 2);
+        let echoed = |app: &EditorApp| {
+            (app.session().unwrap().document.layers.iter())
+                .filter(|l| l.name == "Echoed")
+                .count()
+        };
+        // Both finish; the second result waits while the first is proposed.
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal) && app.plugins.jobs.is_empty()
+        });
+        assert_eq!(echoed(&app), 1);
+        assert_eq!(app.plugins.completed.len(), 1);
+        app.resolve_proposal(true);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        app.resolve_proposal(true);
+        assert_eq!(echoed(&app), 2);
+        assert!(app.plugins.completed.is_empty());
+    }
+
+    #[test]
     fn plugin_action_proposes_a_masked_layer_that_records_its_origin() {
         let dir = tempfile::tempdir().unwrap();
         let (context, mut app) = app();

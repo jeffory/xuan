@@ -644,6 +644,19 @@ pub struct Pane {
     pub title: String,
     #[serde(default)]
     pub refresh: Refresh,
+    #[serde(default)]
+    pub placement: PanePlacement,
+}
+
+/// Where a pane is shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PanePlacement {
+    /// In the sidebar, with the built-in panes.
+    #[default]
+    Sidebar,
+    /// On the plugin's page in Plugins → Manage Plugins…, below its settings.
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1252,6 +1265,11 @@ id = "jobs"
 title = "Comfy jobs"
 refresh = "document"
 
+[[panes]]
+id = "workflows"
+title = "Workflows"
+placement = "settings"
+
 [[formats]]
 id = "jxl"
 label = "JPEG XL"
@@ -1277,6 +1295,8 @@ import = true
         assert_eq!(regions.fields[1].initial(), Value::String("obj".into()));
         assert_eq!(action.inputs[1].initial(), Value::from(0));
         assert_eq!(manifest.panes[0].refresh, Refresh::Document);
+        assert_eq!(manifest.panes[0].placement, PanePlacement::Sidebar);
+        assert_eq!(manifest.panes[1].placement, PanePlacement::Settings);
         let imports: Vec<_> = manifest.import_extensions().map(|(_, e)| e).collect();
         assert_eq!(imports, ["jxl"]);
         assert_eq!(

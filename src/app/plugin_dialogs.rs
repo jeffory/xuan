@@ -649,6 +649,13 @@ impl EditorApp {
                             }
                             ui.add_space(8.0);
                         }
+                        for pane in (manifest.panes.iter())
+                            .filter(|pane| pane.placement == xuan::plugins::manifest::PanePlacement::Settings)
+                        {
+                            ui.label(RichText::new(&pane.title).strong());
+                            self.plugin_settings_pane(ui, &super::plugins::pane_key(&id, &pane.id));
+                            ui.add_space(8.0);
+                        }
                         self.plugin_models_section(ui, manifest);
                         let summary = format!(
                             "{} {} · {} {} · {} {}",
@@ -779,77 +786,102 @@ impl EditorApp {
         self.notify_settings(plugin);
     }
 
-    /// Floating status for running plugin jobs.
-    pub(super) fn plugin_job_windows(&mut self, ctx: &egui::Context) {
-        let jobs: Vec<(uuid::Uuid, String, Option<f32>, String)> = (self.plugins.jobs.iter())
-            .map(|job| (job.id, job.label.clone(), job.progress, job.message.clone()))
-            .chain(
-                (self.plugins.formats.iter())
-                    .map(|job| (job.id, job.label.clone(), None, String::new())),
-            )
-            .collect();
-        let jobs: Vec<_> = jobs
-            .into_iter()
-            .chain((self.plugins.model_jobs.iter()).map(|job| {
-                let message = format!(
-                    "{} / {}",
-                    super::plugin_models::format_size(job.progress.done()),
-                    super::plugin_models::format_size(job.size)
-                );
-                (job.id, job.label(), Some(job.fraction()), message)
-            }))
-            .collect();
+    /// Plugin actions, plugin imports and exports, and model downloads that
+    /// are still running, oldest first.
+    pub(super) fn running_jobs(&self) -> Vec<RunningJob> {
+        let actions = self.plugins.jobs.iter().map(|job| RunningJob {
+            id: job.id,
+            label: job.label.trim_end_matches('…').to_owned(),
+            progress: job.progress,
+            message: job.message.clone(),
+            document: Some(job.document),
+        });
+        let formats = self.plugins.formats.iter().map(|job| RunningJob {
+            id: job.id,
+            label: job.label.clone(),
+            progress: None,
+            message: String::new(),
+            document: None,
+        });
+        let models = self.plugins.model_jobs.iter().map(|job| RunningJob {
+            id: job.id,
+            label: job.label(),
+            progress: Some(job.fraction()),
+            message: format!(
+                "{} / {}",
+                super::plugin_models::format_size(job.progress.done()),
+                super::plugin_models::format_size(job.size)
+            ),
+            document: None,
+        });
+        actions.chain(formats).chain(models).collect()
+    }
+
+    pub(super) fn cancel_running_job(&mut self, id: uuid::Uuid) {
+        if self.plugins.model_jobs.iter().any(|job| job.id == id) {
+            self.cancel_model_job(id);
+        } else if self.plugins.formats.iter().any(|job| job.id == id) {
+            self.cancel_format_job(id);
+        } else {
+            self.cancel_plugin_job(id);
+        }
+    }
+
+    /// The running jobs at the right of the status bar, laid out right to
+    /// left: Cancel, progress, a count that lists every job when there are
+    /// several, then the job's name and message. The job shown is the first
+    /// one for the current document, else the oldest.
+    pub(super) fn job_status(&mut self, ui: &mut egui::Ui, jobs: &[RunningJob]) {
+        let current = self.session().map(|s| s.document.id);
+        let index = (jobs.iter())
+            .position(|job| current.is_some() && job.document == current)
+            .unwrap_or(0);
+        let Some(job) = jobs.get(index) else {
+            return;
+        };
+        let muted = ui.palette().muted;
         let mut cancel = None;
-        for (index, (id, label, progress, message)) in jobs.iter().enumerate() {
-            egui::Window::new(label)
-                .id(egui::Id::new(("plugin_job", id)))
-                .anchor(
-                    egui::Align2::RIGHT_BOTTOM,
-                    egui::vec2(-16.0, -40.0 - 70.0 * index as f32),
-                )
-                .collapsible(false)
-                .resizable(false)
-                .title_bar(false)
-                .frame(theme::frame(&ctx.palette()).inner_margin(egui::Margin::same(10)))
-                .show(ctx, |ui| {
-                    ui.set_width(240.0);
+        if ui.small_button(tr("Cancel")).clicked() {
+            cancel = Some(job.id);
+        }
+        progress_indicator(ui, job.progress, 120.0);
+        if jobs.len() > 1 {
+            let count = tr("{index} of {count}")
+                .replace("{index}", &(index + 1).to_string())
+                .replace("{count}", &jobs.len().to_string());
+            let button = ui
+                .add(egui::Button::new(RichText::new(count).size(11.0)).small())
+                .on_hover_text(tr("Show all running jobs"));
+            egui::Popup::menu(&button).show(|ui| {
+                ui.set_min_width(280.0);
+                for job in jobs {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(label).strong());
+                        ui.label(RichText::new(&job.label).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button(tr("Cancel")).clicked() {
-                                cancel = Some(*id);
+                                cancel = Some(job.id);
                             }
                         });
                     });
-                    match progress {
-                        Some(fraction) => {
-                            ui.add(egui::ProgressBar::new(*fraction).desired_height(6.0));
-                        }
-                        None => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(RichText::new(tr("Working…")).color(ui.palette().muted));
-                            });
-                        }
-                    }
-                    if !message.is_empty() {
+                    progress_indicator(ui, job.progress, 280.0);
+                    if !job.message.is_empty() {
                         ui.add(
-                            egui::Label::new(
-                                RichText::new(message).small().color(ui.palette().muted),
-                            )
-                            .wrap(),
+                            egui::Label::new(RichText::new(&job.message).small().color(muted))
+                                .wrap(),
                         );
                     }
-                });
+                    ui.add_space(4.0);
+                }
+            });
         }
+        let text = if job.message.is_empty() {
+            job.label.clone()
+        } else {
+            format!("{} · {}", job.label, job.message)
+        };
+        ui.add(egui::Label::new(RichText::new(text).size(11.0)).truncate());
         if let Some(id) = cancel {
-            if self.plugins.model_jobs.iter().any(|job| job.id == id) {
-                self.cancel_model_job(id);
-            } else if self.plugins.formats.iter().any(|job| job.id == id) {
-                self.cancel_format_job(id);
-            } else {
-                self.cancel_plugin_job(id);
-            }
+            self.cancel_running_job(id);
         }
     }
 
@@ -1041,6 +1073,32 @@ fn json_to_toml(value: Value) -> toml::Value {
         Value::Array(items) => toml::Value::Array(items.into_iter().map(json_to_toml).collect()),
         Value::Object(map) => {
             toml::Value::Table(map.into_iter().map(|(k, v)| (k, json_to_toml(v))).collect())
+        }
+    }
+}
+
+/// A background job as the status bar shows it.
+pub(super) struct RunningJob {
+    pub id: uuid::Uuid,
+    pub label: String,
+    pub progress: Option<f32>,
+    pub message: String,
+    /// The document a plugin action works on.
+    pub document: Option<uuid::Uuid>,
+}
+
+/// A progress bar once the job reports a fraction, a spinner until then.
+fn progress_indicator(ui: &mut egui::Ui, progress: Option<f32>, width: f32) {
+    match progress {
+        Some(fraction) => {
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .desired_width(width)
+                    .desired_height(6.0),
+            );
+        }
+        None => {
+            ui.spinner();
         }
     }
 }

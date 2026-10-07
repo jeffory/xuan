@@ -418,17 +418,42 @@ impl EditorApp {
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(self.tool.hint())
-                                    .size(11.0)
-                                    .color(ui.palette().muted),
-                            )
-                            .truncate(),
-                        );
+                        // Running jobs, else the latest status message for a
+                        // few seconds, else the tool's hint.
+                        let jobs = self.running_jobs();
+                        if !jobs.is_empty() {
+                            self.job_status(ui, &jobs);
+                        } else if let Some(status) = self.recent_status(ui.ctx()) {
+                            ui.add(egui::Label::new(RichText::new(status).size(11.0)).truncate());
+                        } else {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(self.tool.hint())
+                                        .size(11.0)
+                                        .color(ui.palette().muted),
+                                )
+                                .truncate(),
+                            );
+                        }
                     });
                 });
             });
+    }
+
+    /// The status message while it is new: for `STATUS_SECONDS` after it
+    /// last changed. Only its first line is shown.
+    fn recent_status(&mut self, ctx: &egui::Context) -> Option<String> {
+        const STATUS_SECONDS: f64 = 8.0;
+        let now = ctx.input(|i| i.time);
+        if self.status != self.status_shown.0 {
+            self.status_shown = (self.status.clone(), now);
+        }
+        let age = now - self.status_shown.1;
+        if self.status.is_empty() || age >= STATUS_SECONDS {
+            return None;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(STATUS_SECONDS - age));
+        self.status.lines().next().map(str::to_owned)
     }
 
     pub(super) fn tool_rail(&mut self, ctx: &egui::Context) {

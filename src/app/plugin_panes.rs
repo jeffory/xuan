@@ -41,10 +41,16 @@ impl EditorApp {
     /// Draw a plugin pane. While a dialog is open (`enabled` is false) it is
     /// shown but takes no input, like the built-in panes.
     pub(super) fn plugin_pane(&mut self, ui: &mut egui::Ui, key: &str, enabled: bool) {
-        ui.add_enabled_ui(enabled, |ui| self.plugin_pane_contents(ui, key));
+        ui.add_enabled_ui(enabled, |ui| self.plugin_pane_contents(ui, key, false));
     }
 
-    fn plugin_pane_contents(&mut self, ui: &mut egui::Ui, key: &str) {
+    /// Draw a pane with `placement = "settings"` on its plugin's page in
+    /// Manage Plugins: as tall as its contents, up to a limit.
+    pub(super) fn plugin_settings_pane(&mut self, ui: &mut egui::Ui, key: &str) {
+        self.plugin_pane_contents(ui, key, true);
+    }
+
+    fn plugin_pane_contents(&mut self, ui: &mut egui::Ui, key: &str, embedded: bool) {
         let Some((plugin, _)) = key.strip_prefix("plugin:").and_then(|k| k.split_once('/')) else {
             return;
         };
@@ -56,97 +62,100 @@ impl EditorApp {
             .unwrap_or_default();
         // Without the file system permission, the plugin's own folders only.
         let access = self.plugins.access(&plugin);
-        egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(10, 8))
-            .show(ui, |ui| {
-                if self.plugin_offline(&plugin) {
-                    let name = self.plugins.source(&plugin);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!(
-                                "{name} {}",
-                                tr("uses the network, and plugins that use the network are disabled.")
-                            ))
+        let margin = if embedded {
+            egui::Margin::ZERO
+        } else {
+            egui::Margin::symmetric(10, 8)
+        };
+        egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+            if self.plugin_offline(&plugin) {
+                let name = self.plugins.source(&plugin);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{name} {}",
+                            tr("uses the network, and plugins that use the network are disabled.")
+                        ))
+                        .color(ui.palette().muted),
+                    )
+                    .wrap(),
+                );
+                if widgets::button(ui, tr("Manage Plugins…")).clicked() {
+                    self.plugins.manager_selected = Some(plugin.clone());
+                    self.dialog = Some(super::Dialog::Plugins);
+                }
+                return;
+            }
+            if !self.plugin_granted(&plugin) {
+                let name = self.plugins.source(&plugin);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{name} {}", tr("needs your permission to run.")))
                             .color(ui.palette().muted),
-                        )
-                        .wrap(),
-                    );
-                    if widgets::button(ui, tr("Manage Plugins…")).clicked() {
-                        self.plugins.manager_selected = Some(plugin.clone());
-                        self.dialog = Some(super::Dialog::Plugins);
-                    }
-                    return;
+                    )
+                    .wrap(),
+                );
+                if widgets::button(ui, tr("Review Permissions…")).clicked() {
+                    self.plugins.permission_request =
+                        Some((plugin.clone(), PendingStart::Pane(key.to_owned())));
+                    self.dialog = Some(super::Dialog::PluginPermissions);
                 }
-                if !self.plugin_granted(&plugin) {
-                    let name = self.plugins.source(&plugin);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!(
-                                "{name} {}",
-                                tr("needs your permission to run.")
-                            ))
-                            .color(ui.palette().muted),
-                        )
-                        .wrap(),
-                    );
-                    if widgets::button(ui, tr("Review Permissions…")).clicked() {
-                        self.plugins.permission_request =
-                            Some((plugin.clone(), PendingStart::Pane(key.to_owned())));
-                        self.dialog = Some(super::Dialog::PluginPermissions);
-                    }
-                    return;
+                return;
+            }
+            let needs_open = self
+                .plugins
+                .panes
+                .get(key)
+                .is_none_or(|s| s.tree.is_none() && !s.pending && s.error.is_none());
+            if needs_open {
+                self.render_pane(key, "open", None);
+            }
+            let state = self.plugins.panes.entry(key.to_owned()).or_default();
+            if let Some(error) = &state.error {
+                ui.add(
+                    egui::Label::new(RichText::new(error).small().color(ui.palette().muted)).wrap(),
+                );
+                if widgets::button(ui, tr("Retry")).clicked() {
+                    state.error = None;
+                    state.tree = None;
                 }
-                let needs_open = self
-                    .plugins
-                    .panes
-                    .get(key)
-                    .is_none_or(|s| s.tree.is_none() && !s.pending && s.error.is_none());
-                if needs_open {
-                    self.render_pane(key, "open", None);
+            }
+            let Some(tree) = state.tree.take() else {
+                if state.pending {
+                    ui.spinner();
                 }
-                let state = self.plugins.panes.entry(key.to_owned()).or_default();
-                if let Some(error) = &state.error {
-                    ui.add(
-                        egui::Label::new(RichText::new(error).small().color(ui.palette().muted)).wrap(),
-                    );
-                    if widgets::button(ui, tr("Retry")).clicked() {
-                        state.error = None;
-                        state.tree = None;
-                    }
-                }
-                let Some(tree) = state.tree.take() else {
-                    if state.pending {
-                        ui.spinner();
-                    }
-                    return;
+                return;
+            };
+            let event = {
+                let ctx = ui.ctx().clone();
+                let mut pane = Pane {
+                    state,
+                    plugin_dir: &plugin_dir,
+                    access: &access,
+                    ctx: &ctx,
+                    event: None,
+                    salt: key,
                 };
-                let event = {
-                    let ctx = ui.ctx().clone();
-                    let mut pane = Pane {
-                        state,
-                        plugin_dir: &plugin_dir,
-                        access: &access,
-                        ctx: &ctx,
-                        event: None,
-                        salt: key,
-                    };
-                    egui::ScrollArea::vertical()
-                        .id_salt(("plugin_pane_scroll", key))
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.y = 6.0;
-                            draw(ui, &tree, &mut pane);
-                        });
-                    pane.event
+                let scroll = egui::ScrollArea::vertical().id_salt(("plugin_pane_scroll", key));
+                let scroll = if embedded {
+                    scroll.auto_shrink([false, true]).max_height(320.0)
+                } else {
+                    scroll.auto_shrink([false, false])
                 };
-                let state = self.plugins.panes.entry(key.to_owned()).or_default();
-                if state.tree.is_none() {
-                    state.tree = Some(tree);
-                }
-                if let Some(event) = event {
-                    self.render_pane(key, "event", Some(event));
-                }
-            });
+                scroll.show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    draw(ui, &tree, &mut pane);
+                });
+                pane.event
+            };
+            let state = self.plugins.panes.entry(key.to_owned()).or_default();
+            if state.tree.is_none() {
+                state.tree = Some(tree);
+            }
+            if let Some(event) = event {
+                self.render_pane(key, "event", Some(event));
+            }
+        });
     }
 }
 

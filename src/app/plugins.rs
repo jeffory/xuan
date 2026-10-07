@@ -490,11 +490,13 @@ impl EditorApp {
         }
     }
 
-    /// Add the panes of installed plugins that the layout does not know yet.
+    /// Add the sidebar panes of installed plugins that the layout does not know yet.
     pub(super) fn add_plugin_panes(&mut self) -> bool {
         let mut changed = false;
         for manifest in &self.plugins.manifests {
-            for pane in &manifest.panes {
+            for pane in (manifest.panes.iter())
+                .filter(|pane| pane.placement == plugins::manifest::PanePlacement::Sidebar)
+            {
                 let key = pane_key(&manifest.plugin.id, &pane.id);
                 if self.config.panes.get(&key).is_none() {
                     self.config.panes.ensure(&key);
@@ -518,7 +520,11 @@ impl EditorApp {
         if !self.config.plugins.get(plugin).is_none_or(|c| c.enabled) {
             return None;
         }
-        manifest.pane(pane).map(|pane| pane.title.clone())
+        // A pane on the plugin's settings page is not a sidebar pane.
+        manifest
+            .pane(pane)
+            .filter(|pane| pane.placement == plugins::manifest::PanePlacement::Sidebar)
+            .map(|pane| pane.title.clone())
     }
 
     pub(super) fn plugin_enabled(&self, plugin: &str) -> bool {
@@ -1537,15 +1543,6 @@ impl EditorApp {
         if !self.action_models_ready(plugin, action, inputs) {
             return;
         }
-        if self
-            .plugins
-            .jobs
-            .iter()
-            .any(|job| Some(job.document) == self.session().map(|s| s.document.id))
-        {
-            self.error = Some(tr("A plugin action is already running on this document").into());
-            return;
-        }
         if spec.needs_image()
             && self
                 .session()
@@ -1832,10 +1829,8 @@ impl EditorApp {
             Ok(())
         })();
         match result {
-            Ok(()) => {
-                self.close_plugin_action();
-                self.status = format!("{} {}", spec.label.trim_end_matches('…'), tr("started"));
-            }
+            // The status bar shows the running job, so no "started" message.
+            Ok(()) => self.close_plugin_action(),
             Err(error) => self.error = Some(format!("{error:#}")),
         }
     }
