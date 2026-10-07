@@ -79,6 +79,7 @@ class Catalog:
         self.bundled = bundled_dir
         self.clock = clock
         self.lock = threading.Lock()
+        self._refreshing = {}
         self._defs = None
         self._index = None
 
@@ -93,17 +94,33 @@ class Catalog:
         snapshot = _read(os.path.join(self.bundled, recipe.id + ".json"))
         return {"current": snapshot, "last_good": None, "checked_at": 0, "bad": {}, "warning": None, "retry": False}
 
+    def _due(self, state, force):
+        wait = RETRY_AFTER if state.get("retry") else CHECK_EVERY
+        return force or not state.get("current") or self.clock() - (state.get("checked_at") or 0) >= wait
+
     def ensure(self, recipe, force=False):
         """The version to run, checking Comfy for a newer template when due.
-        Raises RpcError when there is no usable version at all."""
+        Raises RpcError when there is no usable version at all.
+
+        ``self.lock`` guards only the state files, never a download, so a
+        slow check of one recipe does not hold up jobs for the others. A job
+        that finds its recipe being checked runs the version it has, unless
+        there is none yet, and then waits for the check."""
         with self.lock:
             state = self.state(recipe)
-            wait = RETRY_AFTER if state.get("retry") else CHECK_EVERY
-            if force or self.clock() - (state.get("checked_at") or 0) >= wait or not state.get("current"):
-                state = self._refresh(recipe, state)
-            if not state.get("current"):
-                raise RpcError(INTERNAL_ERROR, state.get("warning") or f"No {recipe.label} workflow is available")
-            return state
+            refreshing = self._refreshing.setdefault(recipe.id, threading.Lock())
+        if self._due(state, force):
+            if refreshing.acquire(blocking=force or not state.get("current")):
+                try:
+                    with self.lock:
+                        state = self.state(recipe)  # another thread may just have checked
+                    if self._due(state, force):
+                        state = self._refresh(recipe, state)
+                finally:
+                    refreshing.release()
+        if not state.get("current"):
+            raise RpcError(INTERNAL_ERROR, state.get("warning") or f"No {recipe.label} workflow is available")
+        return state
 
     def mark_bad(self, recipe, reason):
         """Comfy refused the current version: go back to the last good one.
@@ -146,7 +163,8 @@ class Catalog:
             state["retry"] = True
             state["warning"] = (f"Couldn't check Comfy for a newer {recipe.label} workflow ({error.message}); "
                                 f"using {describe(current)}.") if current else f"Couldn't get the {recipe.label} workflow from Comfy: {error.message}"
-        _write(self._path(recipe), state)
+        with self.lock:
+            _write(self._path(recipe), state)
         return state
 
     def _convert(self, recipe, raw, sha):
@@ -154,6 +172,8 @@ class Catalog:
         outputs = [n for n in workflow.get("nodes") or [] if isinstance(n, dict) and n.get("type") == recipe.output and not n.get("mode")]
         if len(outputs) != 1:
             raise Unsupported(f"the template has {len(outputs)} {recipe.output} nodes, expected one")
+        if not isinstance(outputs[0].get("id"), (int, str)):
+            raise Unsupported(f"the template's {recipe.output} node has no id")
         output = str(outputs[0]["id"])
         if self._defs is None:
             self._defs = self.client.node_defs()

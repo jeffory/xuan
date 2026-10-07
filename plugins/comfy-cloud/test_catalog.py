@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -167,6 +168,52 @@ class CatalogTest(unittest.TestCase):
         state = self.catalog.ensure(RECIPE, force=True)
         self.assertEqual(self.seed_of(state), 42)
         self.assertIsNone(self.catalog.mark_bad(RECIPE, "again"))  # nothing older to go back to
+
+    def test_an_output_node_without_an_id_is_refused_not_a_crash(self):
+        workflow = json.loads(self.client.raw)
+        output = next(n for n in workflow["nodes"] if n["type"] == RECIPE.output)
+        del output["id"]
+        self.client.raw = json.dumps(workflow).encode()
+        with self.assertRaises(RpcError) as caught:
+            self.catalog.ensure(RECIPE)
+        self.assertIn("no id", caught.exception.message)
+
+    def test_a_slow_check_holds_up_neither_other_recipes_nor_jobs_with_a_version(self):
+        self.catalog.ensure(RECIPE)
+        other = RECIPES["seedream-flash"]
+        started, release = threading.Event(), threading.Event()
+        fetch, raw = self.client.template, self.client.raw
+
+        def slow(name):
+            if name == RECIPE.template:
+                started.set()
+                release.wait(5)
+                self.client.calls["template"] += 1
+                return raw
+            return fetch(name)
+
+        self.client.template = slow
+        checker = threading.Thread(target=self.catalog.ensure, args=(RECIPE,), kwargs={"force": True})
+        checker.start()
+        try:
+            self.assertTrue(started.wait(5))
+            self.client.raw = template_bytes(other.template)
+            results = []
+
+            def jobs():
+                results.append(self.catalog.ensure(other))  # another recipe, while the check waits
+                self.now += CHECK_EVERY
+                results.append(self.catalog.ensure(RECIPE))  # due, but being checked: runs what it has
+
+            runner = threading.Thread(target=jobs)
+            runner.start()
+            runner.join(2)
+            self.assertFalse(release.is_set())
+            self.assertEqual(len(results), 2, "a job waited for another recipe's check")
+            self.assertTrue(all(state["current"] for state in results))
+        finally:
+            release.set()
+            checker.join(5)
 
 
 if __name__ == "__main__":

@@ -9,13 +9,15 @@ and comfy_api.py talks to the server. See README.md.
 """
 import math
 import os
+import re
 import sys
 import threading
 import time
 import urllib.parse
 from dataclasses import dataclass, field
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sdk", "python"))
+# Xuan puts the SDK on PYTHONPATH; the checkout's copy is only a fallback.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sdk", "python"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from xuan_plugin import (  # noqa: E402
@@ -464,15 +466,41 @@ def check_all():
         plugin.update_pane(PANE, pane_tree())
 
 
-ACTION_LABELS = {"generate": "Generate Image", "edit": "Edit Image", "precise-edit": "Precise Edit",
-                 "split-layers": "Split into Layers", "generate-layer": "Generate Layer", "remove-background": "Remove Background"}
+def action_labels(path=os.path.join(HERE, "plugin.toml")):
+    """Each action's label from plugin.toml without the dialog's ellipsis, so
+    the pane names actions as the menus do and cannot fall behind them.
+
+    Reads the ``[[actions]]`` tables line by line, because tomllib is not in
+    Python 3.10; test_main checks the result against tomllib."""
+    labels, current, in_action = {}, None, False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return labels
+    for line in lines:
+        line = line.strip()
+        if line.startswith("["):
+            in_action, current = line == "[[actions]]", None
+            continue
+        match = re.match(r'(id|label)\s*=\s*"([^"\\]*)"', line)
+        if not in_action or not match:
+            continue
+        if match.group(1) == "id":
+            current = match.group(2)
+        elif current is not None:
+            labels.setdefault(current, match.group(2).rstrip("…"))
+    return labels
+
+
+ACTION_LABELS = action_labels()
 
 
 def pane_tree():
     rows = [ui.heading("Workflows")]
     books = _catalog or Catalog(None, plugin.data_dir, SNAPSHOTS)
     for action, recipe_ids in ACTIONS.items():
-        rows.append(ui.label(ACTION_LABELS[action]))
+        rows.append(ui.label(ACTION_LABELS.get(action, action)))
         for recipe in (RECIPES[recipe_id] for recipe_id in recipe_ids):
             state = books.state(recipe)
             version = state.get("current")

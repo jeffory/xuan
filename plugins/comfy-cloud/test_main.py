@@ -194,6 +194,39 @@ class Manifest(unittest.TestCase):
                         self.assertTrue(any(o.startswith(f"({tier})") and o.endswith(f"({aspect})") for o in options))
 
 
+class Pane(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.original = main._catalog
+        main._catalog = Catalog(None, self.tmp.name, main.SNAPSHOTS, clock=lambda: 0)
+
+    def tearDown(self):
+        main._catalog = self.original
+        self.tmp.cleanup()
+
+    def test_labels_come_from_the_manifest_for_every_action(self):
+        expected = {a["id"]: a["label"].rstrip("…") for a in MANIFEST["actions"]}
+        self.assertEqual(main.ACTION_LABELS, expected)
+        self.assertLessEqual(set(ACTIONS), set(main.ACTION_LABELS))
+
+    def test_the_pane_names_every_action_and_its_models(self):
+        tree = main.pane_tree()
+        text = json.dumps(tree, ensure_ascii=False)
+        for action, recipe_ids in ACTIONS.items():
+            with self.subTest(action=action):
+                self.assertIn(json.dumps(main.ACTION_LABELS[action], ensure_ascii=False), text)
+                for recipe_id in recipe_ids:
+                    self.assertIn(RECIPES[recipe_id].label, text)
+
+    def test_an_action_missing_from_the_manifest_does_not_break_the_pane(self):
+        labels = main.ACTION_LABELS
+        main.ACTION_LABELS = {}
+        try:
+            self.assertIn("fill-region", json.dumps(main.pane_tree()))
+        finally:
+            main.ACTION_LABELS = labels
+
+
 class Provenance(unittest.TestCase):
     def test_the_model_template_and_seed_are_reported_never_the_key(self):
         recipe = RECIPES["seedream-pro"]
