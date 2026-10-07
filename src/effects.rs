@@ -775,8 +775,20 @@ fn apply_filter_impl(
         }
     }
     let mut transform = transform;
-    if edges.contains(&true) {
-        let [left, top, right, bottom] = edges.map(|clamped| if clamped { 0 } else { padding });
+    // Growth per side (left, top, right, bottom). Sides that reach the canvas
+    // edge do not grow; with a selection, only the part of the padding the
+    // selection can reach does.
+    let mut growth = edges.map(|clamped| if clamped { 0 } else { padding });
+    if let Some(selection) = selection.as_deref()
+        && padding > 0
+    {
+        let reach = selection_reach(selection, transform, [w, h], padding, original.dimensions());
+        for (side, reach) in growth.iter_mut().zip(reach) {
+            *side = (*side).min(reach);
+        }
+    }
+    if growth != [padding; 4] {
+        let [left, top, right, bottom] = growth;
         result = image::imageops::crop_imm(
             &result,
             padding - left,
@@ -785,14 +797,10 @@ fn apply_filter_impl(
             original.height() + top + bottom,
         )
         .to_image();
-        transform = if [left, top, right, bottom] == [0; 4] {
+        transform = if growth == [0; 4] {
             original_transform
         } else {
-            expand(
-                original_transform,
-                original.dimensions(),
-                [left, top, right, bottom],
-            )
+            expand(original_transform, original.dimensions(), growth)
         };
     }
     if transform != original_transform
@@ -803,6 +811,41 @@ fn apply_filter_impl(
     layer.transform = transform;
     layer.pixels = Some(Arc::new(result));
     Ok(())
+}
+
+/// How far (left, top, right, bottom) a selection lets a padded filter result
+/// grow past the original layer: outside the selection nothing changes, so the
+/// result only differs from transparent where the selection covers it.
+/// `transform` places the padded buffer of `size` in the document.
+fn selection_reach(
+    selection: &image::GrayImage,
+    transform: Transform,
+    size: [u32; 2],
+    padding: u32,
+    original: (u32, u32),
+) -> [u32; 4] {
+    let Some((x0, y0, x1, y1)) = crate::selection::bounds(selection) else {
+        return [0; 4];
+    };
+    let [w, h] = size.map(|side| side as f32);
+    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        .map(|(x, y)| transform.inverse(Point::new(x as f32, y as f32)));
+    let low = |value: fn(&Point) -> f32| corners.iter().map(value).fold(f32::INFINITY, f32::min);
+    let high =
+        |value: fn(&Point) -> f32| corners.iter().map(value).fold(f32::NEG_INFINITY, f32::max);
+    // A pixel of margin absorbs rounding in the placement.
+    let left = (low(|p| p.x) * w).floor() as i64 - 1;
+    let top = (low(|p| p.y) * h).floor() as i64 - 1;
+    let right = (high(|p| p.x) * w).ceil() as i64 + 1;
+    let bottom = (high(|p| p.y) * h).ceil() as i64 + 1;
+    let padding = i64::from(padding);
+    let grow = |value: i64| value.clamp(0, padding) as u32;
+    [
+        grow(padding - left),
+        grow(padding - top),
+        grow(right - padding - i64::from(original.0)),
+        grow(bottom - padding - i64::from(original.1)),
+    ]
 }
 
 /// Grow a layer's source grid by whole pixels on each side (left, top, right, bottom).
@@ -1250,11 +1293,13 @@ mod tests {
         let layer = doc.active().unwrap();
         assert_eq!(layer.mask.as_ref().unwrap().placement, Some(transform));
         let pixels = layer.pixels.as_ref().unwrap();
-        assert_eq!(pixels.dimensions(), (10, 10));
-        assert_eq!(pixels.get_pixel(2, 4).0, [0; 4]);
-        assert_eq!(pixels.get_pixel(3, 4).0, [255, 0, 0, 255]);
-        assert!(pixels.get_pixel(2, 5)[3] > 0);
-        assert_eq!(pixels.get_pixel(2, 5)[0], 255);
+        // The selection starts at the layer's vertical middle, so the layer
+        // grows left, right and down but not up.
+        assert_eq!(pixels.dimensions(), (10, 7));
+        assert_eq!(pixels.get_pixel(2, 1).0, [0; 4]);
+        assert_eq!(pixels.get_pixel(3, 1).0, [255, 0, 0, 255]);
+        assert!(pixels.get_pixel(2, 2)[3] > 0);
+        assert_eq!(pixels.get_pixel(2, 2)[0], 255);
         doc.validate().unwrap();
     }
 
@@ -1417,6 +1462,151 @@ mod tests {
                     assert!(image.get_pixel(60, 121)[3] > 0);
                 }
             }
+            doc.validate().unwrap();
+        }
+    }
+
+    fn select_rect(doc: &mut Document, [x0, y0, x1, y1]: [f32; 4]) {
+        let mask = crate::selection::rectangle(
+            doc.width,
+            doc.height,
+            Point::new(x0, y0),
+            Point::new(x1, y1),
+            false,
+        );
+        doc.selection = Some(Arc::new(mask));
+    }
+
+    fn selection_filters() -> [Filter; 2] {
+        [
+            Filter::GaussianBlur { radius: 5.0 },
+            Filter::MotionBlur {
+                distance: 20.0,
+                angle: 0.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn blur_inside_a_selection_keeps_the_layer_size_and_changes_only_the_selection() {
+        for filter in selection_filters() {
+            let mut doc = Document::new(300, 300).unwrap();
+            let mut layer = crate::document::Layer::image(
+                "tile",
+                RgbaImage::from_fn(200, 200, |x, y| {
+                    if (x / 4 + y / 4) % 2 == 0 {
+                        Rgba([255, 255, 255, 255])
+                    } else {
+                        Rgba([0, 0, 0, 255])
+                    }
+                }),
+            );
+            layer.transform.x = 50.0;
+            layer.transform.y = 50.0;
+            doc.insert(layer);
+            let before = doc.active().unwrap().clone();
+            select_rect(&mut doc, [120.0, 120.0, 180.0, 180.0]);
+            apply_filter(&mut doc, &filter, false).unwrap();
+            let layer = doc.active().unwrap();
+            assert_eq!(layer.transform, before.transform, "{filter:?}");
+            let (old, new) = (before.pixels.unwrap(), layer.pixels.clone().unwrap());
+            assert_eq!(new.dimensions(), (200, 200), "{filter:?}");
+            let (mut inside, mut outside) = (0, 0);
+            for (x, y, pixel) in new.enumerate_pixels() {
+                let changed = u32::from(pixel != old.get_pixel(x, y));
+                if (70..130).contains(&x) && (70..130).contains(&y) {
+                    inside += changed;
+                } else {
+                    outside += changed;
+                }
+            }
+            assert!(inside > 100, "{filter:?}");
+            assert_eq!(outside, 0, "{filter:?}");
+            doc.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn blur_in_a_selection_at_the_layer_edge_grows_only_that_side() {
+        for filter in selection_filters() {
+            let padding = match filter {
+                Filter::GaussianBlur { radius } => (radius * 3.0).ceil() as u32,
+                Filter::MotionBlur { distance, .. } => (distance * 0.5).ceil() as u32 + 1,
+                _ => 0,
+            };
+            let mut doc = Document::new(300, 300).unwrap();
+            let mut layer = crate::document::Layer::image(
+                "box",
+                RgbaImage::from_pixel(100, 100, Rgba([200, 40, 10, 255])),
+            );
+            layer.transform.x = 50.0;
+            layer.transform.y = 50.0;
+            doc.insert(layer);
+            // Covers the layer's right edge and a few pixels beyond it.
+            select_rect(&mut doc, [120.0, 80.0, 155.0, 120.0]);
+            apply_filter(&mut doc, &filter, false).unwrap();
+            let layer = doc.active().unwrap();
+            let pixels = layer.pixels.as_ref().unwrap();
+            let [top_left, top_right, _, bottom_left] = layer.transform.corners();
+            assert!((top_left.x - 50.0).abs() < 1e-3, "{filter:?}");
+            assert!((top_left.y - 50.0).abs() < 1e-3, "{filter:?}");
+            assert!((bottom_left.y - 150.0).abs() < 1e-3, "{filter:?}");
+            assert_eq!(pixels.height(), 100, "{filter:?}");
+            assert!(
+                pixels.width() > 100 && pixels.width() <= 100 + padding,
+                "{filter:?}"
+            );
+            assert!(top_right.x > 150.0, "{filter:?}");
+            doc.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn blur_in_a_selection_reaching_past_a_layer_corner_grows_toward_it() {
+        let mut doc = Document::new(300, 300).unwrap();
+        let mut layer = crate::document::Layer::image(
+            "box",
+            RgbaImage::from_pixel(100, 100, Rgba([200, 40, 10, 255])),
+        );
+        layer.transform.x = 50.0;
+        layer.transform.y = 50.0;
+        doc.insert(layer);
+        select_rect(&mut doc, [140.0, 140.0, 200.0, 200.0]);
+        apply_filter(&mut doc, &Filter::GaussianBlur { radius: 5.0 }, false).unwrap();
+        let pixels = doc.active().unwrap().pixels.clone().unwrap();
+        assert_eq!(pixels.dimensions(), (115, 115));
+        assert!(pixels.get_pixel(105, 105)[3] > 0);
+        doc.validate().unwrap();
+    }
+
+    #[test]
+    fn blur_inside_a_selection_does_not_grow_a_large_layer() {
+        // The dimensions from issue 69 grew by 67 px on every side.
+        for filter in [
+            Filter::GaussianBlur { radius: 22.0 },
+            Filter::MotionBlur {
+                distance: 132.0,
+                angle: 20.0,
+            },
+        ] {
+            // The layer sits inside a larger canvas, so no side is clamped.
+            let mut doc = Document::new(1000, 1300).unwrap();
+            let mut layer = crate::document::Layer::image(
+                "base",
+                RgbaImage::from_fn(896, 1152, |x, y| {
+                    Rgba([(x % 251) as u8, (y % 241) as u8, 90, 255])
+                }),
+            );
+            layer.transform.x = 52.0;
+            layer.transform.y = 74.0;
+            doc.insert(layer);
+            let transform = doc.active().unwrap().transform;
+            select_rect(&mut doc, [250.0, 400.0, 650.0, 900.0]);
+            apply_filter(&mut doc, &filter, false).unwrap();
+            let layer = doc.active().unwrap();
+            let size = layer.pixels.as_ref().unwrap().dimensions();
+            assert_eq!(size, (896, 1152), "{filter:?}");
+            assert_eq!(layer.transform, transform, "{filter:?}");
             doc.validate().unwrap();
         }
     }

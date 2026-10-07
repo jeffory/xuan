@@ -74,12 +74,13 @@ the document takes effect on the next frame and is drawn at once.
 | open a document | `file/open` (new): the user confirms the file |
 | save / export a document | `file/save_as`, `file/export` (new): the system save dialog, or with `path` Xuan's own prompt (#54); `file/save` saves in place |
 | switch document | `document/activate` (new) |
-| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, provenance) |
+| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
 | get/set layer properties: name, visibility, lock, opacity, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
 | … transform | `document/edit` `transform` (new) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
-| create text / shape layer | `document/edit` `add_text_layer`, `add_shape_layer` (new) |
+| create text / shape layer | `document/edit` `add_text_layer` (with an SVG `path` for text on a path), `add_shape_layer` (new) |
+| edit text, set it on a path (#64) | `document/edit` `set_text` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
 | paint via strokes, fills and gradients | `document/edit` `stroke` (with `points` or an SVG `path`), `fill`, `fill_path`, `gradient` (new) |
@@ -193,6 +194,19 @@ like the existing ones, rather than anything specific to MCP:
   the kurbo crate's. `get_document` lists the saved paths and each path
   shape's outline in document coordinates. `select_shape` also takes
   `feather` for rectangles, ellipses and polygons.
+- **Text on a path** (#64). Letters along a curve took one text layer per
+  letter, each placed and rotated by hand from a spline sampled outside Xuan,
+  and the line could no longer be edited as text. `create_text_layer` takes
+  `path` (SVG path data in document pixels, which places the layer) and
+  `path_options` (`start_offset`, `align`, `side`, `letter_spacing`,
+  `rotate`, `baseline_shift`, `size_end`, `opacity_start`, `opacity_end`), so
+  one call sets "17 letters shrinking from 17 to 7 px and fading from 95% to
+  55%" along the curve as one editable layer. `set_layer` takes `text`,
+  `path` (`null` puts the text back in a box) and `path_options` (merged into
+  the layer's options), sent as the new `set_text` edit before any placement.
+  Glyph positions and advances come from cosmic-text and become distances
+  along the flattened path; `get_document` describes each text layer's text
+  and its path in document coordinates. Saved as `.xuan` format 11.
 - **Paint symmetry** (#66). The 12 rays of a starburst were drawn one at a
   time, and a mirrored figure meant computing x → 512 − x for every point.
   `paint_stroke` (at the top level and in each item of `strokes`) and the

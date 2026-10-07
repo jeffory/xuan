@@ -1017,6 +1017,18 @@ This writes a new file.	这将写入一个新文件。
 Always Allow lets this plugin save and export without asking until you turn it off in Plugins → Manage Plugins…. It still asks before replacing a file Xuan did not write since it started.	“始终允许”让此插件不经询问直接保存和导出，直到你在“插件 → 管理插件…”中将其关闭。替换 Xuan 自启动以来未写入过的文件时仍会询问。
 Save and export without asking	不经询问直接保存和导出
 Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files Xuan wrote since it started, without asking; the status bar shows each one. Replacing any other file still asks.	关闭：插件指定要保存或导出的文件时，Xuan 会先询问。开启：插件不经询问直接写入新文件以及 Xuan 自启动以来写入过的文件，状态栏会显示每一个文件。替换其他文件时仍会询问。
+Path	路径
+Text on a path	路径文字
+None (text box)	无（文本框）
+Save a path with Select → Paths… to set text along it.	用“选择 → 路径…”保存路径后，可让文字沿路径排列。
+Start	起点
+End	终点
+Letter spacing	字距
+Baseline shift	基线偏移
+Flip to the other side	翻转到另一侧
+Turn letters with the path	字母随路径旋转
+End size	结尾字号
+Letters past the end of an open path are hidden; on a closed path the text wraps around.	超出开放路径末端的字母会被隐藏；在闭合路径上文字会环绕。
 Pen	钢笔
 Click for a corner, drag for a curve · Click the first anchor to close · Enter finishes · Drag anchors and handles · Alt-drag a handle breaks it · Click a segment to add an anchor, an anchor to delete it · Alt-click converts	单击添加角点，拖动添加曲线 · 单击第一个锚点闭合 · Enter 完成 · 拖动锚点和手柄 · Alt 拖动手柄可将其断开 · 单击线段添加锚点，单击锚点删除 · Alt 单击转换
 Convert Anchor	转换锚点

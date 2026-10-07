@@ -85,6 +85,7 @@ const SCENES: &[&str] = &[
     "layer_effects_combined",
     "text_and_shapes",
     "path_shapes",
+    "text_on_path",
     "remove_background",
     "raw_default",
     "raw_negative",
@@ -150,6 +151,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("layer_effects_combined", layer_effects_combined()),
         composite("text_and_shapes", text_and_shapes()),
         composite("path_shapes", path_shapes()),
+        composite("text_on_path", text_on_path()),
         composite("remove_background", remove_background()),
     ];
     if let Some(raw) = raw_fixture() {
@@ -825,6 +827,97 @@ fn path_shapes() -> Document {
     .unwrap();
     doc.selection = None;
     doc
+}
+
+/// Text on paths in the bundled Inter font: centred on an arch, wrapped around a circle from
+/// a start offset, shrinking and fading up an S-curve (the issue's 17 → 7 px, 95% → 55%),
+/// flipped under a line with letter spacing, and a wave whose layer was rotated afterwards.
+fn text_on_path() -> Document {
+    use crate::text::{PathAlign, PathSide, PathTextOptions, path_layer};
+    use crate::vector::VectorPath;
+    let mut renderer = TextRenderer::default();
+    let mut on = |content: &str, size: f32, color, d: &str, options| {
+        let style = TextStyle {
+            content: content.into(),
+            size,
+            color,
+            ..Default::default()
+        };
+        path_layer(
+            &mut renderer,
+            style,
+            &VectorPath::parse(d).unwrap(),
+            options,
+        )
+        .unwrap()
+    };
+    let arch = on(
+        "Type on a path",
+        22.0,
+        [30, 40, 90, 255],
+        "M 20 90 C 70 20 186 20 236 90",
+        PathTextOptions {
+            start_offset: 50.0,
+            align: PathAlign::Center,
+            ..Default::default()
+        },
+    );
+    let circle = on(
+        "around and around · ",
+        15.0,
+        [170, 50, 40, 255],
+        "M 215 135 A 35 35 0 1 1 145 135 A 35 35 0 1 1 215 135 Z",
+        PathTextOptions {
+            start_offset: 80.0,
+            ..Default::default()
+        },
+    );
+    let rising = on(
+        "ΑΒΓ letters rise",
+        17.0,
+        [20, 110, 80, 255],
+        "M 16 240 C 60 240 60 170 100 160 S 110 110 96 100",
+        PathTextOptions {
+            size_end: Some(7.0),
+            opacity_start: 0.95,
+            opacity_end: 0.55,
+            ..Default::default()
+        },
+    );
+    let flipped = on(
+        "flipped",
+        16.0,
+        [90, 60, 150, 255],
+        "M 130 236 L 246 236",
+        PathTextOptions {
+            side: PathSide::Right,
+            letter_spacing: 3.0,
+            ..Default::default()
+        },
+    );
+    let mut wave = on(
+        "upright wave",
+        14.0,
+        [200, 120, 20, 255],
+        "M 120 215 Q 150 200 180 215 T 240 215",
+        PathTextOptions {
+            rotate: false,
+            baseline_shift: 2.0,
+            ..Default::default()
+        },
+    );
+    wave.transform.rotation = -6.0;
+    document(vec![
+        Layer::image(
+            "Paper",
+            RgbaImage::from_pixel(SIZE, SIZE, Rgba([238, 232, 220, 255])),
+        ),
+        arch,
+        circle,
+        rising,
+        flipped,
+        wave,
+    ])
 }
 
 /// A 256-pixel preview of the RAW fixture, or `None` when it is not fetched.

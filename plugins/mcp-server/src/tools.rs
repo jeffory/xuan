@@ -171,6 +171,26 @@ fn fill_rule() -> Value {
     json!({"type": "string", "enum": ["nonzero", "evenodd"],
            "description": "Which parts of the path are inside, as SVG's fill-rule (default nonzero); with evenodd an inner subpath always cuts a hole"})
 }
+/// How text follows its path, for create_text_layer and set_layer.
+fn path_options() -> Value {
+    json!({
+        "type": "object",
+        "description": "How the text follows `path`; every key is optional",
+        "properties": {
+            "start_offset": number("Where the text is anchored, in percent of the path's length (-100–100, default 0)"),
+            "align": {"type": "string", "enum": ["start", "center", "end"], "description": "Whether the text starts, is centred or ends at the start offset (default start)"},
+            "side": {"type": "string", "enum": ["left", "right"], "description": "left (default): letters stand on the left of the path's direction, on top of a path drawn left to right; right: flipped to its other side, running the other way"},
+            "letter_spacing": number("Extra pixels after each letter, negative to tighten (default 0)"),
+            "rotate": {"type": "boolean", "description": "Letters turn to follow the path (default true); false keeps them upright"},
+            "baseline_shift": number("Pixels to raise the letters off the path, negative to lower them (default 0)"),
+            "size_end": number("Font size of the last letter, ramping from `size` at the first (1–1024)"),
+            "opacity_start": number("Opacity of the first letter, 0–1 (default 1)"),
+            "opacity_end": number("Opacity of the last letter, 0–1 (default 1)"),
+        },
+        "additionalProperties": false,
+    })
+}
+const TEXT_PATH: &str = "Set the text along this path instead of in a box: SVG path data in document pixels, as in an SVG <path d=…>, e.g. \"M 100 400 Q 300 200 500 400\". Only the first subpath is followed; letters past the end of an open path are hidden, and on a closed path the text wraps around";
 const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
 fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
@@ -334,12 +354,15 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text, `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
                 "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees"),
+                "text": {"type": "string", "description": "A text layer's new text"},
+                "path": {"type": ["string", "null"], "description": "A text layer's path, SVG path data in document pixels; null puts the text back in a box"},
+                "path_options": path_options(),
             }),
             required: &["layer"],
             kind: Kind::Edit,
@@ -347,10 +370,24 @@ fn specs() -> Vec<Spec> {
                 let args = pick(
                     args,
                     &[
-                        "layer", "name", "visible", "locked", "opacity", "blend", "clip_to", "x",
-                        "y", "width", "height", "rotation",
+                        "layer",
+                        "name",
+                        "visible",
+                        "locked",
+                        "opacity",
+                        "blend",
+                        "clip_to",
+                        "x",
+                        "y",
+                        "width",
+                        "height",
+                        "rotation",
+                        "text",
+                        "path",
+                        "path_options",
                     ],
                 )?;
+                let args = unquote(args, "path_options");
                 // Locks protect layers from the agent: it may lock, but only
                 // the user unlocks.
                 if args.get("locked") == Some(&json!(false)) {
@@ -374,6 +411,17 @@ fn specs() -> Vec<Spec> {
                 }
                 if set.len() > 2 {
                     edits.push(Value::Object(set));
+                }
+                // Text and its path; `null` for the path puts the text back in a box.
+                let mut text = op("set_text", &args, &["layer", "text", "path_options"]);
+                if let Some(path) = args.get("path") {
+                    if !(path.is_null() || path.is_string()) {
+                        return Err("`path` must be SVG path data or null".into());
+                    }
+                    text.insert("path".into(), path.clone());
+                }
+                if text.len() > 2 {
+                    edits.push(Value::Object(text));
                 }
                 let transform = op(
                     "transform",
@@ -413,11 +461,12 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "create_text_layer",
             title: "Create a text layer",
-            description: "An editable text layer with its top-left corner at x, y. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa.",
+            description: "An editable text layer with its top-left corner at x, y; or, with `path` (SVG path data in document pixels, which also places it: give no x or y), text set along that path, each letter moved to its distance along it and turned to its direction. `path_options` sets where it starts, alignment, side, letter spacing, whether letters turn, and size and opacity ramps from the first letter to the last. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa.",
             properties: json!({
                 "text": {"type": "string"}, "x": number("Left"), "y": number("Top"), "family": {"type": "string"},
                 "size": number("Font size in pixels"), "color": color("Text colour"), "bold": {"type": "boolean"},
                 "italic": {"type": "boolean"}, "underline": {"type": "boolean"}, "strikethrough": {"type": "boolean"},
+                "path": svg_path(TEXT_PATH), "path_options": path_options(),
                 "name": name(), "above": above(),
             }),
             required: &["text"],
@@ -427,6 +476,8 @@ fn specs() -> Vec<Spec> {
                     "text",
                     "x",
                     "y",
+                    "path",
+                    "path_options",
                     "family",
                     "size",
                     "color",
@@ -437,7 +488,17 @@ fn specs() -> Vec<Spec> {
                     "name",
                     "above",
                 ];
-                let args = pick(args, &keys)?;
+                let args = unquote(pick(args, &keys)?, "path_options");
+                let given = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
+                if given("path") {
+                    if let Some(key) = ["x", "y"].into_iter().find(|k| given(k)) {
+                        return Err(format!(
+                            "Text on a path is placed by its path's coordinates; leave out `{key}`"
+                        ));
+                    }
+                } else if given("path_options") {
+                    return Err("`path_options` go only with `path`".into());
+                }
                 Ok(Plan::new(
                     "Create Text Layer",
                     vec![Value::Object(op("add_text_layer", &args, &keys))],
@@ -1100,7 +1161,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {

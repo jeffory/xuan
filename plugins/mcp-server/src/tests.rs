@@ -2135,3 +2135,109 @@ async fn save_and_export_forward_a_path_and_overwrite_and_name_the_file_in_the_p
         }
     }
 }
+
+#[test]
+fn text_layers_are_set_along_paths_and_their_options_changed() {
+    let editor = FakeEditor::new(false);
+    let arch = "M 20 150 C 80 40 220 40 280 150";
+    let layer = "11111111-1111-1111-1111-111111111111";
+    let options = json!({"start_offset": 50, "align": "center", "size_end": 7,
+                         "opacity_start": 0.95, "opacity_end": 0.55});
+    for (tool, arguments) in [
+        (
+            "create_text_layer",
+            json!({"text": "Up", "size": 17, "path": arch, "path_options": options}),
+        ),
+        // Some clients quote objects; the options are read as JSON.
+        (
+            "create_text_layer",
+            json!({"text": "Up", "path": arch, "path_options": options.to_string()}),
+        ),
+        (
+            "set_layer",
+            json!({"layer": layer, "text": "Over", "path_options": {"side": "right"}, "opacity": 0.5}),
+        ),
+        ("set_layer", json!({"layer": layer, "path": arch, "x": 4})),
+        ("set_layer", json!({"layer": layer, "path": null})),
+    ] {
+        let result = call_tool(&editor, tool, arguments.clone());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "{tool} {arguments}: {result:?}"
+        );
+    }
+    let edits: Vec<Value> = edit_requests(&editor)
+        .into_iter()
+        .map(|r| r["edits"].clone())
+        .collect();
+    assert_eq!(
+        edits[0],
+        json!([{"op": "add_text_layer", "text": "Up", "size": 17, "path": arch, "path_options": options}])
+    );
+    assert_eq!(edits[1][0]["path_options"], options);
+    assert_eq!(
+        edits[2],
+        json!([
+            {"op": "set", "layer": layer, "opacity": 0.5},
+            {"op": "set_text", "layer": layer, "text": "Over", "path_options": {"side": "right"}},
+        ])
+    );
+    // The text moves to its path before the layer is placed.
+    assert_eq!(
+        edits[3],
+        json!([
+            {"op": "set_text", "layer": layer, "path": arch},
+            {"op": "transform", "layer": layer, "x": 4},
+        ])
+    );
+    // `null` is passed on: it puts the text back in a box.
+    assert_eq!(
+        edits[4],
+        json!([{"op": "set_text", "layer": layer, "path": null}])
+    );
+
+    let sent = edit_requests(&editor).len();
+    for (tool, arguments, says) in [
+        (
+            "create_text_layer",
+            json!({"text": "x", "path": arch, "y": 4}),
+            "leave out `y`",
+        ),
+        (
+            "create_text_layer",
+            json!({"text": "x", "path_options": {"align": "end"}}),
+            "`path_options` go only with `path`",
+        ),
+        (
+            "set_layer",
+            json!({"layer": layer, "path": 3}),
+            "`path` must be SVG path data or null",
+        ),
+    ] {
+        let result = call_tool(&editor, tool, arguments.clone());
+        assert_eq!(result.is_error, Some(true), "{tool} {arguments}");
+        assert!(
+            text_of(&result).contains(says),
+            "{tool} {arguments}: {}",
+            text_of(&result)
+        );
+    }
+    assert_eq!(edit_requests(&editor).len(), sent, "nothing more sent");
+    let schema = |name: &str| {
+        (tools::list().into_iter())
+            .find(|t| t.name == name)
+            .unwrap()
+            .input_schema
+    };
+    let create = schema("create_text_layer");
+    assert_eq!(create["properties"]["path"]["type"], "string");
+    assert_eq!(
+        create["properties"]["path_options"]["properties"]["align"]["enum"],
+        json!(["start", "center", "end"])
+    );
+    assert_eq!(
+        schema("set_layer")["properties"]["path"]["type"],
+        json!(["string", "null"])
+    );
+}

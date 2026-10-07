@@ -196,9 +196,9 @@ larger tool arguments with a tool error saying the request is too large.
 | `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer) | `layer/export` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
-| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation | `set`, `transform` |
+| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation; a text layer's `text`, `path` and `path_options` | `set`, `set_text`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
-| `create_text_layer` | Editable text | `add_text_layer` |
+| `create_text_layer` | Editable text in a box, or with `path` along an SVG path | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
 | `create_image_layer` | A PNG the client sends (base64) | `add_layer` |
 | `delete_layer` | Delete a layer or group | `remove_layer` |
@@ -261,6 +261,34 @@ with the document so the user can fill, stroke or select it again from
 **Select → Paths…**; `get_document` lists them under `paths`. A malformed path
 is refused with what was expected and the character, e.g. `SVG path: expected
 the y of the line's end for `L` at character 11, found the end of the path`.
+
+### Text on a path
+
+Letters along a curve are one text layer: give `create_text_layer` a `path`
+instead of `x` and `y`. Each letter is moved to its distance along the path
+and turned to its direction, and the line stays editable text. `path_options`
+says how it follows the path: `start_offset` (percent of the path's length),
+`align` (`start`, `center` or `end` at that point), `side` (`left`, the
+default, stands letters on top of a path drawn left to right; `right` flips
+them under it, reading the other way), `letter_spacing` and `baseline_shift`
+in pixels, `rotate: false` for upright letters, and ramps from the first
+letter to the last: `size_end` (from `size`) and `opacity_start` /
+`opacity_end`. Letters past the end of an open path are hidden; on a closed
+path the text wraps around. For example, letters rising from a book, shrinking
+and fading as they go:
+
+```json
+{"tool": "create_text_layer", "arguments": {"text": "αβγ אבג абв ꦲꦤꦕ", "size": 17,
+  "color": "#2a2a2a", "path": "M 260 620 C 300 520 220 430 300 330 S 380 200 330 120",
+  "path_options": {"size_end": 7, "opacity_start": 0.95, "opacity_end": 0.55,
+                   "letter_spacing": 4}}}
+```
+
+`set_layer` changes it later: `text` for new words, `path` to move it to
+another curve (`null` puts it back in a box), `path_options` for any of the
+options (the others are kept). Moving, scaling or rotating the layer takes
+the path along; `get_document` reports the layer's `text`, with its `path`
+where it is now and its `path_options`.
 
 ### Layers, masks and the active layer
 
