@@ -172,6 +172,15 @@ pub struct Config {
     pub keybindings: toml::Table,
     /// Command ids run from the command palette, most recent first.
     pub recent_commands: Vec<String>,
+    /// Files opened or saved, newest first: File → Open Recent. At most
+    /// [`MAX_RECENT_FILES`]; see [`push_recent_file`].
+    pub recent_files: Vec<PathBuf>,
+    /// Move tool options: Auto Select.
+    pub auto_select: bool,
+    /// Move tool options: Ignore Transparent Pixels.
+    pub ignore_transparent_pixels: bool,
+    /// Move tool options: Show Transform Controls.
+    pub show_controls: bool,
     /// "Disable plugins that use the network": plugins whose manifest declares
     /// network hosts do not start and their actions are unavailable.
     #[serde(default)]
@@ -188,6 +197,20 @@ pub struct Config {
     /// Background and the Magic tool's Object mode. Built-in when absent.
     #[serde(default, skip_serializing_if = "Providers::is_default")]
     pub providers: Providers,
+}
+
+/// Files File → Open Recent remembers.
+pub const MAX_RECENT_FILES: usize = 15;
+
+/// Puts `path` first in `recent`, without duplicates, keeping [`MAX_RECENT_FILES`]. Paths that
+/// are not valid Unicode cannot be written to the configuration, so they are not remembered.
+pub fn push_recent_file(recent: &mut Vec<PathBuf>, path: &Path) {
+    if path.to_str().is_none() {
+        return;
+    }
+    recent.retain(|p| p != path);
+    recent.insert(0, path.to_path_buf());
+    recent.truncate(MAX_RECENT_FILES);
 }
 
 /// The plugin chosen for each replaceable algorithm, by plugin id; `None` is the
@@ -259,6 +282,10 @@ impl Default for Config {
             plugins: BTreeMap::new(),
             keybindings: toml::Table::new(),
             recent_commands: Vec::new(),
+            recent_files: Vec::new(),
+            auto_select: true,
+            ignore_transparent_pixels: true,
+            show_controls: true,
             disable_network_plugins: false,
             block_undeclared_network: None,
             providers: Providers::default(),
@@ -509,6 +536,23 @@ impl Config {
             table.remove("providers");
         } else {
             table.insert("providers".into(), toml::Value::try_from(&self.providers)?);
+        }
+        table.insert("auto_select".into(), toml::Value::Boolean(self.auto_select));
+        table.insert(
+            "ignore_transparent_pixels".into(),
+            toml::Value::Boolean(self.ignore_transparent_pixels),
+        );
+        table.insert(
+            "show_controls".into(),
+            toml::Value::Boolean(self.show_controls),
+        );
+        if self.recent_files.is_empty() {
+            table.remove("recent_files");
+        } else {
+            table.insert(
+                "recent_files".into(),
+                toml::Value::try_from(&self.recent_files)?,
+            );
         }
         if self.recent_commands.is_empty() {
             table.remove("recent_commands");

@@ -27,6 +27,9 @@ mod appearance;
 #[path = "ui_empty_state.rs"]
 mod empty_state;
 
+#[path = "ui_recent.rs"]
+mod recent;
+
 #[path = "ui_tabs.rs"]
 mod tabs;
 

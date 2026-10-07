@@ -485,6 +485,17 @@ fn brush_softer(app: &mut EditorApp) {
 fn brush_harder(app: &mut EditorApp) {
     app.brush.hardness = (app.brush.hardness + 0.1).min(1.0);
 }
+fn has_recent_files(app: &EditorApp) -> bool {
+    !app.config.recent_files.is_empty()
+}
+fn open_latest_recent(app: &mut EditorApp) {
+    if let Some(path) = app.config.recent_files.first().cloned() {
+        app.open_recent(&path);
+    }
+}
+fn clear_recent(app: &mut EditorApp) {
+    app.clear_recent_files();
+}
 fn toggle_controls(app: &mut EditorApp) {
     app.show_controls = !app.show_controls;
 }
@@ -562,6 +573,14 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_shift(Key::O)])
         .when(not_developing)
         .aliases(&["place"]),
+    cmd("open_latest_recent", "Open Most Recent File", C::File)
+        .run(Run::App(open_latest_recent))
+        .aliases(&["recent", "reopen"])
+        .when(has_recent_files),
+    cmd("clear_recent", "Clear Recently Opened", C::File)
+        .run(Run::App(clear_recent))
+        .aliases(&["recent"])
+        .when(has_recent_files),
     cmd("save", "Save", C::File).keys(&[ctrl(Key::S)]),
     cmd("save_as", "Save As…", C::File).keys(&[ctrl_shift(Key::S)]),
     cmd("export", "Export Image…", C::File)

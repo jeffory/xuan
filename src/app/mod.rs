@@ -41,6 +41,7 @@ mod plugin_panes;
 mod plugin_sessions;
 mod plugins;
 mod providers;
+mod recent;
 mod rulers;
 mod selection_dialogs;
 mod settings;
@@ -444,6 +445,8 @@ pub struct EditorApp {
     config_path: Option<PathBuf>,
     /// Settings changed in memory (a field mid-drag) but not yet written.
     config_dirty: bool,
+    /// Which recent files exist, as of a moment ago.
+    recent_exists: recent::RecentExists,
     /// The command registry with the user's key bindings applied.
     keymap: commands::Keymap,
     /// The command palette (Ctrl+K), while it is open.
@@ -651,6 +654,7 @@ impl EditorApp {
             config: Default::default(),
             config_path: None,
             config_dirty: false,
+            recent_exists: Default::default(),
             keymap: Default::default(),
             palette: None,
             key_editor: Default::default(),
@@ -875,7 +879,22 @@ impl EditorApp {
         }
     }
 
-    fn open_path(&mut self, path: &Path, as_layer: bool) {
+    /// Opens `path` as a new tab (or, with `as_layer`, a layer of the current one). Whether it
+    /// opened; a file that did is added to File → Open Recent.
+    fn open_path(&mut self, path: &Path, as_layer: bool) -> bool {
+        let earlier = self.error.take();
+        self.open_path_unchecked(path, as_layer);
+        let opened = self.error.is_none();
+        if opened {
+            self.error = earlier;
+            if !as_layer {
+                self.remember_recent(path);
+            }
+        }
+        opened
+    }
+
+    fn open_path_unchecked(&mut self, path: &Path, as_layer: bool) {
         if xuan::raw::is_raw(path) {
             self.queue_raw(path, as_layer);
             return;
@@ -1109,9 +1128,10 @@ impl EditorApp {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into();
-                session.path = Some(path);
+                session.path = Some(path.clone());
                 session.history.mark_saved();
                 self.status = tr("Project saved").into();
+                self.remember_recent(&path);
                 true
             }
             Err(error) => {
@@ -1791,6 +1811,7 @@ impl EditorApp {
     }
 
     fn show_with_processor(&mut self, ctx: &egui::Context) {
+        self.sync_move_options();
         self.sync_palette(ctx);
 
         self.poll_job();

@@ -94,6 +94,31 @@ fn plugin_items(
     }
 }
 
+/// The entries of File → Open Recent: a shortened path each, the whole path as the tooltip.
+/// Files that are gone are greyed out.
+fn recent_items(
+    ui: &mut egui::Ui,
+    recent: &[(std::path::PathBuf, bool)],
+    choice: &mut Option<std::path::PathBuf>,
+) {
+    if recent.is_empty() {
+        ui.add_enabled(false, Button::new(tr("No recent files")));
+        return;
+    }
+    for (path, exists) in recent {
+        let label = super::recent::elide_path(path, super::recent::LABEL_CHARS);
+        let full = super::recent::safe_path(path);
+        let response = ui
+            .add_enabled(*exists, Button::new(label))
+            .on_hover_text(&full)
+            .on_disabled_hover_text(format!("{full}\n{}", tr("File not found")));
+        if response.clicked() {
+            *choice = Some(path.clone());
+            ui.close();
+        }
+    }
+}
+
 /// What the menus need from the command registry this frame: whether each command can run
 /// and its shortcut hint.
 pub(super) struct MenuItems(HashMap<&'static str, (bool, String)>);
@@ -244,6 +269,8 @@ impl EditorApp {
         let pane_entries = self.pane_entries();
         let mut pane_toggle = None;
         let plugin_menu = self.plugin_menu_items();
+        let recent = self.recent_status();
+        let mut recent_choice: Option<std::path::PathBuf> = None;
         let mut plugin_action: Option<(String, String)> = None;
         let can_rerun = self
             .session()
@@ -274,6 +301,13 @@ impl EditorApp {
                                 item(ui, &items, "open_comp", &mut action);
                                 ui.add_enabled_ui(!developing, |ui| {
                                     item(ui, &items, "import", &mut action);
+                                });
+                                ui.add_enabled_ui(items.get("open").0, |ui| {
+                                    ui.menu_button(tr("Open Recent"), |ui| {
+                                        recent_items(ui, &recent, &mut recent_choice);
+                                        ui.separator();
+                                        item(ui, &items, "clear_recent", &mut action);
+                                    });
                                 });
                                 ui.separator();
                                 ui.add_enabled_ui(has_doc, |ui| {
@@ -668,6 +702,9 @@ impl EditorApp {
         }
         if let Some((plugin, action)) = plugin_action {
             self.start_plugin_action(&plugin, &action);
+        }
+        if let Some(path) = recent_choice {
+            self.open_recent(&path);
         }
         if let Some(action) = action {
             self.run_command(action);
