@@ -193,9 +193,19 @@ pub struct Input {
     /// Fields of each region, for `regions` inputs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<Input>,
+    /// Behind "Advanced" in popovers and the New Image tab.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub advanced: bool,
+    /// Where the input is shown; empty means everywhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surfaces: Vec<Surface>,
 }
 
 impl Input {
+    pub fn shown_on(&self, surface: Surface) -> bool {
+        self.surfaces.is_empty() || self.surfaces.contains(&surface)
+    }
+
     pub fn label(&self) -> &str {
         if self.label.is_empty() {
             &self.id
@@ -413,6 +423,12 @@ pub struct Action {
     /// missing ones before it runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+    /// Places besides its menu where the action appears.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surfaces: Vec<Surface>,
+    /// Short label in the AI Region popover (`region` surface).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub verb: String,
 }
 
 impl Action {
@@ -425,6 +441,24 @@ impl Action {
             .iter()
             .find(|input| input.kind == InputKind::Regions)
     }
+
+    pub fn on(&self, surface: Surface) -> bool {
+        self.surfaces.contains(&surface)
+    }
+}
+
+/// Where an action appears besides its menu, and where an input is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Surface {
+    /// The action's full dialog, opened from its menu (inputs only).
+    Menu,
+    /// The New layer with AI button in the Layers panel.
+    Layer,
+    /// The AI Region tool.
+    Region,
+    /// The Generate tab of New Image.
+    Document,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -938,6 +972,68 @@ impl Manifest {
         Self::parse(&text, dir).with_context(|| format!("Invalid {}", path.display()))
     }
 
+    /// Where an action may appear besides its menu depends on what it is.
+    fn check_surfaces(&self, action: &Action) -> Result<()> {
+        let id = &action.id;
+        let edits = self.permissions.document == DocumentAccess::Edit;
+        let mut listed = std::collections::HashSet::new();
+        for surface in &action.surfaces {
+            ensure!(
+                listed.insert(*surface),
+                "action `{id}` lists a surface twice"
+            );
+            match surface {
+                Surface::Menu => bail!(
+                    "action `{id}`: every action is in its menu; surfaces lists only layer, region or document"
+                ),
+                Surface::Layer => {
+                    ensure!(
+                        action.kind == ActionKind::Generate
+                            || (action.kind == ActionKind::Edit
+                                && action.source.from == SourceKind::Composite),
+                        "action `{id}`: the layer surface needs a generate action or an edit action with a composite source"
+                    );
+                    ensure!(
+                        action.result.into == ResultInto::Layer,
+                        "action `{id}`: the layer surface needs result.into = \"layer\""
+                    );
+                    ensure!(
+                        edits,
+                        "action `{id}`: the layer surface needs document = \"edit\""
+                    );
+                }
+                Surface::Region => {
+                    ensure!(
+                        action.kind == ActionKind::Edit && action.regions_input().is_some(),
+                        "action `{id}`: the region surface needs an edit action with a regions input"
+                    );
+                    ensure!(
+                        edits,
+                        "action `{id}`: the region surface needs document = \"edit\""
+                    );
+                    ensure!(
+                        !action.verb.trim().is_empty(),
+                        "action `{id}`: the region surface needs a verb"
+                    );
+                    ensure!(
+                        action.verb.chars().count() <= 24,
+                        "action `{id}`: the verb must be at most 24 characters"
+                    );
+                }
+                Surface::Document => ensure!(
+                    action.kind == ActionKind::Generate
+                        && matches!(action.result.into, ResultInto::Document | ResultInto::Ask),
+                    "action `{id}`: the document surface needs a generate action whose result goes into a document or asks"
+                ),
+            }
+        }
+        ensure!(
+            action.verb.is_empty() || action.on(Surface::Region),
+            "action `{id}` has a verb but no region surface"
+        );
+        Ok(())
+    }
+
     /// A plugin with `document = "read"` cannot return layers, so an action
     /// that says so in its `result.into` is refused. An action that leaves
     /// `result` out is fine: it may still return masks and new documents,
@@ -1110,6 +1206,7 @@ impl Manifest {
                 "action `{}` max_side must be between 16 and 30000",
                 action.id
             );
+            self.check_surfaces(action)?;
         }
         ensure!(
             self.models.len() <= MAX_MODELS,
@@ -1706,5 +1803,126 @@ import = true
         // A file name not usable from the URL falls back to the id.
         let odd = model("").replace("v1/net.onnx", "v1/%2E%2Ehidden");
         assert_eq!(parse(&odd, "").unwrap().models[0].file_name(), "net");
+    }
+
+    #[test]
+    fn actions_declare_surfaces_and_inputs_can_be_advanced() {
+        let text = r#"
+    [plugin]
+    id = "ai"
+    name = "AI"
+    version = "0.1.0"
+    command = ["sh", "p.sh"]
+
+    [permissions]
+    document = "edit"
+
+    [[actions]]
+    id = "layer"
+    label = "Layer…"
+    surfaces = ["layer"]
+    source = { from = "composite" }
+
+    [[actions.inputs]]
+    id = "prompt"
+    type = "multiline"
+
+    [[actions.inputs]]
+    id = "seed"
+    type = "seed"
+    advanced = true
+
+    [[actions.inputs]]
+    id = "aspect"
+    type = "enum"
+    values = ["1:1"]
+    surfaces = ["menu"]
+
+    [[actions]]
+    id = "edit"
+    label = "Edit…"
+    surfaces = ["region"]
+    verb = "Edit"
+
+    [[actions.inputs]]
+    id = "regions"
+    type = "regions"
+    fields = [{ id = "desc", type = "text" }, { id = "kind", type = "enum", values = ["obj"], advanced = true }]
+
+    [[actions]]
+    id = "new"
+    label = "New…"
+    kind = "generate"
+    surfaces = ["document"]
+    result = { into = "ask" }
+    "#;
+        let manifest = Manifest::parse(text, Path::new("/p")).unwrap();
+        let layer = manifest.action("layer").unwrap();
+        assert!(layer.on(Surface::Layer) && !layer.on(Surface::Region));
+        assert!(!layer.inputs[0].advanced && layer.inputs[1].advanced);
+        assert!(layer.inputs[0].shown_on(Surface::Layer));
+        assert!(
+            layer.inputs[2].shown_on(Surface::Menu) && !layer.inputs[2].shown_on(Surface::Layer)
+        );
+        let edit = manifest.action("edit").unwrap();
+        assert_eq!(edit.verb, "Edit");
+        assert!(edit.regions_input().unwrap().fields[1].advanced);
+        assert!(manifest.action("new").unwrap().on(Surface::Document));
+    }
+
+    #[test]
+    fn surfaces_are_checked_against_the_action() {
+        let dir = Path::new("/p");
+        let base = |action: &str, document: &str| {
+            format!(
+                "[plugin]\nid = \"ai\"\nname = \"AI\"\nversion = \"0.1.0\"\ncommand = [\"sh\"]\n\n[permissions]\ndocument = \"{document}\"\n\n{action}"
+            )
+        };
+        let refused = |action: &str, document: &str| {
+            format!(
+                "{:#}",
+                Manifest::parse(&base(action, document), dir).unwrap_err()
+            )
+        };
+        // layer: composite edit or generate, into layer, document = edit
+        assert!(refused("[[actions]]\nid = \"a\"\nlabel = \"A\"\nsurfaces = [\"layer\"]\nsource = { from = \"layer\" }", "edit").contains("layer"));
+        assert!(refused("[[actions]]\nid = \"a\"\nlabel = \"A\"\nkind = \"generate\"\nsurfaces = [\"layer\"]", "read").contains("document = \"edit\""));
+        // region: regions input and a short verb
+        assert!(
+            refused(
+                "[[actions]]\nid = \"a\"\nlabel = \"A\"\nsurfaces = [\"region\"]\nverb = \"Edit\"",
+                "edit"
+            )
+            .contains("regions")
+        );
+        let regions = "\n\n[[actions.inputs]]\nid = \"r\"\ntype = \"regions\"";
+        assert!(
+            refused(
+                &format!(
+                    "[[actions]]\nid = \"a\"\nlabel = \"A\"\nsurfaces = [\"region\"]{regions}"
+                ),
+                "edit"
+            )
+            .contains("verb")
+        );
+        assert!(refused(&format!("[[actions]]\nid = \"a\"\nlabel = \"A\"\nsurfaces = [\"region\"]\nverb = \"{}\"{regions}", "x".repeat(25)), "edit").contains("24"));
+        assert!(
+            refused(
+                "[[actions]]\nid = \"a\"\nlabel = \"A\"\nverb = \"Edit\"",
+                "edit"
+            )
+            .contains("verb")
+        );
+        // document: generate into document or ask
+        assert!(
+            refused(
+                "[[actions]]\nid = \"a\"\nlabel = \"A\"\nsurfaces = [\"document\"]",
+                "edit"
+            )
+            .contains("generate")
+        );
+        // menu is not an action surface; no repeats
+        assert!(refused("[[actions]]\nid = \"a\"\nlabel = \"A\"\nkind = \"generate\"\nsurfaces = [\"menu\"]", "edit").contains("menu"));
+        assert!(refused("[[actions]]\nid = \"a\"\nlabel = \"A\"\nkind = \"generate\"\nsurfaces = [\"document\", \"document\"]\nresult = { into = \"document\" }", "edit").contains("twice"));
     }
 }
