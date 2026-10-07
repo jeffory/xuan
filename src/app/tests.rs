@@ -4249,6 +4249,25 @@ fn gnome_button_layout_picks_sides_and_order() {
     assert_eq!(ButtonLayout::parse_gnome(""), None);
 }
 
+/// macOS quits at once unless this says the quit flow would ask first (`macos.rs`).
+#[test]
+fn quitting_needs_a_prompt_only_with_unsaved_changes() {
+    let (context, mut app) = app();
+    assert!(!app.quit_needs_prompt());
+    app.dimensions = [16, 16];
+    app.new_document();
+    frame(&context, &mut app);
+    assert!(!app.quit_needs_prompt());
+    assert!(app.begin_quit());
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    assert!(app.quit_needs_prompt());
+    // Once the prompt lets the window close, nothing is left to ask.
+    app.allow_close = true;
+    assert!(!app.quit_needs_prompt());
+    assert!(app.begin_quit());
+}
+
 #[test]
 fn quit_with_unsaved_changes_prompts_from_menu_shortcut_and_window_manager() {
     let ctrl = egui::Modifiers::CTRL;

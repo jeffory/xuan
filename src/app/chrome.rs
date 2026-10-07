@@ -494,6 +494,16 @@ impl EditorApp {
         }
     }
 
+    /// Whether [`Self::begin_quit`] would ask first (a Develop session or unsaved changes)
+    /// rather than let the window close.
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) fn quit_needs_prompt(&self) -> bool {
+        !self.allow_close
+            && (self.develop.is_some()
+                || !self.inactive_develop.is_empty()
+                || self.sessions.iter().any(|s| s.history.dirty()))
+    }
+
     /// Returns `true` when the window may close now. Otherwise starts the
     /// Develop or unsaved-changes prompt, which closes the window when done.
     pub(super) fn begin_quit(&mut self) -> bool {

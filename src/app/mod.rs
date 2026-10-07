@@ -23,6 +23,8 @@ mod layer_effects_dialog;
 mod layers;
 mod layout_grid;
 mod levels_controls;
+#[cfg(target_os = "macos")]
+mod macos;
 mod menus;
 mod navigator;
 mod palette;
@@ -607,6 +609,8 @@ impl EditorApp {
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
+        #[cfg(target_os = "macos")]
+        macos::install_quit_handler(&cc.egui_ctx);
         // Install the native renderer before the first RAW worker is started.
         xuan::gpu::scope(app.processor.clone(), || {
             for path in paths {
@@ -1735,7 +1739,14 @@ impl eframe::App for EditorApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if macos::take_quit_request() {
+            self.request_quit();
+        }
         self.show(ctx);
+        // After the frame, so an edit it made is already counted when macOS asks to quit.
+        #[cfg(target_os = "macos")]
+        macos::set_needs_prompt(self.quit_needs_prompt());
     }
 }
 
