@@ -109,7 +109,7 @@ impl EditorApp {
         )
         .id(egui::Id::new("photoshop_import"))
         .default_width(480.0)
-        .show(ctx, |ui| {
+        .show_with_footer(ctx, |ui| {
             ui.label(tr(
                 "Xuan will convert these Photoshop features. Nothing is applied until you continue.",
             ));
@@ -121,15 +121,14 @@ impl EditorApp {
                         ui.label(RichText::new(format!("• {line}")).color(ui.palette().text));
                     }
                 });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if widgets::button(ui, tr("Cancel")).clicked() {
-                    choice = Some(false);
-                }
-                if widgets::primary_button(ui, tr("Import")).clicked() {
-                    choice = Some(true);
-                }
-            });
+        }, |ui, ()| {
+            let response =
+                widgets::dialog_footer(ui, widgets::FooterButtons::commit(tr("Import")), |_| {});
+            if response.cancel {
+                choice = Some(false);
+            } else if response.commit {
+                choice = Some(true);
+            }
         });
         if choice.is_none() {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {

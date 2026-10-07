@@ -26,7 +26,7 @@ macro_rules! value {
         $(,)?
     ) => {{
         let ui = &mut *($ui);
-        ui.label(RichText::new($label).color(ui.palette().muted));
+        ui.label($label);
         ui.add(
             widgets::Number::new($number)
                 .size(egui::vec2(
@@ -52,6 +52,11 @@ impl EditorApp {
             .min_height(42.0)
             .frame(theme::frame(&ctx.palette()))
             .show(ctx, |ui| {
+                // The bar keeps its height with no document, so the tabs and canvas do not move
+                // when the first one opens; there is just nothing in it to use yet.
+                if self.session().is_none() {
+                    return;
+                }
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none() && self.color_range.is_none(), |ui| {
                     egui::ScrollArea::horizontal()
                         .id_salt("options_scroll")
@@ -388,7 +393,23 @@ impl EditorApp {
         }
     }
 
+    /// What the status bar suggests with nothing open, using the current key bindings.
+    fn empty_hint(&self) -> String {
+        let mut parts = vec![tr("Drop an image here").to_owned()];
+        for (id, text) in [
+            ("open", tr("{} opens a file")),
+            ("new", tr("{} starts a new canvas")),
+        ] {
+            let shortcut = self.keymap.shortcut(id);
+            if !shortcut.is_empty() {
+                parts.push(text.replace("{}", &shortcut));
+            }
+        }
+        parts.join(" · ")
+    }
+
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
+        let has_document = self.session().is_some();
         super::chrome::status_bar(&ctx.palette(), self.window_corner_radius(ctx), "status_bar")
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -425,23 +446,28 @@ impl EditorApp {
                                 .color(ui.palette().muted),
                         );
                     }
+                    let hint = if !has_document {
+                        self.empty_hint()
+                    } else if self.tool == Tool::Region && self.plugins.action.is_none() {
+                        tr("Drag a box and say what to do there · Click a box to change it · Delete removes it").to_owned()
+                    } else {
+                        self.tool.hint().to_owned()
+                    };
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Running jobs, else the latest status message for a
-                        // few seconds, else the tool's hint.
+                        // Running jobs, even with no document open (New Image can
+                        // generate one), else the latest status message for a few
+                        // seconds, else the hint.
                         let jobs = self.running_jobs();
                         if !jobs.is_empty() {
                             self.job_status(ui, &jobs);
                         } else if let Some(status) = self.recent_status(ui.ctx()) {
                             ui.add(egui::Label::new(RichText::new(status).size(11.0)).truncate());
                         } else {
-                            let hint = if self.tool == Tool::Region && self.plugins.action.is_none() {
-                                tr("Drag a box and say what to do there · Click a box to change it · Delete removes it")
-                            } else {
-                                self.tool.hint()
-                            };
                             ui.add(
-                                egui::Label::new(RichText::new(hint).size(11.0).color(ui.palette().muted))
-                                    .truncate(),
+                                egui::Label::new(
+                                    RichText::new(hint).size(11.0).color(ui.palette().muted),
+                                )
+                                .truncate(),
                             );
                         }
                     });
@@ -466,43 +492,100 @@ impl EditorApp {
     }
 
     pub(super) fn tool_rail(&mut self, ctx: &egui::Context) {
+        const MARGIN_X: i8 = 10;
+        const MARGIN_Y: i8 = 16;
+        const GAP: f32 = 5.0;
+        // The pinned colour swatches under a separator. The footer lays itself out with no item
+        // spacing, so its height is the sum of these and nothing is clipped.
+        const FOOTER_ABOVE: f32 = 8.0;
+        const FOOTER_BELOW: f32 = 5.0;
+        const FOOTER_HEIGHT: f32 = FOOTER_ABOVE + 1.0 + FOOTER_BELOW + widgets::PALETTE_HEIGHT;
+        let tools: Vec<Tool> = Tool::ALL
+            .into_iter()
+            .filter(|t| *t != Tool::Region || self.region_tool_available())
+            .collect();
+        // One column unless the tools would run into the swatches; then as few as fit, up to three.
+        let room = ctx.available_rect().height() - 2.0 * f32::from(MARGIN_Y) - FOOTER_HEIGHT;
+        let columns = (1..=MAX_TOOL_COLUMNS)
+            .find(|&columns| tool_column_height(tools.len().div_ceil(columns)) <= room)
+            .unwrap_or(MAX_TOOL_COLUMNS);
+        let width = 2.0 * f32::from(MARGIN_X) + tool_columns_width(columns);
         let mut tool = None;
         egui::SidePanel::left("tools")
-            .exact_width(56.0)
+            .exact_width(width)
             .resizable(false)
             .frame(
                 egui::Frame::new()
                     .fill(ctx.palette().panel)
-                    .inner_margin(egui::Margin::symmetric(10, 16)),
+                    .inner_margin(egui::Margin::symmetric(MARGIN_X, MARGIN_Y)),
             )
             .show(ctx, |ui| {
                 ui.add_enabled_ui(
                     self.dialog.is_none() && self.job.is_none() && self.color_range.is_none(),
                     |ui| {
-                        egui::ScrollArea::vertical()
-                            .scroll_bar_visibility(
-                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                            )
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing.y = 5.0;
-                                for t in Tool::ALL {
-                                    if t == Tool::Region && !self.region_tool_available() {
-                                        continue;
-                                    }
-                                    let shortcut = super::commands::tool_command(t)
-                                        .map(|id| self.keymap.shortcut(id))
-                                        .unwrap_or_default();
-                                    if icons::tool_button(ui, t, self.tool == t, &shortcut)
-                                        .clicked()
-                                    {
-                                        tool = Some(t);
-                                    }
-                                }
-                                ui.add_space(8.0);
-                                ui.separator();
-                                ui.add_space(5.0);
+                        // The swatches stay put; only the tools scroll, and only if even
+                        // three columns do not fit.
+                        egui::TopBottomPanel::bottom("tool_swatches")
+                            .frame(egui::Frame::NONE)
+                            .show_separator_line(false)
+                            .exact_height(FOOTER_HEIGHT)
+                            .show_inside(ui, |ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.add_space(FOOTER_ABOVE);
+                                let (line, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 1.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().hline(
+                                    line.x_range(),
+                                    line.center().y,
+                                    ui.visuals().widgets.noninteractive.bg_stroke,
+                                );
+                                ui.add_space(FOOTER_BELOW);
                                 widgets::palette(ui, &mut self.brush.color, &mut self.background);
                             });
+                        let output = egui::ScrollArea::vertical()
+                            .scroll_bar_visibility(
+                                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                            )
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+                                egui::Grid::new("tool_grid")
+                                    .spacing([GAP, GAP])
+                                    .show(ui, |ui| {
+                                        for (index, &t) in tools.iter().enumerate() {
+                                            let shortcut = super::commands::tool_command(t)
+                                                .map(|id| self.keymap.shortcut(id))
+                                                .unwrap_or_default();
+                                            if icons::tool_button(ui, t, self.tool == t, &shortcut)
+                                                .clicked()
+                                            {
+                                                tool = Some(t);
+                                            }
+                                            if (index + 1) % columns == 0 {
+                                                ui.end_row();
+                                            }
+                                        }
+                                    });
+                            });
+                        // A scroll cue for windows too short even for three columns.
+                        if output.content_size.y > output.inner_rect.height() + 0.5 {
+                            let rect = output.inner_rect;
+                            let fade = egui::Rect::from_min_max(
+                                egui::pos2(rect.left(), rect.bottom() - 18.0),
+                                rect.right_bottom(),
+                            );
+                            let panel = ui.ctx().palette().panel;
+                            let clear = panel.gamma_multiply(0.0);
+                            let mut mesh = egui::Mesh::default();
+                            mesh.colored_vertex(fade.left_top(), clear);
+                            mesh.colored_vertex(fade.right_top(), clear);
+                            mesh.colored_vertex(fade.right_bottom(), panel);
+                            mesh.colored_vertex(fade.left_bottom(), panel);
+                            mesh.add_triangle(0, 1, 2);
+                            mesh.add_triangle(0, 2, 3);
+                            ui.painter().add(egui::Shape::mesh(mesh));
+                        }
                     },
                 );
             });
@@ -670,4 +753,17 @@ impl EditorApp {
             symmetry.center = None;
         }
     }
+}
+
+/// The most columns the tool rail uses before it scrolls.
+const MAX_TOOL_COLUMNS: usize = 3;
+
+/// The height of `rows` tool buttons with their gaps.
+fn tool_column_height(rows: usize) -> f32 {
+    rows as f32 * 36.0 + rows.saturating_sub(1) as f32 * 5.0
+}
+
+/// The width of `columns` tool buttons with their gaps.
+fn tool_columns_width(columns: usize) -> f32 {
+    columns as f32 * 36.0 + columns.saturating_sub(1) as f32 * 5.0
 }

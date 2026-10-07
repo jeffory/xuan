@@ -9,7 +9,12 @@ written in Python with the standard library only.
 ## Setup
 
 1. Copy or symlink this folder into Xuan's plugins directory (see
-   `docs/PLUGINS.md`), or add its parent to `XUAN_PLUGIN_PATH`.
+   `docs/PLUGINS.md`), install it with **Plugins → Install from Folder or
+   Zip…**, or add its parent to `XUAN_PLUGIN_PATH`. It needs nothing else:
+   Xuan puts the Python SDK it ships (`xuan_plugin`) on the plugin's
+   `PYTHONPATH` (see "The Python SDK" in `docs/PLUGINS.md`). With a Xuan from
+   before that, copy `sdk/python/xuan_plugin.py` from the same release next to
+   `main.py`.
 2. In Xuan open **Plugins → Manage Plugins… → Comfy Cloud**, allow the
    permissions and paste an API key from
    [platform.comfy.org](https://platform.comfy.org). Running workflows through

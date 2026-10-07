@@ -374,7 +374,10 @@ impl InputKind {
     /// secrets. A plugin that needs send consent gets none of it before the
     /// user agreed, not even for an estimate.
     pub fn private(self) -> bool {
-        matches!(self, Self::Text | Self::Multiline | Self::Path | Self::Secret)
+        matches!(
+            self,
+            Self::Text | Self::Multiline | Self::Path | Self::Secret
+        )
     }
 }
 

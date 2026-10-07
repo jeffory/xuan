@@ -18,6 +18,10 @@ ARCHITECTURES = {"x86_64": ("amd64", 62), "aarch64": ("arm64", 183)}
 # bin/xuan (src/plugins/mod.rs, bundled_dir_for).
 BUNDLED_PLUGINS = "lib/xuan/plugins"
 PLUGIN_EXECUTABLES = ["mcp-server/target/release/xuan-mcp-server"]
+# The Python plugin SDK, beside the bundled plugins; Xuan puts it on every
+# plugin's PYTHONPATH (src/plugins/mod.rs, sdk_dir_from).
+PLUGIN_SDK = "lib/xuan/sdk"
+PLUGIN_SDK_MODULE = "python/xuan_plugin.py"
 DEB_LIBRARIES = [
     "libgcc-s1",
     "libvulkan1",
@@ -94,6 +98,7 @@ def stage_payload(stage, payload):
     shutil.copytree(stage / "bin", prefix / "bin")
     shutil.copytree(stage / "share", prefix / "share")
     shutil.copytree(stage / BUNDLED_PLUGINS, prefix / BUNDLED_PLUGINS)
+    shutil.copytree(stage / PLUGIN_SDK, prefix / PLUGIN_SDK)
     # Package files must stay readable even when the builder has a private umask.
     payload.chmod(0o755)
     for path in payload.rglob("*"):
@@ -303,6 +308,9 @@ def restore_bundled_plugins(payload):
     held = os.environ.get("XUAN_HELD_PLUGINS")
     if held:
         shutil.copytree(held, payload / "usr" / BUNDLED_PLUGINS)
+        # The SDK is not held back (it has no ELF files); AppRun names it.
+        if not (payload / "usr" / PLUGIN_SDK / PLUGIN_SDK_MODULE).is_file():
+            raise ValueError("Missing the Python plugin SDK in the AppImage")
 
 
 def build_appimage(payload, output, version, architecture, temporary):

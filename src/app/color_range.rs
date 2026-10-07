@@ -1,4 +1,4 @@
-//! Select → Color Range…, after Compositor's `ColorRangeSheet`: every pixel near the
+//! Select → Colour Range…, after Compositor's `ColorRangeSheet`: every pixel near the
 //! colours clicked on the canvas, anywhere in the image. The selection updates on the
 //! canvas as the colours, Fuzziness and Invert change; OK keeps it as one undo step and
 //! Cancel puts back the selection there was.
@@ -49,7 +49,7 @@ impl EditorApp {
             return;
         };
         session.history.commit();
-        session.history.begin(tr("Color Range"), &session.document);
+        session.history.begin(tr("Colour Range"), &session.document);
         let image = Arc::new(render::render(&session.document));
         let document = session.document.id;
         let original = session.document.selection.clone();
@@ -70,7 +70,7 @@ impl EditorApp {
         self.set_tool(Tool::Dropper);
     }
 
-    /// A click on the canvas while Color Range is open: Shift adds the colour and Alt
+    /// A click on the canvas while Colour Range is open: Shift adds the colour and Alt
     /// takes it away, whichever eyedropper is chosen.
     pub(super) fn sample_color_range(&mut self, point: Point, modifiers: egui::Modifiers) {
         let Some(edit) = &mut self.color_range else {
@@ -142,7 +142,7 @@ impl EditorApp {
             if keep && !edit.range.include.is_empty() {
                 session.document.selection = Some(Arc::new(edit.range.mask(&edit.image)));
                 session.history.commit();
-                self.status = tr("Color Range").into();
+                self.status = tr("Colour Range").into();
             } else {
                 session.history.cancel(&mut session.document);
             }
@@ -177,7 +177,7 @@ impl EditorApp {
         let mut ok = false;
         let mut cancel = false;
         let aspect = edit.image.height() as f32 / edit.image.width().max(1) as f32;
-        widgets::Window::new(tr("Color Range"))
+        widgets::Window::new(tr("Colour Range"))
             .id("color_range")
             .open(&mut open)
             .default_width(340.0)
@@ -186,79 +186,87 @@ impl EditorApp {
                 egui::Align2::RIGHT_TOP,
                 ctx.content_rect().right_top() + egui::vec2(-16.0, 90.0),
             )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    // Holding Shift or Alt shows the eyedropper a click will use.
-                    let mut shown = held.unwrap_or(edit.mode);
-                    widgets::segmented(
-                        ui,
-                        &mut shown,
-                        &[
-                            (SampleMode::Replace, tr("Pick")),
-                            (SampleMode::Add, tr("Add")),
-                            (SampleMode::Remove, tr("Remove")),
-                        ],
-                    )
-                    .on_hover_text(tr("Shift-click adds a colour, Alt-click takes one away."));
-                    if held.is_none() {
-                        edit.mode = shown;
-                    }
-                });
-                ui.add_space(8.0);
-                let size = if aspect > PREVIEW.y / PREVIEW.x {
-                    egui::vec2(PREVIEW.y / aspect, PREVIEW.y)
-                } else {
-                    egui::vec2(PREVIEW.x, PREVIEW.x * aspect)
-                };
-                ui.vertical_centered(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
-                    if let Some(texture) = &edit.preview {
-                        ui.painter().image(
-                            texture.id(),
-                            rect,
-                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                    }
-                    ui.painter().rect_stroke(
-                        rect,
-                        0.0,
-                        egui::Stroke::new(1.0_f32, Color32::from_white_alpha(50)),
-                        egui::StrokeKind::Inside,
-                    );
-                });
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(if edit.range.include.is_empty() {
-                        tr("Click the image to pick the colour to select.")
-                    } else {
-                        tr("Shift-click adds a colour, Alt-click takes one away.")
-                    })
-                    .color(ui.palette().muted),
-                );
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label(tr("Fuzziness"));
-                    ui.add(widgets::Slider::new(
-                        &mut edit.range.fuzziness,
-                        0..=ColorRange::MAX_FUZZINESS,
-                    ))
-                    .on_hover_text(tr(
-                        "How far a colour may be from the picked ones and still be selected",
-                    ));
-                });
-                widgets::checkbox(ui, &mut edit.range.invert, tr("Invert")).on_hover_text(tr(
-                    "Select everything except those colours, such as all but a green screen",
-                ));
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ok = ui.add(widgets::Button::new(tr("OK")).primary()).clicked();
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        // Holding Shift or Alt shows the eyedropper a click will use.
+                        let mut shown = held.unwrap_or(edit.mode);
+                        widgets::segmented(
+                            ui,
+                            &mut shown,
+                            &[
+                                (SampleMode::Replace, tr("Pick")),
+                                (SampleMode::Add, tr("Add")),
+                                (SampleMode::Remove, tr("Remove")),
+                            ],
+                        )
+                        .on_hover_text(tr("Shift-click adds a colour, Alt-click takes one away."));
+                        if held.is_none() {
+                            edit.mode = shown;
+                        }
                     });
-                });
-            });
+                    ui.add_space(8.0);
+                    let size = if aspect > PREVIEW.y / PREVIEW.x {
+                        egui::vec2(PREVIEW.y / aspect, PREVIEW.y)
+                    } else {
+                        egui::vec2(PREVIEW.x, PREVIEW.x * aspect)
+                    };
+                    ui.vertical_centered(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
+                        if let Some(texture) = &edit.preview {
+                            ui.painter().image(
+                                texture.id(),
+                                rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                Color32::WHITE,
+                            );
+                        }
+                        ui.painter().rect_stroke(
+                            rect,
+                            0.0,
+                            egui::Stroke::new(1.0_f32, Color32::from_white_alpha(50)),
+                            egui::StrokeKind::Inside,
+                        );
+                    });
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(if edit.range.include.is_empty() {
+                            tr("Click the image to pick the colour to select.")
+                        } else {
+                            tr("Shift-click adds a colour, Alt-click takes one away.")
+                        })
+                        .color(ui.palette().muted),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Fuzziness"));
+                        ui.add(widgets::Slider::new(
+                            &mut edit.range.fuzziness,
+                            0..=ColorRange::MAX_FUZZINESS,
+                        ))
+                        .on_hover_text(tr(
+                            "How far a colour may be from the picked ones and still be selected",
+                        ));
+                    });
+                    widgets::checkbox(ui, &mut edit.range.invert, tr("Invert")).on_hover_text(tr(
+                        "Select everything except those colours, such as all but a green screen",
+                    ));
+                },
+                |ui, ()| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Apply")),
+                        |_| {},
+                    );
+                    ok = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !ctx.wants_keyboard_input();
         if ok || enter {
             self.close_color_range(true);

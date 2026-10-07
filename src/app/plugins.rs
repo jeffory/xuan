@@ -69,6 +69,10 @@ pub(super) struct PluginState {
     /// The secrets file exists but could not be read; it is never overwritten.
     pub secrets_unreadable: bool,
     pub(super) config_dir: Option<PathBuf>,
+    /// The Python plugin SDK's folder, put first on every plugin's
+    /// `PYTHONPATH` and named in `XUAN_PLUGIN_SDK` (see
+    /// [`plugins::sdk_dir`]); set when the plugins are loaded.
+    pub sdk_dir: Option<PathBuf>,
     scratch: HashMap<String, tempfile::TempDir>,
     /// Private data folders for plugins when there is no configuration folder.
     data_fallback: HashMap<String, tempfile::TempDir>,
@@ -132,6 +136,12 @@ pub(super) struct PluginState {
     /// When a plugin last switched the current document; see
     /// `ACTIVATE_INTERVAL`.
     pub activated_at: HashMap<String, std::time::Instant>,
+    /// By plugin, the files Xuan wrote for its `file/save_as`, `file/export`
+    /// and `file/save` requests in this run, canonicalized: a plugin allowed
+    /// to save without asking may replace these without asking, and no
+    /// others (not the user's own saves, nor another plugin's files).
+    /// Forgotten when its grant is revoked or changes.
+    pub written_files: HashMap<String, std::collections::HashSet<PathBuf>>,
 }
 
 enum Pending {
@@ -460,6 +470,7 @@ impl EditorApp {
                 }
             }
         }
+        self.plugins.sdk_dir = plugins::sdk_dir();
         let bundled = plugins::bundled_dir();
         let dirs = plugins::plugin_dirs(
             config_dir.as_deref(),
@@ -576,8 +587,10 @@ impl EditorApp {
         {
             new.send_without_asking = old.send_without_asking;
             new.edit_without_asking = old.edit_without_asking;
+            new.save_without_asking = old.save_without_asking;
         } else {
             self.plugins.forget_session(plugin);
+            self.plugins.written_files.remove(plugin);
         }
         // Secrets were entered for the folder the user allowed before; never
         // hand them to a plugin with the same id from another folder.
@@ -731,7 +744,7 @@ impl EditorApp {
             // Only files unchanged since they were verified, looked up
             // before the process starts.
             let models = self.model_paths(plugin);
-            let env = vec![
+            let mut env = vec![
                 ("XUAN_PLUGIN_ID".to_owned(), plugin.to_owned()),
                 ("XUAN_DATA_DIR".to_owned(), data_dir.display().to_string()),
                 (
@@ -740,6 +753,12 @@ impl EditorApp {
                 ),
                 ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
             ];
+            // Python plugins import the SDK that matches this Xuan, wherever
+            // they are installed.
+            env.extend(plugins::sdk_env(
+                self.plugins.sdk_dir.as_deref(),
+                std::env::var_os("PYTHONPATH").as_deref(),
+            ));
             let context = self.context.clone();
             let wake: plugins::host::Wake = Arc::new(move || context.request_repaint());
             let blocked = self.plugin_network_blocked(plugin);
@@ -1314,7 +1333,7 @@ impl EditorApp {
                         job.progress = Some(fraction.clamp(0.0, 1.0) as f32);
                     }
                     if let Some(message) = params.get("message").and_then(Value::as_str) {
-                        job.message = message.chars().take(200).collect();
+                        job.message = one_line(message, 200);
                     }
                 }
             }
@@ -2968,9 +2987,12 @@ fn withhold_private(spec: &Action, inputs: &mut Map<String, Value>) {
     }
 }
 
-/// `text` on one line, without control characters, cut to `max` characters.
+/// `text` on one line, without control characters or characters that are
+/// invisible or reorder text (see [`super::plugin_files::invisible`]), cut to
+/// `max` characters. For any plugin text Xuan shows.
 pub(super) fn one_line(text: &str, max: usize) -> String {
     text.chars()
+        .filter(|&c| !super::plugin_files::invisible(c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(max)
         .collect()
@@ -2986,14 +3008,17 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
         permissions: manifest.permissions.clone(),
         send_without_asking: false,
         edit_without_asking: false,
+        save_without_asking: false,
     }
 }
 
-/// The most regions an action's regions input takes.
-/// An `action/estimate` answer as one line: "cost · ≈N s".
+/// An `action/estimate` answer as one line: "cost · ≈N s". The cost is the
+/// plugin's words: one line, without invisible characters, at most 120.
 fn estimate_text(value: &Value) -> Option<String> {
-    let cost = value.get("cost").and_then(Value::as_str).unwrap_or("");
-    let seconds = value.get("seconds").and_then(Value::as_f64);
+    let cost = one_line(value.get("cost").and_then(Value::as_str).unwrap_or(""), 120);
+    let cost = cost.trim();
+    let seconds = (value.get("seconds").and_then(Value::as_f64))
+        .filter(|s| s.is_finite() && (0.0..1e9).contains(s));
     let mut text = cost.to_owned();
     if let Some(seconds) = seconds {
         if !text.is_empty() {
@@ -3004,6 +3029,7 @@ fn estimate_text(value: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// The most regions an action's regions input takes.
 pub(super) fn region_limit(input: &plugins::manifest::Input) -> usize {
     input.max.map_or(plugins::manifest::MAX_REGIONS, |max| {
         (max.max(0.0) as usize).min(plugins::manifest::MAX_REGIONS)

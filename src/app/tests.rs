@@ -42,11 +42,17 @@ mod selection;
 #[path = "tests/paths.rs"]
 mod paths;
 
+#[path = "tests/pencil_cursor.rs"]
+mod pencil_cursor;
+
 #[path = "tests/pen.rs"]
 mod pen;
 
 #[path = "tests/providers.rs"]
 mod providers;
+
+#[path = "tests/canvas_commands.rs"]
+mod canvas_commands;
 
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -4916,7 +4922,10 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
 fn settings_threshold_field(context: &egui::Context, app: &mut EditorApp) -> Pos2 {
     app.dialog = Some(Dialog::Settings);
     settings::show_settings_page(context, settings::SettingsPage::Appearance);
-    frame(context, app);
+    // The page is a grid, which lays itself out invisibly on its first frame.
+    for _ in 0..3 {
+        frame(context, app);
+    }
     layer_label(context, app, "500%") + Vec2::new(8.0, 6.0)
 }
 

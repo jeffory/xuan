@@ -134,6 +134,51 @@ mod unix {
         assert!(app.error.is_none(), "{:?}", app.error);
     }
 
+    /// Issue 73: a Python example copied out of the repository, as a user
+    /// installs it, finds the SDK installed with Xuan. Here Xuan's prefix is
+    /// a temporary folder with the SDK in `lib/xuan/sdk/python`, and the
+    /// plugin's repository-relative path to the SDK leads nowhere.
+    #[test]
+    fn an_installed_python_plugin_imports_the_sdk_that_ships_with_xuan() {
+        if !python() {
+            eprintln!("python3 not available; skipping");
+            return;
+        }
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let prefix = tempfile::tempdir().unwrap();
+        let lib = prefix.path().join("lib").join("xuan");
+        let sdk = lib.join("sdk").join("python");
+        std::fs::create_dir_all(&sdk).unwrap();
+        std::fs::create_dir_all(lib.join("plugins")).unwrap();
+        std::fs::copy(
+            repo.join("sdk/python/xuan_plugin.py"),
+            sdk.join("xuan_plugin.py"),
+        )
+        .unwrap();
+        let user = tempfile::tempdir().unwrap();
+        let plugin = user.path().join("plugins").join("histogram");
+        std::fs::create_dir_all(&plugin).unwrap();
+        for name in ["plugin.toml", "main.py"] {
+            std::fs::copy(repo.join("plugins/histogram").join(name), plugin.join(name)).unwrap();
+        }
+        assert!(!user.path().join("sdk/python/xuan_plugin.py").exists());
+
+        let (context, mut app) = app();
+        app.plugins.sdk_dir = xuan::plugins::sdk_dir_from(None, Some(&lib.join("plugins")), None);
+        assert_eq!(app.plugins.sdk_dir.as_deref(), Some(sdk.as_path()));
+        app.install_plugins(vec![Manifest::load(&plugin).unwrap()], vec![]);
+        app.grant_plugin("histogram", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        let key = "plugin:histogram/histogram";
+        run_until(&context, &mut app, |app| {
+            app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert!(app.plugins.running("histogram"));
+        app.stop_plugin("histogram");
+    }
+
     #[test]
     fn select_bright_areas_proposes_a_selection_through_the_python_sdk() {
         if !python() {

@@ -72,14 +72,15 @@ the document takes effect on the next frame and is drawn at once.
 | --- | --- |
 | list documents | `document/list` (new) |
 | open a document | `file/open` (new): the user confirms the file |
-| save / export a document | `file/save_as`, `file/export` (new): the system save dialog |
+| save / export a document | `file/save_as`, `file/export` (new): the system save dialog, or with `path` Xuan's own prompt (#54); `file/save` saves in place |
 | switch document | `document/activate` (new) |
-| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, provenance) |
+| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
 | get/set layer properties: name, visibility, lock, opacity, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
 | … transform | `document/edit` `transform` (new) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
-| create text / shape layer | `document/edit` `add_text_layer`, `add_shape_layer` (new) |
+| create text / shape layer | `document/edit` `add_text_layer` (with an SVG `path` for text on a path), `add_shape_layer` (new) |
+| edit text, set it on a path (#64) | `document/edit` `set_text` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
 | paint via strokes, fills and gradients | `document/edit` `stroke` (with `points` or an SVG `path`), `fill`, `fill_path`, `gradient` (new) |
@@ -88,7 +89,7 @@ the document takes effect on the next frame and is drawn at once.
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
 | reorder layers | `document/edit` `move_layer` (new) |
-| crop / resize canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas` |
+| crop / resize / rotate / trim canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas`, `rotate_canvas`, `trim`; `host/run` `crop_to_selection` |
 | several edits as one undo step (#61) | one `document/edit` with every edit; `"$n"` names a layer added earlier in the request (new) |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
@@ -136,11 +137,12 @@ like the existing ones, rather than anything specific to MCP:
   selection of layers (duplicate, delete).
 - **Copying from a pane.** A pane `button` may carry `copy` text that Xuan
   puts on the clipboard when the user clicks it, for the connection details.
-- **Canvas.** `crop`, `resize_canvas` and `resize_image`. They are accepted
+- **Canvas.** `crop`, `resize_canvas`, `resize_image`, `rotate_canvas` and `trim`. They are accepted
   only in `document/edit`, not in action results, whose images are placed on
   the canvas as it was sent.
 - **More `host/run` commands** flagged `Edit` in the command registry, where a
   menu command already makes one undoable edit without a dialog:
+  `rotate_canvas_cw`, `rotate_canvas_ccw`, `rotate_canvas_180`, `crop_to_selection`,
   `select_layer_pixels`, `select_mask_black`, `feather`, `select_subject`,
   `content_fill`, `remove_background` and `remove_flat_background`. `host/run`
   now refuses commands that are greyed out in their menu.
@@ -193,6 +195,19 @@ like the existing ones, rather than anything specific to MCP:
   the kurbo crate's. `get_document` lists the saved paths and each path
   shape's outline in document coordinates. `select_shape` also takes
   `feather` for rectangles, ellipses and polygons.
+- **Text on a path** (#64). Letters along a curve took one text layer per
+  letter, each placed and rotated by hand from a spline sampled outside Xuan,
+  and the line could no longer be edited as text. `create_text_layer` takes
+  `path` (SVG path data in document pixels, which places the layer) and
+  `path_options` (`start_offset`, `align`, `side`, `letter_spacing`,
+  `rotate`, `baseline_shift`, `size_end`, `opacity_start`, `opacity_end`), so
+  one call sets "17 letters shrinking from 17 to 7 px and fading from 95% to
+  55%" along the curve as one editable layer. `set_layer` takes `text`,
+  `path` (`null` puts the text back in a box) and `path_options` (merged into
+  the layer's options), sent as the new `set_text` edit before any placement.
+  Glyph positions and advances come from cosmic-text and become distances
+  along the flattened path; `get_document` describes each text layer's text
+  and its path in document coordinates. Saved as `.xuan` format 11.
 - **Paint symmetry** (#66). The 12 rays of a starburst were drawn one at a
   time, and a mirrored figure meant computing x → 512 − x for every point.
   `paint_stroke` (at the top level and in each item of `strokes`) and the
@@ -228,10 +243,11 @@ or nothing.
 
 ## Opening, saving and exporting
 
-The rule from #33 (F2) stands: a plugin can never save or overwrite a file
-silently, and `host/run` keeps refusing `save`, `save_as`, `export`, `open` and
-`close`. A plugin that drives the editor still needs to deliver its work, so
-three requests route the decision through the user:
+#33 (F2) ruled that a plugin can never save or overwrite a file silently;
+#54 relaxed that into an opt-in the user grants per plugin (below).
+`host/run` keeps refusing `save`, `save_as`, `export`, `open` and `close`. A
+plugin that drives the editor still needs to deliver its work, so the file
+requests route the decision through the user:
 
 - **`file/save_as` and `file/export` open the system's save dialog**, titled
   with the plugin's name and id and prefilled with a suggested name. The user
@@ -273,8 +289,63 @@ Alternatives considered: an export confined to the plugin's own folders already
 exists (`document/export` writes a PNG into its folders) and is enough for
 previews, but it does not put a file where the user wants it, and a plugin
 handing such a file back for the user to accept would just be a second save
-dialog. A per-plugin allow-list of folders was rejected: it is a standing
-permission for silent writes, which is exactly what F2 rules out.
+dialog. A per-plugin allow-list of folders was rejected for #33 as a standing
+permission for silent writes; #54 below adds such a permission, without the
+folder list, because agent workflows need it.
+
+### Saving without the dialog (#54)
+
+The save dialog kept every write in the user's hands, but an MCP client
+cannot operate it, so a batch of edits and exports, or a save at the end of a
+long task, needed someone at the computer for each file. The maintainer's
+decision: ask the user the first time, and offer to always allow.
+
+- **`path`.** `file/save_as` and `file/export` take an optional absolute
+  `path` (and `overwrite`); `file/save` saves a document back to its own
+  `.xuan` file, as Ctrl+S. Without `path`, the save dialog is unchanged.
+- **Xuan's own prompt.** In place of the system dialog Xuan shows **Save a
+  file?** (or **Export an image?**, **Save the project?**), naming the plugin,
+  the document, the file name, its folder (resolved), and whether it writes a
+  new file or replaces one: **Save**, **Always Allow** or **Cancel**. It is a
+  plugin prompt like **Open a file?**: it comes back after another dialog
+  replaced it (#56), `request/cancel` closes it and a late answer does
+  nothing (#57), and the MCP server keeps the client waiting with progress
+  notifications meanwhile.
+- **Always Allow** is `save_without_asking` in the plugin's grant, next to
+  `edit_without_asking`. It shows as **Save and export without asking** in
+  **Plugins → Manage Plugins…**, where it can be turned off, and is dropped
+  when the plugin's folder, command or permissions change. The issue
+  proposed limiting it to folders the user lists; that was not done, because
+  the prompt already names the folder each time it asks, the parent must
+  exist, and a folder list would be a second setting to explain. Writes are
+  visible instead.
+- **Overwrites.** Replacing a file always needs `overwrite: true`, prompt or
+  not; without it the request fails before any prompt, so a client cannot
+  replace a file by accident. With Always Allow, a write replaces a file
+  without asking only if Xuan wrote that file for the same plugin since it
+  started (through its own `file/save_as`, `file/export` or `file/save`,
+  asked or not), or for `file/save`, the document's own project. A file the
+  user saved or exported themselves, or one written for another plugin,
+  shows the prompt again, which says it replaces the file. The review of the
+  first version caught that a run-wide list let an agent replace a project
+  the user had just saved (say `B.xuan`) with another document; the list is
+  now per plugin, kept until Xuan quits and forgotten when the plugin's grant
+  is revoked or changes. So the grant covers new files and the plugin's own
+  output, never the user's work. Folders and symbolic links at the path are
+  never replaced, and a file that appears at a path the prompt called new is
+  not replaced.
+- **Path rules.** The path must be absolute and its folder must exist; the
+  file name must already be plain (no control, bidi or invisible characters,
+  reserved characters, leading dot or Windows device name), and is refused
+  rather than cleaned so the prompt names the file written; the extension
+  must match the format (`.xuan`, or the image extension, which picks the
+  format; a `format` that disagrees is refused). Errors name files, never
+  folders, as before.
+- **Visibility.** Each write made without asking is shown in the status bar
+  ("Exported without asking: …"), in the plugin's log, and in the MCP Server
+  pane's recent tool calls ("export_document: exported out.png without
+  asking"); the pane also says when Always Allow is on. Answers carry
+  `asked: false` for such writes.
 
 The requests wait until no other dialog is open, a plugin has at most one
 waiting, and a cancel is the error `-32800`, so a misbehaving client can
@@ -309,7 +380,7 @@ client and Xuan in step:
   or when a stateless client closes its HTTP request, the server withdraws the
   call's waiting request with the plugin protocol's `request/cancel` (see
   "Withdrawing a request" in `docs/PLUGINS.md`). Xuan drops the request and
-  its prompt, so a late **Allow** or **Open** does nothing and the prompt does
+  its prompt, so a late **Allow**, **Open** or **Save** does nothing and the prompt does
   not come back after another dialog. A save dialog already open cannot be
   withdrawn: it is the system's, modal, and the save happens if the user
   confirms it. On the legacy session protocol rmcp keeps a call running when

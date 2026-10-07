@@ -4,11 +4,20 @@ use xuan::i18n::tr;
 use super::{
     Tool,
     theme::{self, PaletteExt},
+    widgets::{FocusRing, focus_ring, focus_ring_at},
 };
 
 /// A tool rail button. Its tooltip names the tool and its current `shortcut`, if any.
 pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, shortcut: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            selected,
+            tool.label(),
+        )
+    });
     let painter = ui.painter();
     let p = ui.palette();
     if selected || response.hovered() {
@@ -33,6 +42,15 @@ pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, shortcut: &str) -> e
     }
     let icon_padding = if tool == Tool::Gradient { 9.0 } else { 7.0 };
     draw(ui, tool, rect.shrink(icon_padding), ui.palette().text);
+    // Flush with the button's edge: the rail's scroll area would clip a ring outside it, and
+    // there the ring borders the panel whether or not the tool is selected.
+    focus_ring_at(
+        ui,
+        &response,
+        rect,
+        f32::from(theme::BUTTON_RADIUS),
+        FocusRing::Inside,
+    );
     if shortcut.is_empty() {
         response.on_hover_text(tool.label())
     } else {
@@ -109,6 +127,7 @@ pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
         offsets.into_iter().map(|offset| center + offset).collect(),
         Stroke::new(1.5_f32, ui.palette().muted),
     ));
+    focus_ring(ui, &response, 4.0);
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::CollapsingHeader,
@@ -126,6 +145,17 @@ pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
 
 pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            visible,
+            tr("Toggle visibility"),
+        )
+    });
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 4.0, ui.palette().icon_hover);
+    }
     let source = if visible {
         egui::include_image!("../../assets/svg/eye.svg")
     } else {
@@ -137,11 +167,17 @@ pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
         ui.palette().disabled
     };
     svg(ui, source, rect, color);
+    focus_ring(ui, &response, 4.0);
     response.on_hover_text(tr("Toggle visibility"))
 }
 
-pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
+/// A layer action icon (new layer, group, mask, …), named `label` for assistive technology
+/// and its tooltip.
+pub fn action_button(ui: &mut Ui, kind: &str, label: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     let painter = ui.painter();
     if response.hovered() {
         painter.rect_filled(rect, 5.0, ui.palette().icon_hover);
@@ -154,10 +190,11 @@ pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
         "mask" => egui::include_image!("../../assets/svg/mask.svg"),
         "delete_layer" => egui::include_image!("../../assets/svg/trash.svg"),
         "ai_layer" => egui::include_image!("../../assets/svg/sparkles.svg"),
-        _ => return response,
+        _ => return response.on_hover_text(label),
     };
     svg(ui, source, rect.shrink(6.0), ui.palette().muted);
-    response
+    focus_ring(ui, &response, 5.0);
+    response.on_hover_text(label)
 }
 
 pub fn rotate_button(ui: &mut Ui, clockwise: bool) -> egui::Response {
@@ -172,11 +209,15 @@ pub fn rotate_button(ui: &mut Ui, clockwise: bool) -> egui::Response {
     } else {
         egui::include_image!("../../assets/svg/rotate-left.svg")
     };
+    // Drawn like the button's label: in the disabled text colour, unfaded, when disabled.
+    let color = super::widgets::label_color(ui, response.enabled(), ui.palette().text);
+    let mut icon = ui.new_child(egui::UiBuilder::new().max_rect(response.rect));
+    icon.set_opacity(super::widgets::control_opacity(ui));
     svg(
-        ui,
+        &icon,
         source,
         Rect::from_center_size(response.rect.center(), Vec2::splat(16.0)),
-        ui.palette().text,
+        color,
     );
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
@@ -202,6 +243,7 @@ pub fn lock(ui: &mut Ui, locked: bool) -> egui::Response {
         Rect::from_center_size(rect.center(), Vec2::splat(16.0)),
         color,
     );
+    focus_ring(ui, &response, 4.0);
     response.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::Checkbox,
@@ -215,4 +257,18 @@ pub fn lock(ui: &mut Ui, locked: bool) -> egui::Response {
     } else {
         tr("Lock layer")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rotate_icons_are_a_framed_arrow_not_the_undo_redo_glyphs() {
+        for svg in [
+            include_str!("../../assets/svg/rotate-left.svg"),
+            include_str!("../../assets/svg/rotate-right.svg"),
+        ] {
+            assert!(svg.contains("<rect"), "the frame");
+            assert!(svg.contains("<path"), "the arrow");
+        }
+    }
 }

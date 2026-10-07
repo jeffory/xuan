@@ -341,7 +341,9 @@ impl EditorApp {
                                             }
                                         }
                                         if layer.group {
-                                            if icons::action_button(ui, "group").clicked() {
+                                            if icons::action_button(ui, "group", tr("Select group"))
+                                                .clicked()
+                                            {
                                                 actions.select = Some((layer.id, false));
                                             }
                                         } else if !layer.standalone_mask {
@@ -695,6 +697,7 @@ impl EditorApp {
                 StrokeKind::Outside,
             );
         }
+        widgets::focus_ring_at(ui, &response, rect, 2.0, widgets::FocusRing::Around);
         if mask && !layer.mask.as_ref().unwrap().enabled {
             ui.painter().line_segment(
                 [response.rect.left_top(), response.rect.right_bottom()],
@@ -735,27 +738,22 @@ impl EditorApp {
                                 "mask",
                             ),
                         ] {
-                            if icons::action_button(ui, command)
-                                .on_hover_text(tip)
-                                .clicked()
-                            {
+                            if icons::action_button(ui, command, tip).clicked() {
                                 actions.command = Some(command);
                             }
                         }
-                        let adjustment = icons::action_button(ui, "adjustment")
-                            .on_hover_text(tr("New adjustment layer"));
+                        let adjustment =
+                            icons::action_button(ui, "adjustment", tr("New adjustment layer"));
                         egui::Popup::menu(&adjustment).show(|ui| {
                             actions.adjustment = menus::adjustment_menu(ui);
                         });
-                        let filter = icons::action_button(ui, "filter")
-                            .on_hover_text(tr("New filter layer"));
+                        let filter = icons::action_button(ui, "filter", tr("New filter layer"));
                         egui::Popup::menu(&filter).show(|ui| {
                             actions.filter = menus::filter_menu(ui);
                         });
                         self.ai_layer_button(ui, actions);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if icons::action_button(ui, "delete_layer")
-                                .on_hover_text(tr("Delete layer"))
+                            if icons::action_button(ui, "delete_layer", tr("Delete layer"))
                                 .clicked()
                             {
                                 actions.command = Some("delete_layer");
@@ -772,26 +770,24 @@ impl EditorApp {
         if layer_actions.is_empty() {
             return;
         }
-        let button = icons::action_button(ui, "ai_layer");
-        button.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                ui.is_enabled(),
-                tr("New layer with AI"),
-            )
-        });
-        let button = button.on_hover_text(tr("New layer with AI"));
+        // Disabled with the rest of the footer while no document is open.
+        let button = icons::action_button(ui, "ai_layer", tr("New layer with AI"));
         let anchor = button.rect.left_top() - vec2(0.0, 6.0);
-        if let [(plugin, action, _)] = layer_actions.as_slice() {
+        if let [offered] = layer_actions.as_slice() {
+            // The one action's plugin, on hover after the button's own name.
+            let button = button.on_hover_text(offered.attributed());
             if button.clicked() {
-                actions.ai_layer = Some((plugin.clone(), action.clone(), anchor));
+                actions.ai_layer = Some((offered.plugin.clone(), offered.action.clone(), anchor));
             }
             return;
         }
         egui::Popup::menu(&button).show(|ui| {
-            for (plugin, action, label) in &layer_actions {
-                if ui.button(label).clicked() {
-                    actions.ai_layer = Some((plugin.clone(), action.clone(), anchor));
+            for offered in &layer_actions {
+                let item = super::menus::item_button(ui, true, &offered.attributed(), "")
+                    .on_hover_text(&offered.source);
+                if item.clicked() {
+                    actions.ai_layer =
+                        Some((offered.plugin.clone(), offered.action.clone(), anchor));
                     ui.close();
                 }
             }

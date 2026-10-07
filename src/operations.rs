@@ -3,12 +3,14 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Result, ensure};
-use image::{GrayImage, Luma, RgbaImage};
+use anyhow::{Context as _, Result, ensure};
+use image::{GrayImage, Luma, Rgba, RgbaImage};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
     document::{Document, Layer, Point, Transform, validate_size},
+    i18n::tr,
     render, selection,
 };
 
@@ -580,6 +582,204 @@ pub fn flip_canvas(document: &mut Document, horizontal: bool) {
     }
 }
 
+/// A turn of the whole canvas, as Image → Rotate Canvas offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanvasRotation {
+    Clockwise,
+    CounterClockwise,
+    Half,
+}
+
+impl CanvasRotation {
+    /// The turn for an angle in degrees clockwise: 90, 180, 270 or -90.
+    pub fn from_degrees(degrees: i32) -> Option<Self> {
+        match degrees {
+            90 | -270 => Some(Self::Clockwise),
+            -90 | 270 => Some(Self::CounterClockwise),
+            180 | -180 => Some(Self::Half),
+            _ => None,
+        }
+    }
+
+    fn degrees(self) -> f32 {
+        match self {
+            Self::Clockwise => 90.0,
+            Self::CounterClockwise => -90.0,
+            Self::Half => 180.0,
+        }
+    }
+
+    /// Where a document point goes on the old `width` × `height` canvas.
+    fn map(self, point: Point, width: f32, height: f32) -> Point {
+        match self {
+            Self::Clockwise => Point::new(height - point.y, point.x),
+            Self::CounterClockwise => Point::new(point.y, width - point.x),
+            Self::Half => Point::new(width - point.x, height - point.y),
+        }
+    }
+}
+
+/// Image → Rotate Canvas: turn the whole document a quarter or half turn. Every layer's
+/// placement, mask placement, guide, document path and the selection turn with it, and a quarter
+/// turn swaps the canvas width and height. Pixels are not resampled, so text, shapes and
+/// effects stay live (an effect's light angle stays put, as with Photoshop's global light).
+pub fn rotate_canvas(document: &mut Document, rotation: CanvasRotation) {
+    let (width, height) = (document.width as f32, document.height as f32);
+    let turn = |t: &mut Transform| {
+        let center = rotation.map(t.center(), width, height);
+        t.x = center.x - t.width * 0.5;
+        t.y = center.y - t.height * 0.5;
+        let angle = t.rotation + rotation.degrees();
+        t.rotation = if angle > 180.0 {
+            angle - 360.0
+        } else if angle <= -180.0 {
+            angle + 360.0
+        } else {
+            angle
+        };
+    };
+    for layer in &mut document.layers {
+        turn(&mut layer.transform);
+        if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
+            turn(placement);
+        }
+    }
+    for guide in &mut document.guides {
+        use crate::layout::GuideAxis::{Horizontal, Vertical};
+        let p = guide.position;
+        (guide.axis, guide.position) = match (rotation, guide.axis) {
+            (CanvasRotation::Clockwise, Vertical) => (Horizontal, p),
+            (CanvasRotation::Clockwise, Horizontal) => (Vertical, height - p),
+            (CanvasRotation::CounterClockwise, Vertical) => (Horizontal, width - p),
+            (CanvasRotation::CounterClockwise, Horizontal) => (Vertical, p),
+            (CanvasRotation::Half, Vertical) => (Vertical, width - p),
+            (CanvasRotation::Half, Horizontal) => (Horizontal, height - p),
+        };
+    }
+    let (w, h) = (f64::from(width), f64::from(height));
+    crate::vector::transform_paths(
+        &mut document.paths,
+        kurbo::Affine::new(match rotation {
+            CanvasRotation::Clockwise => [0.0, 1.0, -1.0, 0.0, h, 0.0],
+            CanvasRotation::CounterClockwise => [0.0, -1.0, 1.0, 0.0, 0.0, w],
+            CanvasRotation::Half => [-1.0, 0.0, 0.0, -1.0, w, h],
+        }),
+    );
+    if let Some(selection) = &document.selection {
+        document.selection = Some(Arc::new(match rotation {
+            CanvasRotation::Clockwise => image::imageops::rotate90(&**selection),
+            CanvasRotation::CounterClockwise => image::imageops::rotate270(&**selection),
+            CanvasRotation::Half => image::imageops::rotate180(&**selection),
+        }));
+    }
+    if rotation != CanvasRotation::Half {
+        std::mem::swap(&mut document.width, &mut document.height);
+    }
+}
+
+/// Image → Crop to Selection: crop the canvas to the selection's bounds.
+pub fn crop_to_selection(document: &mut Document) -> Result<()> {
+    let (left, top, right, bottom) = document
+        .selection
+        .as_deref()
+        .and_then(selection::bounds)
+        .context(tr("The selection is empty."))?;
+    crop(
+        document,
+        Point::new(left as f32, top as f32),
+        Point::new(right as f32, bottom as f32),
+    )
+}
+
+/// What Image → Trim looks for at the edges.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrimBasis {
+    /// Fully transparent pixels.
+    #[default]
+    Transparent,
+    /// Pixels of the same colour as the top-left pixel.
+    TopLeft,
+    /// Pixels of the same colour as the bottom-right pixel.
+    BottomRight,
+}
+
+/// Which edges Image → Trim may cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrimSides {
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl Default for TrimSides {
+    fn default() -> Self {
+        Self {
+            top: true,
+            bottom: true,
+            left: true,
+            right: true,
+        }
+    }
+}
+
+/// The `(left, top, right, bottom)` an image trims to, or `None` when the trim would change
+/// nothing (or nothing would be left, as for a flat image).
+pub fn trim_bounds(
+    image: &RgbaImage,
+    basis: TrimBasis,
+    sides: TrimSides,
+) -> Option<(u32, u32, u32, u32)> {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let background = match basis {
+        TrimBasis::Transparent => None,
+        TrimBasis::TopLeft => Some(*image.get_pixel(0, 0)),
+        TrimBasis::BottomRight => Some(*image.get_pixel(width - 1, height - 1)),
+    };
+    let is_content = |pixel: &Rgba<u8>| match background {
+        None => pixel[3] != 0,
+        Some(background) => *pixel != background,
+    };
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (width, height, 0, 0);
+    for (x, y, pixel) in image.enumerate_pixels() {
+        if is_content(pixel) {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+    let bounds = (
+        if sides.left { min_x } else { 0 },
+        if sides.top { min_y } else { 0 },
+        if sides.right { max_x + 1 } else { width },
+        if sides.bottom { max_y + 1 } else { height },
+    );
+    (bounds != (0, 0, width, height)).then_some(bounds)
+}
+
+/// Image → Trim: crop the canvas to the visible composite's content. Returns whether anything
+/// was trimmed; when not, the document is unchanged.
+pub fn trim(document: &mut Document, basis: TrimBasis, sides: TrimSides) -> Result<bool> {
+    let image = render::render(document);
+    let Some((left, top, right, bottom)) = trim_bounds(&image, basis, sides) else {
+        return Ok(false);
+    };
+    crop(
+        document,
+        Point::new(left as f32, top as f32),
+        Point::new(right as f32, bottom as f32),
+    )?;
+    Ok(true)
+}
+
 pub fn copy_pixels(document: &Document, merged: bool) -> Option<(RgbaImage, Point)> {
     let image = if merged {
         render::render(document)
@@ -1024,5 +1224,249 @@ mod tests {
         );
         document.active_mut().unwrap().mask = None;
         assert!(!selection_from_mask_black(&mut document));
+    }
+
+    fn px(n: u8) -> Rgba<u8> {
+        Rgba([n * 10, 0, 0, 255])
+    }
+
+    /// A 3 × 2 document with distinct pixels: row 0 is 1 2 3, row 1 is 4 5 6.
+    fn asymmetric() -> Document {
+        let mut document = Document::new(3, 2).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(3, 2, |x, y| {
+            px((y * 3 + x + 1) as u8)
+        })));
+        document
+    }
+
+    fn rows(image: &RgbaImage) -> Vec<Vec<u8>> {
+        (0..image.height())
+            .map(|y| {
+                (0..image.width())
+                    .map(|x| image.get_pixel(x, y)[0] / 10)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rotating_the_canvas_turns_the_pixels_and_swaps_the_size() {
+        let cases = [
+            (
+                CanvasRotation::Clockwise,
+                (2, 3),
+                vec![vec![4, 1], vec![5, 2], vec![6, 3]],
+            ),
+            (
+                CanvasRotation::CounterClockwise,
+                (2, 3),
+                vec![vec![3, 6], vec![2, 5], vec![1, 4]],
+            ),
+            (
+                CanvasRotation::Half,
+                (3, 2),
+                vec![vec![6, 5, 4], vec![3, 2, 1]],
+            ),
+        ];
+        for (rotation, size, expected) in cases {
+            let mut document = asymmetric();
+            rotate_canvas(&mut document, rotation);
+            assert_eq!((document.width, document.height), size, "{rotation:?}");
+            assert_eq!(rows(&render::render(&document)), expected, "{rotation:?}");
+        }
+    }
+
+    #[test]
+    fn four_quarter_turns_and_opposite_turns_restore_the_document() {
+        use crate::layout::{Guide, GuideAxis};
+        let mut document = asymmetric();
+        document.layers[0].transform.rotation = 90.0;
+        document.layers[0].transform.x = 0.5;
+        document.guides = vec![Guide::new(GuideAxis::Vertical, 1.0)];
+        let original = (document.layers[0].transform, document.guides[0]);
+        for _ in 0..4 {
+            rotate_canvas(&mut document, CanvasRotation::Clockwise);
+        }
+        assert_eq!((document.width, document.height), (3, 2));
+        assert_eq!((document.layers[0].transform, document.guides[0]), original);
+        rotate_canvas(&mut document, CanvasRotation::Clockwise);
+        rotate_canvas(&mut document, CanvasRotation::CounterClockwise);
+        assert_eq!((document.layers[0].transform, document.guides[0]), original);
+        rotate_canvas(&mut document, CanvasRotation::Half);
+        rotate_canvas(&mut document, CanvasRotation::Half);
+        assert_eq!(document.layers[0].transform, original.0);
+    }
+
+    #[test]
+    fn offset_and_turned_layers_export_like_the_rotated_export() {
+        let mut document = Document::new(5, 3).unwrap();
+        let mut offset = Layer::image("Offset", RgbaImage::from_fn(2, 1, |x, _| px(x as u8 + 1)));
+        offset.transform.x = 2.0;
+        offset.transform.y = 1.0;
+        let mut turned = Layer::image("Turned", RgbaImage::from_fn(3, 1, |x, _| px(x as u8 + 7)));
+        turned.transform.y = 1.0;
+        turned.transform.rotation = 90.0;
+        turned.transform.flip_x = true;
+        document.insert(offset);
+        document.insert(turned);
+        let before = render::render(&document);
+        for (rotation, expected) in [
+            (
+                CanvasRotation::Clockwise,
+                image::imageops::rotate90(&before),
+            ),
+            (
+                CanvasRotation::CounterClockwise,
+                image::imageops::rotate270(&before),
+            ),
+            (CanvasRotation::Half, image::imageops::rotate180(&before)),
+        ] {
+            let mut rotated = document.clone();
+            rotate_canvas(&mut rotated, rotation);
+            assert_eq!(render::render(&rotated), expected, "{rotation:?}");
+        }
+    }
+
+    #[test]
+    fn masks_paths_guides_and_the_selection_turn_with_the_canvas() {
+        use crate::layout::{Guide, GuideAxis};
+        let mut document = Document::new(6, 4).unwrap();
+        document.layers[0].mask = Some(crate::document::Mask {
+            placement: Some(Transform {
+                x: 1.0,
+                y: 0.0,
+                ..Transform::new(2, 2)
+            }),
+            ..crate::document::Mask::white()
+        });
+        document.paths = vec![crate::vector::NamedPath::new(
+            "Path",
+            crate::vector::VectorPath::parse("M 0 0 L 4 0 L 4 1 Z").unwrap(),
+        )];
+        document.guides = vec![
+            Guide::new(GuideAxis::Vertical, 1.0),
+            Guide::new(GuideAxis::Horizontal, 1.0),
+        ];
+        let mut mask = GrayImage::new(6, 4);
+        mask.put_pixel(5, 0, Luma([255]));
+        document.selection = Some(Arc::new(mask));
+        rotate_canvas(&mut document, CanvasRotation::Clockwise);
+        // (x, y) -> (4 - y, x): the mask's centre (2, 1) lands on (3, 2).
+        let placement = document.layers[0].mask.as_ref().unwrap().placement.unwrap();
+        assert_eq!((placement.center().x, placement.center().y), (3.0, 2.0));
+        assert_eq!(placement.rotation, 90.0);
+        let bounds = document.paths[0].d.bounds().unwrap();
+        assert_eq!(
+            (bounds.x0, bounds.y0, bounds.x1, bounds.y1),
+            (3.0, 0.0, 4.0, 4.0)
+        );
+        assert_eq!(
+            document
+                .guides
+                .iter()
+                .map(|g| (g.axis, g.position))
+                .collect::<Vec<_>>(),
+            [(GuideAxis::Horizontal, 1.0), (GuideAxis::Vertical, 3.0)]
+        );
+        let selection = document.selection.as_ref().unwrap();
+        assert_eq!(selection.dimensions(), (4, 6));
+        assert_eq!(selection::bounds(selection), Some((4 - 1, 5, 4, 6)));
+    }
+
+    #[test]
+    fn crop_to_selection_makes_the_canvas_the_selection_bounds() {
+        let mut document = Document::new(8, 6).unwrap();
+        assert!(crop_to_selection(&mut document).is_err());
+        let mut mask = GrayImage::new(8, 6);
+        for y in 1..3 {
+            for x in 2..5 {
+                mask.put_pixel(x, y, Luma([255]));
+            }
+        }
+        document.selection = Some(Arc::new(mask));
+        crop_to_selection(&mut document).unwrap();
+        assert_eq!((document.width, document.height), (3, 2));
+        assert_eq!(document.layers[0].transform.x, -2.0);
+        assert!(document.selection.is_none());
+    }
+
+    fn margins() -> Document {
+        let mut document = Document::new(7, 5).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(7, 5, |x, y| {
+            if (2..5).contains(&x) && (1..3).contains(&y) {
+                px(5)
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        })));
+        document
+    }
+
+    #[test]
+    fn trim_removes_transparent_margins() {
+        let mut document = margins();
+        assert!(trim(&mut document, TrimBasis::Transparent, TrimSides::default()).unwrap());
+        assert_eq!((document.width, document.height), (3, 2));
+        assert!(
+            rows(&render::render(&document))
+                .iter()
+                .flatten()
+                .all(|v| *v == 5)
+        );
+        // Nothing left to trim.
+        assert!(!trim(&mut document, TrimBasis::Transparent, TrimSides::default()).unwrap());
+        assert_eq!((document.width, document.height), (3, 2));
+    }
+
+    #[test]
+    fn trim_honours_the_chosen_sides() {
+        let sides = |top, bottom, left, right| TrimSides {
+            top,
+            bottom,
+            left,
+            right,
+        };
+        for (sides, size) in [
+            (sides(true, false, false, false), (7, 4)),
+            (sides(false, true, false, false), (7, 3)),
+            (sides(false, false, true, false), (5, 5)),
+            (sides(false, false, false, true), (5, 5)),
+            (sides(true, true, false, false), (7, 2)),
+        ] {
+            let mut document = margins();
+            assert!(trim(&mut document, TrimBasis::Transparent, sides).unwrap());
+            assert_eq!((document.width, document.height), size, "{sides:?}");
+        }
+        let mut document = margins();
+        let none = sides(false, false, false, false);
+        assert!(!trim(&mut document, TrimBasis::Transparent, none).unwrap());
+    }
+
+    #[test]
+    fn trim_by_corner_colour_removes_a_flat_border() {
+        let mut document = Document::new(6, 5).unwrap();
+        let border = Rgba([9, 9, 9, 255]);
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(6, 5, |x, y| {
+            if (1..4).contains(&x) && (2..4).contains(&y) {
+                px(3)
+            } else {
+                border
+            }
+        })));
+        let mut by_top_left = document.clone();
+        assert!(trim(&mut by_top_left, TrimBasis::TopLeft, TrimSides::default()).unwrap());
+        assert_eq!((by_top_left.width, by_top_left.height), (3, 2));
+        let mut by_bottom_right = document.clone();
+        assert!(
+            trim(
+                &mut by_bottom_right,
+                TrimBasis::BottomRight,
+                TrimSides::default()
+            )
+            .unwrap()
+        );
+        assert_eq!((by_bottom_right.width, by_bottom_right.height), (3, 2));
+        // A fully opaque image has no transparent margin.
+        assert!(!trim(&mut document, TrimBasis::Transparent, TrimSides::default()).unwrap());
     }
 }

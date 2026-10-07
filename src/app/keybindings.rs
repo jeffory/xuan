@@ -169,7 +169,7 @@ impl KeyEditor {
     }
 }
 
-fn matches_search(entry: &Entry, query: &str) -> bool {
+pub(super) fn matches_search(entry: &Entry, query: &str) -> bool {
     if query.is_empty() {
         return true;
     }
@@ -218,11 +218,7 @@ pub(super) fn page(
     ui.heading(tr("Keyboard Shortcuts"));
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut editor.search)
-                .hint_text(tr("Search commands or keys"))
-                .desired_width(240.0),
-        );
+        search_box(ui, &mut editor.search);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = ui.add_enabled(!overrides.is_empty(), Button::new(tr("Reset All")));
             if response.clicked() {
@@ -252,14 +248,16 @@ pub(super) fn page(
                     )
                     .wrap(),
                 );
-                ui.horizontal(|ui| {
-                    if widgets::primary_button(ui, tr("Reassign")).clicked() {
-                        answer = Some(true);
-                    }
-                    if widgets::button(ui, tr("Cancel")).clicked() {
-                        answer = Some(false);
-                    }
-                });
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Reassign")),
+                    |_| {},
+                );
+                if response.commit {
+                    answer = Some(true);
+                } else if response.cancel {
+                    answer = Some(false);
+                }
             });
         match answer {
             Some(true) => editor.reassign(keymap, overrides),
@@ -282,15 +280,106 @@ pub(super) fn page(
     ui.add_space(6.0);
 
     let query = editor.search.trim().to_lowercase();
-    egui::ScrollArea::vertical()
+    list(
+        ui,
+        keymap,
+        &query,
+        false,
+        ui.available_height(),
+        |ui, entry| row(ui, entry, editor, overrides),
+        |_| {},
+    );
+}
+
+/// The search box above the list, here and in Help → Keyboard Shortcuts.
+pub(super) fn search_box(ui: &mut Ui, search: &mut String) {
+    ui.add(
+        egui::TextEdit::singleline(search)
+            .hint_text(tr("Search commands or keys"))
+            .desired_width(240.0),
+    );
+}
+
+/// Help → Keyboard Shortcuts: the same list read-only, with the same search box. `others` are
+/// the keys and gestures the editor handles itself, as (keys, action); `/` splits several keys.
+pub(super) fn reference(
+    ui: &mut Ui,
+    keymap: &Keymap,
+    search: &mut String,
+    height: f32,
+    others: &[(&str, &str)],
+) {
+    search_box(ui, search);
+    ui.add_space(6.0);
+    let query = search.trim().to_lowercase();
+    let others: Vec<_> = others
+        .iter()
+        .filter(|(keys, action)| {
+            query.is_empty()
+                || keys.to_lowercase().contains(&query)
+                || action.to_lowercase().contains(&query)
+        })
+        .collect();
+    let any = keymap
+        .entries()
+        .iter()
+        .any(|entry| !entry.keys.is_empty() && matches_search(entry, &query));
+    if !any && others.is_empty() {
+        ui.label(RichText::new(tr("No shortcuts match.")).color(ui.palette().muted));
+        return;
+    }
+    list(
+        ui,
+        keymap,
+        &query,
+        true,
+        height,
+        |ui, entry| {
+            let keys: Vec<String> = entry.keys.iter().map(|k| k.label()).collect();
+            reference_row(ui, entry.label(), &keys);
+        },
+        |ui| {
+            if others.is_empty() {
+                return;
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new(tr("Other")).color(ui.palette().muted));
+            for (keys, action) in others {
+                let keys: Vec<String> = keys.split(" / ").map(str::to_owned).collect();
+                reference_row(ui, action, &keys);
+            }
+        },
+    );
+}
+
+/// The width of the action column, so the keys line up.
+const ACTION_WIDTH: f32 = 210.0;
+
+/// The commands matching `query` (only those with keys when `bound_only`) by category in a scroll area `height` tall, each drawn by `row`,
+/// then whatever `after` adds. Settings and the F1 reference share it, so they look alike.
+fn list(
+    ui: &mut Ui,
+    keymap: &Keymap,
+    query: &str,
+    bound_only: bool,
+    height: f32,
+    mut row: impl FnMut(&mut Ui, &Entry),
+    after: impl FnOnce(&mut Ui),
+) {
+    let output = egui::ScrollArea::vertical()
         .id_salt("keyboard_shortcuts")
+        .max_height(height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for category in Category::ALL {
                 let rows: Vec<&Entry> = keymap
                     .entries()
                     .iter()
-                    .filter(|entry| entry.category() == category && matches_search(entry, &query))
+                    .filter(|entry| {
+                        entry.category() == category
+                            && matches_search(entry, query)
+                            && !(bound_only && entry.keys.is_empty())
+                    })
                     .collect();
                 if rows.is_empty() {
                     continue;
@@ -298,23 +387,52 @@ pub(super) fn page(
                 ui.add_space(6.0);
                 ui.label(RichText::new(tr(category.name())).color(ui.palette().muted));
                 for entry in rows {
-                    row(ui, entry, editor, overrides);
+                    row(ui, entry);
                 }
             }
+            after(ui);
+        });
+    widgets::overflow_fades(ui, &output);
+}
+
+/// One command of the read-only reference: the action, then its keys as chips.
+pub(super) fn reference_row(ui: &mut Ui, label: &str, keys: &[String]) {
+    ui.horizontal(|ui| {
+        action_cell(ui, label);
+        for key in keys {
+            chip(ui, key);
+        }
+    });
+}
+
+fn action_cell(ui: &mut Ui, label: &str) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(ACTION_WIDTH, 22.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_width(ACTION_WIDTH);
+            ui.add(egui::Label::new(label).truncate());
+        },
+    );
+}
+
+/// A key that cannot be clicked: the same bezel colours as the buttons in Settings.
+fn chip(ui: &mut Ui, text: &str) {
+    let p = ui.palette();
+    egui::Frame::new()
+        .fill(p.control[0])
+        .stroke(egui::Stroke::new(1.0_f32, p.control_edge))
+        .corner_radius(theme::BUTTON_RADIUS)
+        .inner_margin(egui::Margin::symmetric(11, 2))
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(RichText::new(text).color(p.text)).selectable(false));
         });
 }
 
 fn row(ui: &mut Ui, entry: &Entry, editor: &mut KeyEditor, overrides: &mut toml::Table) {
     let label = entry.label();
     ui.horizontal(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(210.0, 22.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.set_min_width(210.0);
-                ui.add(egui::Label::new(label).truncate());
-            },
-        );
+        action_cell(ui, label);
         for (index, chord) in entry.keys.iter().enumerate() {
             let capturing = editor.capturing(&entry.id, Some(index));
             let (text, accessible) = if capturing {

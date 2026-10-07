@@ -335,7 +335,7 @@ fn header(reader: &mut Reader<'_>) -> Result<Header> {
     if mode != 3 {
         bail!(
             "{} {only_rgb8}",
-            tr("This Photoshop file uses the {} color mode.")
+            tr("This Photoshop file uses the {} colour mode.")
                 .replace("{}", tr(color_mode_name(mode)))
         );
     }
@@ -1492,6 +1492,7 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
         italic: italic || flag("FauxItalic"),
         underline: flag("Underline"),
         strikethrough: flag("Strikethrough"),
+        path: None,
     };
     style.validate().ok()?;
     if runs.iter().skip(1).any(|run| style_of(run) != Some(first)) {

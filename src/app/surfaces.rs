@@ -12,7 +12,7 @@ use xuan::{
 use super::{
     Dialog, EditorApp,
     plugin_dialogs::{input_id, input_widget},
-    plugins::{ActionEdit, PendingStart},
+    plugins::{ActionEdit, PendingStart, one_line},
     theme::{self, PaletteExt as _},
     widgets,
 };
@@ -27,6 +27,26 @@ pub(super) enum SurfacePopup {
     },
     /// An AI Region box's popover.
     Region { document: uuid::Uuid, index: usize },
+}
+
+/// An action offered on a surface, with the plugin it comes from.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct SurfaceAction {
+    pub plugin: String,
+    pub action: String,
+    /// The action's label, without its "…".
+    pub label: String,
+    /// The plugin's name.
+    pub plugin_name: String,
+    /// The plugin's name, id and folder, for hover text.
+    pub source: String,
+}
+
+impl SurfaceAction {
+    /// "Action label · Plugin name", as menus name plugin actions.
+    pub fn attributed(&self) -> String {
+        super::commands::plugin_action_label(&self.label, &self.plugin_name)
+    }
 }
 
 /// How a surface started an action.
@@ -144,18 +164,32 @@ impl EditorApp {
         }
     }
 
-    /// Enabled plugins' actions on `surface`: (plugin, action, label
-    /// without its "…"), in manifest order.
-    pub(super) fn surface_actions(&self, surface: Surface) -> Vec<(String, String, String)> {
+    /// The actions of plugins that may run now (enabled, and not held back by
+    /// offline mode) on `surface`, in manifest order.
+    pub(super) fn surface_actions(&self, surface: Surface) -> Vec<SurfaceAction> {
         (self.plugins.manifests.iter())
-            .filter(|m| self.plugin_enabled(&m.plugin.id))
+            .filter(|m| self.plugin_available(&m.plugin.id))
             .flat_map(|m| {
-                (m.actions.iter().filter(move |a| a.on(surface))).map(move |a| {
-                    let label = a.label.trim_end_matches('…').to_owned();
-                    (m.plugin.id.clone(), a.id.clone(), label)
+                (m.actions.iter().filter(move |a| a.on(surface))).map(move |a| SurfaceAction {
+                    plugin: m.plugin.id.clone(),
+                    action: a.id.clone(),
+                    label: one_line(a.label.trim_end_matches('…'), 80),
+                    plugin_name: one_line(&m.plugin.name, 80),
+                    source: format!("{}\n{}", self.plugins.source(&m.plugin.id), m.dir.display()),
                 })
             })
             .collect()
+    }
+
+    /// The action `plugin`/`action` on `surface`, if it may run there now.
+    pub(super) fn surface_action(
+        &self,
+        surface: Surface,
+        plugin: &str,
+        action: &str,
+    ) -> Option<SurfaceAction> {
+        (self.surface_actions(surface).into_iter())
+            .find(|a| a.plugin == plugin && a.action == action)
     }
 
     /// The values a surface shows for an action: last used this session,
@@ -299,10 +333,7 @@ impl EditorApp {
             return;
         };
         let (plugin, action, anchor) = (plugin.clone(), action.clone(), *anchor);
-        let label = (self.surface_actions(Surface::Layer).into_iter())
-            .find(|(p, a, _)| *p == plugin && *a == action)
-            .map(|(_, _, label)| label);
-        let Some(label) = label else {
+        let Some(offered) = self.surface_action(Surface::Layer, &plugin, &action) else {
             self.surface_popup = None;
             return;
         };
@@ -318,7 +349,8 @@ impl EditorApp {
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_width(300.0);
-                        ui.label(egui::RichText::new(&label).strong());
+                        widgets::subheading(ui, offered.attributed())
+                            .on_hover_text(&offered.source);
                         ui.add_space(4.0);
                         let ready = self.surface_form(
                             ui,

@@ -171,6 +171,26 @@ fn fill_rule() -> Value {
     json!({"type": "string", "enum": ["nonzero", "evenodd"],
            "description": "Which parts of the path are inside, as SVG's fill-rule (default nonzero); with evenodd an inner subpath always cuts a hole"})
 }
+/// How text follows its path, for create_text_layer and set_layer.
+fn path_options() -> Value {
+    json!({
+        "type": "object",
+        "description": "How the text follows `path`; every key is optional",
+        "properties": {
+            "start_offset": number("Where the text is anchored, in percent of the path's length (-100–100, default 0)"),
+            "align": {"type": "string", "enum": ["start", "center", "end"], "description": "Whether the text starts, is centred or ends at the start offset (default start)"},
+            "side": {"type": "string", "enum": ["left", "right"], "description": "left (default): letters stand on the left of the path's direction, on top of a path drawn left to right; right: flipped to its other side, running the other way"},
+            "letter_spacing": number("Extra pixels after each letter, negative to tighten (default 0)"),
+            "rotate": {"type": "boolean", "description": "Letters turn to follow the path (default true); false keeps them upright"},
+            "baseline_shift": number("Pixels to raise the letters off the path, negative to lower them (default 0)"),
+            "size_end": number("Font size of the last letter, ramping from `size` at the first (1–1024)"),
+            "opacity_start": number("Opacity of the first letter, 0–1 (default 1)"),
+            "opacity_end": number("Opacity of the last letter, 0–1 (default 1)"),
+        },
+        "additionalProperties": false,
+    })
+}
+const TEXT_PATH: &str = "Set the text along this path instead of in a box: SVG path data in document pixels, as in an SVG <path d=…>, e.g. \"M 100 400 Q 300 200 500 400\". Only the first subpath is followed; letters past the end of an open path are hidden, and on a closed path the text wraps around";
 const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
 fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
@@ -196,7 +216,7 @@ const BACKGROUND: [&str; 3] = [
 
 /// `host/run` commands the `run_command` tool offers. Xuan decides what is
 /// allowed: saving, opening, the clipboard and settings never are.
-const COMMANDS: [&str; 26] = [
+const COMMANDS: [&str; 30] = [
     "flatten",
     "duplicate",
     "new_layer",
@@ -212,6 +232,10 @@ const COMMANDS: [&str; 26] = [
     "flip_v",
     "flip_canvas_h",
     "flip_canvas_v",
+    "rotate_canvas_cw",
+    "rotate_canvas_ccw",
+    "rotate_canvas_180",
+    "crop_to_selection",
     "invert",
     "clear",
     "fill_fg",
@@ -334,12 +358,15 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text, `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
                 "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees"),
+                "text": {"type": "string", "description": "A text layer's new text"},
+                "path": {"type": ["string", "null"], "description": "A text layer's path, SVG path data in document pixels; null puts the text back in a box"},
+                "path_options": path_options(),
             }),
             required: &["layer"],
             kind: Kind::Edit,
@@ -347,10 +374,24 @@ fn specs() -> Vec<Spec> {
                 let args = pick(
                     args,
                     &[
-                        "layer", "name", "visible", "locked", "opacity", "blend", "clip_to", "x",
-                        "y", "width", "height", "rotation",
+                        "layer",
+                        "name",
+                        "visible",
+                        "locked",
+                        "opacity",
+                        "blend",
+                        "clip_to",
+                        "x",
+                        "y",
+                        "width",
+                        "height",
+                        "rotation",
+                        "text",
+                        "path",
+                        "path_options",
                     ],
                 )?;
+                let args = unquote(args, "path_options");
                 // Locks protect layers from the agent: it may lock, but only
                 // the user unlocks.
                 if args.get("locked") == Some(&json!(false)) {
@@ -374,6 +415,17 @@ fn specs() -> Vec<Spec> {
                 }
                 if set.len() > 2 {
                     edits.push(Value::Object(set));
+                }
+                // Text and its path; `null` for the path puts the text back in a box.
+                let mut text = op("set_text", &args, &["layer", "text", "path_options"]);
+                if let Some(path) = args.get("path") {
+                    if !(path.is_null() || path.is_string()) {
+                        return Err("`path` must be SVG path data or null".into());
+                    }
+                    text.insert("path".into(), path.clone());
+                }
+                if text.len() > 2 {
+                    edits.push(Value::Object(text));
                 }
                 let transform = op(
                     "transform",
@@ -413,11 +465,12 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "create_text_layer",
             title: "Create a text layer",
-            description: "An editable text layer with its top-left corner at x, y. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa.",
+            description: "An editable text layer with its top-left corner at x, y; or, with `path` (SVG path data in document pixels, which also places it: give no x or y), text set along that path, each letter moved to its distance along it and turned to its direction. `path_options` sets where it starts, alignment, side, letter spacing, whether letters turn, and size and opacity ramps from the first letter to the last. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa.",
             properties: json!({
                 "text": {"type": "string"}, "x": number("Left"), "y": number("Top"), "family": {"type": "string"},
                 "size": number("Font size in pixels"), "color": color("Text colour"), "bold": {"type": "boolean"},
                 "italic": {"type": "boolean"}, "underline": {"type": "boolean"}, "strikethrough": {"type": "boolean"},
+                "path": svg_path(TEXT_PATH), "path_options": path_options(),
                 "name": name(), "above": above(),
             }),
             required: &["text"],
@@ -427,6 +480,8 @@ fn specs() -> Vec<Spec> {
                     "text",
                     "x",
                     "y",
+                    "path",
+                    "path_options",
                     "family",
                     "size",
                     "color",
@@ -437,7 +492,17 @@ fn specs() -> Vec<Spec> {
                     "name",
                     "above",
                 ];
-                let args = pick(args, &keys)?;
+                let args = unquote(pick(args, &keys)?, "path_options");
+                let given = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
+                if given("path") {
+                    if let Some(key) = ["x", "y"].into_iter().find(|k| given(k)) {
+                        return Err(format!(
+                            "Text on a path is placed by its path's coordinates; leave out `{key}`"
+                        ));
+                    }
+                } else if given("path_options") {
+                    return Err("`path_options` go only with `path`".into());
+                }
                 Ok(Plan::new(
                     "Create Text Layer",
                     vec![Value::Object(op("add_text_layer", &args, &keys))],
@@ -1013,6 +1078,46 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             }),
         },
         Spec {
+            name: "trim_canvas",
+            title: "Trim",
+            description: "Trim the canvas to the visible image's content, as Image → Trim does: `based_on` is \"transparent\" (transparent margins, the default), \"top_left\" or \"bottom_right\" (margins of the colour of that pixel); `top`, `bottom`, `left` and `right` (all true by default) say which sides may be trimmed. Nothing changes when there is nothing to trim. To crop to the selection, run_command crop_to_selection.",
+            properties: json!({
+                "based_on": {"type": "string", "enum": ["transparent", "top_left", "bottom_right"]},
+                "top": {"type": "boolean"},
+                "bottom": {"type": "boolean"},
+                "left": {"type": "boolean"},
+                "right": {"type": "boolean"}
+            }),
+            required: &[],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["based_on", "top", "bottom", "left", "right"];
+                let args = pick(args, &keys)?;
+                Ok(Plan::new(
+                    "Trim",
+                    vec![Value::Object(op("trim", &args, &keys))],
+                    Reply::Size,
+                ))
+            }),
+        },
+        Spec {
+            name: "rotate_canvas",
+            title: "Rotate canvas",
+            description: "Rotate the whole document `degrees` clockwise: 90, 180 or 270 (-90 also turns counter-clockwise). Layers, masks, guides, paths and the selection turn with it, and a quarter turn swaps the width and height.",
+            properties: json!({"degrees": {"type": "integer", "enum": [90, 180, 270, -90]}}),
+            required: &["degrees"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["degrees"];
+                let args = pick(args, &keys)?;
+                Ok(Plan::new(
+                    "Rotate Canvas",
+                    vec![Value::Object(op("rotate_canvas", &args, &keys))],
+                    Reply::Size,
+                ))
+            }),
+        },
+        Spec {
             name: "resize_canvas",
             title: "Canvas size",
             description: "Change the canvas size without scaling the content; `anchor` [ax, ay] (0–1) says where the content stays: [0, 0] top-left, [0.5, 0.5] centre (default).",
@@ -1068,7 +1173,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "run_command",
             title: "Run an editor command",
-            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (attach a mask layer made from the selection to the image), new_mask_layer, delete_mask, disable_mask, link_mask (these three on a mask layer), clip (clipping mask), flip_h, flip_v (the layer), flip_canvas_h, flip_canvas_v, invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out. Commands act on the selected layers, the last one active: give `layers` to select them first, as select_layers does. Returns the ids of the layers the command added. content_fill, remove_background and remove_flat_background run in the background: other edits fail with \"The editor is busy\" until they finish.",
+            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (attach a mask layer made from the selection to the image), new_mask_layer, delete_mask, disable_mask, link_mask (these three on a mask layer), clip (clipping mask), flip_h, flip_v (the layer), flip_canvas_h, flip_canvas_v, rotate_canvas_cw, rotate_canvas_ccw, rotate_canvas_180 (the whole canvas), crop_to_selection (crop the canvas to the selection's bounds), invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out. Commands act on the selected layers, the last one active: give `layers` to select them first, as select_layers does. Returns the ids of the layers the command added. content_fill, remove_background and remove_flat_background run in the background: other edits fail with \"The editor is busy\" until they finish.",
             properties: json!({
                 "command": {"type": "string", "enum": COMMANDS},
                 "layers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Layer ids to select first, the last one active (default: the layers selected now); only for commands that edit"},
@@ -1100,7 +1205,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer with both properties and placement is two). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1137,24 +1242,81 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "save_document",
             title: "Save the project",
-            description: "Ask the user to save a document (the current one by default) as a .xuan project: Xuan shows its save dialog with `suggested_name`, and the user chooses where. Returns the file name, or an error if the user cancelled.",
-            properties: json!({"document": {"type": "string"}, "suggested_name": {"type": "string"}}),
+            description: concat!(
+                "Save a document (the current one by default) as a .xuan project. ",
+                "With an absolute `path` (ending in .xuan, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
+                "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
+                "With `in_place: true`, save the document back to its own .xuan file, as Ctrl+S does, asking the same way. ",
+                "Without either, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
+                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
+                " Returns the file name (never the folder), with `asked: false` when it was written without asking, or an error if the user cancelled."
+            ),
+            properties: json!({
+                "document": {"type": "string"},
+                "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
+                "path": {"type": "string", "description": "Where to save, an absolute path ending in .xuan"},
+                "overwrite": {"type": "boolean", "description": "Allow replacing an existing file at `path`"},
+                "in_place": {"type": "boolean", "description": "Save to the document's own .xuan file"},
+            }),
             required: &[],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["document", "suggested_name"])?;
+                let mut args = pick(
+                    args,
+                    &[
+                        "document",
+                        "suggested_name",
+                        "path",
+                        "overwrite",
+                        "in_place",
+                    ],
+                )?;
+                let in_place = args.remove("in_place");
+                if in_place
+                    .as_ref()
+                    .is_some_and(|value| !value.is_null() && !value.is_boolean())
+                {
+                    return Err("`in_place` must be true or false".into());
+                }
+                if in_place == Some(json!(true)) {
+                    if let Some(key) = ["suggested_name", "path", "overwrite"]
+                        .into_iter()
+                        .find(|key| args.contains_key(*key))
+                    {
+                        return Err(format!(
+                            "`in_place` saves to the document's own file; leave out `{key}`"
+                        ));
+                    }
+                    return text(cx.call("file/save", Value::Object(args))?);
+                }
                 text(cx.call("file/save_as", Value::Object(args))?)
             }),
         },
         Spec {
             name: "export_document",
             title: "Export an image",
-            description: "Ask the user to export a document as png (default), jpg, tiff or webp: Xuan shows its save dialog and the user chooses where. Returns the file name.",
-            properties: json!({"document": {"type": "string"}, "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]}, "suggested_name": {"type": "string"}}),
+            description: concat!(
+                "Export a document (the current one by default) as png (default), jpg, tiff or webp. ",
+                "With an absolute `path` (ending in .png, .jpg, .jpeg, .tif, .tiff or .webp, which picks the format, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
+                "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
+                "Without `path`, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
+                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
+                " Returns the file name (never the folder), with `asked: false` when it was written without asking."
+            ),
+            properties: json!({
+                "document": {"type": "string"},
+                "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]},
+                "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
+                "path": {"type": "string", "description": "Where to export, an absolute path with an image extension"},
+                "overwrite": {"type": "boolean", "description": "Allow replacing an existing file at `path`"},
+            }),
             required: &[],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["document", "format", "suggested_name"])?;
+                let args = pick(
+                    args,
+                    &["document", "format", "suggested_name", "path", "overwrite"],
+                )?;
                 text(cx.call("file/export", Value::Object(args))?)
             }),
         },
@@ -1192,6 +1354,8 @@ pub fn list() -> Vec<Tool> {
                     "delete_layer"
                         | "merge_layers"
                         | "crop_canvas"
+                        | "trim_canvas"
+                        | "rotate_canvas"
                         | "resize_canvas"
                         | "resize_image"
                         | "run_command"
@@ -1222,6 +1386,41 @@ pub fn waiting_message(name: &str) -> &'static str {
         Some(Kind::File) => "Waiting for the user to answer in Xuan",
         _ => "Waiting for Xuan",
     }
+}
+
+/// For the pane's activity: what a save or export wrote, such as
+/// "exported out.png without asking". Only the file name Xuan answered with,
+/// stripped of control and bidi characters.
+pub fn written(name: &str, result: &CallToolResult) -> Option<String> {
+    let verb = match name {
+        "save_document" => "saved",
+        "export_document" => "exported",
+        _ => return None,
+    };
+    if result.is_error == Some(true) {
+        return None;
+    }
+    let text = (result.content.iter()).find_map(|content| content.as_text())?;
+    let answer: Value = serde_json::from_str(&text.text).ok()?;
+    let file: String = (answer.get("name")?.as_str()?.chars())
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{200B}'..='\u{200F}'
+                        | '\u{202A}'..='\u{202E}'
+                        | '\u{2066}'..='\u{2069}'
+                        | '\u{061C}'
+                        | '\u{FEFF}'
+                )
+        })
+        .take(120)
+        .collect();
+    Some(if answer.get("asked") == Some(&Value::Bool(false)) {
+        format!("{verb} {file} without asking")
+    } else {
+        format!("{verb} {file}")
+    })
 }
 
 /// Run a tool. Errors from Xuan or from the arguments become a tool error
@@ -1615,7 +1814,7 @@ fn explain(method: &str, error: &EditorError) -> String {
     }
     match method {
         "document/edit" | "host/run" => "The user did not allow edits from this session in Xuan. Ask the user before trying again.".into(),
-        "file/save_as" | "file/export" | "file/open" => "The user cancelled.".into(),
+        "file/save_as" | "file/export" | "file/save" | "file/open" => "The user cancelled.".into(),
         _ if method.ends_with("/export") => "The user did not allow sending the image to this MCP server.".into(),
         _ => format!("Xuan: {}", error.message),
     }
@@ -1629,7 +1828,7 @@ pub fn not_answered(method: &str) -> String {
         "document/edit" | "host/run" => {
             "The user has not yet answered Xuan's prompt to allow edits from this session"
         }
-        "file/save_as" | "file/export" | "file/open" => {
+        "file/save_as" | "file/export" | "file/save" | "file/open" => {
             "The user has not yet answered Xuan's dialog for this request"
         }
         _ if method.ends_with("/export") => {

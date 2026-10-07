@@ -462,11 +462,22 @@ fn reset_colors(app: &mut EditorApp) {
     app.brush.color = [0, 0, 0, 255];
     app.background = [255; 4];
 }
+/// The next brush size down: 15% smaller, but never by less than one pixel,
+/// so small sizes step 3, 2, 1 instead of sticking at 3. Stops at 1 px.
+pub(super) fn smaller_diameter(diameter: f32) -> f32 {
+    let current = diameter.round().max(1.0);
+    (diameter / 1.15).round().min(current - 1.0).max(1.0)
+}
+/// The next brush size up: 15% larger, but never by less than one pixel.
+pub(super) fn larger_diameter(diameter: f32) -> f32 {
+    let current = diameter.round().max(1.0);
+    (diameter * 1.15).round().max(current + 1.0).min(2000.0)
+}
 fn brush_smaller(app: &mut EditorApp) {
-    app.brush.diameter = (app.brush.diameter / 1.15).round().max(1.0);
+    app.brush.diameter = smaller_diameter(app.brush.diameter);
 }
 fn brush_larger(app: &mut EditorApp) {
-    app.brush.diameter = (app.brush.diameter * 1.15).round().min(2000.0);
+    app.brush.diameter = larger_diameter(app.brush.diameter);
 }
 fn brush_softer(app: &mut EditorApp) {
     app.brush.hardness = (app.brush.hardness - 0.1).max(0.0);
@@ -623,6 +634,24 @@ pub(super) const COMMANDS: &[Command] = &[
         .host(Edit)
         .aliases(&["mirror"]),
     cmd("flip_canvas_v", "Flip Canvas Vertical", C::Image).host(Edit),
+    cmd("rotate_canvas_cw", "Rotate Canvas 90° Clockwise", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd(
+        "rotate_canvas_ccw",
+        "Rotate Canvas 90° Counter-Clockwise",
+        C::Image,
+    )
+    .host(Edit)
+    .aliases(&["rotate image", "turn"]),
+    cmd("rotate_canvas_180", "Rotate Canvas 180°", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd("crop_to_selection", "Crop to Selection", C::Image)
+        .when(has_selection)
+        .host(Edit)
+        .aliases(&["crop"]),
+    cmd("trim", "Trim…", C::Image).aliases(&["crop", "remove margins", "borders"]),
     // Layer
     cmd("new_layer", "New Layer", C::Layer)
         .keys(&[ctrl_shift(Key::N)])
@@ -680,7 +709,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_alt(Key::A)])
         .host(Edit)
         .aliases(&["foreground", "cutout", "grabcut"]),
-    cmd("color_range", "Color Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
+    cmd("color_range", "Colour Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
     cmd("expand_selection", "Expand Selection…", C::Select)
         .when(has_selection)
         .aliases(&["grow", "dilate"]),
@@ -698,7 +727,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .aliases(&["cutout", "transparent", "subject", "grabcut"]),
     cmd(
         "remove_flat_background",
-        "Remove Flat Background (edge colors)",
+        "Remove Flat Background (edge colours)",
         C::Filter,
     )
     .when(image_layer)
@@ -902,13 +931,13 @@ pub(super) const COMMANDS: &[Command] = &[
     tool("tool_zoom", "Zoom", &[bare(Key::Z)], Run::Tool(Tool::Zoom)),
     tool(
         "swap_colors",
-        "Swap Colors",
+        "Swap Colours",
         &[bare(Key::X)],
         Run::App(swap_colors),
     ),
     tool(
         "reset_colors",
-        "Reset Colors",
+        "Reset Colours",
         &[bare(Key::D)],
         Run::App(reset_colors),
     ),

@@ -37,6 +37,64 @@ pub(super) fn clone_sample_position(
     }
 }
 
+/// Screen-space outer edge of the pixels a pencil dab of `size` px covers when
+/// the pointer is at `pointer` (document coordinates): the square for a Square
+/// tip, the stair-stepped disc for a Round one. The dab anchors on the same
+/// lattice the stroke does (pixel centre for odd sizes, pixel corner for even
+/// ones), so every vertex lies on a pixel boundary.
+pub(super) fn pencil_outline(
+    size: u32,
+    square: bool,
+    pointer: Point,
+    origin: Pos2,
+    zoom: f32,
+) -> Vec<Pos2> {
+    let size = size.max(1);
+    let anchor = if size % 2 == 1 {
+        (pointer.x.floor() as i32, pointer.y.floor() as i32)
+    } else {
+        (pointer.x.round() as i32, pointer.y.round() as i32)
+    };
+    // Per row: the first and one-past-last covered column.
+    let mut rows = std::collections::BTreeMap::<i32, (i32, i32)>::new();
+    for (dx, dy) in paint::tip_offsets(size, square) {
+        let span = rows.entry(anchor.1 + dy).or_insert((i32::MAX, i32::MIN));
+        span.0 = span.0.min(anchor.0 + dx);
+        span.1 = span.1.max(anchor.0 + dx + 1);
+    }
+    let at = |x: i32, y: i32| origin + vec2(x as f32, y as f32) * zoom;
+    let mut outline: Vec<Pos2> = Vec::new();
+    let mut push = |point: Pos2| {
+        if outline.last() == Some(&point) {
+            return;
+        }
+        // Drop a vertex that sits in the middle of a straight run.
+        if let [.., a, b] = outline[..]
+            && ((a.x == b.x && b.x == point.x) || (a.y == b.y && b.y == point.y))
+        {
+            outline.pop();
+        }
+        outline.push(point);
+    };
+    // Down the right edge, then back up the left (tips are convex per row).
+    for (&y, &(_, right)) in &rows {
+        push(at(right, y));
+        push(at(right, y + 1));
+    }
+    for (&y, &(left, _)) in rows.iter().rev() {
+        push(at(left, y + 1));
+        push(at(left, y));
+    }
+    // Close the loop: the first vertex may also be mid-run.
+    if let [first, .., last] = outline[..]
+        && let [.., before] = outline[..outline.len() - 1]
+        && ((before.x == last.x && last.x == first.x) || (before.y == last.y && last.y == first.y))
+    {
+        outline.pop();
+    }
+    outline
+}
+
 /// Screen-space outline of the brush tip centred at `centre`; `shape` is the
 /// tilt axis, tilt aspect and pressure scale from `EditorApp::brush_shape`.
 fn brush_outline(
@@ -48,31 +106,9 @@ fn brush_outline(
     (axis, aspect, pressure): (Point, f32, f32),
 ) -> Vec<Pos2> {
     if pencil {
-        // Pixel-exact tip: whole-pixel size, snapped to the pixel grid.
-        let size = (brush.diameter * pressure).round().max(1.0);
-        let half = size * zoom * 0.5;
+        let size = (brush.diameter * pressure).round().max(1.0) as u32;
         let doc = Point::new((centre.x - origin.x) / zoom, (centre.y - origin.y) / zoom);
-        let snapped = if size % 2.0 == 1.0 {
-            Point::new(doc.x.floor() + 0.5, doc.y.floor() + 0.5)
-        } else {
-            Point::new(doc.x.round(), doc.y.round())
-        };
-        let centre = origin + vec2(snapped.x, snapped.y) * zoom;
-        if brush.square {
-            vec![
-                centre + vec2(-half, -half),
-                centre + vec2(half, -half),
-                centre + vec2(half, half),
-                centre + vec2(-half, half),
-            ]
-        } else {
-            (0..48)
-                .map(|i| {
-                    let angle = i as f32 * std::f32::consts::TAU / 48.0;
-                    centre + vec2(angle.cos(), angle.sin()) * half
-                })
-                .collect()
-        }
+        pencil_outline(size, brush.square, doc, origin, zoom)
     } else {
         let radius = brush.diameter * zoom * pressure * 0.5;
         (0..48)
@@ -684,14 +720,15 @@ impl EditorApp {
                         );
                     }
                 }
-                let accent = ui.palette().accent;
+                let (accent, ink) = (ui.palette().accent, ui.palette().on_accent_text);
                 if let Some(edit) = &self.plugins.action {
-                    draw_region_boxes(&painter, &map, edit.regions.iter(), edit.selected, accent);
+                    let regions = edit.regions.iter();
+                    draw_region_boxes(&painter, &map, regions, edit.selected, accent, ink);
                 } else if self.tool == Tool::Region
                     && let Some(session) = self.session()
                 {
                     let boxes = session.ai_boxes.iter().map(|b| &b.region);
-                    draw_region_boxes(&painter, &map, boxes, session.ai_selected, accent);
+                    draw_region_boxes(&painter, &map, boxes, session.ai_selected, accent, ink);
                 }
                 if !self.polygon.is_empty() {
                     let mut points: Vec<_> = self.polygon.iter().copied().map(map).collect();
@@ -1993,6 +2030,7 @@ fn draw_region_boxes<'a>(
     regions: impl Iterator<Item = &'a xuan::plugins::jobs::Region>,
     selected: Option<usize>,
     accent: Color32,
+    ink: Color32,
 ) {
     for (index, region) in regions.enumerate() {
         let rect = Rect::from_two_pos(
@@ -2021,7 +2059,7 @@ fn draw_region_boxes<'a>(
             egui::Align2::CENTER_CENTER,
             format!("{:02}", index + 1),
             egui::FontId::monospace(10.0),
-            Color32::WHITE,
+            ink,
         );
         if let Some(text) = region
             .fields
@@ -2033,7 +2071,7 @@ fn draw_region_boxes<'a>(
                 egui::Align2::LEFT_TOP,
                 text.chars().take(28).collect::<String>(),
                 egui::FontId::proportional(11.0),
-                Color32::WHITE,
+                ink,
             );
         }
     }

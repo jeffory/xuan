@@ -168,12 +168,12 @@ impl EditorApp {
                     .id("plugin_install")
                     .default_width(420.0)
                     .open(&mut open)
-                    .show(ctx, |ui| {
+                    .show_with_footer(ctx, |ui| {
                         if let Some(error) = &error {
-                            ui.label(RichText::new(tr("Cannot install this plugin")).strong());
+                            widgets::subheading(ui, tr("Cannot install this plugin"));
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(error).color(ui.visuals().error_fg_color),
+                                    RichText::new(error).color(ui.palette().error),
                                 )
                                 .wrap(),
                             );
@@ -191,24 +191,22 @@ impl EditorApp {
                                 .small()
                                 .color(ui.palette().muted),
                         );
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            if widgets::button(ui, tr("Choose Zip…")).clicked() {
-                                pick = rfd::FileDialog::new()
-                                    .add_filter(tr("Zip archive"), &["zip"])
-                                    .pick_file();
-                            }
-                            if widgets::button(ui, tr("Choose Folder…")).clicked() {
-                                pick = rfd::FileDialog::new().pick_folder();
-                            }
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    cancel = widgets::button(ui, tr("Cancel")).clicked();
-                                },
-                            );
-                        });
+                    }, |ui, ()| {
+                        cancel = widgets::dialog_footer(
+                            ui,
+                            widgets::FooterButtons::cancel_only(),
+                            |ui| {
+                                if widgets::button(ui, tr("Choose Zip…")).clicked() {
+                                    pick = rfd::FileDialog::new()
+                                        .add_filter(tr("Zip archive"), &["zip"])
+                                        .pick_file();
+                                }
+                                if widgets::button(ui, tr("Choose Folder…")).clicked() {
+                                    pick = rfd::FileDialog::new().pick_folder();
+                                }
+                            },
+                        )
+                        .cancel;
                     });
             }
             Some(staged) => {
@@ -231,7 +229,7 @@ impl EditorApp {
                     .id("plugin_install")
                     .default_width(440.0)
                     .open(&mut open)
-                    .show(ctx, |ui| {
+                    .show_with_footer(ctx, |ui| {
                         ui.add(
                             egui::Label::new(format!(
                                 "{source} {} {}",
@@ -264,7 +262,7 @@ impl EditorApp {
                             );
                         }
                         ui.add_space(8.0);
-                        ui.label(RichText::new(tr("Permissions")).strong());
+                        widgets::subheading(ui, tr("Permissions"));
                         super::plugin_dialogs::permissions_list(ui, manifest, blocked);
                         ui.add_space(8.0);
                         if staged.update {
@@ -283,32 +281,29 @@ impl EditorApp {
                             GrantAfterInstall::Kept => tr("It stays allowed: you allowed it before with the same folder, command and permissions."),
                             GrantAfterInstall::AsksAgain => tr("Its folder, command or permissions differ from what you allowed, so Xuan asks again before it runs."),
                         };
-                        ui.add(egui::Label::new(format!("• {note}")).wrap());
+                        super::plugin_dialogs::bullet(ui, note);
                         if let Some(error) = &error {
                             ui.add_space(8.0);
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(error).color(ui.visuals().error_fg_color),
+                                    RichText::new(error).color(ui.palette().error),
                                 )
                                 .wrap(),
                             );
                         }
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let label = if staged.update {
-                                        tr("Update")
-                                    } else {
-                                        tr("Install")
-                                    };
-                                    confirm = widgets::primary_button(ui, label).clicked();
-                                    cancel = widgets::button(ui, tr("Cancel")).clicked();
-                                },
-                            );
-                        });
+                    }, |ui, ()| {
+                        let label = if staged.update {
+                            tr("Update")
+                        } else {
+                            tr("Install")
+                        };
+                        let response = widgets::dialog_footer(
+                            ui,
+                            widgets::FooterButtons::commit(label),
+                            |_| {},
+                        );
+                        confirm = response.commit;
+                        cancel = response.cancel;
                     });
             }
         }

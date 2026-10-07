@@ -56,6 +56,7 @@ mod tabs;
 mod tests;
 mod text_controls;
 mod theme;
+mod trim_dialog;
 mod widgets;
 #[cfg(target_os = "linux")]
 mod window_theme;
@@ -173,7 +174,7 @@ impl Tool {
                 "Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels",
             ),
             Self::Wand => {
-                tr("Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect")
+                tr("Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect")
             }
             Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
             Self::Pencil => tr(
@@ -371,6 +372,8 @@ enum Dialog {
     LayerEffects,
     /// Select → Expand… / Contract….
     SelectionAmount,
+    /// Image → Trim….
+    Trim,
     /// Select → Paths….
     Paths,
 }
@@ -498,13 +501,15 @@ pub struct EditorApp {
     tolerance: u8,
     /// Select → Expand… / Contract…: the open dialog and the amounts it remembers.
     selection_amount: Option<selection_dialogs::AmountEdit>,
+    /// Image → Trim…: the choices it remembers.
+    trim_settings: trim_dialog::TrimSettings,
     /// Select → Paths…, while it is open.
     paths_edit: Option<paths_dialog::PathsEdit>,
     /// The Pen tool's path being drawn and the path shown for editing.
     pen: pen_tool::PenState,
     expand_amount: u32,
     contract_amount: u32,
-    /// Select → Color Range…, while open; and the Fuzziness it remembers.
+    /// Select → Colour Range…, while open; and the Fuzziness it remembers.
     color_range: Option<color_range::ColorRangeEdit>,
     color_range_fuzziness: u32,
     /// Why the last command used a built-in algorithm instead of the chosen provider.
@@ -711,6 +716,7 @@ impl EditorApp {
             selection_mode: SelectionMode::Replace,
             tolerance: 32,
             selection_amount: None,
+            trim_settings: Default::default(),
             paths_edit: None,
             pen: Default::default(),
             expand_amount: 2,
@@ -1684,6 +1690,27 @@ impl EditorApp {
                 operations::flip_canvas(doc, command == "flip_canvas_h");
                 Ok(())
             }),
+            "rotate_canvas_cw" | "rotate_canvas_ccw" | "rotate_canvas_180" => {
+                let rotation = match command {
+                    "rotate_canvas_cw" => operations::CanvasRotation::Clockwise,
+                    "rotate_canvas_ccw" => operations::CanvasRotation::CounterClockwise,
+                    _ => operations::CanvasRotation::Half,
+                };
+                self.edit(tr("Rotate Canvas"), |doc| {
+                    operations::rotate_canvas(doc, rotation);
+                    Ok(())
+                });
+                if let Some(session) = self.session_mut() {
+                    session.fit = true;
+                }
+            }
+            "crop_to_selection" => {
+                self.edit(tr("Crop to Selection"), operations::crop_to_selection);
+                if let Some(session) = self.session_mut() {
+                    session.fit = true;
+                }
+            }
+            "trim" => self.open_trim(),
             "canvas_size" | "image_size" => {
                 if let Some(session) = self.session() {
                     let dimensions = [session.document.width, session.document.height];
@@ -1904,7 +1931,7 @@ impl EditorApp {
                 format!(
                     "{}{} —  Xuan",
                     s.title,
-                    if s.history.dirty() { " •" } else { "" }
+                    if s.history.edited() { " •" } else { "" }
                 )
             })
         };

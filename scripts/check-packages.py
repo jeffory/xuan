@@ -25,6 +25,9 @@ SOURCE_NAME = f"xuan-{VERSION}-source"
 # The MCP server plugin ships in every package, in the bundled plugins folder
 # Xuan finds next to its executable (src/plugins/mod.rs, bundled_dir_for).
 PLUGIN_MANIFEST = ROOT / "plugins/mcp-server/plugin.toml"
+# The Python plugin SDK ships beside the bundled plugins, where Xuan finds it
+# to put it on every plugin's PYTHONPATH (src/plugins/mod.rs, sdk_dir_from).
+PLUGIN_SDK = ROOT / "sdk/python/xuan_plugin.py"
 
 
 def check_checksum(package):
@@ -41,6 +44,7 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
         "share/licenses/xuan/heic-rs-MIT.txt",
         "share/licenses/xuan/seccompiler-BSD-3-Clause.txt",
         "share/licenses/xuan/kurbo-MIT.txt",
+        "share/licenses/xuan/Hack-LICENSE.txt",
         "share/licenses/xuan/tabler-icons-MIT.txt",
         "share/licenses/xuan/Inter-LICENSE.txt",
         "share/licenses/xuan/DroidSansFallback-LICENSE.txt",
@@ -53,7 +57,8 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
     plugin_executable = plugin / (
         "target/release/xuan-mcp-server" + (".exe" if windows else "")
     )
-    for path in (plugin / "plugin.toml", plugin_executable):
+    sdk = prefix / ("sdk/python" if windows else "lib/xuan/sdk/python")
+    for path in (plugin / "plugin.toml", plugin_executable, sdk / PLUGIN_SDK.name):
         expected.add(path.relative_to(prefix).as_posix())
     if not windows:
         expected.update(
@@ -124,6 +129,7 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
                 f"Not publicly readable: {path}"
             )
     check_plugin(plugin, plugin_executable, windows)
+    check_sdk(sdk)
     if windows:
         assert pe_subsystem(executable) == 2, "Expected a GUI executable"
     else:
@@ -211,6 +217,27 @@ def check_plugin(plugin, executable, windows):
         )
 
 
+def check_sdk(sdk):
+    """The Python plugin SDK: the repository's, and importable from its
+    folder on PYTHONPATH as Xuan starts plugins."""
+    assert (sdk / PLUGIN_SDK.name).read_bytes() == PLUGIN_SDK.read_bytes(), (
+        "The packaged Python plugin SDK differs from sdk/python/xuan_plugin.py"
+    )
+    found = (
+        "import os, sys, xuan_plugin\n"
+        "real = os.path.realpath\n"
+        "assert real(os.path.dirname(xuan_plugin.__file__)) == real(sys.argv[1])"
+    )
+    # -B: no __pycache__ in the package, which later checks compare file by file.
+    subprocess.run(
+        [sys.executable, "-B", "-s", "-c", found, sdk],
+        cwd=sdk.parent,
+        env={**os.environ, "PYTHONPATH": str(sdk)},
+        check=True,
+        timeout=30,
+    )
+
+
 def check_version(actual):
     """Match `xuan --version` against the build channel (see src/buildinfo.rs).
 
@@ -244,6 +271,7 @@ def check_source(temporary):
         "licenses/heic-rs-MIT.txt",
         "licenses/seccompiler-BSD-3-Clause.txt",
         "licenses/kurbo-MIT.txt",
+        "licenses/Hack-LICENSE.txt",
         "licenses/tabler-icons-MIT.txt",
         "assets/svg/transform.svg",
         "scripts/package.sh",
@@ -261,6 +289,7 @@ def check_source(temporary):
         "plugins/mcp-server/plugin.toml",
         "plugins/mcp-server/src/main.rs",
         "sdk/xuan-plugin/Cargo.toml",
+        "sdk/python/xuan_plugin.py",
         "docs/DEVELOPMENT.md",
         "LICENSE",
         "THIRD_PARTY.md",

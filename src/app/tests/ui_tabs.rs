@@ -238,13 +238,13 @@ fn the_tab_bar_sits_between_the_tool_options_and_the_canvas() {
 fn the_new_canvas_button_is_square_and_still_works() {
     let mut ui = three_tabs();
     let gamma = tab_rect(&ui, "Gamma");
-    // The zoom-in button has the same name, so pick the one right after the last tab.
+    // Pick the one right after the last tab.
     let plus = ui
         .harness
-        .get_all_by_label("+")
+        .get_all_by_label("New canvas")
         .map(|node| node.rect())
         .find(|r| (r.center().y - gamma.center().y).abs() < 1.0 && r.left() >= gamma.right())
-        .expect("a + button in the tab bar");
+        .expect("a New canvas button in the tab bar");
     assert!((plus.width() - plus.height()).abs() < 1.0, "square");
     ui.app_mut().command_trace = Some(Vec::new());
     ui.click_at(plus.center());

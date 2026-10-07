@@ -157,13 +157,20 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 10;
+const LATEST_VERSION: u32 = 11;
 
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    // Older readers would drop a text layer's path and set its text in a box when edited.
+    if document
+        .layers
+        .iter()
+        .any(|l| l.text.as_ref().is_some_and(|t| t.path.is_some()))
+    {
+        11
     // Older readers would drop the paths, and cannot draw a path shape.
-    if !document.paths.is_empty()
+    } else if !document.paths.is_empty()
         || document
             .layers
             .iter()
@@ -588,6 +595,63 @@ mod tests {
             .unwrap()
             .width = 0.0;
         assert!(boxless.validate().is_err());
+    }
+
+    #[test]
+    fn text_on_a_path_round_trips_as_version_11() {
+        use crate::text::{PathTextOptions, TextRenderer, TextStyle, path_layer};
+        use crate::vector::VectorPath;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("text.xuan");
+        let mut doc = Document::new(120, 80).unwrap();
+        let style = TextStyle {
+            content: "Curve".into(),
+            size: 20.0,
+            ..Default::default()
+        };
+        let mut renderer = TextRenderer::default();
+        let mut boxed = Layer::image("Curve", renderer.render(&style).unwrap());
+        boxed.text = Some(style.clone());
+        doc.insert(boxed);
+        // Text in a box needs no newer version.
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 1);
+        let curve = VectorPath::parse("M 10 60 Q 60 0 110 60").unwrap();
+        let options = PathTextOptions {
+            start_offset: 50.0,
+            align: crate::text::PathAlign::Center,
+            size_end: Some(10.0),
+            ..Default::default()
+        };
+        doc.insert(path_layer(&mut renderer, style, &curve, options).unwrap());
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 11);
+        let stored = &manifest["document"]["layers"][2]["text"]["path"];
+        assert_eq!(stored["align"], "center");
+        assert_eq!(stored["size_end"], 10.0);
+        assert!(stored["d"].as_str().unwrap().starts_with('M'));
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[2].text, doc.layers[2].text);
+        assert_eq!(render::render(&loaded), render::render(&doc));
+
+        // A broken text path is refused when read or checked.
+        let mut layer = manifest["document"]["layers"][2].clone();
+        layer["text"]["path"]["d"] = serde_json::json!("M 0 0 L");
+        assert!(serde_json::from_value::<Layer>(layer).is_err());
+        for (pointer, value) in [
+            ("/text/path/width", serde_json::json!(0)),
+            ("/text/path/opacity_end", serde_json::json!(3)),
+            ("/text/path/start_offset", serde_json::json!(-500)),
+        ] {
+            let mut json = manifest["document"]["layers"][2].clone();
+            *json.pointer_mut(pointer).unwrap() = value;
+            let mut bad = doc.clone();
+            let pixels = bad.layers[2].pixels.clone();
+            bad.layers[2] = serde_json::from_value(json).unwrap();
+            bad.layers[2].pixels = pixels;
+            assert!(bad.validate().is_err(), "{pointer}");
+        }
     }
 
     #[test]

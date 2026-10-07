@@ -116,6 +116,26 @@ impl Transform {
         .map(|point| self.point(point))
     }
 
+    /// The affine map from a `width` × `height` box stretched over the layer to document
+    /// coordinates, unless the layer is warped (then no affine map fits).
+    pub fn box_affine(self, width: f32, height: f32) -> Option<kurbo::Affine> {
+        if self.warp.is_some() {
+            return None;
+        }
+        let o = self.point(Point::new(0.0, 0.0));
+        let x = self.point(Point::new(1.0, 0.0));
+        let y = self.point(Point::new(0.0, 1.0));
+        let (w, h) = (f64::from(width), f64::from(height));
+        Some(kurbo::Affine::new([
+            f64::from(x.x - o.x) / w,
+            f64::from(x.y - o.y) / w,
+            f64::from(y.x - o.x) / h,
+            f64::from(y.y - o.y) / h,
+            f64::from(o.x),
+            f64::from(o.y),
+        ]))
+    }
+
     pub fn valid(self) -> bool {
         [self.x, self.y, self.width, self.height, self.rotation]
             .iter()

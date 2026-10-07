@@ -30,7 +30,9 @@ so a handler may call the editor (`host.document()`, `host.export_layer()`, …)
 while a job runs. In Python, decorate functions on a `Plugin`; in Rust, chain
 closures on `Plugin::new()` and call `run()`. `cargo build --release` in
 `plugins/invert-regions` builds the Rust example; the Python examples run as
-they are with `python3` on `PATH`.
+they are with `python3` on `PATH`, from the repository or copied into the
+plugins directory: Xuan ships the Python SDK and puts it on every plugin's
+import path (see [The Python SDK](#the-python-sdk)).
 
 ## Installing
 
@@ -46,6 +48,38 @@ every folder in the user plugins directory at start-up and from
 Set `XUAN_PLUGIN_PATH` (a `:`/`;`-separated list of directories) to load plugins
 from other places, for example a development checkout. Folders whose name starts
 with `.` are skipped.
+
+A Python plugin that imports `xuan_plugin` needs nothing else in its folder:
+Xuan provides the [SDK](#the-python-sdk) that matches it. Third-party Python
+packages a plugin uses are its own business (its README says how to install
+them).
+
+### The Python SDK
+
+Every package installs the Python SDK, `xuan_plugin.py` from
+`sdk/python/`, beside the bundled plugins:
+
+| Package | Python SDK folder |
+| --- | --- |
+| deb, rpm | `/usr/lib/xuan/sdk/python/` |
+| Linux tar.gz | `lib/xuan/sdk/python/` in the extracted folder; `scripts/install.sh` copies it to `<prefix>/lib/xuan/sdk/python/` (from a source checkout, `sdk/python/xuan_plugin.py`) |
+| AppImage | `usr/lib/xuan/sdk/python/` inside the image (`AppRun` names it in `XUAN_PLUGIN_SDK`) |
+| Windows zip | `sdk\python\` next to `xuan.exe` |
+
+Xuan starts every plugin with that folder first on `PYTHONPATH` (any
+`PYTHONPATH` Xuan itself was started with follows it) and named in
+`XUAN_PLUGIN_SDK`, so a plain `import xuan_plugin` works wherever the plugin is
+installed, and the SDK always matches the app's protocol. Plugins in other
+languages can find the folder in `XUAN_PLUGIN_SDK` too. Xuan looks for it, in
+order: in `XUAN_PLUGIN_SDK` when that is set to an absolute path before Xuan
+starts; in `sdk/python` beside the bundled plugins folder (`<prefix>/lib/xuan`
+on Linux, the folder of `xuan.exe` on Windows); and, for a development build,
+in the `sdk/python` of the checkout it was built from. When none holds
+`xuan_plugin.py`, plugins start without either variable.
+
+The Python examples also add the repository's `sdk/python` to the end of
+`sys.path`, so they run from a checkout with any Xuan; the SDK on `PYTHONPATH`
+comes before it.
 
 ### Bundled plugins
 
@@ -856,8 +890,11 @@ for a job go in the `work_dir` the host passes with each job and are removed whe
 the job ends. `models_dir` is the plugin's [models folder](#models) and
 `models` maps the id of each declared model that is downloaded and verified to
 its file; a model that is missing, downloading or corrupt is left out. The
-plugin process also gets `XUAN_PLUGIN_ID`, `XUAN_DATA_DIR` and
-`XUAN_MODELS_DIR` in its environment. In the SDKs, `job.model_path("id")`
+plugin process also gets `XUAN_PLUGIN_ID`, `XUAN_DATA_DIR`,
+`XUAN_MODELS_DIR` and `PYTHONUNBUFFERED=1` in its environment, and, when Xuan
+finds the [Python SDK](#the-python-sdk), `XUAN_PLUGIN_SDK` (the SDK's folder)
+and `PYTHONPATH` with that folder first, followed by the value Xuan was started
+with. In the SDKs, `job.model_path("id")`
 returns the path or fails with a setup error, and `plugin.model_path("id")`
 (Python) or `settings.model_path("id")` and `host.model_path("id")` (Rust)
 return it or nothing.
@@ -1018,12 +1055,13 @@ wait for the user's answer (see [Network](#network)).
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
-| `session/status` | `{session?}` | `{edit_prompt, edits, auto}`: how direct edits are handled in the session; see [Edit sessions](#edit-sessions) |
+| `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), and whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)) |
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does; a plugin may switch at most once a second (`-32003` with `retry_after` otherwise; naming the current document always succeeds) |
 | `host/run` | `{action, inputs?, layers?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
-| `file/save_as` | `{document?, suggested_name?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; see [Files the user chooses](#files-the-user-chooses) |
-| `file/export` | `{document?, format?, suggested_name?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`) |
+| `file/save_as` | `{document?, suggested_name?}` or `{document?, path, overwrite?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; with `path`, `{name, asked}` once it was saved there after Xuan's prompt (`asked: true`) or without asking (`asked: false`); see [Files the user chooses](#files-the-user-chooses) |
+| `file/export` | `{document?, format?, suggested_name?}` or `{document?, format?, path, overwrite?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`); with `path`, `{name, asked}` as for `file/save_as` |
+| `file/save` | `{document?}` | `{name, asked}` once the document was saved back to its own `.xuan` file, as **File → Save**, after Xuan's prompt or without asking |
 | `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
 
 ### Layer descriptions
@@ -1109,6 +1147,17 @@ Layers and their properties:
   editable text layer with its top-left corner at `x`, `y`. `size` is in pixels
   (1–1024, default 48), the text at most 16 KiB; an unknown `family` falls back
   to Xuan's bundled font.
+- `{"op": "add_text_layer", "text", "path", "path_options"?, …}`: text set
+  along `path`, [SVG path data](#svg-path-data) in document coordinates, which
+  also places the layer (give no `x` or `y`); the other fields are as above.
+  See [Text on a path](#text-on-a-path).
+- `{"op": "set_text", "layer", "text"?, "family"?, "size"?, "color"?, "bold"?,
+  "italic"?, "underline"?, "strikethrough"?, "path"?: d | null,
+  "path_options"?}`: change a text layer, keeping what is left out. `path`
+  (document coordinates) sets the text along a path, `null` returns it to a
+  box at the layer's top-left corner, and `path_options` changes how it
+  follows the path, keeping the options it leaves out. The layer must not be
+  locked.
 - `{"op": "add_shape_layer", "shape": "Rectangle" | "Ellipse" |
   "RoundedRectangle", "x", "y", "width", "height", "color"?,
   "corner_radius"?, "name"?, "above"?}`: an editable shape layer.
@@ -1247,6 +1296,14 @@ the menu commands do):
   Size…**, which may also shrink; `anchor` `[0, 0]` keeps the top-left corner,
   `[0.5, 0.5]` (the default) the centre.
 - `{"op": "resize_image", "width", "height"}`: **Image → Image Size…**.
+- `{"op": "rotate_canvas", "degrees"}`: **Image → Rotate Canvas**, `degrees`
+  clockwise: 90, 180 or 270 (-90 is 270). Layers, masks, guides, document
+  paths and the selection turn with the canvas; a quarter turn swaps the
+  width and height.
+- `{"op": "trim", "based_on"?, "top"?, "bottom"?, "left"?, "right"?}`:
+  **Image → Trim…**. `based_on` is `transparent` (the default), `top_left` or
+  `bottom_right`, the pixel whose colour the margins have; the sides default
+  to `true`. Nothing changes when there is nothing to trim.
 
 ### SVG path data
 
@@ -1262,6 +1319,37 @@ as SVG does, and take `fill_rule` `nonzero` (the default, SVG's) or `evenodd`
 (an inner subpath always cuts a hole). Errors say what was expected and at
 which character, e.g. `SVG path: expected the y of the line's end for `L` at
 character 11, found the end of the path`.
+
+### Text on a path
+
+A text layer can follow a path instead of sitting in a box (format 11). Each
+glyph keeps the position and advance it has on a straight line, which becomes
+its distance along the path's first subpath; it is drawn there turned to the
+path's direction. The path is kept in the layer's own box, as a path shape's
+outline is, so moving, scaling or rotating the layer takes it along, and
+changing the text keeps it where it is in the document. Glyphs whose middle
+falls before the start or past the end of an open path are hidden, as in
+Photoshop; on a closed path the text wraps around. Later lines run beside the
+first, a line height further from the path each.
+
+`path_options`, every key optional:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `start_offset` | `0` | Where the text is anchored, in percent of the path's length (−100–100) |
+| `align` | `"start"` | `"start"`, `"center"` or `"end"`: the text starts, is centred or ends at the start offset |
+| `side` | `"left"` | `"left"`: letters stand on the left of the path's direction (on top of a path drawn left to right); `"right"`: flipped to its other side, running the other way |
+| `letter_spacing` | `0` | Extra pixels after each letter (−1000–1000) |
+| `rotate` | `true` | Letters turn to follow the path; `false` keeps them upright |
+| `baseline_shift` | `0` | Pixels to raise the letters off the path, negative to lower them |
+| `size_end` | none | Font size of the last letter (1–1024), ramping from `size` at the first; the letters close up as they shrink |
+| `opacity_start`, `opacity_end` | `1` | Opacity of the first and last letter (0–1), blending between them and multiplying the colour's alpha |
+
+A text layer's description has `text`: `{text, family, size, color, bold,
+italic, underline, strikethrough}`, and for text on a path also `path` (where
+the path is now, in document coordinates; `null` once the layer is warped),
+`path_options`, and `local_path` and `local_size`, the path as stored in the
+layer's own box. Other layers have `text: null`.
 
 Edits apply in order, each in the document's coordinates at that point: an
 `add_layer` after an `extend_canvas` is placed on the grown canvas. A batch
@@ -1295,10 +1383,10 @@ text that starts with `$` in other fields is just text.
 
 ### Files the user chooses
 
-A plugin cannot save, export or overwrite a file on its own, and cannot open
-one behind the user's back: `host/run` refuses `save`, `save_as`, `export`,
-`open` and `close`. Three requests ask the user instead, and wait for the
-answer:
+A plugin cannot save, export or overwrite a file unless the user agreed, and
+cannot open one behind the user's back: `host/run` refuses `save`, `save_as`,
+`export`, `open` and `close`. These requests ask the user instead, and wait
+for the answer:
 
 - `file/save_as` shows the system's save dialog for the document (the
   current one, or `document`), titled with the plugin's name and id and
@@ -1315,13 +1403,22 @@ answer:
   or `webp`); the document itself is not changed. The name the user confirms
   must end in `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff` or `.webp` (which picks
   the format written), with the same second dialog otherwise.
+- With a `path`, `file/save_as` and `file/export` write there instead of
+  showing the system dialog (which an LLM behind a plugin cannot operate),
+  once the user agreed in Xuan's own prompt, **Save a file?** or **Export an
+  image?**. It names the plugin, the document, the file name and its folder,
+  and says whether the file is new or replaces an existing one, with
+  **Save**, **Always Allow** and **Cancel**. `file/save` (no params but
+  `document`) saves the document back to its own `.xuan` file, as **File →
+  Save**, with the same prompt (**Save the project?**); a document without a
+  project file is refused. See [Saving without the dialog](#saving-without-the-dialog).
 - `file/open` shows **Open a file?**, naming the plugin and the file's full
   path (symbolic links resolved), with **Open** and **Cancel**. The path must
   be absolute and name a regular file or a project folder. It opens as a new
   document, as **File → Open…** would.
 
-`file/save_as` and `file/export` answer with the file's name only, never
-the folder the user chose; `file/open` with the new document's id. Their
+`file/save_as`, `file/export` and `file/save` answer with the file's name
+only, never the folder; `file/open` with the new document's id. Their
 error messages name files the same way, without folders (a symbolic link's
 target folder included). Each fails with `-32800` when the user cancels;
 for 30 seconds after a cancel, the plugin's file requests fail at once
@@ -1332,6 +1429,46 @@ change the open document, and the plugin learns nothing more than the name of th
 user chose. To hand the user a file without a dialog, write it into the
 plugin's own folders (for example with `document/export`) and show it in a
 pane.
+
+#### Saving without the dialog
+
+The rules for a `path` in `file/save_as` and `file/export`:
+
+- It must be absolute, and its folder must exist (Xuan does not create
+  folders). The folder is resolved, symbolic links followed, and the prompt
+  shows the result.
+- Its file name is written as given, so it must already be plain: no control,
+  bidi or invisible characters, none of `\ / : * ? " < > |`, no leading dot or
+  trailing dot or space, and not a name Windows reserves for a device (`CON`,
+  `NUL`, `COM1`, …). Xuan refuses such a name rather than cleaning it, so the
+  file written is the one the prompt named.
+- `file/save_as` needs `.xuan`. For `file/export` the extension (`.png`,
+  `.jpg`, `.jpeg`, `.tif`, `.tiff` or `.webp`, any case) picks the format; a
+  `format` that disagrees is refused.
+- An existing file is replaced only with `overwrite: true`; without it the
+  request fails at once (`-32602`). A folder or a symbolic link at the path is
+  never replaced. If a file appears at a path the prompt called new before the
+  user answers, nothing is written.
+- Errors name the file, never its folder; a bad path fails before any prompt.
+
+**Always Allow** stores `save_without_asking` in the plugin's grant, like
+the edit prompt's auto mode: from then on its writes to a path, and
+`file/save`, happen without the prompt. The exception is replacing an
+existing file that Xuan did not write for this same plugin since it started
+(through the plugin's own `file/save_as`, `file/export` or `file/save`,
+asked or not): a file the user saved or exported themselves, or one written
+for another plugin, still shows the prompt, even with `overwrite: true`, so a
+plugin cannot silently replace the user's work. `file/save` writes the
+document's own project without asking, as Ctrl+S. The plugin's list of files
+is kept until Xuan quits, and forgotten when its grant is revoked or changes.
+Each write made without asking is shown in the status bar ("Exported without
+asking: …", with the whole path) and in the plugin's log in **Plugins →
+Manage Plugins…**, and the answer says `asked: false`. The setting shows as
+**Save and export without asking** in **Plugins → Manage Plugins…** (for
+plugins that ask before edits, and for any plugin while it is on), where it
+can be turned off. Like auto mode, it is dropped when the plugin's folder,
+command or permissions change. **Cancel** fails the request with `-32800` and
+starts the same 30-second cooldown as cancelling the save dialog.
 
 Notifications from the plugin: `host/log` `{level, message}`, `host/status`
 `{message}` and `request/cancel` `{id}` (see [Withdrawing a
@@ -1359,7 +1496,7 @@ serves gave up, sends the notification `request/cancel` with the request's
 
 Xuan drops the request and answers it with `-32800`. Its prompt is closed,
 not just hidden, so it does not come back after another dialog and a late
-**Allow**, **Send** or **Open** does nothing; if other requests still wait,
+**Allow**, **Send**, **Open** or **Save** does nothing; if other requests still wait,
 Xuan asks about the first of them instead. Withdrawing is not a refusal: no
 answer is recorded for the session and the plugin may ask again at once. A
 request Xuan already answered, an unknown id, and a save dialog that is
@@ -1484,7 +1621,8 @@ request](#withdrawing-a-request)).
   `flatten`, `mask`, `new_mask_layer`, `delete_mask`, `disable_mask`,
   `link_mask`, `clip`, `select_all`, `deselect`, `invert_selection`,
   `fill_fg`, `fill_bg`, `clear`, `invert`, `flip_h`, `flip_v`,
-  `flip_canvas_h`, `flip_canvas_v`, `select_layer_pixels`,
+  `flip_canvas_h`, `flip_canvas_v`, `rotate_canvas_cw`, `rotate_canvas_ccw`,
+  `rotate_canvas_180`, `crop_to_selection`, `select_layer_pixels`,
   `select_mask_black`, `feather`, `select_subject`, `content_fill`,
   `remove_background` and `remove_flat_background`. The last four run in the
   background like their menu items and become one undo step when they finish;

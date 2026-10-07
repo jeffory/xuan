@@ -66,6 +66,99 @@ pub(super) struct Asset {
     pub scale: u32,
     /// A monochrome icon that takes the header foreground colour.
     pub symbolic: bool,
+    /// What a non-symbolic image is drawn in, measured once when it is loaded. `None` for
+    /// symbolic icons (they are tinted at paint time) and for images that could not be decoded.
+    pub glyph: Option<Glyph>,
+}
+
+/// The colours of a theme image that carries its own colours, as measured by [`measure_glyph`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Glyph {
+    /// Average colour of the glyph's opaque or mostly opaque pixels.
+    pub color: [u8; 3],
+    /// The colour of the image's own filled background (Breeze's coloured close circle),
+    /// or `None` when the glyph sits on transparency.
+    pub background: Option<[u8; 3]>,
+}
+
+/// Contrast below which a theme image is replaced (the same bar as [`Tints::color`]).
+const MIN_GLYPH_CONTRAST: f32 = 3.0;
+
+impl Glyph {
+    /// Whether the glyph reads on a title bar of colour `titlebar`. An image with a background
+    /// of its own is judged against that background, because the title bar never shows
+    /// behind the glyph; otherwise against the title bar.
+    pub(super) fn readable_on(&self, titlebar: Color32) -> bool {
+        let rgb = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
+        let behind = self.background.map_or(titlebar, rgb);
+        super::theme::contrast_ratio(rgb(self.color), behind) >= MIN_GLYPH_CONTRAST
+    }
+}
+
+/// Measures the colours of a decoded theme image.
+///
+/// Pixels with at least half alpha count as opaque. When they cover less than half of the
+/// image, the glyph is a stroke on transparency: its colour is their average. When they
+/// cover half or more and form more than one colour, the image has a filled background
+/// (the most common colour) and the glyph is the average of the pixels furthest from it.
+/// A solid single-colour image is just a glyph. Kept simple on purpose: the artwork is a few
+/// flat colours, not photographs.
+fn measure_glyph(image: &egui::ColorImage) -> Option<Glyph> {
+    // Opaque pixels, bucketed to 16 levels per channel to find the dominant colour.
+    let opaque: Vec<[u8; 3]> = image
+        .pixels
+        .iter()
+        .filter(|p| p.a() >= 128)
+        .map(|p| {
+            let [r, g, b, _] = p.to_srgba_unmultiplied();
+            [r, g, b]
+        })
+        .collect();
+    if opaque.is_empty() {
+        return None;
+    }
+    let average = |pixels: &[[u8; 3]]| {
+        let n = pixels.len() as u32;
+        let sum = |c: usize| (pixels.iter().map(|p| u32::from(p[c])).sum::<u32>() / n) as u8;
+        [sum(0), sum(1), sum(2)]
+    };
+    let bucket = |p: &[u8; 3]| (p[0] >> 4, p[1] >> 4, p[2] >> 4);
+    let mut counts: BTreeMap<(u8, u8, u8), usize> = BTreeMap::new();
+    for pixel in &opaque {
+        *counts.entry(bucket(pixel)).or_default() += 1;
+    }
+    let plain = Glyph {
+        color: average(&opaque),
+        background: None,
+    };
+    if opaque.len() * 2 < image.pixels.len() {
+        return Some(plain);
+    }
+    let dominant = counts
+        .iter()
+        .max_by_key(|(key, count)| (**count, std::cmp::Reverse(**key)))
+        .map(|(key, _)| *key)?;
+    let (back, rest): (Vec<[u8; 3]>, Vec<[u8; 3]>) =
+        opaque.iter().partition(|p| bucket(p) == dominant);
+    if rest.is_empty() {
+        return Some(plain);
+    }
+    let background = average(&back);
+    let distance = |p: &[u8; 3]| {
+        (0..3)
+            .map(|c| i32::from(p[c]).abs_diff(i32::from(background[c])))
+            .sum::<u32>()
+    };
+    let furthest = rest.iter().map(distance).max().unwrap_or(0);
+    // Anti-aliasing blends the glyph into the background; the far end is the true colour.
+    let core: Vec<[u8; 3]> = rest
+        .into_iter()
+        .filter(|p| distance(p) * 2 >= furthest)
+        .collect();
+    Some(Glyph {
+        color: average(&core),
+        background: Some(background),
+    })
 }
 
 impl Asset {
@@ -284,11 +377,23 @@ impl Probe {
             return None;
         }
         let stamp = self.stat(path)?;
-        (stamp.len > 0 && stamp.len <= MAX_FILE_BYTES).then(|| Asset {
-            path: normalize(path),
+        if stamp.len == 0 || stamp.len > MAX_FILE_BYTES {
+            return None;
+        }
+        let path = normalize(path);
+        let glyph = if symbolic {
+            None
+        } else {
+            read_capped(&path).and_then(|bytes| {
+                rasterise(&bytes, ext == "svg", 1.0, None).and_then(|i| measure_glyph(&i))
+            })
+        };
+        Some(Asset {
+            path,
             stamp,
             scale: scale.max(1),
             symbolic,
+            glyph,
         })
     }
 
@@ -902,6 +1007,9 @@ pub(super) struct Resolved {
     pub source: Source,
     images: BTreeMap<(Kind, State), Vec<Asset>>,
     pub tints: Tints,
+    /// The icon theme's symbolic window icons, kept beside images from an earlier lookup step
+    /// for when those cannot be read on the title bar (see [`Resolved::readable_pick`]).
+    symbolic: Option<Box<Resolved>>,
 }
 
 impl Resolved {
@@ -974,6 +1082,31 @@ impl Resolved {
         })
     }
 
+    /// Like [`Resolved::pick`], but never an image that cannot be read on a title bar of
+    /// colour `titlebar`. Such an image (kde-gtk-config bakes the desktop's colours into its
+    /// glyphs, so a light glyph can land on a light bar) is replaced by the icon theme's
+    /// symbolic icon, which the caller tints with the bar's foreground. Recolouring the
+    /// image instead would not do for artwork with a filled background, and the lookup
+    /// already holds the symbolic icons. `None` when neither is available: the caller
+    /// draws the built-in glyphs.
+    pub(super) fn readable_pick(
+        &self,
+        kind: Kind,
+        state: State,
+        ppp: f32,
+        titlebar: Color32,
+    ) -> Option<Pick<'_>> {
+        let pick = self.pick(kind, state, ppp)?;
+        let readable = pick
+            .asset
+            .glyph
+            .is_none_or(|glyph| glyph.readable_on(titlebar));
+        if readable {
+            return Some(pick);
+        }
+        self.symbolic.as_deref()?.pick(kind, state, ppp)
+    }
+
     #[cfg(test)]
     pub(super) fn path(&self, kind: Kind, state: State) -> Option<&Path> {
         self.images
@@ -1015,6 +1148,7 @@ fn build(
             source,
             images,
             tints,
+            symbolic: None,
         })
 }
 
@@ -1064,13 +1198,36 @@ fn resolve(env: &Env, probe: &Probe) -> Option<Resolved> {
         reader.rules
     };
 
+    // 3. The icon theme's symbolic window icons. Also the stand-in for an image of steps 1
+    // and 2 that cannot be read on the title bar, so it is built for them too.
+    let symbolic = || {
+        let rules: Vec<Rule> = [
+            (Kind::Minimize, "window-minimize-symbolic"),
+            (Kind::Maximize, "window-maximize-symbolic"),
+            (Kind::Restore, "window-restore-symbolic"),
+            (Kind::Close, "window-close-symbolic"),
+        ]
+        .into_iter()
+        .map(|(kind, name)| Rule {
+            kind,
+            state: State::Normal,
+            images: vec![ImageRef::Icon(name.into())],
+        })
+        .collect();
+        build(Source::IconTheme, &rules, probe, &icons, tints)
+    };
+    let with_fallback = |mut found: Resolved| {
+        found.symbolic = symbolic().map(Box::new);
+        Some(found)
+    };
+
     // 1. kde-gtk-config's rendering of the current KWin decoration.
     if env.kde {
         for version in ["gtk-3.0", "gtk-4.0"] {
             let dir = env.config_home.join(version);
             let rules = css(&[dir.join("window_decorations.css"), dir.join("gtk.css")]);
             if let Some(found) = build(Source::KdeGtkConfig, &rules, probe, &icons, tints) {
-                return Some(found);
+                return with_fallback(found);
             }
         }
     }
@@ -1090,27 +1247,13 @@ fn resolve(env: &Env, probe: &Probe) -> Option<Resolved> {
                 }
                 let rules = css(&files);
                 if let Some(found) = build(Source::GtkTheme, &rules, probe, &icons, tints) {
-                    return Some(found);
+                    return with_fallback(found);
                 }
             }
         }
     }
 
-    // 3. The icon theme's symbolic window icons.
-    let rules: Vec<Rule> = [
-        (Kind::Minimize, "window-minimize-symbolic"),
-        (Kind::Maximize, "window-maximize-symbolic"),
-        (Kind::Restore, "window-restore-symbolic"),
-        (Kind::Close, "window-close-symbolic"),
-    ]
-    .into_iter()
-    .map(|(kind, name)| Rule {
-        kind,
-        state: State::Normal,
-        images: vec![ImageRef::Icon(name.into())],
-    })
-    .collect();
-    build(Source::IconTheme, &rules, probe, &icons, tints)
+    symbolic()
 }
 
 // ---------------------------------------------------------------------------

@@ -62,7 +62,8 @@ pub(super) struct AiBox {
 impl EditorApp {
     /// A new box with the first region action and its defaults.
     fn new_ai_box(&self, mut region: Region) -> Option<AiBox> {
-        let (plugin, action, _) = self.surface_actions(Surface::Region).into_iter().next()?;
+        let first = self.surface_actions(Surface::Region).into_iter().next()?;
+        let (plugin, action) = (first.plugin, first.action);
         let spec = self.plugins.manifest(&plugin)?.action(&action)?.clone();
         let regions = spec.regions_input()?;
         for field in &regions.fields {
@@ -412,18 +413,16 @@ impl EditorApp {
             + egui::vec2(ai_box.region.x + ai_box.region.width, ai_box.region.y) * session.zoom
             + egui::vec2(8.0, 0.0);
         let verbs: Vec<_> = (self.surface_actions(Surface::Region).into_iter())
-            .map(|(plugin, action, _)| {
-                let verb = self.verb_of(&plugin, &action);
-                (plugin, action, verb)
+            .map(|offered| {
+                let verb = self.verb_of(&offered.plugin, &offered.action);
+                (offered, verb)
             })
             .collect();
         let count = self.ai_box_groups(index).first().map_or(0, Vec::len);
         let label = if count > 1 {
-            format!(
-                "{} {count} {}",
-                self.verb_of(&ai_box.plugin, &ai_box.action),
-                tr("boxes")
-            )
+            tr("{verb} {count} boxes")
+                .replace("{verb}", &self.verb_of(&ai_box.plugin, &ai_box.action))
+                .replace("{count}", &count.to_string())
         } else {
             tr("Generate").to_owned()
         };
@@ -440,16 +439,33 @@ impl EditorApp {
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_width(300.0);
+                        let current = (verbs.iter()).position(|(offered, _)| {
+                            offered.plugin == ai_box.plugin && offered.action == ai_box.action
+                        });
                         if verbs.len() > 1 {
-                            ui.horizontal(|ui| {
-                                for (plugin, action, verb) in &verbs {
-                                    let on = ai_box.plugin == *plugin && ai_box.action == *action;
-                                    if ui.selectable_label(on, verb).clicked() && !on {
-                                        change = Some((plugin.clone(), action.clone()));
-                                    }
-                                }
-                            });
-                            ui.add_space(4.0);
+                            let mut chosen = current.unwrap_or(0);
+                            let options: Vec<(usize, &str)> = (verbs.iter().enumerate())
+                                .map(|(index, (_, verb))| (index, verb.as_str()))
+                                .collect();
+                            let response = widgets::segmented(ui, &mut chosen, &options);
+                            if Some(chosen) != current {
+                                let offered = &verbs[chosen].0;
+                                change = Some((offered.plugin.clone(), offered.action.clone()));
+                            }
+                            if let Some((offered, _)) = current.and_then(|i| verbs.get(i)) {
+                                response.on_hover_text(&offered.source);
+                            }
+                            ui.add_space(6.0);
+                        }
+                        // Whose words these are: the action and its plugin.
+                        if let Some((offered, _)) = current.and_then(|i| verbs.get(i)) {
+                            ui.label(
+                                egui::RichText::new(offered.attributed())
+                                    .small()
+                                    .color(ui.palette().muted),
+                            )
+                            .on_hover_text(&offered.source);
+                            ui.add_space(2.0);
                         }
                         let ready = self.ai_box_form(ui, index, fresh);
                         self.surface_estimate_line(ui, &ai_box.plugin, &ai_box.action);

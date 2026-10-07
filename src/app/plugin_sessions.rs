@@ -374,6 +374,7 @@ impl EditorApp {
             "edit_prompt": if asks { "session" } else { "none" },
             "edits": edits,
             "auto": asks && self.edits_without_asking(plugin),
+            "save_auto": self.saves_without_asking(plugin),
         })
     }
 
@@ -399,7 +400,7 @@ impl EditorApp {
         .id(("plugin_edit_session", &request.plugin))
         .default_width(460.0)
         .open(&mut open)
-        .show(ctx, |ui| {
+        .show_with_footer(ctx, |ui| {
             let lead = format!(
                 "{source} {}",
                 tr("asks to change your documents directly, starting with:")
@@ -445,20 +446,22 @@ impl EditorApp {
                 &mut deny_all,
                 tr("With Deny: refuse every session until the plugin stops"),
             );
-            ui.separator();
-            ui.horizontal(|ui| {
-                if widgets::button(ui, tr("Always Allow")).clicked() {
-                    answer = Some(EditAnswer::Always);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::primary_button(ui, tr("Allow")).clicked() {
-                        answer = Some(EditAnswer::Allow);
-                    }
-                    if widgets::button(ui, tr("Deny")).clicked() {
-                        answer = Some(EditAnswer::Deny);
-                    }
-                });
-            });
+        }, |ui, ()| {
+            let mut always = false;
+            let response = widgets::dialog_footer(
+                ui,
+                widgets::FooterButtons::commit(tr("Allow")).cancel_label(tr("Deny")),
+                |ui| {
+                    always = widgets::button(ui, tr("Always Allow")).clicked();
+                },
+            );
+            if always {
+                answer = Some(EditAnswer::Always);
+            } else if response.commit {
+                answer = Some(EditAnswer::Allow);
+            } else if response.cancel {
+                answer = Some(EditAnswer::Deny);
+            }
         });
         if let Some(prompt) = &mut self.plugins.edit_prompt {
             prompt.deny_all = deny_all;

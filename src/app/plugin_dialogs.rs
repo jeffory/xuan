@@ -227,9 +227,9 @@ impl EditorApp {
             .id(("plugin_action", &plugin, &action))
             .default_width(380.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let Some(edit) = &mut self.plugins.action else {
-                    return;
+                    return None;
                 };
                 if !spec.description.is_empty() {
                     ui.add(egui::Label::new(RichText::new(&spec.description).color(ui.palette().muted)).wrap());
@@ -334,17 +334,19 @@ impl EditorApp {
                     });
                     ui.add_space(4.0);
                 }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if let Some(estimate) = &edit.estimate {
-                        ui.label(RichText::new(estimate).color(ui.palette().muted));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        run = widgets::primary_button(ui, tr("Run")).clicked();
-                        cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    });
-                });
+                Some(edit.estimate.clone())
+            }, |ui, estimate| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Run")),
+                    |ui| {
+                        if let Some(estimate) = estimate.flatten() {
+                            ui.label(RichText::new(estimate).color(ui.palette().muted));
+                        }
+                    },
+                );
+                run = response.commit;
+                cancel = response.cancel;
             });
         if use_selection {
             self.add_selection_region();
@@ -388,7 +390,7 @@ impl EditorApp {
             .id(("plugin_permissions", &plugin))
             .default_width(420.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 ui.add(
                     egui::Label::new(format!(
                         "{source} {} {}",
@@ -436,18 +438,17 @@ impl EditorApp {
                         ui.label(format!("• {}", tr("Its permissions changed")));
                     }
                 }
-                ui.add_space(12.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Allow")).clicked() {
-                            decision = Some(true);
-                        }
-                        if widgets::button(ui, tr("Deny")).clicked() {
-                            decision = Some(false);
-                        }
-                    });
-                });
+            }, |ui, ()| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Allow")).cancel_label(tr("Deny")),
+                    |_| {},
+                );
+                if response.commit {
+                    decision = Some(true);
+                } else if response.cancel {
+                    decision = Some(false);
+                }
             });
         match decision {
             Some(true) => {
@@ -493,6 +494,7 @@ impl EditorApp {
         let mut setting_changed: Option<(String, String, Value)> = None;
         let mut ask_again: Option<String> = None;
         let mut auto_mode: Option<(String, bool)> = None;
+        let mut save_mode: Option<(String, bool)> = None;
         let mut offline = self.config.disable_network_plugins;
         let mut block = self.config.block_undeclared_network();
         let plugin_dir = self
@@ -504,7 +506,7 @@ impl EditorApp {
             .id("plugin_manager")
             .default_width(680.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let mut separator = None;
                 let columns = ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
@@ -598,7 +600,7 @@ impl EditorApp {
                         ui.label(RichText::new(status).small().color(ui.palette().muted));
                         ui.add_space(8.0);
                         {
-                            ui.label(RichText::new(tr("Permissions")).strong());
+                            widgets::subheading(ui, tr("Permissions"));
                             permissions_list(ui, manifest, self.plugin_network_blocked(&id));
                             ui.horizontal(|ui| {
                                 if self.plugin_granted(&id) {
@@ -632,10 +634,24 @@ impl EditorApp {
                                     auto_mode = Some((id.clone(), auto));
                                 }
                             }
+                            // Shown for plugins that drive the editor (the MCP
+                            // server), and for any plugin while it is on, so it
+                            // can be turned off.
+                            if self.plugin_granted(&id)
+                                && (self.asks_before_edits(&id) || self.saves_without_asking(&id))
+                            {
+                                let mut save = self.saves_without_asking(&id);
+                                if widgets::checkbox(ui, &mut save, tr("Save and export without asking"))
+                                    .on_hover_text(tr("Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files it wrote since Xuan started, without asking; the status bar shows each one. Replacing any other file still asks."))
+                                    .changed()
+                                {
+                                    save_mode = Some((id.clone(), save));
+                                }
+                            }
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
-                            ui.label(RichText::new(tr("Settings")).strong());
+                            widgets::subheading(ui, tr("Settings"));
                             for setting in &manifest.settings {
                                 let mut value = if setting.kind == InputKind::Secret {
                                     Value::String(
@@ -661,19 +677,16 @@ impl EditorApp {
                         for pane in (manifest.panes.iter())
                             .filter(|pane| pane.placement == xuan::plugins::manifest::PanePlacement::Settings)
                         {
-                            ui.label(RichText::new(&pane.title).strong());
+                            widgets::subheading(ui, super::plugins::one_line(&pane.title, 80));
                             self.plugin_settings_pane(ui, &super::plugins::pane_key(&id, &pane.id));
                             ui.add_space(8.0);
                         }
                         self.plugin_models_section(ui, manifest);
                         let summary = format!(
-                            "{} {} · {} {} · {} {}",
-                            manifest.actions.len(),
-                            tr("actions"),
-                            manifest.panes.len(),
-                            tr("panes"),
-                            manifest.formats.len(),
-                            tr("formats")
+                            "{} · {} · {}",
+                            counted(manifest.actions.len(), "action", "actions"),
+                            counted(manifest.panes.len(), "pane", "panes"),
+                            counted(manifest.formats.len(), "format", "formats")
                         );
                         ui.label(RichText::new(summary).small().color(ui.palette().muted));
                         let log = self.plugins.log(&id);
@@ -700,7 +713,7 @@ impl EditorApp {
                 }
                 if !errors.is_empty() {
                     ui.separator();
-                    ui.label(RichText::new(tr("Could not load")).strong());
+                    widgets::subheading(ui, tr("Could not load"));
                     for error in &errors {
                         ui.add(
                             egui::Label::new(
@@ -719,16 +732,20 @@ impl EditorApp {
                     widgets::checkbox(ui, &mut block, tr("Block network for plugins that don't declare it"))
                         .on_hover_text(tr("Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
                 }
-                ui.horizontal(|ui| {
-                    if let Some(dir) = &plugin_dir {
-                        ui.label(RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display())).small().color(ui.palette().muted));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Done")).clicked() {
-                            done = true;
-                        }
-                    });
-                });
+                if let Some(dir) = &plugin_dir {
+                    // A long path would widen the window: elide it, with the whole path on hover.
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display()))
+                                .small()
+                                .color(ui.palette().muted),
+                        )
+                        .truncate(),
+                    );
+                }
+            }, |ui, ()| {
+                done = widgets::dialog_footer(ui, widgets::FooterButtons::single(tr("Done")), |_| {})
+                    .commit;
             });
         self.plugins.manager_selected = selected;
         if let Some((id, granted)) = grant {
@@ -749,6 +766,9 @@ impl EditorApp {
         }
         if let Some((id, on)) = auto_mode {
             self.set_edit_auto_mode(&id, on);
+        }
+        if let Some((id, on)) = save_mode {
+            self.set_save_without_asking(&id, on);
         }
         if offline != self.config.disable_network_plugins {
             self.set_network_plugins_disabled(offline);
@@ -800,7 +820,14 @@ impl EditorApp {
     pub(super) fn running_jobs(&self) -> Vec<RunningJob> {
         let actions = self.plugins.jobs.iter().map(|job| RunningJob {
             id: job.id,
-            label: job.label.trim_end_matches('…').to_owned(),
+            // The plugin's words, with the plugin they come from.
+            label: super::commands::plugin_action_label(
+                &super::plugins::one_line(job.label.trim_end_matches('…'), 80),
+                &super::plugins::one_line(
+                    (self.plugins.manifest(&job.plugin)).map_or(&job.plugin, |m| &m.plugin.name),
+                    80,
+                ),
+            ),
             progress: job.progress,
             message: job.message.clone(),
             document: Some(job.document),
@@ -850,7 +877,7 @@ impl EditorApp {
         };
         let muted = ui.palette().muted;
         let mut cancel = None;
-        if ui.small_button(tr("Cancel")).clicked() {
+        if widgets::button(ui, tr("Cancel")).clicked() {
             cancel = Some(job.id);
         }
         progress_indicator(ui, job.progress, 120.0);
@@ -858,16 +885,14 @@ impl EditorApp {
             let count = tr("{index} of {count}")
                 .replace("{index}", &(index + 1).to_string())
                 .replace("{count}", &jobs.len().to_string());
-            let button = ui
-                .add(egui::Button::new(RichText::new(count).size(11.0)).small())
-                .on_hover_text(tr("Show all running jobs"));
+            let button = widgets::button(ui, count).on_hover_text(tr("Show all running jobs"));
             egui::Popup::menu(&button).show(|ui| {
                 ui.set_min_width(280.0);
                 for job in jobs {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&job.label).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(tr("Cancel")).clicked() {
+                            if widgets::button(ui, tr("Cancel")).clicked() {
                                 cancel = Some(job.id);
                             }
                         });
@@ -957,43 +982,57 @@ impl EditorApp {
     }
 }
 
+/// "1 pane" or "2 panes".
+fn counted(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", tr(if count == 1 { one } else { many }))
+}
+
+/// Width of the bullet column, so wrapped lines hang under the first.
+const BULLET_INDENT: f32 = 12.0;
+
+/// A bulleted line whose wrapped lines hang under its first.
+pub(super) fn bullet(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_sized([BULLET_INDENT, 0.0], egui::Label::new("•"));
+        ui.add(egui::Label::new(text).wrap());
+    });
+}
+
+/// A small muted note under a bullet, indented to line up with the bullet's text.
+fn bullet_note(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(BULLET_INDENT);
+        ui.add(egui::Label::new(RichText::new(text).small().color(ui.palette().muted)).wrap());
+    });
+}
+
 /// The permissions a plugin declares. `blocked` says whether it starts with
 /// its network blocked ([`xuan::plugins::sandbox`]).
 pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
     if blocked {
-        ui.label(format!("• {}", tr("Network blocked by Xuan (Linux)")));
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "  {}",
-                    tr("It cannot open network sockets, not even to this computer.")
-                ))
-                .small()
-                .color(ui.palette().muted),
-            )
-            .wrap(),
+        bullet(ui, tr("Network blocked by Xuan (Linux)"));
+        bullet_note(
+            ui,
+            tr("It cannot open network sockets, not even to this computer."),
         );
     }
     if !permissions.network.is_empty() {
-        ui.add(
-            egui::Label::new(format!(
-                "• {} {}",
+        bullet(
+            ui,
+            format!(
+                "{} {}",
                 tr("Says it connects to:"),
                 permissions.network.join(", ")
-            ))
-            .wrap(),
+            ),
         );
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "  {}",
-                    tr("Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.")
-                ))
-                .small()
-                .color(ui.palette().muted),
-            )
-            .wrap(),
+        bullet_note(
+            ui,
+            tr(
+                "Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.",
+            ),
         );
     }
     if !manifest.models.is_empty() {
@@ -1008,60 +1047,57 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
             })
             .collect::<Vec<_>>()
             .join(", ");
-        ui.add(
-            egui::Label::new(format!(
-                "• {} {models}",
+        bullet(
+            ui,
+            format!(
+                "{} {models}",
                 tr("Uses models that Xuan downloads, after asking you:")
-            ))
-            .wrap(),
+            ),
         );
     }
     if !permissions.secrets.is_empty() {
-        ui.label(format!(
-            "• {} {}",
-            tr("Receives these secrets:"),
-            permissions.secrets.join(", ")
-        ));
+        bullet(
+            ui,
+            format!(
+                "{} {}",
+                tr("Receives these secrets:"),
+                permissions.secrets.join(", ")
+            ),
+        );
     }
     if permissions.document == xuan::plugins::manifest::DocumentAccess::Edit {
-        ui.label(format!(
-            "• {}",
-            tr("Edits documents directly (as undoable steps)")
-        ));
+        bullet(ui, tr("Edits documents directly (as undoable steps)"));
         if permissions.edit_prompt == xuan::plugins::manifest::EditPrompt::Session {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "  {}",
-                        tr("Asks you before its first edit in each session, unless you turn on auto mode.")
-                    ))
-                    .small()
-                    .color(ui.palette().muted),
-                )
-                .wrap(),
+            bullet_note(
+                ui,
+                tr("Asks you before its first edit in each session, unless you turn on auto mode."),
             );
         }
     } else {
-        ui.label(format!(
-            "• {}",
-            tr("Can read the document and propose selections or new documents, but can't change your image")
-        ));
+        bullet(
+            ui,
+            tr(
+                "Can read the document and propose selections or new documents, but can't change your image",
+            ),
+        );
     }
     match permissions.filesystem {
         xuan::plugins::manifest::FilesystemAccess::None => {}
         xuan::plugins::manifest::FilesystemAccess::Read => {
-            ui.label(format!(
-                "• {}",
+            bullet(
+                ui,
                 tr(
-                    "Has Xuan read any file for it, not only those in its own and temporary folders"
-                )
-            ));
+                    "Has Xuan read any file for it, not only those in its own and temporary folders",
+                ),
+            );
         }
         xuan::plugins::manifest::FilesystemAccess::Write => {
-            ui.label(format!(
-                "• {}",
-                tr("Has Xuan read and write any file or folder for it, not only its own and temporary folders")
-            ));
+            bullet(
+                ui,
+                tr(
+                    "Has Xuan read and write any file or folder for it, not only its own and temporary folders",
+                ),
+            );
         }
     }
 }

@@ -24,8 +24,26 @@ mod palette;
 #[path = "ui_appearance.rs"]
 mod appearance;
 
+#[path = "ui_empty_state.rs"]
+mod empty_state;
+
 #[path = "ui_tabs.rs"]
 mod tabs;
+
+#[path = "ui_dialogs.rs"]
+mod dialogs;
+
+#[path = "ui_settings_shortcuts.rs"]
+mod settings_shortcuts;
+
+#[path = "ui_tool_rail.rs"]
+mod tool_rail;
+
+#[path = "ui_polish.rs"]
+mod polish;
+
+#[path = "ui_focus.rs"]
+mod focus;
 
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
@@ -39,16 +57,19 @@ pub(super) struct UiTest {
 impl UiTest {
     /// An empty editor: no documents open.
     pub(super) fn new() -> Self {
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(1280.0, 860.0))
-            .build_state(
-                |ctx, app: &mut Option<EditorApp>| {
-                    if let Some(app) = app {
-                        app.show(ctx);
-                    }
-                },
-                None,
-            );
+        Self::sized(Vec2::new(1280.0, 860.0))
+    }
+
+    /// An empty editor in a window of this size.
+    pub(super) fn sized(size: Vec2) -> Self {
+        let mut harness = Harness::builder().with_size(size).build_state(
+            |ctx, app: &mut Option<EditorApp>| {
+                if let Some(app) = app {
+                    app.show(ctx);
+                }
+            },
+            None,
+        );
         // The app installs fonts and the theme on the context it is built with, so it must be built
         // from the harness's own context rather than a throwaway one.
         *harness.state_mut() = Some(EditorApp::with_context(
@@ -671,11 +692,11 @@ mod rulers_and_guides {
         ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 64;
         ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 10;
         ui.settle();
-        assert!(!ui.enabled("OK"));
+        assert!(!ui.enabled("Apply"));
         ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 8;
         ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 100;
         ui.settle();
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().dialog.is_none());
         let expected = GridSettings {
             spacing: 100,
@@ -761,7 +782,7 @@ mod layer_appearance {
         }
         let y = |ui: &UiTest, name: &str| ui.harness.get_by_label(name).rect().top();
         assert!(y(&ui, "Dissolve") < y(&ui, "Darken"));
-        assert!(y(&ui, "Linear Burn") < y(&ui, "Darker Color"));
+        assert!(y(&ui, "Linear Burn") < y(&ui, "Darker Colour"));
         assert!(y(&ui, "Pin Light") < y(&ui, "Hard Mix"));
         assert!(y(&ui, "Divide") < y(&ui, "Hue"));
         // The menu opens where it fits the window.
@@ -793,7 +814,7 @@ mod layer_appearance {
         ui.click("Show Stroke");
         assert!(shows(&ui, "Outside") && shows(&ui, "Inside"));
         ui.click("Inside");
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().dialog.is_none());
         let effects = active(&ui).effects.clone().unwrap();
         assert!(effects.is_enabled(EffectKind::DropShadow));
@@ -825,6 +846,47 @@ mod layer_appearance {
         ui.app_mut().command("undo");
         ui.settle();
         assert_eq!(active(&ui).effects, None);
+    }
+
+    #[test]
+    fn the_layer_effects_list_highlights_the_row_being_edited_without_a_check_glyph() {
+        use xuan::layer_effects::EffectKind;
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        ui.open_menu("Layer");
+        ui.click("Layer Effects…");
+        let selected = |ui: &UiTest, name: &str| {
+            ui.harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, name)
+                .accesskit_node()
+                .toggled()
+        };
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Drop Shadow"),
+            Some(egui::accesskit::Toggled::False)
+        );
+        // Clicking a name selects the row; it does not turn the effect on.
+        ui.click("Inner Glow");
+        assert_eq!(
+            selected(&ui, "Inner Glow"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::False)
+        );
+        let edit = ui.app().layer_effects.as_ref().unwrap();
+        assert_eq!(edit.selected, EffectKind::InnerGlow);
+        assert!(edit.effects.is_empty());
+        assert!(active(&ui).effects.is_none());
+        // The check mark is gone: nothing in the list is labelled with one.
+        assert!(ui.harness.query_all_by_label_contains("✓").next().is_none());
+        ui.click("Cancel");
     }
 
     #[test]
@@ -901,7 +963,7 @@ mod layer_appearance {
 
         ui.open_menu("Layer");
         ui.click("New Adjustment Layer ⏵");
-        ui.click("Color Balance");
+        ui.click("Colour Balance");
         assert!(ui.has("Cyan – Red") && ui.has("Preserve Luminosity"));
         // Each tonal range has its own sliders.
         ui.click("Shadows");
@@ -966,6 +1028,86 @@ mod window_menu {
         assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
         assert!(!ui.app().config.panes.get(NAVIGATOR).unwrap().hidden);
         assert!(ui.has("Navigator"));
+    }
+
+    /// A plugin with three panes that only say they need permission.
+    fn short_plugin_panes(ui: &mut UiTest, directory: &Path) {
+        let mut manifest = String::from(
+            "[plugin]\nid = \"short\"\nname = \"Short\"\nversion = \"1\"\ncommand = [\"sh\", \"x\"]\n",
+        );
+        for (id, title) in [("a", "Short A"), ("b", "Short B"), ("c", "Short C")] {
+            manifest.push_str(&format!(
+                "\n[[panes]]\nid = \"{id}\"\ntitle = \"{title}\"\n"
+            ));
+        }
+        std::fs::write(directory.join("plugin.toml"), manifest).unwrap();
+        let manifest = xuan::plugins::Manifest::load(directory).unwrap();
+        ui.app_mut().install_plugins(vec![manifest], vec![]);
+        ui.harness.run_steps(8);
+    }
+
+    #[test]
+    fn short_panes_below_layers_leave_it_room_for_rows() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        short_plugin_panes(&mut ui, plugin.path());
+        let header =
+            |ui: &UiTest, title: &str| ui.harness.get_by_role_and_label(Role::Button, title).rect();
+        let layers = header(&ui, "Layers");
+        let next = header(&ui, "Short A");
+        let row = ui.harness.get_by_label("Layer 1").rect();
+        assert!(
+            row.top() >= layers.bottom() && row.bottom() <= next.top(),
+            "the layer row {row:?} should sit between {layers:?} and {next:?}"
+        );
+        // The list has room for several rows, not just one.
+        assert!(
+            next.top() - layers.bottom() >= 200.0,
+            "Layers is too short: {layers:?} to {next:?}"
+        );
+        // The short panes give back what they do not draw: no big gap below.
+        let last = header(&ui, "Short C");
+        assert!(
+            last.bottom() + 150.0 > ui.harness.ctx.content_rect().bottom() - 40.0,
+            "gap under the last pane: {last:?}"
+        );
+        // Stable: more frames change nothing.
+        let before = header(&ui, "Short A");
+        ui.harness.run_steps(5);
+        assert_eq!(header(&ui, "Short A"), before);
+    }
+
+    #[test]
+    fn a_resized_pane_keeps_its_height_and_collapsing_gives_it_back() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        short_plugin_panes(&mut ui, plugin.path());
+        let gap = |ui: &UiTest| {
+            let a = ui
+                .harness
+                .get_by_role_and_label(Role::Button, "Short A")
+                .rect();
+            let b = ui
+                .harness
+                .get_by_role_and_label(Role::Button, "Short B")
+                .rect();
+            b.top() - a.bottom()
+        };
+        let short = gap(&ui);
+        assert!(short < 120.0, "{short}");
+        ui.app_mut()
+            .config
+            .panes
+            .set_height("plugin:short/a", 150.0);
+        ui.harness.run_steps(5);
+        assert!(gap(&ui) >= 150.0, "{}", gap(&ui));
+        ui.app_mut().config.panes.toggle_collapsed("plugin:short/a");
+        ui.harness.run_steps(5);
+        assert!(gap(&ui) < 40.0, "{}", gap(&ui));
     }
 
     #[test]
@@ -1040,11 +1182,11 @@ mod color_range {
     }
 
     #[test]
-    fn picking_a_colour_previews_the_selection_and_ok_keeps_it() {
+    fn picking_a_colour_previews_the_selection_and_apply_keeps_it() {
         let mut ui = halves();
         let revision = ui.app().session().unwrap().history.revision;
         ui.open_menu("Select");
-        ui.click("Color Range…");
+        ui.click("Colour Range…");
         assert!(ui.app().color_range.is_some());
         assert!(ui.has("Fuzziness"));
         // The menus' commands wait while the dialog is open.
@@ -1058,7 +1200,7 @@ mod color_range {
         ui.click_role(Role::CheckBox, "Invert");
         let right: Vec<u8> = left.iter().map(|v| 255 - v).collect();
         assert_eq!(selected(&ui), Some(right.clone()));
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().color_range.is_none());
         assert_eq!(selected(&ui), Some(right));
         assert_eq!(ui.app().session().unwrap().history.revision, revision + 1);
@@ -1070,7 +1212,7 @@ mod color_range {
     fn cancel_puts_back_the_old_selection() {
         let mut ui = halves();
         ui.open_menu("Select");
-        ui.click("Color Range…");
+        ui.click("Colour Range…");
         let pos = at(&ui, 15.5, 4.5);
         ui.click_at(pos);
         assert!(selected(&ui).is_some());
@@ -1079,7 +1221,7 @@ mod color_range {
         assert_eq!(selected(&ui), None);
         assert_ne!(
             ui.app().session().unwrap().history.undo_name(),
-            Some("Color Range")
+            Some("Colour Range")
         );
     }
 }
@@ -1166,8 +1308,9 @@ mod status_bar {
         let first = job(ui.app(), "Generate Image…", None, "Running on Comfy Cloud");
         ui.app_mut().plugins.jobs.push(first);
         ui.settle();
-        // No floating window: the job is a line in the status bar.
-        assert!(ui.has("Generate Image · Running on Comfy Cloud"));
+        // No floating window: the job is a line in the status bar, naming the
+        // plugin (here only its id: it is not installed).
+        assert!(ui.has("Generate Image · mock · Running on Comfy Cloud"));
         assert!(!ui.has("1 of 1"));
         let second = job(ui.app(), "Edit Image…", Some(0.5), "");
         ui.app_mut().plugins.jobs.push(second);
@@ -1175,9 +1318,24 @@ mod status_bar {
         assert!(ui.has("1 of 2"));
         // The count lists every job, each with its own Cancel.
         ui.click("1 of 2");
-        assert!(ui.has_role(Role::Label, "Generate Image"));
-        assert!(ui.has_role(Role::Label, "Edit Image"));
+        assert!(ui.has_role(Role::Label, "Generate Image · mock"));
+        assert!(ui.has_role(Role::Label, "Edit Image · mock"));
         assert_eq!(ui.harness.query_all_by_label("Cancel").count(), 3);
+    }
+
+    #[test]
+    fn running_jobs_show_with_no_document_open() {
+        // New Image → Generate from the empty state runs with no document.
+        let mut ui = UiTest::with_document();
+        let mut running = job(ui.app(), "Generate Image…", None, "Queued");
+        running.document = uuid::Uuid::new_v4();
+        ui.app_mut().command("close");
+        ui.settle();
+        assert!(ui.app().session().is_none());
+        ui.app_mut().plugins.jobs.push(running);
+        ui.settle();
+        assert!(ui.has("Generate Image · mock · Queued"));
+        assert!(ui.enabled("Cancel"));
     }
 
     #[test]
@@ -1406,10 +1564,11 @@ label = "Prompt"
         ui.click("Generate");
         assert!(ui.has("Prompt"));
         assert!(ui.has("Exact size"));
+        // Whose action it is, and the prompt takes typing straight away.
+        assert!(ui.has("Generate Image · AI"));
+        assert!(ui.harness.get_by_role(Role::MultilineTextInput).is_focused());
         assert!(ui.harness.query_all_by_label("Width").next().is_some());
         assert!(!ui.enabled("Generate image"));
-        ui.harness.get_by_role(Role::MultilineTextInput).click();
-        ui.harness.step();
         ui.harness
             .get_by_role(Role::MultilineTextInput)
             .type_text("a fox");

@@ -332,7 +332,7 @@ impl EditorApp {
         match key {
             TabKey::Document(id) => self
                 .document_index(id)
-                .is_some_and(|i| self.sessions[i].history.dirty()),
+                .is_some_and(|i| self.sessions[i].history.edited()),
             TabKey::Raw(id) => self
                 .develop
                 .iter()
@@ -508,7 +508,11 @@ impl EditorApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             ui.add_space(8.0);
-                            self.zoom_buttons(ui, &mut actions);
+                            // Nothing to zoom until a document is open. The strip still
+                            // reserves this width, so the tabs do not shift when one opens.
+                            if self.session().is_some() || self.develop.is_some() {
+                                self.zoom_buttons(ui, &mut actions);
+                            }
                         });
                     });
                 });
@@ -518,11 +522,13 @@ impl EditorApp {
 
     fn zoom_buttons(&self, ui: &mut Ui, actions: &mut Actions) {
         ui.add_enabled_ui(self.develop.as_ref().is_none_or(|d| d.ready()), |ui| {
-            if widgets::button(ui, "−")
-                .on_hover_text(tr("Zoom out"))
-                .clicked()
-            {
-                actions.command = Some("zoom_out");
+            // The strip lays out right to left, so the buttons are added in reverse to read
+            // "− + 100% Fit", the Navigator's order for − and +.
+            if widgets::button(ui, tr("Fit")).clicked() {
+                actions.command = Some("fit");
+            }
+            if widgets::button(ui, "100%").clicked() {
+                actions.command = Some("actual");
             }
             if widgets::button(ui, "+")
                 .on_hover_text(tr("Zoom in"))
@@ -530,11 +536,11 @@ impl EditorApp {
             {
                 actions.command = Some("zoom_in");
             }
-            if widgets::button(ui, "100%").clicked() {
-                actions.command = Some("actual");
-            }
-            if widgets::button(ui, tr("Fit")).clicked() {
-                actions.command = Some("fit");
+            if widgets::button(ui, "−")
+                .on_hover_text(tr("Zoom out"))
+                .clicked()
+            {
+                actions.command = Some("zoom_out");
             }
         });
     }
@@ -650,10 +656,26 @@ impl EditorApp {
                 selected: selected == Some(key),
                 dirty: self.tab_dirty(key),
                 hovered: response.hovered() || dragging,
-                close_hovered: close.hovered(),
+                // A focused close button shows, as under the pointer.
+                close_hovered: close.hovered() || close.has_focus(),
                 dragging,
             };
             paint_tab(ui, &ui.painter().with_clip_rect(clip), &p, rect, &look);
+            // Inside the tab: tabs sit edge to edge and the strip clips them.
+            widgets::focus_ring_at(
+                ui,
+                &response,
+                rect.intersect(viewport),
+                0.0,
+                widgets::FocusRing::Inside,
+            );
+            widgets::focus_ring_at(
+                ui,
+                &close,
+                close_rect(rect).intersect(viewport),
+                10.0,
+                widgets::FocusRing::Inside,
+            );
             if index + 1 < keys.len() {
                 // The 1 px separator in the gap after this tab, not after the last.
                 let x = rect.right() + GAP / 2.0;
@@ -675,6 +697,7 @@ impl EditorApp {
                     );
                 }
             }
+            let close = close.on_hover_text(tr("Close Tab"));
             if close.clicked() || (response.clicked_by(egui::PointerButton::Middle)) {
                 actions.close.push(key);
             } else if response.clicked() {
@@ -752,11 +775,12 @@ impl EditorApp {
 
         let (rect, new) = ui.allocate_exact_size(vec2(TAB_HEIGHT, TAB_HEIGHT), Sense::click());
         new.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "+")
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tr("New canvas"))
         });
         if new.hovered() {
             ui.painter().rect_filled(rect, 0.0, p.tab_hover);
         }
+        widgets::focus_ring_at(ui, &new, rect, 0.0, widgets::FocusRing::Inside);
         let c = rect.center();
         let stroke = Stroke::new(1.4_f32, p.text);
         ui.painter()

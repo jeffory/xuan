@@ -120,15 +120,29 @@ follow instructions hidden in something it read.
   their pixels and placement, and the MCP server can lock a layer but never
   unlock one (the plugin protocol itself lets a plugin with `document =
   "edit"` unlock a layer, as the Layers panel does).
-- **Files go through you.** Saving and exporting open Xuan's save dialog with
-  a suggested name, and you choose where (or cancel); opening a file shows its
-  full path and opens it only if you agree. The client cannot pick where a
-  file goes, replace one without the save dialog asking you to confirm, or
-  open something silently. The file is written exactly where you confirmed:
-  if the name you typed lacks the extension, the dialog asks again with it
-  added rather than writing next to the file you saw. Suggested names are
-  cleaned of folders, invisible and right-to-left control characters and
-  Windows device names (`CON`, `NUL`, …). The client learns only file names,
+- **Files go through you.** Without a `path`, saving and exporting open
+  Xuan's save dialog with a suggested name, and you choose where (or cancel).
+  The file is written exactly where you confirmed: if the name you typed
+  lacks the extension, the dialog asks again with it added rather than
+  writing next to the file you saw. Suggested names are cleaned of folders,
+  invisible and right-to-left control characters and Windows device names
+  (`CON`, `NUL`, …). Opening a file shows its full path and opens it only if
+  you agree.
+- **Saving to a path the client names** (`save_document` or
+  `export_document` with `path`, or `save_document` with `in_place`) shows
+  Xuan's own prompt instead, because a client cannot operate the system
+  dialog: it names the client, the file, its folder, and whether it replaces
+  a file, with **Save**, **Always Allow** and **Cancel**. **Always Allow**
+  lets the client save and export to paths without asking from then on; each
+  such write shows in the status bar, the plugin's log and the MCP Server
+  pane's recent tool calls, with the file name. It is a switch in **Plugins →
+  Manage Plugins… → MCP Server** ("Save and export without asking"), and it
+  is dropped if the plugin's folder, command or permissions change. The path
+  must be absolute, in a folder that exists, with the format's extension and
+  a plain file name. An existing file is replaced only when the call says
+  `overwrite: true`; even with Always Allow, replacing a file the client
+  did not write itself since Xuan started (one you saved, say) asks you
+  again. The client learns only file names,
   never folders, in answers and in error messages. Xuan's other file
   commands, the clipboard, settings and other plugins are out of reach.
 - **Switching documents** is limited to once a second, so a client cannot
@@ -183,9 +197,9 @@ larger tool arguments with a tool error saying the request is too large.
 | `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer) | `layer/export` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
-| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation | `set`, `transform` |
+| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation; a text layer's `text`, `path` and `path_options` | `set`, `set_text`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
-| `create_text_layer` | Editable text | `add_text_layer` |
+| `create_text_layer` | Editable text in a box, or with `path` along an SVG path | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
 | `create_image_layer` | A PNG the client sends (base64) | `add_layer` |
 | `delete_layer` | Delete a layer or group | `remove_layer` |
@@ -202,12 +216,13 @@ larger tool arguments with a tool error saying the request is too large.
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
 | `crop_canvas`, `resize_canvas`, `resize_image` | Crop, Canvas Size, Image Size | `crop`, `resize_canvas`, `resize_image` |
+| `rotate_canvas`, `trim_canvas` | Rotate Canvas (90, 180, 270 degrees clockwise), Trim (transparent, top-left or bottom-right colour margins, per side); `run_command` `crop_to_selection` crops to the selection | `rotate_canvas`, `trim` |
 | `undo`, `redo` | Up to 20 steps | `host/run` |
 | `batch` | Several edit tools' steps as one undo step, all or nothing | one `document/edit` |
-| `run_command` | Flatten, duplicate, flip, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
+| `run_command` | Flatten, duplicate, flip, rotate canvas, crop to selection, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
-| `save_document` | Save as a `.xuan` project, through the save dialog | `file/save_as` |
-| `export_document` | Export PNG, JPEG, TIFF or WebP, through the save dialog | `file/export` |
+| `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
+| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/export` |
 | `open_document` | Open an image or project, after the user agrees | `file/open` |
 
 Filters and adjustments use the shapes `.xuan` files store, for example
@@ -248,6 +263,34 @@ with the document so the user can fill, stroke or select it again from
 **Select → Paths…**; `get_document` lists them under `paths`. A malformed path
 is refused with what was expected and the character, e.g. `SVG path: expected
 the y of the line's end for `L` at character 11, found the end of the path`.
+
+### Text on a path
+
+Letters along a curve are one text layer: give `create_text_layer` a `path`
+instead of `x` and `y`. Each letter is moved to its distance along the path
+and turned to its direction, and the line stays editable text. `path_options`
+says how it follows the path: `start_offset` (percent of the path's length),
+`align` (`start`, `center` or `end` at that point), `side` (`left`, the
+default, stands letters on top of a path drawn left to right; `right` flips
+them under it, reading the other way), `letter_spacing` and `baseline_shift`
+in pixels, `rotate: false` for upright letters, and ramps from the first
+letter to the last: `size_end` (from `size`) and `opacity_start` /
+`opacity_end`. Letters past the end of an open path are hidden; on a closed
+path the text wraps around. For example, letters rising from a book, shrinking
+and fading as they go:
+
+```json
+{"tool": "create_text_layer", "arguments": {"text": "αβγ אבג абв ꦲꦤꦕ", "size": 17,
+  "color": "#2a2a2a", "path": "M 260 620 C 300 520 220 430 300 330 S 380 200 330 120",
+  "path_options": {"size_end": 7, "opacity_start": 0.95, "opacity_end": 0.55,
+                   "letter_spacing": 4}}}
+```
+
+`set_layer` changes it later: `text` for new words, `path` to move it to
+another curve (`null` puts it back in a box), `path_options` for any of the
+options (the others are kept). Moving, scaling or rotating the layer takes
+the path along; `get_document` reports the layer's `text`, with its `path`
+where it is now and its `path_options`.
 
 ### Layers, masks and the active layer
 
@@ -352,7 +395,10 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
   right across the canvas centre (or `"center": [x, y]`), and `{"mode":
   "radial", "segments": 12, "center": [x, y]}` turns one ray into a
   starburst's twelve. Copies don't darken each other where they cross.
-- Ask the user before saving; the save dialog is theirs to answer.
+- Ask the user before saving; the save dialog and the save prompt are theirs
+  to answer. To save without the dialog, pass `path` (absolute, in a folder
+  that exists); the first such save waits for the user's answer in Xuan.
+  Pass `overwrite: true` only when you mean to replace that file.
 
 ## The `.xuan` format for agents
 

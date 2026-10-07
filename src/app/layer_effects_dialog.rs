@@ -31,7 +31,7 @@ pub(super) fn can_take_effects(layer: &xuan::document::Layer) -> bool {
 fn color_row(ui: &mut egui::Ui, color: &mut [u8; 3], opacity: &mut f32) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.label(tr("Color"));
+        ui.label(tr("Colour"));
         let mut rgba = [color[0], color[1], color[2], 255];
         if widgets::color_well(ui, &mut rgba).changed() {
             *color = [rgba[0], rgba[1], rgba[2]];
@@ -182,75 +182,82 @@ impl EditorApp {
             .id("layer_effects")
             .open(&mut open)
             .default_width(460.0)
-            .show(ctx, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(150.0);
-                        for kind in EffectKind::ALL {
-                            ui.horizontal(|ui| {
-                                let mut shown = edit.effects.is_enabled(kind);
-                                let label = format!("{} {}", tr("Show"), tr(kind.name()));
-                                if widgets::bare_checkbox(ui, &mut shown, &label)
-                                    .on_hover_text(&label)
-                                    .changed()
-                                {
-                                    if shown && !edit.effects.contains(kind) {
-                                        edit.effects.add(kind, background);
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(150.0);
+                            for kind in EffectKind::ALL {
+                                ui.horizontal(|ui| {
+                                    let mut shown = edit.effects.is_enabled(kind);
+                                    let label = format!("{} {}", tr("Show"), tr(kind.name()));
+                                    if widgets::bare_checkbox(ui, &mut shown, &label)
+                                        .on_hover_text(&label)
+                                        .changed()
+                                    {
+                                        if shown && !edit.effects.contains(kind) {
+                                            edit.effects.add(kind, background);
+                                        }
+                                        edit.effects.set_enabled(kind, shown);
+                                        edit.selected = kind;
+                                        changed = true;
                                     }
-                                    edit.effects.set_enabled(kind, shown);
-                                    edit.selected = kind;
+                                    if widgets::selected_row(
+                                        ui,
+                                        edit.selected == kind,
+                                        tr(kind.name()),
+                                    )
+                                    .clicked()
+                                    {
+                                        edit.selected = kind;
+                                    }
+                                });
+                            }
+                        });
+                        ui.add_space(16.0);
+                        ui.vertical(|ui| {
+                            // Room for the tallest effect, so the window keeps its size (and its
+                            // buttons their place) as effects are switched or added.
+                            ui.set_min_height(250.0);
+                            widgets::subheading(ui, tr(edit.selected.name()));
+                            ui.add_space(4.0);
+                            if edit.effects.contains(edit.selected) {
+                                changed |= controls(ui, &mut edit.effects, edit.selected);
+                                ui.add_space(6.0);
+                                if widgets::button(ui, tr("Remove Effect")).clicked() {
+                                    edit.effects.remove(edit.selected);
                                     changed = true;
                                 }
-                                widgets::selectable_value(
-                                    ui,
-                                    &mut edit.selected,
-                                    kind,
-                                    tr(kind.name()),
+                            } else {
+                                ui.label(
+                                    RichText::new(tr("Not on this layer"))
+                                        .small()
+                                        .color(ui.palette().muted),
                                 );
-                            });
-                        }
-                    });
-                    ui.add_space(16.0);
-                    ui.vertical(|ui| {
-                        // Room for the tallest effect, so the window keeps its size (and its
-                        // buttons their place) as effects are switched or added.
-                        ui.set_min_height(250.0);
-                        ui.label(RichText::new(tr(edit.selected.name())).strong());
-                        ui.add_space(4.0);
-                        if edit.effects.contains(edit.selected) {
-                            changed |= controls(ui, &mut edit.effects, edit.selected);
-                            ui.add_space(6.0);
-                            if widgets::button(ui, tr("Remove Effect")).clicked() {
-                                edit.effects.remove(edit.selected);
-                                changed = true;
+                                if widgets::button(ui, tr("Add Effect")).clicked() {
+                                    edit.effects.add(edit.selected, background);
+                                    changed = true;
+                                }
                             }
-                        } else {
-                            ui.label(
-                                RichText::new(tr("Not on this layer"))
-                                    .small()
-                                    .color(ui.palette().muted),
-                            );
-                            if widgets::button(ui, tr("Add Effect")).clicked() {
-                                edit.effects.add(edit.selected, background);
-                                changed = true;
-                            }
-                        }
+                        });
                     });
-                });
-                ui.add_space(10.0);
-                ui.separator();
-                ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(tr("Effects stay editable; the pixels are not changed"))
                             .small()
                             .color(ui.palette().muted),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ok = widgets::primary_button(ui, tr("OK")).clicked();
-                        cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    });
-                });
-            });
+                },
+                |ui, ()| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Apply")),
+                        |_| {},
+                    );
+                    ok = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         if changed && let Some(session) = self.session_mut() {
             if let Some(layer) = session
                 .document

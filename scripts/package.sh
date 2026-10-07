@@ -48,6 +48,10 @@ install -Dm644 plugins/mcp-server/plugin.toml "$xuan_plugin/plugin.toml"
 install -Dm755 "$xuan_plugin_target_dir/$xuan_plugin_target/release/xuan-mcp-server" \
     "$xuan_plugin/target/release/xuan-mcp-server"
 strip "$xuan_plugin/target/release/xuan-mcp-server"
+# The Python plugin SDK: <prefix>/lib/xuan/sdk/python, beside the bundled
+# plugins. Xuan puts it first on every plugin's PYTHONPATH and names it in
+# XUAN_PLUGIN_SDK, so installed Python plugins import the matching SDK.
+install -Dm644 sdk/python/xuan_plugin.py "$xuan_stage/lib/xuan/sdk/python/xuan_plugin.py"
 if [[ -n ${XUAN_MAX_GLIBC:-} ]]; then
     python3 scripts/check-glibc.py --max-version "$XUAN_MAX_GLIBC" "$xuan_stage/bin/xuan"
 fi
@@ -60,6 +64,7 @@ install -m644 licenses/rawler-LGPL-2.1.txt "$xuan_licenses/"
 install -m644 licenses/heic-rs-MIT.txt "$xuan_licenses/"
 install -m644 licenses/seccompiler-BSD-3-Clause.txt "$xuan_licenses/"
 install -m644 licenses/kurbo-MIT.txt "$xuan_licenses/"
+install -m644 licenses/Hack-LICENSE.txt "$xuan_licenses/"
 install -m644 licenses/tabler-icons-MIT.txt "$xuan_licenses/"
 install -m644 assets/fonts/Inter-LICENSE.txt "$xuan_licenses/"
 install -m644 assets/fonts/DroidSansFallback-LICENSE.txt "$xuan_licenses/"

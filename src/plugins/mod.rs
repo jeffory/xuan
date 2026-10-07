@@ -101,6 +101,91 @@ pub fn bundled_dir_for(exe: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Names the folder of the Python plugin SDK (`xuan_plugin.py`). Xuan sets
+/// it for every plugin it starts, with the folder first on `PYTHONPATH`;
+/// set before Xuan starts, it replaces the folder Xuan would find itself.
+pub const SDK_VARIABLE: &str = "XUAN_PLUGIN_SDK";
+
+/// The Python SDK's module file, which a folder must hold to be the SDK's.
+pub const SDK_MODULE: &str = "xuan_plugin.py";
+
+/// The folder of the Python plugin SDK that matches this Xuan, see
+/// [`sdk_dir_from`]. Canonicalized when it exists.
+pub fn sdk_dir() -> Option<PathBuf> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("sdk")
+            .join("python");
+        let dir = sdk_dir_from(
+            std::env::var_os(SDK_VARIABLE).as_deref(),
+            bundled_dir().as_deref(),
+            Some(&checkout),
+        )?;
+        Some(canonical(&dir))
+    })
+    .clone()
+}
+
+/// [`sdk_dir`] from `XUAN_PLUGIN_SDK`'s value, the bundled plugins folder
+/// and the source checkout Xuan was built from. An absolute value of the
+/// variable wins. Otherwise the SDK is `sdk/python` beside the bundled
+/// plugins folder (`<prefix>/lib/xuan/sdk/python` on Linux, `sdk\python`
+/// next to `xuan.exe` on Windows), or, in a development build run from its
+/// checkout, the checkout's `sdk/python`; each only when it holds
+/// [`SDK_MODULE`].
+pub fn sdk_dir_from(
+    variable: Option<&OsStr>,
+    bundled: Option<&Path>,
+    checkout: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(dir) = variable.map(Path::new).filter(|dir| dir.is_absolute()) {
+        return Some(dir.to_path_buf());
+    }
+    let shipped = bundled
+        .and_then(Path::parent)
+        .map(|lib| lib.join("sdk").join("python"));
+    shipped
+        .into_iter()
+        .chain(checkout.map(Path::to_path_buf))
+        .find(|dir| dir.join(SDK_MODULE).is_file())
+}
+
+/// The environment that puts the SDK folder `sdk` on a plugin's import
+/// path: `XUAN_PLUGIN_SDK` naming it, and `PYTHONPATH` with it first and the
+/// `existing` value after it. Nothing without a folder; without
+/// `PYTHONPATH` when the folder cannot be joined into one.
+pub fn sdk_env(sdk: Option<&Path>, existing: Option<&OsStr>) -> Vec<(String, String)> {
+    // A folder that is not Unicode would reach the plugin garbled.
+    let Some(sdk) = sdk.and_then(|sdk| without_verbatim_prefix(sdk).to_str().map(str::to_owned))
+    else {
+        return Vec::new();
+    };
+    let mut env = vec![(SDK_VARIABLE.to_owned(), sdk.clone())];
+    // A folder holding the separator cannot be one entry of the list, and
+    // an existing value that is not Unicode is left as it is.
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    if sdk.contains(separator) {
+        return env;
+    }
+    let path = match existing.filter(|rest| !rest.is_empty()).map(OsStr::to_str) {
+        None => Some(sdk),
+        Some(Some(rest)) => Some(format!("{sdk}{separator}{rest}")),
+        Some(None) => None,
+    };
+    env.extend(path.map(|path| ("PYTHONPATH".to_owned(), path)));
+    env
+}
+
+/// `path` without the `\\?\` that canonicalizing adds on Windows before a
+/// drive letter, which Python's imports do not expect.
+fn without_verbatim_prefix(path: &Path) -> &Path {
+    match path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => Path::new(rest),
+        _ => path,
+    }
+}
+
 /// Whether `dir` is the bundled plugins folder `bundled`.
 pub fn is_bundled(dir: &Path, bundled: Option<&Path>) -> bool {
     bundled.is_some_and(|bundled| dir == bundled || canonical(dir) == canonical(bundled))
@@ -382,6 +467,103 @@ mod tests {
             );
         }
         assert_eq!(bundled_dir_from(None, None), None);
+    }
+
+    #[test]
+    fn the_python_sdk_is_found_beside_the_bundled_plugins_or_in_the_checkout() {
+        let prefix = tempfile::tempdir().unwrap();
+        let bundled = prefix.path().join("lib").join("xuan").join("plugins");
+        let shipped = prefix
+            .path()
+            .join("lib")
+            .join("xuan")
+            .join("sdk")
+            .join("python");
+        let checkout = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(&bundled).unwrap();
+        // Neither holds the SDK yet.
+        std::fs::create_dir_all(&shipped).unwrap();
+        assert_eq!(
+            sdk_dir_from(None, Some(&bundled), Some(checkout.path())),
+            None
+        );
+        assert_eq!(sdk_dir_from(None, None, None), None);
+        // The checkout's is the fallback for a development build.
+        std::fs::write(checkout.path().join(SDK_MODULE), "").unwrap();
+        assert_eq!(
+            sdk_dir_from(None, Some(&bundled), Some(checkout.path())),
+            Some(checkout.path().to_path_buf())
+        );
+        // The one installed with Xuan wins over it.
+        std::fs::write(shipped.join(SDK_MODULE), "").unwrap();
+        assert_eq!(
+            sdk_dir_from(None, Some(&bundled), Some(checkout.path())),
+            Some(shipped.clone())
+        );
+        // The variable wins when it is an absolute path; otherwise it is ignored.
+        let chosen = tempfile::tempdir().unwrap();
+        assert_eq!(
+            sdk_dir_from(Some(chosen.path().as_os_str()), Some(&bundled), None),
+            Some(chosen.path().to_path_buf())
+        );
+        for ignored in ["", "relative/sdk"] {
+            assert_eq!(
+                sdk_dir_from(Some(OsStr::new(ignored)), Some(&bundled), None),
+                Some(shipped.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn the_sdk_goes_first_on_the_python_path_and_keeps_the_rest() {
+        let sdk = tempfile::tempdir().unwrap();
+        let sdk_text = sdk.path().to_str().unwrap().to_owned();
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let other = std::env::temp_dir().join("elsewhere");
+        let existing = format!("{}{separator}{}", other.display(), other.display());
+        let env = sdk_env(Some(sdk.path()), Some(OsStr::new(&existing)));
+        assert_eq!(
+            env,
+            [
+                (SDK_VARIABLE.to_owned(), sdk_text.clone()),
+                (
+                    "PYTHONPATH".to_owned(),
+                    format!("{sdk_text}{separator}{existing}")
+                ),
+            ]
+        );
+        // The split value names the SDK first.
+        let python_path = &env[1].1;
+        assert_eq!(
+            std::env::split_paths(python_path).next(),
+            Some(sdk.path().to_path_buf())
+        );
+        // Without an existing value it is the SDK alone.
+        for existing in [None, Some(OsStr::new(""))] {
+            assert_eq!(
+                sdk_env(Some(sdk.path()), existing),
+                [
+                    (SDK_VARIABLE.to_owned(), sdk_text.clone()),
+                    ("PYTHONPATH".to_owned(), sdk_text.clone()),
+                ]
+            );
+        }
+        // Without an SDK neither is set.
+        assert!(sdk_env(None, Some(OsStr::new(&existing))).is_empty());
+        // A folder whose name holds the separator only gets the variable.
+        let odd = sdk.path().join(format!("a{separator}b"));
+        assert_eq!(
+            sdk_env(Some(&odd), None),
+            [(SDK_VARIABLE.to_owned(), odd.to_str().unwrap().to_owned())]
+        );
+        assert_eq!(
+            without_verbatim_prefix(Path::new(r"\\?\C:\Program Files\Xuan\sdk\python")),
+            Path::new(r"C:\Program Files\Xuan\sdk\python")
+        );
+        assert_eq!(
+            without_verbatim_prefix(Path::new(r"\\?\UNC\server\share")),
+            Path::new(r"\\?\UNC\server\share")
+        );
     }
 
     #[test]

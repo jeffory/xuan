@@ -136,16 +136,21 @@ impl EditorApp {
                     event: None,
                     salt: key,
                 };
-                let scroll = egui::ScrollArea::vertical().id_salt(("plugin_pane_scroll", key));
-                let scroll = if embedded {
-                    scroll.auto_shrink([false, true]).max_height(320.0)
+                if embedded {
+                    // Manage Plugins' page scrolls already: no scroll area inside it.
+                    ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        draw(ui, &tree, &mut pane);
+                    });
                 } else {
-                    scroll.auto_shrink([false, false])
-                };
-                scroll.show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    draw(ui, &tree, &mut pane);
-                });
+                    egui::ScrollArea::vertical()
+                        .id_salt(("plugin_pane_scroll", key))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            draw(ui, &tree, &mut pane);
+                        });
+                }
                 pane.event
             };
             let state = self.plugins.panes.entry(key.to_owned()).or_default();
@@ -189,7 +194,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
             });
         }
         Node::Heading { text } => {
-            ui.label(RichText::new(text).strong());
+            widgets::subheading(ui, text);
         }
         Node::Label {
             text,

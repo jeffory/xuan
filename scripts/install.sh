@@ -29,6 +29,17 @@ elif [[ -f "$xuan_root/plugins/mcp-server/target/release/xuan-mcp-server" ]]; th
     install -Dm755 "$xuan_root/plugins/mcp-server/target/release/xuan-mcp-server" \
         "$xuan_bundled/mcp-server/target/release/xuan-mcp-server"
 fi
+# The Python plugin SDK goes beside them, to <prefix>/lib/xuan/sdk/python,
+# where Xuan finds it and puts it on every plugin's PYTHONPATH. It belongs to
+# Xuan too and is replaced with the one that matches this build.
+xuan_sdk="$xuan_prefix/lib/xuan/sdk"
+for xuan_sdk_module in "$xuan_root/lib/xuan/sdk/python/xuan_plugin.py" "$xuan_root/sdk/python/xuan_plugin.py"; do
+    if [[ -f "$xuan_sdk_module" ]]; then
+        rm -rf -- "$xuan_sdk"
+        install -Dm644 "$xuan_sdk_module" "$xuan_sdk/python/xuan_plugin.py"
+        break
+    fi
+done
 if [[ -d "$xuan_root/share" ]]; then
     install -d "$xuan_prefix/share"
     cp -R --preserve=mode "$xuan_root/share/." "$xuan_prefix/share/"
@@ -44,6 +55,7 @@ else
     install -Dm644 "$xuan_root/licenses/tabler-icons-MIT.txt" "$xuan_prefix/share/licenses/xuan/tabler-icons-MIT.txt"
     install -Dm644 "$xuan_root/licenses/seccompiler-BSD-3-Clause.txt" "$xuan_prefix/share/licenses/xuan/seccompiler-BSD-3-Clause.txt"
     install -Dm644 "$xuan_root/licenses/kurbo-MIT.txt" "$xuan_prefix/share/licenses/xuan/kurbo-MIT.txt"
+    install -Dm644 "$xuan_root/licenses/Hack-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/Hack-LICENSE.txt"
     install -Dm644 "$xuan_root/assets/fonts/Inter-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/Inter-LICENSE.txt"
     install -Dm644 "$xuan_root/assets/fonts/DroidSansFallback-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/DroidSansFallback-LICENSE.txt"
     for xuan_license in LICENSE-MIT LICENSE-APACHE; do
