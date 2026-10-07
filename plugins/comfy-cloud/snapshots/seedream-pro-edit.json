@@ -2,7 +2,7 @@
  "template": "api_bytedance_seedream_5_0_pro_image_edit",
  "template_sha256": "b202733e88f324a7e80c378ccae65dd58c579cd85dd3bbfd51b1f8b9300c228c",
  "template_date": "2026-07-08",
- "converted_at": "2026-10-07T00:30:05+00:00",
+ "converted_at": "2026-10-07T03:37:46+00:00",
  "output": "2",
  "api": {
   "2": {
@@ -147,5 +147,6 @@
     "step": 2
    }
   ]
- }
+ },
+ "recipe_key": "8c97fc124eb7b6d5"
 }

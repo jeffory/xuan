@@ -38,6 +38,7 @@ menu = "Plugins"
 kind = "generate"
 description = "Generate an image from a description with Seedream 5.0 or Ideogram 4.5."
 result = { into = "ask" }
+surfaces = ["document"]
 
 [[actions.inputs]]
 id = "prompt"
@@ -55,11 +56,13 @@ values = [
   { id = "ideogram", label = "Ideogram 4.5 (good with lettering)" },
 ]
 default = "seedream-pro"
+advanced = true
 
 [[actions.inputs]]
 id = "aspect"
 type = "enum"
 label = "Shape"
+surfaces = ["menu"]
 values = [
   { id = "1:1", label = "Square 1:1" },
   { id = "4:3", label = "Landscape 4:3" },
@@ -75,6 +78,7 @@ default = "1:1"
 id = "resolution"
 type = "enum"
 label = "Size"
+surfaces = ["menu"]
 values = [{ id = "1K", label = "About 1 megapixel" }, { id = "2K", label = "About 4 megapixels" }]
 default = "2K"
 
@@ -82,6 +86,7 @@ default = "2K"
 id = "seed"
 type = "seed"
 label = "Seed"
+advanced = true
 
 [[actions]]
 id = "edit"
@@ -112,6 +117,7 @@ default = "ideogram-edit"
 id = "seed"
 type = "seed"
 label = "Seed"
+advanced = true
 
 [[actions]]
 id = "precise-edit"
@@ -119,6 +125,8 @@ label = "Precise Edit…"
 menu = "Filter"
 kind = "edit"
 description = "Draw boxes over the parts to change, or turn the selection into one, and describe each change. Ideogram 4.5 changes only what you ask for."
+surfaces = ["region"]
+verb = "Edit"
 source = { from = "layer", max_side = 2048, crop_to_regions = true, padding = 0.25 }
 result = { into = "layer", mask_to_regions = true }
 
@@ -129,14 +137,15 @@ label = "Edits"
 min = 1
 fields = [
   { id = "desc", type = "text", label = "Instruction", placeholder = "Add sunglasses" },
-  { id = "type", type = "enum", label = "Kind", values = [{ id = "obj", label = "Object" }, { id = "text", label = "Text" }], default = "obj" },
-  { id = "text", type = "text", label = "Text to write", placeholder = "Only for Text boxes" },
+  { id = "type", type = "enum", label = "Kind", values = [{ id = "obj", label = "Object" }, { id = "text", label = "Text" }], default = "obj", advanced = true },
+  { id = "text", type = "text", label = "Text to write", placeholder = "Only for Text boxes", advanced = true },
 ]
 
 [[actions.inputs]]
 id = "background"
 type = "text"
 label = "Background"
+advanced = true
 placeholder = "Leave empty to keep it"
 
 [[actions.inputs]]
@@ -150,11 +159,13 @@ values = [
   { id = "high", label = "High" },
 ]
 default = "medium"
+advanced = true
 
 [[actions.inputs]]
 id = "seed"
 type = "seed"
 label = "Seed"
+advanced = true
 
 [[actions]]
 id = "split-layers"
@@ -185,6 +196,7 @@ default = "split-pro"
 id = "seed"
 type = "seed"
 label = "Seed"
+advanced = true
 
 [[actions]]
 id = "generate-layer"
@@ -194,6 +206,7 @@ kind = "edit"
 description = "Generate an object on a transparent background with GPT Image 2.5 and add it as a new layer the size of the canvas. With Match the picture on, GPT draws it into the flattened image and Seedream lifts it back out, so it fits the picture (two Comfy steps)."
 source = { from = "composite", max_side = 1536 }
 result = { into = "layer" }
+surfaces = ["layer"]
 
 [[actions.inputs]]
 id = "prompt"
@@ -217,6 +230,7 @@ values = [
   { id = "gpt-sunburst-layer", label = "GPT Image 2.5 Sunburst (more detail)" },
 ]
 default = "gpt-flare-layer"
+advanced = true
 
 [[actions.inputs]]
 id = "quality"
@@ -224,11 +238,101 @@ type = "enum"
 label = "Quality"
 values = [{ id = "low", label = "Low" }, { id = "medium", label = "Medium" }, { id = "high", label = "High" }]
 default = "medium"
+advanced = true
 
 [[actions.inputs]]
 id = "seed"
 type = "seed"
 label = "Seed"
+advanced = true
+
+[[actions]]
+id = "generate-in-region"
+label = "Generate in Region…"
+menu = "Layer"
+kind = "edit"
+surfaces = ["region"]
+verb = "Add"
+description = "Draw a box and describe what to add there: GPT Image 2.5 draws it into the picture and Seedream lifts it out as a layer that fits."
+source = { from = "composite", max_side = 2048, crop_to_regions = true, padding = 0.5 }
+result = { into = "layer", mask_to_regions = true }
+
+[[actions.inputs]]
+id = "regions"
+type = "regions"
+label = "Box"
+min = 1
+max = 1
+fields = [{ id = "desc", type = "text", label = "What to add", placeholder = "A hot air balloon" }]
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+advanced = true
+values = [
+  { id = "gpt-flare-layer", label = "GPT Image 2.5 Flare (faster)" },
+  { id = "gpt-sunburst-layer", label = "GPT Image 2.5 Sunburst (more detail)" },
+]
+default = "gpt-flare-layer"
+
+[[actions.inputs]]
+id = "quality"
+type = "enum"
+label = "Quality"
+advanced = true
+values = [{ id = "low", label = "Low" }, { id = "medium", label = "Medium" }, { id = "high", label = "High" }]
+default = "medium"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+
+[[actions]]
+id = "fill-region"
+label = "Fill Region…"
+menu = "Filter"
+kind = "edit"
+surfaces = ["region"]
+verb = "Replace"
+description = "Draw a box (or use the selection) and describe what belongs there: GPT Image 2.5 repaints only that area."
+source = { from = "composite", max_side = 2048, crop_to_regions = true, padding = 0.25 }
+result = { into = "layer", mask_to_regions = true }
+
+[[actions.inputs]]
+id = "regions"
+type = "regions"
+label = "Box"
+min = 1
+max = 1
+fields = [{ id = "desc", type = "text", label = "What to paint here", placeholder = "A wooden bench" }]
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+advanced = true
+values = [
+  { id = "gpt-flare-fill", label = "GPT Image 2.5 Flare (faster)" },
+  { id = "gpt-sunburst-fill", label = "GPT Image 2.5 Sunburst (more detail)" },
+]
+default = "gpt-flare-fill"
+
+[[actions.inputs]]
+id = "quality"
+type = "enum"
+label = "Quality"
+advanced = true
+values = [{ id = "low", label = "Low" }, { id = "medium", label = "Medium" }, { id = "high", label = "High" }]
+default = "medium"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
 
 [[actions]]
 id = "remove-background"

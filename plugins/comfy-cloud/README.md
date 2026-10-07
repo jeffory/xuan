@@ -26,11 +26,37 @@ written in Python with the standard library only.
 | **Split into Layers…** | Layer | Seedream 5.0 Pro, Seedream 5.0 Flash | Separates the flattened image into a background plate and layers you can move, all added as new layers. You can say what to separate, or leave it empty to find the main elements. |
 | **Generate Layer…** | Layer | GPT Image 2.5 Flare, GPT Image 2.5 Sunburst | Draws what you describe on a transparent background, as a new layer the size of the canvas. With **Match the picture** on (the default), GPT draws it into the flattened image, then Seedream 5.0 Flash lifts just that object out, so the layer fits the picture's colours, lighting and layout (two steps: about $0.05 and a minute more). Off, only the prompt is sent and GPT draws on a transparent background directly. |
 | **Remove Background (Bria)** | Filter | Bria RMBG 2.0 | Cuts the active layer's subject out, as a new layer. Choose **Comfy Cloud** under **Settings → Selection** to use it for Xuan's own **Filter → Remove Background**, which then gives the layer a mask you can paint, and **Select → Subject**. |
+| **Generate in Region…** | Layer | GPT Image 2.5 Flare, GPT Image 2.5 Sunburst | Draw a box and say what to add there. GPT draws it into the picture around the box, Seedream lifts it out, and the new layer shows within the box. |
+| **Fill Region…** | Filter | GPT Image 2.5 Flare, GPT Image 2.5 Sunburst | Draw a box (or use the selection) and say what belongs there. GPT repaints only that area, keeping the rest of the picture. |
 
 Results arrive as a proposal above the canvas, with **Compare**, **Accept**
 and **Discard**. Each result layer records its provenance (Layers panel →
 Generation): the model, the seed, the Comfy template and its date, the
 server and the Comfy job id. The API key is never included.
+
+### Without the menus
+
+Xuan shows these where you work, each as a prompt and **Generate**, with the
+model, quality and seed under **Advanced**:
+
+- **New layer with AI**, the sparkles button in the Layers panel, runs
+  Generate Layer over the whole canvas.
+- The **AI Region** tool in the toolbox: draw a box (or use the selection),
+  then pick **Edit** (Precise Edit), **Add** (Generate in Region) or
+  **Replace** (Fill Region) and describe it. Edit sends all its boxes in one
+  Ideogram call.
+- **File → New…**, **Generate** tab: Generate Image at the size typed. With
+  **Exact size**, the canvas is exactly that size and the image covers it as
+  a layer you can move to reframe.
+
+**Resolution.** Xuan says how many document pixels each result will cover,
+and the plugin renders at least that: exactly when the model takes custom
+sizes (GPT Image 2.5 from 480 to 3840 pixels in steps of 16, Seedream 5.0
+from 1024 to 4514), otherwise the smallest preset that is big enough
+(Ideogram 4.5's 1K and 2K). A target smaller than the model's minimum is
+rendered at the minimum; only a target beyond the model's maximum is
+rendered smaller, and the status bar says so. Results cover their area
+without being stretched, keeping every pixel the model made.
 
 ## Where the workflows come from
 
@@ -51,6 +77,8 @@ working when Comfy renumbers a template's nodes.
 | Generate Layer, GPT Image 2.5 Flare | `api_openai_gpt_image_25_flare_t2i` |
 | Generate Layer, GPT Image 2.5 Sunburst | `api_openai_gpt_image_25_sunburst_t2i` |
 | Remove Background | `utility_bria_remove_image_background` |
+| Generate in Region | GPT Image 2.5 templates, then `api_bytedance_seedream_5_0_layer_separation` |
+| Fill Region | `api_openai_gpt_image_25_flare_t2i`, `api_openai_gpt_image_25_sunburst_t2i`, with a mask |
 
 Templates are public at `https://cloud.comfy.org/templates/<name>.json`, but
 they are saved in the editor's format, which the API does not run.

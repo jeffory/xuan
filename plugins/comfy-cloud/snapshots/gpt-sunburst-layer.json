@@ -2,7 +2,7 @@
  "template": "api_openai_gpt_image_25_sunburst_t2i",
  "template_sha256": "fc75bc1b4f659ddf026ad0e96d4e962edbc47500f97b030e58cd5d4ed4b988ba",
  "template_date": "2026-09-09",
- "converted_at": "2026-10-07T01:02:15+00:00",
+ "converted_at": "2026-10-07T03:37:48+00:00",
  "output": "269",
  "api": {
   "269": {
@@ -140,5 +140,6 @@
     "step": 16
    }
   ]
- }
+ },
+ "recipe_key": "6d7749db9519b3a8"
 }

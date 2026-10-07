@@ -22,6 +22,7 @@ class Recipe:
     seed: Tuple[str, ...] = ()
     image: Tuple[str, ...] = ()  # each gets the uploaded source image
     reference: Tuple[str, ...] = ()  # each gets the uploaded reference image, when one is sent
+    mask: Tuple[str, ...] = ()  # each gets the uploaded mask (white is repainted), when one is sent
     size: Optional[str] = None  # a combo of "(2K) 2848x1600 (16:9)"-style presets
     match_size: Optional[Tuple[str, str, str]] = None  # (preset combo, width, height): follow the source's shape
     match_area: int = 2048 * 2048  # pixels match_size aims for
@@ -38,7 +39,7 @@ class Recipe:
 
     def targets(self):
         """Every input this recipe sets."""
-        found = list(self.prompt) + list(self.seed) + list(self.image) + list(self.reference) + list(self.fixed)
+        found = list(self.prompt) + list(self.seed) + list(self.image) + list(self.reference) + list(self.mask) + list(self.fixed)
         found += [t for t in (self.size, self.quality, self.background) if t]
         if self.match_size:
             found += list(self.match_size)
@@ -76,6 +77,8 @@ _GPT_LAYER = dict(
     size_rule="custom",
     fixed={f"{GPT}.model.background": "transparent", f"{GPT}.n": 1},
 )
+# Fill region: GPT repaints the white part of a mask over the picture.
+_GPT_FILL = dict(_GPT_LAYER, mask=(f"{GPT}.model.mask",), fixed={f"{GPT}.model.background": "opaque", f"{GPT}.n": 1})
 _SEPARATION = dict(
     template="api_bytedance_seedream_5_0_layer_separation",
     output="SaveImageAdvanced",
@@ -118,6 +121,8 @@ RECIPES = {
         Recipe("split-pro", "Seedream 5.0 Pro", select={f"{SEPARATION}.model": "seedream 5.0 pro"}, **_SEPARATION),
         Recipe("gpt-flare-layer", "GPT Image 2.5 Flare", "api_openai_gpt_image_25_flare_t2i", **_GPT_LAYER),
         Recipe("gpt-sunburst-layer", "GPT Image 2.5 Sunburst", "api_openai_gpt_image_25_sunburst_t2i", **_GPT_LAYER),
+        Recipe("gpt-flare-fill", "GPT Image 2.5 Flare", "api_openai_gpt_image_25_flare_t2i", **_GPT_FILL),
+        Recipe("gpt-sunburst-fill", "GPT Image 2.5 Sunburst", "api_openai_gpt_image_25_sunburst_t2i", **_GPT_FILL),
         Recipe("bria-remove-background", "Bria RMBG 2.0", "utility_bria_remove_image_background", "SaveImage", image=(f"{BRIA}.image",)),
     )
 }
@@ -130,6 +135,8 @@ ACTIONS = {
     "split-layers": ("split-pro", "split-flash"),
     "generate-layer": ("gpt-flare-layer", "gpt-sunburst-layer"),
     "remove-background": ("bria-remove-background",),
+    "generate-in-region": ("gpt-flare-layer", "gpt-sunburst-layer"),
+    "fill-region": ("gpt-flare-fill", "gpt-sunburst-fill"),
 }
 
 
@@ -330,6 +337,13 @@ def apply(entry, recipe, values):
         load(values["image"], recipe.image, "Xuan source")
     if recipe.reference and values.get("reference") is not None:
         load(values["reference"], recipe.reference, "Xuan reference")
+    if recipe.mask and values.get("mask") is not None:
+        numeric = [int(k) for k in graph if str(k).isdigit()]
+        node_id = str(max(numeric, default=0) + 1)
+        graph[node_id] = {"class_type": "LoadImageMask", "inputs": {"image": values["mask"], "channel": "red"},
+                          "_meta": {"title": "Xuan mask"}}
+        for target in recipe.mask:
+            put(target, [node_id, 0], link=True)
     target = values.get("target")
     if target:
         sets, _ = choose_size(entry, recipe, target)

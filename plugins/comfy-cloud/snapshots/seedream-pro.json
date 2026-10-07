@@ -2,7 +2,7 @@
  "template": "api_bytedance_seedream_5_0_pro_t2i",
  "template_sha256": "8b46e0100415d441f9bac75dddb6a4598ccaef5e1b30d7eb50d3971cf45cda19",
  "template_date": "2026-07-08",
- "converted_at": "2026-10-07T00:30:04+00:00",
+ "converted_at": "2026-10-07T03:37:45+00:00",
  "output": "2",
  "api": {
   "2": {
@@ -93,6 +93,27 @@
      "Custom"
     ]
    }
+  ],
+  "ByteDanceSeedreamNodeV3.model.width": [
+   "INT",
+   {
+    "tooltip": "Custom width for image. Value is working only if `size_preset` is set to `Custom`",
+    "default": 2048,
+    "min": 1024,
+    "max": 4514,
+    "step": 2
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.height": [
+   "INT",
+   {
+    "tooltip": "Custom height for image. Value is working only if `size_preset` is set to `Custom`",
+    "default": 2048,
+    "min": 1024,
+    "max": 4514,
+    "step": 2
+   }
   ]
- }
+ },
+ "recipe_key": "461fd4268f630fb1"
 }

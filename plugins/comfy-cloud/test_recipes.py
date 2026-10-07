@@ -122,6 +122,15 @@ class RecipesTest(unittest.TestCase):
         graph = apply(entry_for(recipe), recipe, {"image": ASSET})
         self.assertEqual(sorted(n["class_type"] for n in graph.values()), ["BriaRemoveImageBackground", "LoadImage", "SaveImage"])
 
+    def test_fill_wires_the_mask_into_gpt(self):
+        recipe = RECIPES["gpt-flare-fill"]
+        mask = {"__type": "core/ASSET", "info": {"id": "mask-1"}}
+        graph = apply(entry_for(recipe), recipe, {"prompt": "x", "seed": 1, "reference": ASSET, "mask": mask, "target": (600, 400)})
+        gpt = node_of(graph, "OpenAIGPTImageNodeV2")["inputs"]
+        loader = graph[gpt["model.mask"][0]]
+        self.assertEqual((loader["class_type"], loader["inputs"]["channel"], loader["inputs"]["image"]), ("LoadImageMask", "red", mask))
+        self.assertEqual(gpt["model.background"], "opaque")
+
     def test_a_template_without_the_bound_input_is_refused(self):
         recipe = RECIPES["seedream-pro"]
         entry = entry_for(recipe)

@@ -2,7 +2,7 @@
  "template": "api_bytedance_seedream_5_0_layer_separation",
  "template_sha256": "a0758965e3e502cc961bc9cde90bc970e37a54666e13848051c215eb80697183",
  "template_date": "2026-08-07",
- "converted_at": "2026-10-07T00:30:06+00:00",
+ "converted_at": "2026-10-07T03:37:47+00:00",
  "output": "23",
  "api": {
   "23": {
@@ -142,5 +142,6 @@
     "label_off": "full canvas"
    }
   ]
- }
+ },
+ "recipe_key": "9b936936e97a2385"
 }

@@ -7,6 +7,7 @@ recipes.py lists the workflows, catalog.py keeps them up to date with
 Comfy's templates, convert.py turns a template into a workflow the API runs
 and comfy_api.py talks to the server. See README.md.
 """
+import math
 import os
 import sys
 import threading
@@ -25,6 +26,7 @@ from xuan_plugin import (  # noqa: E402
     NeedsSetup,
     Plugin,
     RpcError,
+    encode_gray_png,
     ui,
 )
 
@@ -121,7 +123,7 @@ class Result:
     extra: dict = field(default_factory=dict)  # name -> downloaded images of nodes `post` added
 
 
-def run(job, recipe, values, image_path=None, reference_path=None, post=None, download=True, stage=""):
+def run(job, recipe, values, image_path=None, reference_path=None, post=None, download=True, stage="", mask_path=None):
     """Run ``recipe`` with ``values``, uploading the source image and the
     reference image first when given. ``post(workflow)`` may add nodes to the
     workflow and returns ``{name: node id}``; their images land in
@@ -138,7 +140,7 @@ def run(job, recipe, values, image_path=None, reference_path=None, post=None, do
     books = catalog(client)
     state = books.ensure(recipe)
     notes = [state["warning"]] if state.get("warning") else []
-    for role, path in (("image", image_path), ("reference", reference_path)):
+    for role, path in (("image", image_path), ("reference", reference_path), ("mask", mask_path)):
         if path:
             job.check_cancelled()
             say("Uploading the image")
@@ -202,6 +204,58 @@ def source_size(job):
     return int(source["width"]), int(source["height"])
 
 
+def target_of(job):
+    """``inputs.target`` (document pixels a surface run covers), or None."""
+    target = job.inputs.get("target") or {}
+    try:
+        width, height = int(target["width"]), int(target["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def source_doc_size(job):
+    """The source sent, in document pixels (the export is scaled down)."""
+    width, height = source_size(job)
+    scale = float((job.source or {}).get("scale") or 1.0) or 1.0
+    return max(1, round(width / scale)), max(1, round(height / scale))
+
+
+def scaled_target(job):
+    """The crop the plugin got for a box, in document pixels: the box target
+    scaled by the crop's size over the box's (padding included)."""
+    target = target_of(job)
+    width, height = source_size(job)
+    region = job.regions[0] if job.regions else {}
+    if target and region.get("width") and region.get("height"):
+        return max(1, round(target[0] * width / region["width"])), max(1, round(target[1] * height / region["height"]))
+    return source_doc_size(job)
+
+
+def layer_name(prompt):
+    return prompt if len(prompt) <= 40 else prompt[:39].rstrip() + "…"
+
+
+def region_prompt(job):
+    region = job.regions[0] if job.regions else {}
+    return str((region.get("fields") or {}).get("desc") or "").strip()
+
+
+def rect_mask(path, size, region):
+    """A grey PNG of ``size``, white inside the region's rectangle."""
+    width, height = size
+    x0 = min(width, max(0, int(region["x"])))
+    x1 = min(width, max(x0, math.ceil(region["x"] + region["width"])))
+    y0 = min(height, max(0, int(region["y"])))
+    y1 = min(height, max(y0, math.ceil(region["y"] + region["height"])))
+    black = bytes(width)
+    inside = bytes(x0) + b"\xff" * (x1 - x0) + bytes(width - x1)
+    gray = b"".join(inside if y0 <= y < y1 else black for y in range(height))
+    with open(path, "wb") as handle:
+        handle.write(encode_gray_png(width, height, gray))
+    return path
+
+
 def seed_of(job):
     try:
         return int(job.inputs.get("seed") or 0)
@@ -217,20 +271,24 @@ def generate(job):
     recipe = recipe_for("generate", job.inputs.get("model"))
     values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job),
               "aspect": job.inputs.get("aspect") or "1:1", "tier": job.inputs.get("resolution") or "2K"}
+    if target_of(job):
+        values["target"] = target_of(job)
     if not values["prompt"].strip():
         raise RpcError(INVALID_PARAMS, "Describe the image to generate")
     result = run(job, recipe, values)
-    return [Job.image(path, name=recipe.label, provenance=result.provenance) for path in result.images] + texts(result.notes)
+    name = layer_name(values["prompt"].strip()) if job.inputs.get("surface") == "document" else recipe.label
+    return [Job.image(path, name=name, provenance=result.provenance) for path in result.images] + texts(result.notes)
 
 
 @plugin.action("edit")
 def edit(job):
     recipe = recipe_for("edit", job.inputs.get("model"))
-    values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job), "source_size": source_size(job)}
+    values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job), "source_size": source_size(job),
+              "target": target_of(job) or source_doc_size(job)}
     if not values["prompt"].strip():
         raise RpcError(INVALID_PARAMS, "Describe the change")
     result = run(job, recipe, values, image_path=job.source_path)
-    images = [Job.image(path, name=recipe.label, fit_source=True, provenance=result.provenance) for path in result.images]
+    images = [Job.image(path, name=recipe.label, fit="cover", provenance=result.provenance) for path in result.images]
     return images + texts(result.notes)
 
 
@@ -243,7 +301,7 @@ def precise_edit(job):
     values = {"seed": seed_of(job), "source_size": source_size(job), "regions": regions,
               "quality": job.inputs.get("quality") or "medium", "background": job.inputs.get("background") or ""}
     result = run(job, recipe, values, image_path=job.source_path)
-    images = [Job.image(path, name="Precise Edit", fit_source=True, provenance=result.provenance) for path in result.images]
+    images = [Job.image(path, name="Precise Edit", fit="cover", provenance=result.provenance) for path in result.images]
     return images + texts(result.notes)
 
 
@@ -272,31 +330,77 @@ LAYER_ALONE = "\n\nOn a transparent background, with nothing else in the picture
 LIFT_RECIPE = "split-flash"
 
 
+def draw_and_lift(job, recipe, prompt, values):
+    """GPT draws ``prompt`` into the source picture (opaque), then Seedream
+    lifts just that object out. Returns ``(layers, provenance, notes)``."""
+    scene = run(job, recipe, dict(values, prompt=SCENE + prompt, overrides={f"{GPT}.model.background": "opaque"}),
+                reference_path=job.source_path, stage="Drawing it into the picture: ")
+    lift_recipe = RECIPES[LIFT_RECIPE]
+    lift = run(job, lift_recipe, {"prompt": LIFT.format(prompt), "seed": values["seed"]},
+               image_path=scene.images[0], stage="Lifting it out: ")
+    layers = lift.images[1:]  # the first is the background plate
+    if not layers:
+        raise RpcError(INTERNAL_ERROR, "Seedream found nothing to lift out of the picture; try describing it differently")
+    record = dict(scene.provenance, model=f"{recipe.label} + {lift_recipe.label}")
+    record["extra"] = dict(scene.provenance["extra"], lifted_with=lift_recipe.template)
+    return layers, record, scene.notes + lift.notes
+
+
+def as_layers(paths, prompt, record):
+    name = layer_name(prompt)
+    names = [name] if len(paths) == 1 else [f"{name} {n}" for n in range(1, len(paths) + 1)]
+    return [Job.image(path, name=layer, fit="cover", provenance=record) for path, layer in zip(paths, names)]
+
+
 @plugin.action("generate-layer")
 def generate_layer(job):
     recipe = recipe_for("generate-layer", job.inputs.get("model"))
     prompt = (job.inputs.get("prompt") or "").strip()
     if not prompt:
         raise RpcError(INVALID_PARAMS, "Describe what to put on the new layer")
-    values = {"seed": seed_of(job), "source_size": source_size(job), "quality": job.inputs.get("quality") or "medium"}
+    values = {"seed": seed_of(job), "source_size": source_size(job), "quality": job.inputs.get("quality") or "medium",
+              "target": target_of(job) or source_doc_size(job)}
     if job.inputs.get("reference", True) is False:
         result = run(job, recipe, dict(values, prompt=prompt + LAYER_ALONE))
         layers, record, notes = result.images, result.provenance, result.notes
     else:
-        scene = run(job, recipe, dict(values, prompt=SCENE + prompt, overrides={f"{GPT}.model.background": "opaque"}),
-                    reference_path=job.source_path, stage="Drawing it into the picture: ")
-        lift_recipe = RECIPES[LIFT_RECIPE]
-        lift = run(job, lift_recipe, {"prompt": LIFT.format(prompt), "seed": values["seed"]},
-                   image_path=scene.images[0], stage="Lifting it out: ")
-        layers = lift.images[1:]  # the first is the background plate
-        if not layers:
-            raise RpcError(INTERNAL_ERROR, "Seedream found nothing to lift out of the picture; try describing it differently")
-        record = dict(scene.provenance, model=f"{recipe.label} + {lift_recipe.label}")
-        record["extra"] = dict(scene.provenance["extra"], lifted_with=lift_recipe.template)
-        notes = scene.notes + lift.notes
-    name = prompt if len(prompt) <= 40 else prompt[:39].rstrip() + "…"
-    names = [name] if len(layers) == 1 else [f"{name} {n}" for n in range(1, len(layers) + 1)]
-    return [Job.image(path, name=layer, fit_source=True, provenance=record) for path, layer in zip(layers, names)] + texts(notes)
+        layers, record, notes = draw_and_lift(job, recipe, prompt, values)
+    return as_layers(layers, prompt, record) + texts(notes)
+
+
+@plugin.action("generate-in-region")
+def generate_in_region(job):
+    """Draw a box and say what to add: GPT draws it into the crop around the
+    box, Seedream lifts it out, and the layer shows within the box."""
+    recipe = recipe_for("generate-in-region", job.inputs.get("model"))
+    prompt = region_prompt(job)
+    if not prompt:
+        raise RpcError(INVALID_PARAMS, "Describe what to add in the box")
+    values = {"seed": seed_of(job), "quality": job.inputs.get("quality") or "medium", "target": scaled_target(job)}
+    layers, record, notes = draw_and_lift(job, recipe, prompt, values)
+    return as_layers(layers, prompt, record) + texts(notes)
+
+
+# Fill region: GPT repaints only the box (white in the mask).
+FILL = ("Repaint only the white area of the mask with what is described below, matching the picture's colours, "
+        "lighting, perspective and style.\n\n")
+
+
+@plugin.action("fill-region")
+def fill_region(job):
+    """Draw a box (or use the selection) and say what belongs there: GPT
+    Image repaints only that area of the picture."""
+    recipe = recipe_for("fill-region", job.inputs.get("model"))
+    prompt = region_prompt(job)
+    if not prompt:
+        raise RpcError(INVALID_PARAMS, "Describe what to paint in the box")
+    size = source_size(job)
+    region = job.regions[0]
+    mask = region.get("mask") or rect_mask(job.path("mask.png"), size, region)
+    values = {"prompt": FILL + prompt, "seed": seed_of(job), "quality": job.inputs.get("quality") or "medium",
+              "target": scaled_target(job)}
+    result = run(job, recipe, values, reference_path=job.source_path, mask_path=mask)
+    return as_layers(result.images, prompt, result.provenance) + texts(result.notes)
 
 
 @plugin.action("remove-background")

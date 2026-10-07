@@ -56,6 +56,14 @@ def template_date(index, name):
     return None
 
 
+def recipe_key(recipe):
+    """What a converted version was made for: the inputs the recipe sets and
+    the options it selects. A version made for other inputs lacks their
+    definitions, so it is converted again."""
+    text = json.dumps([sorted(recipe.targets()), sorted(recipe.select.items())])
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
 def describe(version):
     """How a version is named to the user: by Comfy's date for its template."""
     if not version:
@@ -80,7 +88,7 @@ class Catalog:
     def state(self, recipe):
         """The saved state, else one built from the shipped snapshot."""
         saved = _read(self._path(recipe))
-        if isinstance(saved, dict) and saved.get("current"):
+        if isinstance(saved, dict) and (saved.get("current") or {}).get("recipe_key") == recipe_key(recipe):
             return saved
         snapshot = _read(os.path.join(self.bundled, recipe.id + ".json"))
         return {"current": snapshot, "last_good": None, "checked_at": 0, "bad": {}, "warning": None, "retry": False}
@@ -118,7 +126,7 @@ class Catalog:
         try:
             raw = self.client.template(recipe.template)
             sha = hashlib.sha256(raw).hexdigest()
-            if sha == current.get("template_sha256"):
+            if sha == current.get("template_sha256") and current.get("recipe_key") == recipe_key(recipe):
                 state["warning"], state["retry"] = None, False
             elif sha in (state.get("bad") or {}):
                 state["retry"] = False  # already known not to work; keep the warning
@@ -164,4 +172,5 @@ class Catalog:
             "output": output,
             "api": graph,
             "specs": target_specs(graph, specs, recipe),
+            "recipe_key": recipe_key(recipe),
         }

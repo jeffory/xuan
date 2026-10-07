@@ -2,7 +2,7 @@
  "template": "utility_bria_remove_image_background",
  "template_sha256": "9073e45deb887912ace1a9a03d85a51bd23b4d5496aaa78b1723ddd48688a75f",
  "template_date": "2026-02-16",
- "converted_at": "2026-10-07T01:02:15+00:00",
+ "converted_at": "2026-10-07T03:37:49+00:00",
  "output": "27",
  "api": {
   "27": {
@@ -47,5 +47,6 @@
    "IMAGE",
    {}
   ]
- }
+ },
+ "recipe_key": "be8d70e42f515568"
 }

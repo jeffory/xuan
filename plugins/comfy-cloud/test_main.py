@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import main  # noqa: E402
 import comfy_api  # noqa: E402
-from catalog import Catalog  # noqa: E402
+from catalog import Catalog, recipe_key  # noqa: E402
 from recipes import ACTIONS, RECIPES  # noqa: E402
 from test_recipes import entry_for  # noqa: E402
 
@@ -168,6 +168,20 @@ class Manifest(unittest.TestCase):
             self.assertEqual([v["id"] for v in model["values"]], list(recipe_ids), action_id)
             self.assertEqual(model["default"], recipe_ids[0])
 
+    def test_surface_actions_follow_the_surface_rules(self):
+        for action in MANIFEST["actions"]:
+            surfaces = action.get("surfaces", [])
+            with self.subTest(action=action["id"]):
+                if "region" in surfaces:
+                    self.assertTrue(action.get("verb"))
+                    self.assertTrue(any(i["type"] == "regions" for i in action["inputs"]))
+                if "document" in surfaces:
+                    self.assertEqual(action.get("kind"), "generate")
+                if "layer" in surfaces:
+                    self.assertEqual(action.get("source", {}).get("from"), "composite")
+        offered = {s for a in MANIFEST["actions"] for s in a.get("surfaces", [])}
+        self.assertEqual(offered, {"layer", "region", "document"})
+
     def test_generate_shapes_have_presets_in_every_model(self):
         aspects = [v["id"] for v in next(i for i in MANIFEST["actions"][0]["inputs"] if i["id"] == "aspect")["values"]]
         for recipe_id in ACTIONS["generate"]:
@@ -279,6 +293,9 @@ class Running(unittest.TestCase):
         self.tmp.cleanup()
 
     def install(self, recipe, current, last_good=None):
+        for version in (current, last_good):
+            if version:
+                version["recipe_key"] = recipe_key(recipe)
         state = {"current": current, "last_good": last_good, "checked_at": 0, "bad": {}, "warning": None, "retry": False}
         os.makedirs(os.path.join(self.tmp.name, "recipes"), exist_ok=True)
         with open(os.path.join(self.tmp.name, "recipes", recipe.id + ".json"), "w", encoding="utf-8") as handle:
@@ -316,7 +333,7 @@ class Running(unittest.TestCase):
         job = FakeJob(self.tmp.name, action="edit", inputs={"prompt": "night", "seed": 2}, source=source)
         outputs = main.edit(job)
         self.assertEqual(self.server.uploads, [source["path"]])
-        self.assertEqual(outputs[0]["fit"], "source")
+        self.assertEqual(outputs[0]["fit"], "cover")
         load = next(n for n in self.server.submitted[0].values() if n["class_type"] == "LoadImage")
         self.assertEqual(load["inputs"]["image"], {"__type": "core/ASSET", "info": {"id": "asset-1"}})
 
@@ -330,7 +347,7 @@ class Running(unittest.TestCase):
         node = next(n for n in self.server.submitted[0].values() if n["class_type"] == "OpenAIGPTImageNodeV2")
         self.assertEqual(node["inputs"]["model.background"], "transparent")
         self.assertNotIn("model.images.image_1", node["inputs"])
-        self.assertEqual(outputs[0]["fit"], "source")
+        self.assertEqual(outputs[0]["fit"], "cover")
         self.assertTrue(outputs[0]["name"].startswith("a red kite"))
 
     def test_generate_layer_draws_into_the_picture_then_lifts_the_object_out(self):
@@ -369,6 +386,43 @@ class Running(unittest.TestCase):
         menu = main.remove_background(FakeJob(self.tmp.name, "remove-background", {}, source))
         self.assertEqual((menu[0]["kind"], menu[0]["name"]), ("image", "Cut-out"))
         self.assertNotIn("SplitImageWithAlpha", {n["class_type"] for n in self.server.submitted[1].values()})
+
+    def test_surface_runs_render_at_least_the_target_and_cover_it(self):
+        recipe = RECIPES["seedream-pro"]
+        self.install(recipe, entry_for(recipe))
+        job = FakeJob(self.tmp.name, inputs={"prompt": "a fox", "surface": "document", "target": {"width": 1600, "height": 900}})
+        outputs = main.generate(job)
+        node = next(n for n in self.server.submitted[0].values() if n["class_type"] == "ByteDanceSeedreamNodeV3")["inputs"]
+        self.assertEqual((node["model.size_preset"], node["model.width"], node["model.height"]), ("Custom", 1822, 1024))
+        self.assertEqual(outputs[0]["name"], "a fox")
+
+    def test_fill_region_sends_the_box_as_a_mask_and_covers_the_crop(self):
+        recipe = RECIPES["gpt-flare-fill"]
+        self.install(recipe, entry_for(recipe))
+        source = {"path": os.path.join(self.tmp.name, "crop.png"), "width": 300, "height": 200}
+        regions = [{"index": 1, "x": 50, "y": 40, "width": 200, "height": 120, "mask": None, "fields": {"desc": "a cat"}}]
+        job = FakeJob(self.tmp.name, "fill-region", {"regions": regions, "surface": "region", "target": {"width": 400, "height": 240}}, source)
+        outputs = main.fill_region(job)
+        graph = self.server.submitted[0]
+        gpt = next(n for n in graph.values() if n["class_type"] == "OpenAIGPTImageNodeV2")["inputs"]
+        self.assertEqual(graph[gpt["model.mask"][0]]["class_type"], "LoadImageMask")
+        self.assertEqual(graph[gpt["model.images.image_1"][0]]["class_type"], "LoadImage")
+        self.assertIn("a cat", gpt["prompt"])
+        self.assertEqual(len(self.server.uploads), 2)  # the crop and the mask
+        self.assertEqual(outputs[0]["fit"], "cover")
+
+    def test_generate_in_region_lifts_the_object_out_of_the_crop(self):
+        for recipe_id in ("gpt-flare-layer", main.LIFT_RECIPE):
+            self.install(RECIPES[recipe_id], entry_for(RECIPES[recipe_id]))
+        source = {"path": os.path.join(self.tmp.name, "crop.png"), "width": 300, "height": 200}
+        regions = [{"index": 1, "x": 75, "y": 50, "width": 150, "height": 100, "mask": None, "fields": {"desc": "a kite"}}]
+        job = FakeJob(self.tmp.name, "generate-in-region", {"regions": regions, "surface": "region", "target": {"width": 150, "height": 100}}, source)
+        outputs = main.generate_in_region(job)
+        scene = next(n for n in self.server.submitted[0].values() if n["class_type"] == "OpenAIGPTImageNodeV2")["inputs"]
+        # The crop is twice the box, so GPT renders at least 300x200 doc px (min side 480).
+        self.assertGreaterEqual(scene["model.custom_width"], 300)
+        self.assertEqual(len(self.server.submitted), 2)
+        self.assertEqual(outputs[0]["fit"], "cover")
 
     def test_actions_refuse_missing_input_before_anything_is_sent(self):
         source = {"path": "/tmp/x.png", "width": 300, "height": 300}

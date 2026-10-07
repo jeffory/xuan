@@ -2,7 +2,7 @@
  "template": "api_openai_gpt_image_25_flare_t2i",
  "template_sha256": "fa033bdf15c92a9d6f1d3aeab4cc3cf73b81d62956ca5d87868fd46b449a9752",
  "template_date": "2026-09-09",
- "converted_at": "2026-10-07T03:37:47+00:00",
+ "converted_at": "2026-10-07T03:37:48+00:00",
  "output": "269",
  "api": {
   "269": {
@@ -60,6 +60,12 @@
   "OpenAIGPTImageNodeV2.model.images.image_1": [
    "IMAGE",
    {}
+  ],
+  "OpenAIGPTImageNodeV2.model.mask": [
+   "MASK",
+   {
+    "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+   }
   ],
   "OpenAIGPTImageNodeV2.model.background": [
    "COMBO",
@@ -141,5 +147,5 @@
    }
   ]
  },
- "recipe_key": "6d7749db9519b3a8"
+ "recipe_key": "ea1da6c5dfa7f0de"
 }

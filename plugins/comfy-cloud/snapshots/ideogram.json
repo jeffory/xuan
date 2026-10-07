@@ -2,7 +2,7 @@
  "template": "api_ideogram_v4_5_t2i",
  "template_sha256": "fcd968635a2f95a9ba187c1386ad10468cb72850936d3b809e6c341da687d4ca",
  "template_date": "2026-09-30",
- "converted_at": "2026-10-07T00:30:04+00:00",
+ "converted_at": "2026-10-07T03:37:46+00:00",
  "output": "5",
  "api": {
   "5": {
@@ -104,5 +104,6 @@
     ]
    }
   ]
- }
+ },
+ "recipe_key": "4ebfa6cb296c9cc1"
 }

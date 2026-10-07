@@ -8,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "sdk", "python"))
 sys.path.insert(0, HERE)
 
-from catalog import CHECK_EVERY, RETRY_AFTER, Catalog  # noqa: E402
+from catalog import CHECK_EVERY, RETRY_AFTER, Catalog, recipe_key  # noqa: E402
 from recipes import RECIPES  # noqa: E402
 from xuan_plugin import INTERNAL_ERROR, RpcError  # noqa: E402
 
@@ -136,6 +136,21 @@ class CatalogTest(unittest.TestCase):
         self.now += RETRY_AFTER
         state = self.catalog.ensure(RECIPE)
         self.assertIsNone(state["warning"])
+
+    def test_a_version_converted_for_other_recipe_inputs_is_not_used(self):
+        # The plugin now sets inputs the cached conversion has no definitions for.
+        self.ship_snapshot()
+        self.catalog.ensure(RECIPE)
+        path = os.path.join(self.data, "recipes", RECIPE.id + ".json")
+        with open(path, "r", encoding="utf-8") as handle:
+            state = json.load(handle)
+        state["current"]["recipe_key"] = "older-recipe"
+        state["current"]["specs"] = {}
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+        state = self.make().state(RECIPE)
+        self.assertEqual(state["current"]["recipe_key"], recipe_key(RECIPE))
+        self.assertIn("ByteDanceSeedreamNodeV3.model.width", state["current"]["specs"])
 
     def test_nothing_usable_raises(self):
         self.client.fail = "offline"

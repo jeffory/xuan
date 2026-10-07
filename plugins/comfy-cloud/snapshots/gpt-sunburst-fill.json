@@ -1,8 +1,8 @@
 {
- "template": "api_openai_gpt_image_25_flare_t2i",
- "template_sha256": "fa033bdf15c92a9d6f1d3aeab4cc3cf73b81d62956ca5d87868fd46b449a9752",
+ "template": "api_openai_gpt_image_25_sunburst_t2i",
+ "template_sha256": "fc75bc1b4f659ddf026ad0e96d4e962edbc47500f97b030e58cd5d4ed4b988ba",
  "template_date": "2026-09-09",
- "converted_at": "2026-10-07T03:37:47+00:00",
+ "converted_at": "2026-10-07T03:37:48+00:00",
  "output": "269",
  "api": {
   "269": {
@@ -12,7 +12,7 @@
      "271",
      0
     ],
-    "filename_prefix": "GPT_image_2.5_flare_t2i"
+    "filename_prefix": "GPT_image_2.5_sunburst_t2i"
    },
    "_meta": {
     "title": "Save Image"
@@ -21,15 +21,15 @@
   "271": {
    "class_type": "OpenAIGPTImageNodeV2",
    "inputs": {
-    "prompt": "1:1 square poster, an extreme close-up, high-contrast shot of a racing car front nose, aerodynamic wing and tire rim, cutting through darkness with bright red motion blur and glowing orange light. The words \u201cGPT IMAGE 2.5\u201d are projected directly onto the car body in brilliant neon orange, overlapping the front wing and tire rim. Intense red and black palette, cinematic low key, sharp reflections, dramatic low angle, shallow depth of field, high-speed motorsport aesthetic. No sidebar, no extra UI panels, no technical symbols, no barcode, no additional text except \u201cGPT IMAGE 2.5\u201d.",
-    "model": "gpt-image-2.5-flare",
+    "prompt": "1:1 square editorial fashion poster, futuristic desert motorcycle rally scene. A rugged male biker with long dark hair and weathered leather jacket stands beside a giant black armored motorcycle in the center, surrounded by enormous rusty mechanical towers, glowing energy gates and drifting sandstorms. He has a confident expression, arms crossed, leaning slightly against the bike. Large oversized display typography spelling the exact text \u201cGPT IMAGE 2.5\u201d in bold industrial sans-serif font, burnt orange, letters weaving through the upper half of the frame, some behind the biker, some in front, overlapping motorcycle parts and desert towers, the only text in the scene. Small scattered graphic elements: circular speed badge upper right, rubber-stamp style icon lower left, thin wavy line doodles, tiny star icons, small crescent near bottom, vertical stack of colourful abstract symbols on right edge, small sun-shaped emblem bottom right. Short justified caption-style text block lower right, subtitle line above it in thin tracked-out caps. Asymmetric grid layout, burnt orange, black, desert beige and electric blue palette, hyperrealistic 3D render, cinematic depth of field, intricate details, soft grainy film texture, premium print quality.",
+    "model": "gpt-image-2.5-sunburst",
     "model.size": "auto",
     "model.custom_width": 1024,
     "model.custom_height": 1024,
     "model.background": "auto",
     "model.quality": "low",
     "n": 1,
-    "seed": 122545540
+    "seed": 831748761
    },
    "_meta": {
     "title": "OpenAI GPT Image 2.5"
@@ -60,6 +60,12 @@
   "OpenAIGPTImageNodeV2.model.images.image_1": [
    "IMAGE",
    {}
+  ],
+  "OpenAIGPTImageNodeV2.model.mask": [
+   "MASK",
+   {
+    "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+   }
   ],
   "OpenAIGPTImageNodeV2.model.background": [
    "COMBO",
@@ -141,5 +147,5 @@
    }
   ]
  },
- "recipe_key": "6d7749db9519b3a8"
+ "recipe_key": "ea1da6c5dfa7f0de"
 }
