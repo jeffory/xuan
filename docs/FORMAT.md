@@ -119,7 +119,7 @@ The `document` object gains two optional keys:
 
 Invalid guides or grid settings fail validation on load and save. Rulers, grid and guide
 visibility, Lock Guides and the Snap To settings are app preferences, not project data.
-Guides follow Crop, Canvas Size, Image Size and Flip Canvas.
+Guides follow Crop, Trim, Canvas Size, Image Size, Flip Canvas and Rotate Canvas.
 
 ## Plugin provenance (version 6)
 
@@ -239,8 +239,8 @@ most 256 KiB, with at most 10,000 segments and every coordinate finite and withi
 
 - The `document` object gains an optional `paths` key: up to 1,000 objects `{"id": UUID,
   "name": string, "d": path data}` in the Paths dialog's order, in document pixels. Names
-  are 1-256 bytes and not blank; IDs are unique. Paths follow Crop, Canvas Size, Image
-  Size and Flip Canvas.
+  are 1-256 bytes and not blank; IDs are unique. Paths follow Crop, Trim, Canvas Size, Image
+  Size, Flip Canvas and Rotate Canvas.
 - A layer's `shape` may have `"kind": "Path"` with a `path` object `{"d": path data,
   "width": number, "height": number, "fill_rule": "nonzero" | "evenodd"}`. The outline is
   in the coordinates of a `width` × `height` box (each 1-300,000), which the layer's
