@@ -19,7 +19,9 @@ import urllib.parse
 import urllib.request
 import uuid
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sdk", "python"))
+# The SDK installed with Xuan comes first on PYTHONPATH; in a source
+# checkout, fall back to the repository's.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sdk", "python"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from xuan_plugin import (  # noqa: E402

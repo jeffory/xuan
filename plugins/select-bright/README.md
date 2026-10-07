@@ -43,6 +43,12 @@ mask. See "Providers" in `docs/PLUGINS.md`.
 XUAN_PLUGIN_PATH=$PWD/plugins xuan
 ```
 
+To install it instead, copy this folder into Xuan's plugins directory or use
+**Plugins → Install from Folder or Zip…**. It needs nothing else: Xuan puts
+the Python SDK it ships (`xuan_plugin`) on the plugin's `PYTHONPATH` (see
+"The Python SDK" in `docs/PLUGINS.md`). With a Xuan from before that, copy
+`sdk/python/xuan_plugin.py` from the same release next to `main.py`.
+
 Then allow it in **Plugins → Manage Plugins…**, open an image and run
 **Select → Select Bright Areas…**. The composite is sent at most 1024 pixels
 on its longest side; the mask comes back at that size with `fit = "source"`
