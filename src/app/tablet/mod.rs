@@ -14,7 +14,9 @@ use std::thread::JoinHandle;
 use egui::{Event, PointerButton, Pos2};
 #[cfg(target_os = "linux")]
 use raw_window_handle::RawDisplayHandle;
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
+#[cfg(any(target_os = "linux", windows))]
+use raw_window_handle::RawWindowHandle;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 const BUTTONS: [PointerButton; 3] = [
     PointerButton::Primary,
@@ -147,6 +149,12 @@ impl TabletInput {
                     None
                 }
             }
+        }
+        // No native pen backend yet (macOS): pens work as a mouse, without pressure.
+        #[cfg(not(any(target_os = "linux", windows)))]
+        {
+            let _ = (display, window);
+            None
         }
     }
 
