@@ -424,6 +424,7 @@ pub struct Slider<'a, N> {
     max_decimals: Option<usize>,
     clamp_existing_to_range: bool,
     value_size: egui::Vec2,
+    centered: bool,
 }
 impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
     pub fn new(value: &'a mut N, range: RangeInclusive<N>) -> Self {
@@ -437,7 +438,15 @@ impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
             max_decimals: None,
             clamp_existing_to_range: true,
             value_size: vec2(NUMBER_WIDTH, 22.0),
+            centered: false,
         }
+    }
+    /// A bipolar slider whose neutral value is 0 inside the range (Hue, Exposure, Contrast):
+    /// the rail fills from the zero position to the thumb, so it looks empty at its default
+    /// rather than half on. Ranges without 0 inside fill from the left as usual.
+    pub fn centered(mut self) -> Self {
+        self.centered = true;
+        self
     }
     pub fn text(mut self, label: impl ToString) -> Self {
         self.label = label.to_string();
@@ -526,26 +535,25 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
             );
             let r = response.rect;
             let radius = r.height() / 2.5;
-            let x_range = (r.left() + radius)..=(r.right() - radius);
-            let t = if self.logarithmic && *range.start() > 0.0 {
-                (value.ln() - range.start().ln()) / (range.end().ln() - range.start().ln())
-            } else {
-                (value - range.start()) / (range.end() - range.start())
-            };
-            let x = egui::lerp(x_range.clone(), t.clamp(0.0, 1.0) as f32);
             let rail = Rect::from_min_max(
-                pos2(*x_range.start(), r.center().y - 1.5),
-                pos2(*x_range.end(), r.center().y + 1.5),
+                pos2(r.left() + radius, r.center().y - 1.5),
+                pos2(r.right() - radius, r.center().y + 1.5),
             );
+            let track = SliderTrack {
+                rail,
+                range: range.clone(),
+                logarithmic: self.logarithmic,
+                centered: self.centered,
+            };
+            let x = track.x(value);
             let p = ui.palette();
             ui.painter()
                 .rect_filled(rail.translate(vec2(0.0, 1.0)), 2.0, p.slider_rail_edge);
             ui.painter().rect_filled(rail, 2.0, p.slider_rail);
-            ui.painter().rect_filled(
-                Rect::from_min_max(rail.min, pos2(x, rail.bottom())),
-                2.0,
-                p.accent,
-            );
+            let fill = track.fill(value);
+            if fill.width() > 0.0 {
+                ui.painter().rect_filled(fill, 2.0, p.accent);
+            }
             let thumb = Rect::from_center_size(pos2(x, r.center().y), vec2(14.0, 14.0));
             ui.painter()
                 .circle_filled(thumb.center() + vec2(0.0, 1.0), 7.5, p.thumb_shadow);
@@ -583,6 +591,42 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
             response.mark_changed();
         }
         response
+    }
+}
+
+/// Where a slider's value sits along its rail, and the part of the rail it fills.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SliderTrack {
+    /// The rail, from the thumb's leftmost to its rightmost centre.
+    pub rail: Rect,
+    pub range: RangeInclusive<f64>,
+    pub logarithmic: bool,
+    /// Fill from 0 rather than from the left end; see [`Slider::centered`].
+    pub centered: bool,
+}
+
+impl SliderTrack {
+    /// The x of `value` along the rail, clamped to its ends.
+    pub fn x(&self, value: f64) -> f32 {
+        let (start, end) = (*self.range.start(), *self.range.end());
+        let t = if self.logarithmic && start > 0.0 {
+            (value.ln() - start.ln()) / (end.ln() - start.ln())
+        } else {
+            (value - start) / (end - start)
+        };
+        egui::lerp(self.rail.x_range(), t.clamp(0.0, 1.0) as f32)
+    }
+
+    /// The filled part of the rail for `value`: from the left end to the thumb or, for a
+    /// centred slider, between the zero position and the thumb. Empty (zero width) at 0.
+    pub fn fill(&self, value: f64) -> Rect {
+        let thumb = self.x(value);
+        let origin = if self.centered {
+            self.x(0.0)
+        } else {
+            self.rail.left()
+        };
+        Rect::from_x_y_ranges(origin.min(thumb)..=origin.max(thumb), self.rail.y_range())
     }
 }
 

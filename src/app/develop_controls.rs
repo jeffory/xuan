@@ -15,6 +15,22 @@ use super::{
 };
 
 fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
+    slider_from(ui, label, value, range, unit, false);
+}
+
+/// A slider whose neutral value is 0 in the middle of its range: it fills from 0.
+fn bipolar(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
+    slider_from(ui, label, value, range, unit, true);
+}
+
+fn slider_from(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: RangeInclusive<f32>,
+    unit: &str,
+    centered: bool,
+) {
     ui.horizontal(|ui| {
         ui.add_sized(
             [105.0, 22.0],
@@ -22,12 +38,14 @@ fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive
         );
         let field_width = widgets::NUMBER_WIDTH + widgets::SLIDER_SPACING;
         ui.spacing_mut().slider_width = (ui.available_width() - field_width).max(40.0);
-        ui.add(
-            widgets::Slider::new(value, range)
-                .clamp_existing_to_range(false)
-                .suffix(unit)
-                .max_decimals(2),
-        );
+        let mut slider = widgets::Slider::new(value, range)
+            .clamp_existing_to_range(false)
+            .suffix(unit)
+            .max_decimals(2);
+        if centered {
+            slider = slider.centered();
+        }
+        ui.add(slider);
     });
 }
 
@@ -42,7 +60,7 @@ fn tool_checkbox(ui: &mut egui::Ui, d: &mut Develop, tool: CanvasTool, label: &s
 }
 
 fn percent(ui: &mut egui::Ui, label: &str, value: &mut f32) {
-    slider(ui, label, value, -100.0..=100.0, "%");
+    bipolar(ui, label, value, -100.0..=100.0, "%");
 }
 
 pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
@@ -175,7 +193,7 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
     {
         d.settings.exposure = raw::auto_exposure(raw);
     }
-    slider(
+    bipolar(
         ui,
         tr("Exposure"),
         &mut d.settings.exposure,
@@ -247,7 +265,7 @@ fn white_balance(ui: &mut egui::Ui, d: &mut Develop) {
             );
         },
     );
-    slider(ui, tr("Tint"), &mut d.settings.tint, -150.0..=150.0, "");
+    bipolar(ui, tr("Tint"), &mut d.settings.tint, -150.0..=150.0, "");
 }
 
 fn negative(ui: &mut egui::Ui, d: &mut Develop) {
@@ -288,7 +306,7 @@ fn negative(ui: &mut egui::Ui, d: &mut Develop) {
             d.compare = super::develop::Compare::Original;
         }
     });
-    slider(
+    bipolar(
         ui,
         tr("Black point"),
         &mut d.settings.negative.black_point,
@@ -306,7 +324,7 @@ fn negative(ui: &mut egui::Ui, d: &mut Develop) {
         .iter()
         .enumerate()
     {
-        slider(
+        bipolar(
             ui,
             label,
             &mut d.settings.negative.balance[c],
@@ -592,7 +610,7 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
     if overlay.kind != OverlayKind::Linear {
         slider(ui, tr("Feather"), &mut overlay.feather, 0.01..=1.0, "");
     }
-    slider(
+    bipolar(
         ui,
         tr("Exposure"),
         &mut overlay.exposure,
