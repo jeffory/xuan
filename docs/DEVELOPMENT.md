@@ -23,6 +23,10 @@ HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windo
 
 Install the x86_64 MSVC Rust toolchain (`stable-x86_64-pc-windows-msvc`) and Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK. Use Windows 10/11 with a DirectX 12 or Vulkan driver. Native file dialogs and the clipboard use Windows APIs. Packaging also requires Python **3.11+** on `PATH`.
 
+### macOS
+
+Install the Xcode Command Line Tools (`xcode-select --install`) and Rust with rustup. Use an Apple Silicon Mac with macOS 11 or later; the editor renders with Metal. macOS support is in progress (see [MACOS.md](MACOS.md)): there is no app bundle, installer or signature yet, so run it with `cargo run` or from the unsigned build the [macOS workflow](../.github/workflows/macos.yml) uploads, and pens work as a mouse, without pressure.
+
 ## Build and run
 
 ```sh
@@ -170,6 +174,8 @@ scripts/check.sh          # formatting, Clippy, engine and UI tests
 scripts/check.sh --gpu    # also compares wgpu output against the CPU reference
 ```
 
+The same script runs on macOS, where `--gpu` uses Metal.
+
 On Windows, run the equivalent checks in PowerShell:
 
 ```powershell
@@ -179,7 +185,7 @@ cargo test --locked --all-targets
 cargo test --locked --package egui-winit --lib clipboard_paste
 ```
 
-The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
+The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb on Linux and in the runner's own desktop session on macOS. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
 
 ## Writing UI tests
 
@@ -232,9 +238,9 @@ cargo test --locked --lib gpu::goldens -- --ignored # the same scenes on the GPU
 
 The CPU output is the source of truth: the update command only rewrites goldens from the CPU renderer, and only files whose pixels changed. Review the PNG changes like any other diff before committing them. Fetch the RAW fixtures first, or the three RAW scenes are skipped and their goldens left untouched.
 
-A scene passes when at most a small fraction of its pixels differ from the golden by more than a per-channel tolerance. The CPU allows 2 levels on 0.2% of the pixels (3 levels on 0.5% for RAW Develop), which absorbs one-ulp differences between the Linux and Windows maths libraries while failing on any visible change. The GPU test, run by `scripts/check.sh --gpu`, compares against the same goldens with looser limits (4 levels on 0.5% of the pixels, 6 levels on 1% for RAW Develop), because GPU arithmetic, shader maths and mipmapped downscaling differ from the CPU reference. On Mesa lavapipe every scene is within one level. Text uses only the bundled font, never system fonts, so it renders identically on every platform.
+A scene passes when at most a small fraction of its pixels differ from the golden by more than a per-channel tolerance. The CPU allows 2 levels on 0.2% of the pixels (3 levels on 0.5% for RAW Develop), which absorbs one-ulp differences between the Linux, Windows and macOS maths libraries while failing on any visible change. The GPU test, run by `scripts/check.sh --gpu`, compares against the same goldens with looser limits (4 levels on 0.5% of the pixels, 6 levels on 1% for RAW Develop), because GPU arithmetic, shader maths and mipmapped downscaling differ from the CPU reference. On Mesa lavapipe every scene is within one level. Text uses only the bundled font, never system fonts, so it renders identically on every platform.
 
-On a mismatch the test writes `expected.png`, `actual.png` and `diff.png` (red: over the tolerance, yellow: within it) to `target/golden-failures/<cpu|gpu>/<scene>/`; set `XUAN_GOLDEN_FAILURES` to use another directory. CI uploads that directory as the `golden-failures-linux` or `golden-failures-windows` artifact when the job fails.
+On a mismatch the test writes `expected.png`, `actual.png` and `diff.png` (red: over the tolerance, yellow: within it) to `target/golden-failures/<cpu|gpu>/<scene>/`; set `XUAN_GOLDEN_FAILURES` to use another directory. CI uploads that directory as the `golden-failures-linux`, `golden-failures-windows` or `golden-failures-macos` artifact when the job fails.
 
 ## Tablet input checks
 
