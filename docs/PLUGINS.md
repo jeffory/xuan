@@ -964,7 +964,9 @@ evenly so that it covers those bounds, centred, and keeps what hangs over
 in the layer (nothing is cropped), which suits models that only render
 certain sizes. `cover` cannot be used with `result.into = "replace"`, and
 older versions of Xuan refuse it: send it only when `initialize`'s
-`host.features` lists `fit_cover` (actions on surfaces need `surfaces`). For an extended source those bounds
+`host.features` lists `fit_cover` (actions on surfaces need `surfaces`):
+`plugin.host_info["features"]` in Python, `job.host.supports("fit_cover")`
+or `Settings::host` in Rust. For an extended source those bounds
 include the new canvas (see [Extending the
 canvas](#extending-the-canvas-outpainting)). `fit` cannot be combined with `width` or
 `height`, and an action without a source cannot use `fit`. Sizes must be
