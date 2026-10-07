@@ -427,6 +427,7 @@ fn mock_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
         cancelled: false,
         consented: false,
         provider: None,
+        surface: None,
     }
 }
 
@@ -502,6 +503,79 @@ fn image_outputs_may_declare_their_placed_size() {
             .extend(extra.as_object().unwrap().clone());
         let result = app.apply_job_result(&job, json!({"outputs": [output]}));
         assert_eq!(result.is_ok(), ok, "{extra}: {result:?}");
+    }
+}
+
+#[test]
+fn an_exact_size_document_result_covers_a_canvas_of_that_size() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    // 40x10 from the model for a 20x20 canvas: covers the height, hangs over the sides.
+    let wide = dir.path().join("wide.png");
+    RgbaImage::from_pixel(40, 10, image::Rgba([9, 9, 9, 255]))
+        .save(&wide)
+        .unwrap();
+    let mut job = mock_job_without_document();
+    job.into = xuan::plugins::manifest::ResultInto::Document;
+    job.surface = Some(crate::app::surfaces::SurfaceRun {
+        surface: xuan::plugins::manifest::Surface::Document,
+        target: (20, 20),
+        exact: true,
+        resolution: 300.0,
+    });
+    app.apply_job_result(
+        &job,
+        json!({"outputs": [{"kind": "image", "path": wide, "name": "A fox"}]}),
+    )
+    .unwrap();
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (20, 20));
+    assert_eq!(document.resolution, 300.0);
+    let layer = &document.layers[0];
+    assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (40, 10));
+    assert_eq!(
+        (
+            layer.transform.x,
+            layer.transform.y,
+            layer.transform.width,
+            layer.transform.height
+        ),
+        (-30.0, 0.0, 80.0, 20.0)
+    );
+    assert!(
+        app.status
+            .contains(xuan::i18n::tr("Move the layer to reframe"))
+    );
+    // Without exact the document takes the image's own size.
+    job.surface.as_mut().unwrap().exact = false;
+    app.apply_job_result(&job, json!({"outputs": [{"kind": "image", "path": wide}]}))
+        .unwrap();
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (40, 10));
+}
+
+/// A finished job of the mock plugin that started with no document open.
+fn mock_job_without_document() -> crate::app::plugins::PluginJob {
+    crate::app::plugins::PluginJob {
+        id: uuid::Uuid::new_v4(),
+        plugin: "mock".into(),
+        action: "echo".into(),
+        label: "Echo".into(),
+        document: uuid::Uuid::nil(),
+        _work_dir: xuan::plugins::private_dir("xuan-job-").unwrap(),
+        prepared: xuan::plugins::jobs::Prepared::none(),
+        regions: Vec::new(),
+        inputs: serde_json::json!({}),
+        into: xuan::plugins::manifest::ResultInto::Layer,
+        mask_to_regions: false,
+        progress: None,
+        message: String::new(),
+        cancelled: false,
+        consented: false,
+        provider: None,
+        surface: None,
     }
 }
 
@@ -859,6 +933,7 @@ fn the_send_prompt_names_the_extension() {
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
         provider: None,
+        surface: None,
     };
     app.plugins.action = Some(edit(6));
     assert_eq!(
@@ -1784,6 +1859,7 @@ fn a_selection_mask_is_listed_for_consent_and_needs_a_selection() {
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
         provider: None,
+        surface: None,
     });
     // Nothing selected: the action refuses to start, and no mask is listed.
     app.start_plugin_action("mock", "inpaint");
@@ -2585,6 +2661,79 @@ mod unix {
         assert_eq!(app.tool, Tool::Region);
         app.close_plugin_action();
         assert!(!app.region_tool_available());
+    }
+
+    #[test]
+    fn surface_runs_tell_the_plugin_where_they_came_from_and_the_target_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        let run = crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Region,
+            target: (20, 10),
+            exact: false,
+            resolution: 72.0,
+        };
+        let regions = vec![xuan::plugins::jobs::Region::rect(4.0, 4.0, 20.0, 10.0)];
+        let given = serde_json::Map::from_iter([("prompt".to_owned(), serde_json::json!("a hat"))]);
+        app.tool = Tool::Region;
+        assert!(app.run_from_surface("mock", "echo", &given, regions, run));
+        assert_eq!(app.plugins.jobs.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let line = received
+            .lines()
+            .find(|l| l.contains("\"action/run\""))
+            .unwrap();
+        assert!(line.contains("\"surface\":\"region\""), "{line}");
+        assert!(
+            line.contains("\"target\":{\"height\":10,\"width\":20}")
+                || line.contains("\"target\":{\"width\":20,\"height\":10}"),
+            "{line}"
+        );
+        assert!(line.contains("\"prompt\":\"a hat\""), "{line}");
+        // The Region tool stays selected after a surface run.
+        assert_eq!(app.tool, Tool::Region);
+    }
+
+    #[test]
+    fn a_surface_run_waits_for_permission_and_never_runs_silently() {
+        // Review focus 1: not yet allowed → the permission prompt; disabled or offline → a status.
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        std::fs::write(dir.path().join("plugin.toml"), MANIFEST).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let run = crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Layer,
+            target: (16, 16),
+            exact: false,
+            resolution: 72.0,
+        };
+        assert!(app.run_from_surface(
+            "mock",
+            "echo",
+            &serde_json::Map::new(),
+            Vec::new(),
+            run.clone()
+        ));
+        assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+        assert!(app.plugins.jobs.is_empty());
+        app.dialog = None;
+        app.config.plugins.entry("mock".into()).or_default().enabled = false;
+        assert!(!app.run_from_surface("mock", "echo", &serde_json::Map::new(), Vec::new(), run));
+        assert!(app.plugins.jobs.is_empty());
     }
 
     #[test]

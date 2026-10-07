@@ -1156,6 +1156,7 @@ mod status_bar {
             cancelled: false,
             consented: false,
             provider: None,
+            surface: None,
         }
     }
 

@@ -47,6 +47,7 @@ mod settings;
 mod shortcuts;
 mod snap;
 mod stroke_smoothing;
+mod surfaces;
 mod system_theme;
 mod tablet;
 mod tabs;

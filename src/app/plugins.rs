@@ -19,7 +19,9 @@ use xuan::{
         self, LoadError, Manifest, edits,
         host::{Incoming, Process},
         jobs::{self, Prepared, Region},
-        manifest::{Action, ActionKind, Capability, DocumentAccess, InputKind, Menu, ResultInto},
+        manifest::{
+            Action, ActionKind, Capability, DocumentAccess, InputKind, Menu, ResultInto, Surface,
+        },
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
         ui::Node,
     },
@@ -165,6 +167,8 @@ pub(super) struct PluginJob {
     pub consented: bool,
     /// Set when the job stands in for a built-in command.
     pub provider: Option<super::providers::ProviderRun>,
+    /// Set when a surface (Layers panel, AI Region, New Image) started it.
+    pub surface: Option<super::surfaces::SurfaceRun>,
 }
 
 /// A plugin action in a menu.
@@ -230,6 +234,9 @@ pub(super) struct ActionEdit {
     /// Set when the action stands in for a built-in command: it runs without its
     /// dialog and its mask is applied as that command's result.
     pub provider: Option<super::providers::ProviderRun>,
+    /// Set when a surface (Layers panel, AI Region, New Image) started it
+    /// instead of the dialog.
+    pub surface: Option<super::surfaces::SurfaceRun>,
 }
 
 #[derive(Default)]
@@ -1596,6 +1603,7 @@ impl EditorApp {
                 into: ResultInto::Layer,
                 consented: false,
                 provider,
+                surface: None,
             });
             self.run_plugin_action();
             return;
@@ -1616,6 +1624,7 @@ impl EditorApp {
             },
             consented: false,
             provider: None,
+            surface: None,
         });
         if spec.regions_input().is_some() {
             self.set_tool(Tool::Region);
@@ -1624,7 +1633,9 @@ impl EditorApp {
     }
 
     pub(super) fn close_plugin_action(&mut self) {
+        // A surface run keeps the tool it was started from (AI Region).
         if let Some(edit) = self.plugins.action.take()
+            && edit.surface.is_none()
             && self.tool == Tool::Region
         {
             self.set_tool(if edit.previous_tool == Tool::Region {
@@ -1703,6 +1714,15 @@ impl EditorApp {
                     json!({"x": min_x, "y": min_y, "width": max_x - min_x, "height": max_y - min_y}),
                 );
             }
+        }
+        // A surface run says where it came from and how many document pixels
+        // the result will cover, so the plugin can render at least that.
+        if let Some(run) = &edit.surface {
+            inputs.insert("surface".into(), json!(run.surface));
+            inputs.insert(
+                "target".into(),
+                json!({"width": run.target.0, "height": run.target.1}),
+            );
         }
         // Inputs as stored on the layer: regions in document coordinates.
         let mut stored = edit.values.clone();
@@ -1794,6 +1814,7 @@ impl EditorApp {
         }
         let document = self.session().map(|s| s.document.id);
         let provider = (self.plugins.action.as_ref()).and_then(|edit| edit.provider.clone());
+        let surface = (self.plugins.action.as_ref()).and_then(|edit| edit.surface.clone());
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
             let work_dir = plugins::private_dir("xuan-job-")?;
@@ -1825,6 +1846,7 @@ impl EditorApp {
                 cancelled: false,
                 consented,
                 provider,
+                surface,
             });
             Ok(())
         })();
@@ -2144,9 +2166,39 @@ impl EditorApp {
                 Output::None => {}
             }
         }
+        // New Image's Generate tab: its resolution, and with Exact size a
+        // canvas of the size asked for that the image covers, centred.
+        let made = job
+            .surface
+            .as_ref()
+            .filter(|run| run.surface == Surface::Document);
         for (name, image, provenance) in new_documents {
-            let mut document = Document::new(image.width(), image.height())?;
+            let (pixels_w, pixels_h) = image.dimensions();
+            let (width, height) = match made {
+                Some(run) if run.exact => run.target,
+                _ => (pixels_w, pixels_h),
+            };
+            let mut document = Document::new(width, height)?;
+            if let Some(run) = made {
+                document.resolution = run.resolution;
+            }
             let mut layer = Layer::image(&name, image);
+            if made.is_some_and(|run| run.exact) {
+                let (x, y, w, h) = jobs::cover(
+                    (pixels_w as f32, pixels_h as f32),
+                    (width as f32, height as f32),
+                );
+                layer.transform = xuan::document::Transform {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    ..xuan::document::Transform::new(pixels_w, pixels_h)
+                };
+                if w > width as f32 + 0.5 || h > height as f32 + 0.5 {
+                    self.status = tr("Move the layer to reframe").into();
+                }
+            }
             layer.generated = Some(generated(None, None));
             layer.provenance = provenance;
             document.layers = vec![layer];
