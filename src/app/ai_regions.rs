@@ -82,9 +82,17 @@ impl EditorApp {
         })
     }
 
-    /// Add a box dragged from `start` to `end` (document pixels) and open
-    /// its popover. Boxes under two pixels are ignored.
+    /// Add a box dragged from `start` to `end` (document pixels), kept on
+    /// the canvas, and open its popover. Boxes under two pixels are ignored.
     pub(super) fn add_ai_box(&mut self, start: Point, end: Point) {
+        let Some((width, height)) = self
+            .session()
+            .map(|s| (s.document.width as f32, s.document.height as f32))
+        else {
+            return;
+        };
+        let clamp = |p: Point| Point::new(p.x.clamp(0.0, width), p.y.clamp(0.0, height));
+        let (start, end) = (clamp(start), clamp(end));
         let (x, y) = (start.x.min(end.x), start.y.min(end.y));
         let (width, height) = ((start.x - end.x).abs(), (start.y - end.y).abs());
         if width < 2.0 || height < 2.0 {
@@ -215,18 +223,20 @@ impl EditorApp {
         (ai_box.plugin, ai_box.action) = (plugin.into(), action.into());
     }
 
-    /// Whether the action of the box at `index` takes several boxes at once
-    /// (Precise Edit), so Generate sends every box with that action.
-    fn sends_together(&self, ai_box: &AiBox) -> bool {
+    /// How many boxes one job of the box's action takes: more than one for
+    /// an action like Precise Edit, so Generate sends every box with it.
+    fn boxes_per_job(&self, ai_box: &AiBox) -> usize {
         (self.plugins.manifest(&ai_box.plugin))
             .and_then(|m| m.action(&ai_box.action))
             .and_then(|a| a.regions_input())
-            .is_some_and(|input| region_limit(input) > 1)
+            .map_or(1, region_limit)
     }
 
-    /// The boxes Generate on box `index` sends, as groups of one job each:
-    /// all ready boxes of its action when that action takes several, else
-    /// the box alone (when it is ready).
+    /// The boxes Generate on box `index` sends, as groups of one job each.
+    /// An action that takes one box runs the box alone (when it is ready).
+    /// One that takes several gets every ready box of that action, in jobs of
+    /// at most its limit; a job has one set of inputs, so boxes whose own
+    /// values (model, quality, …) differ go in jobs of their own.
     fn ai_box_groups(&self, index: usize) -> Vec<Vec<usize>> {
         let Some(session) = self.session() else {
             return Vec::new();
@@ -234,24 +244,28 @@ impl EditorApp {
         let Some(chosen) = session.ai_boxes.get(index) else {
             return Vec::new();
         };
-        if !self.sends_together(chosen) {
+        let limit = self.boxes_per_job(chosen).max(1);
+        if limit == 1 {
             return if self.box_ready(chosen) {
                 vec![vec![index]]
             } else {
                 Vec::new()
             };
         }
-        let together: Vec<usize> = (session.ai_boxes.iter().enumerate())
-            .filter(|(_, b)| {
-                b.plugin == chosen.plugin && b.action == chosen.action && self.box_ready(b)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if together.is_empty() {
-            Vec::new()
-        } else {
-            vec![together]
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for (i, b) in session.ai_boxes.iter().enumerate() {
+            if b.plugin != chosen.plugin || b.action != chosen.action || !self.box_ready(b) {
+                continue;
+            }
+            let same = groups
+                .iter_mut()
+                .find(|group| group.len() < limit && session.ai_boxes[group[0]].values == b.values);
+            match same {
+                Some(group) => group.push(i),
+                None => groups.push(vec![i]),
+            }
         }
+        groups
     }
 
     /// Run the box at `index` (with the other boxes of its action when that
@@ -288,6 +302,7 @@ impl EditorApp {
                 resolution: 72.0,
                 boxes: picked.iter().map(|b| b.id).collect(),
             };
+            // The boxes of a group share their values; see ai_box_groups.
             let first = picked[0];
             let regions = picked.iter().map(|b| b.region.clone()).collect();
             match self.run_from_surface(&first.plugin, &first.action, &first.values, regions, run) {
@@ -418,7 +433,11 @@ impl EditorApp {
                 (offered, verb)
             })
             .collect();
-        let count = self.ai_box_groups(index).first().map_or(0, Vec::len);
+        let count = self
+            .ai_box_groups(index)
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>();
         let label = if count > 1 {
             tr("{verb} {count} boxes")
                 .replace("{verb}", &self.verb_of(&ai_box.plugin, &ai_box.action))

@@ -428,6 +428,7 @@ fn mock_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
         consented: false,
         provider: None,
         surface: None,
+        ai_boxes: Vec::new(),
     }
 }
 
@@ -577,6 +578,7 @@ fn mock_job_without_document() -> crate::app::plugins::PluginJob {
         consented: false,
         provider: None,
         surface: None,
+        ai_boxes: Vec::new(),
     }
 }
 
@@ -2932,6 +2934,91 @@ mod unix {
             init.contains("\"fit_cover\"") && init.contains("\"surfaces\""),
             "{init}"
         );
+    }
+
+    #[test]
+    fn ai_region_boxes_come_back_when_their_job_does_not_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        // A box dragged past the canvas is kept on it.
+        app.add_ai_box(Point::new(50.0, 40.0), Point::new(90.0, 70.0));
+        let region = app.session().unwrap().ai_boxes[0].region.clone();
+        assert_eq!(
+            (region.x, region.y, region.width, region.height),
+            (50.0, 40.0, 14.0, 8.0)
+        );
+        (app.session_mut().unwrap().ai_boxes[0].region.fields).insert("desc".into(), "hat".into());
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        // The plugin stops before answering: the box is back, prompt and all.
+        app.stop_plugin("mock");
+        let boxes = &app.session().unwrap().ai_boxes;
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].region.fields["desc"], serde_json::json!("hat"));
+    }
+
+    #[test]
+    fn grouped_ai_boxes_each_run_with_their_own_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for x in [2.0, 20.0, 40.0] {
+            app.add_ai_box(Point::new(x, 2.0), Point::new(x + 10.0, 12.0));
+        }
+        let session = app.session_mut().unwrap();
+        for ai_box in &mut session.ai_boxes {
+            ai_box.region.fields.insert("desc".into(), "hat".into());
+        }
+        // The second box asks for something else than the other two.
+        (session.ai_boxes[1].values).insert("prompt".into(), "other".into());
+        assert_eq!(app.generate_ai_boxes(0), 2);
+        let jobs = &app.plugins.jobs;
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].regions.len(), 2);
+        assert_eq!(jobs[1].regions.len(), 1);
+        assert_eq!(jobs[1].inputs["prompt"], serde_json::json!("other"));
+        assert_ne!(jobs[0].inputs["prompt"], serde_json::json!("other"));
+    }
+
+    #[test]
+    fn a_second_job_does_not_replace_a_layer_another_is_replacing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        let manifest = MANIFEST.replace(
+            "[[actions]]\nid = \"echo\"",
+            "[permissions]\ndocument = \"edit\"\n\n[[actions]]\nid = \"swap\"\nlabel = \"Swap…\"\nresult = { into = \"replace\" }\n\n[[actions]]\nid = \"echo\"",
+        );
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [8, 8];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 1);
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert!(app.error.take().unwrap().contains("already replacing"));
+        // Another layer may be replaced meanwhile.
+        app.command("new_layer");
+        app.command("fill_fg");
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 2);
     }
 
     #[test]

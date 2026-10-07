@@ -836,13 +836,15 @@ surfaces = ["menu"]           # only in the full dialog
 | `document` | The **Generate** tab of **File → New…** | `generate` with `result.into` of `document` or `ask` |
 
 The manifest is refused when an action does not fit a surface it lists, when
-it lists one twice or lists `menu` (every action has its menu), or when it has
-a `verb` without the `region` surface.
+it lists one twice or lists `menu` (every action has its menu), when it has
+a `verb` without the `region` surface, or when the verb is not plain text (no
+control, bidi or invisible characters).
 
 **Inputs.** `advanced = true` (on an action input or a region field) puts it in
 the collapsed **Advanced** section of popovers and the New Image tab; the full
 dialog shows everything. `surfaces = [...]` on an input shows it only where
-listed, `menu` being the dialog. Generate needs the first text input of the
+listed, `menu` being the dialog; it may list `menu` and the action's own
+surfaces, each once. Generate needs the first text input of the
 basic ones to have text. A popover remembers its values per action for the
 session.
 
@@ -857,11 +859,20 @@ A plugin should render at least `target`, and exactly when its model allows,
 then place the result with `"fit": "cover"`: the layer keeps every pixel the
 model made, covering its area without stretching.
 
-**Regions.** Each AI Region box keeps its own verb and values. An action whose
-`regions` input takes several boxes (no `max`, or `max` above 1) gets every box
-with that verb in one job; an action with `max = 1` runs once per box. Sent
-boxes are removed; several jobs may run on a document at once. Boxes are kept
-for the session beside their document and are never edits of it.
+**Regions.** Each AI Region box keeps its own verb and values. Generate in a
+box's popover runs that box alone when its action's `regions` input has
+`max = 1`. When the input takes several boxes (no `max`, or `max` above 1), it
+runs every box with that verb that has its prompt: boxes with the same values
+go in one job, up to `max` boxes each, and boxes whose values differ (another
+model, say) go in jobs of their own, since a job has one set of inputs. Sent
+boxes are hidden while their job runs and come back if it fails, is cancelled
+or its result is refused; several jobs may run on a document at once. Boxes
+are kept for the session beside their document and are never edits of it.
+
+Xuan sets the inputs `surface` and `target` on surface runs and `capability`,
+`point` and `rect` on provider runs, so an action cannot declare inputs with
+those ids. An action whose result replaces a layer does not start while
+another job is replacing the same layer.
 
 **Documents.** The result opens as a new document at the image's own size and
 the dialog's resolution. With **Exact size** the canvas is exactly the width

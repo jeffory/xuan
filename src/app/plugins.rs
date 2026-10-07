@@ -185,6 +185,9 @@ pub(super) struct PluginJob {
     pub provider: Option<super::providers::ProviderRun>,
     /// Set when a surface (Layers panel, AI Region, New Image) started it.
     pub surface: Option<super::surfaces::SurfaceRun>,
+    /// The AI Region boxes it sends, hidden while it runs and put back on
+    /// their document if it fails, is cancelled or its result is refused.
+    pub ai_boxes: Vec<super::ai_regions::AiBox>,
 }
 
 /// A plugin action in a menu.
@@ -616,7 +619,13 @@ impl EditorApp {
             process.stop();
         }
         self.plugins.pending.retain(|(id, _), _| id != plugin);
-        self.plugins.jobs.retain(|job| job.plugin != plugin);
+        let (stopped, running) = std::mem::take(&mut self.plugins.jobs)
+            .into_iter()
+            .partition(|job| job.plugin == plugin);
+        self.plugins.jobs = running;
+        for job in stopped {
+            self.restore_ai_boxes(job);
+        }
         self.fail_format_jobs(plugin, None);
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
@@ -1873,6 +1882,35 @@ impl EditorApp {
             return;
         }
         let chosen = edit.into;
+        // Two jobs replacing the same layer would each overwrite the other's
+        // result: the second waits until the first is done.
+        let into = if spec.result.into == ResultInto::Ask {
+            chosen
+        } else {
+            spec.result.into
+        };
+        let session = self.session();
+        let active = session.and_then(|s| s.document.active).filter(|_| {
+            spec.kind == ActionKind::Edit
+                && spec.source.from == plugins::manifest::SourceKind::Layer
+        });
+        if into == ResultInto::Replace
+            && let Some(layer) = active
+            && self.plugins.jobs.iter().any(|job| {
+                job.into == ResultInto::Replace
+                    && Some(job.document) == session.map(|s| s.document.id)
+                    && job.prepared.layer == Some(layer)
+            })
+        {
+            self.error = Some(
+                tr("A plugin is already replacing this layer; wait for it to finish or cancel it")
+                    .into(),
+            );
+            if (self.plugins.action.as_ref()).is_some_and(|e| e.surface.is_some()) {
+                self.plugins.action = None;
+            }
+            return;
+        }
         // A run that sends document data to a plugin that declares network
         // hosts waits for the user to confirm it.
         let consented =
@@ -1913,11 +1951,7 @@ impl EditorApp {
                 prepared,
                 regions,
                 inputs,
-                into: if spec.result.into == ResultInto::Ask {
-                    chosen
-                } else {
-                    spec.result.into
-                },
+                into,
                 mask_to_regions: spec.result.mask_to_regions,
                 progress: None,
                 message: String::new(),
@@ -1925,6 +1959,7 @@ impl EditorApp {
                 consented,
                 provider,
                 surface: surface.clone(),
+                ai_boxes: Vec::new(),
             });
             Ok(())
         })();
@@ -1932,13 +1967,19 @@ impl EditorApp {
             // The status bar shows the running job, so no "started" message.
             Ok(()) => {
                 self.close_plugin_action();
-                // AI Region boxes leave once their job runs.
+                // AI Region boxes go with their job, and come back if it fails.
                 if let Some(run) = surface.filter(|run| !run.boxes.is_empty())
                     && let Some(session) =
                         (self.sessions.iter_mut()).find(|s| Some(s.document.id) == document)
                 {
-                    session.ai_boxes.retain(|b| !run.boxes.contains(&b.id));
+                    let (sent, kept) = std::mem::take(&mut session.ai_boxes)
+                        .into_iter()
+                        .partition(|b| run.boxes.contains(&b.id));
+                    session.ai_boxes = kept;
                     session.ai_selected = None;
+                    if let Some(started) = self.plugins.jobs.iter_mut().find(|j| j.id == job) {
+                        started.ai_boxes = sent;
+                    }
                 }
             }
             Err(error) => {
@@ -1983,6 +2024,7 @@ impl EditorApp {
             Ok(value) if !job.cancelled => value,
             Ok(_) => {
                 self.status = tr("Cancelled").into();
+                self.restore_ai_boxes(job);
                 return;
             }
             Err(error) => {
@@ -1991,6 +2033,7 @@ impl EditorApp {
                 } else {
                     self.error = Some(error);
                 }
+                self.restore_ai_boxes(job);
                 return;
             }
         };
@@ -2005,10 +2048,26 @@ impl EditorApp {
         self.apply_completed_results();
     }
 
+    /// Put a job's AI Region boxes back on their document, after it failed,
+    /// was cancelled or its result was refused, so the user can try again.
+    fn restore_ai_boxes(&mut self, job: PluginJob) {
+        if job.ai_boxes.is_empty() {
+            return;
+        }
+        if let Some(session) = (self.sessions.iter_mut()).find(|s| s.document.id == job.document) {
+            for ai_box in job.ai_boxes {
+                if !session.ai_boxes.iter().any(|b| b.id == ai_box.id) {
+                    session.ai_boxes.push(ai_box);
+                }
+            }
+        }
+    }
+
     /// Whether a job result can be shown now: nothing else is open or under way
-    /// that a proposal would interrupt.
+    /// that a proposal would interrupt, an AI popover included.
     fn ready_for_plugin_result(&self) -> bool {
-        self.dialog.is_none()
+        self.surface_popup.is_none()
+            && self.dialog.is_none()
             && self.error.is_none()
             && self.plugins.proposal.is_none()
             && self.job.is_none()
@@ -2026,6 +2085,7 @@ impl EditorApp {
         {
             if let Err(error) = self.apply_job_result(&job, value) {
                 self.error = Some(format!("{}: {error:#}", job.label));
+                self.restore_ai_boxes(job);
             }
         }
     }

@@ -925,6 +925,8 @@ Object Selection	对象选择
 Click an object or drag a box around it	点按对象或拖出框住它的矩形
 is not installed or no longer provides it	未安装或已不再提供此功能
 is disabled	已停用
+is not installed	未安装
+A plugin is already replacing this layer; wait for it to finish or cancel it	已有插件正在替换此图层；请等待其完成或取消
 used the built-in	已改用内置的
 Built-in	内置
 Choose the algorithm behind Select Subject and Remove Background	选择“选择主体”和“移除背景”所用的算法
