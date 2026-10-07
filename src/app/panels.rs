@@ -446,9 +446,7 @@ impl EditorApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(hint)
-                                    .size(11.0)
-                                    .color(ui.palette().muted),
+                                RichText::new(hint).size(11.0).color(ui.palette().muted),
                             )
                             .truncate(),
                         );
