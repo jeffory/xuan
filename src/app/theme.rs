@@ -58,7 +58,7 @@ pub struct Palette {
     // Lines
     /// Separators between panels and inside them.
     pub divider: Color32,
-    /// Window, pop-up and field outlines.
+    /// Window and pop-up outlines.
     pub border: Color32,
     /// The line under a floating panel's header.
     pub header_rule: Color32,
@@ -77,23 +77,31 @@ pub struct Palette {
     pub warning: Color32,
 
     // Accent
+    /// Accent lines and marks drawn on the surfaces: focus rings, drop indicators, the filled
+    /// part of a slider. At least 3:1 against the panel and the window.
     pub accent: Color32,
-    /// Default buttons: top and bottom of the gradient.
+    /// Accent fills that carry text: menu rows under the pointer. `on_accent_text` and
+    /// `on_accent_muted` reach 4.5:1 on it.
+    pub accent_fill: Color32,
+    /// Default buttons: top and bottom of the gradient. `on_accent_text` reaches 4.5:1 on
+    /// both stops.
     pub accent_gradient: [Color32; 2],
     /// Default buttons while pressed.
     pub accent_pressed: [Color32; 2],
     /// A checked checkbox.
     pub check: [Color32; 2],
-    /// Marks drawn on the accent: check marks and highlighted menu text.
+    /// Marks drawn on `check`: check marks.
     pub on_accent: Color32,
-    /// Text on an accent-coloured highlight (menu rows under the pointer).
+    /// Text on `accent_fill` and `accent_gradient`: highlighted menu rows, default buttons.
     pub on_accent_text: Color32,
-    /// Secondary text (shortcut hints) on an accent highlight.
+    /// Secondary text (shortcut hints) on `accent_fill`.
     pub on_accent_muted: Color32,
 
     // egui's own widgets (combo boxes, text edits, buttons)
     pub widget_fill: Color32,
     pub widget_weak_fill: Color32,
+    /// Outlines of text and number fields and of egui's buttons: 3:1 against the panel and
+    /// the window.
     pub widget_stroke: Color32,
     pub widget_hover_fill: Color32,
     pub widget_hover_weak_fill: Color32,
@@ -106,7 +114,7 @@ pub struct Palette {
     pub control: [Color32; 2],
     pub control_hover: [Color32; 2],
     pub control_pressed: [Color32; 2],
-    /// The inner highlight round a control.
+    /// The outline round a control: 3:1 against the panel and the window over either shade.
     pub control_edge: Color32,
     /// The drop shadow under a control.
     pub control_shadow: Color32,
@@ -114,6 +122,7 @@ pub struct Palette {
     pub checkbox: [Color32; 2],
     pub checkbox_hover: [Color32; 2],
     pub checkbox_edge: Color32,
+    /// 3:1 against the panel and the window.
     pub slider_rail: Color32,
     /// The highlight under a slider rail.
     pub slider_rail_edge: Color32,
@@ -231,31 +240,32 @@ impl Palette {
         warning: rgb(255, 170, 60),
 
         accent: rgb(10, 132, 255),
-        accent_gradient: [rgb(65, 155, 255), rgb(22, 112, 231)],
-        accent_pressed: [rgb(30, 103, 210), rgb(24, 89, 183)],
-        check: [rgb(62, 151, 255), rgb(24, 113, 228)],
+        accent_fill: rgb(0, 84, 198),
+        accent_gradient: [rgb(16, 106, 232), rgb(0, 84, 198)],
+        accent_pressed: [rgb(0, 72, 176), rgb(0, 62, 158)],
+        check: [rgb(50, 140, 252), rgb(24, 113, 228)],
         on_accent: Color32::WHITE,
-        on_accent_text: rgb(235, 235, 237),
-        on_accent_muted: rgb(154, 154, 157),
+        on_accent_text: Color32::WHITE,
+        on_accent_muted: gray(214),
 
         widget_fill: gray(72),
         widget_weak_fill: gray(62),
-        widget_stroke: gray(91),
+        widget_stroke: gray(122),
         widget_hover_fill: gray(88),
         widget_hover_weak_fill: gray(78),
-        widget_hover_stroke: gray(112),
+        widget_hover_stroke: gray(150),
         widget_active_fill: gray(52),
         widget_open_fill: gray(68),
 
         control: [gray(86), gray(67)],
         control_hover: [gray(94), gray(75)],
         control_pressed: [gray(74), gray(55)],
-        control_edge: white(28),
+        control_edge: white(72),
         control_shadow: black(65),
         checkbox: [gray(78), gray(57)],
         checkbox_hover: [gray(95), gray(71)],
         checkbox_edge: white(45),
-        slider_rail: gray(70),
+        slider_rail: gray(122),
         slider_rail_edge: white(12),
         thumb: [gray(255), gray(221)],
         thumb_pressed: gray(190),
@@ -347,7 +357,8 @@ impl Palette {
         warning: rgb(150, 82, 0),
 
         accent: rgb(0, 97, 224),
-        accent_gradient: [rgb(28, 120, 240), rgb(0, 92, 214)],
+        accent_fill: rgb(0, 97, 224),
+        accent_gradient: [rgb(16, 106, 232), rgb(0, 88, 208)],
         accent_pressed: [rgb(0, 78, 186), rgb(0, 68, 166)],
         check: [rgb(24, 116, 238), rgb(0, 90, 212)],
         on_accent: Color32::WHITE,
@@ -356,22 +367,22 @@ impl Palette {
 
         widget_fill: rgb(228, 228, 232),
         widget_weak_fill: rgb(236, 236, 240),
-        widget_stroke: rgb(184, 184, 191),
+        widget_stroke: rgb(136, 136, 143),
         widget_hover_fill: rgb(218, 218, 223),
         widget_hover_weak_fill: rgb(226, 226, 231),
-        widget_hover_stroke: rgb(150, 150, 158),
+        widget_hover_stroke: rgb(104, 104, 112),
         widget_active_fill: rgb(206, 206, 212),
         widget_open_fill: rgb(222, 222, 227),
 
         control: [Color32::WHITE, rgb(244, 244, 247)],
         control_hover: [Color32::WHITE, rgb(236, 236, 241)],
         control_pressed: [rgb(226, 226, 231), rgb(216, 216, 222)],
-        control_edge: black(46),
+        control_edge: black(118),
         control_shadow: black(22),
         checkbox: [Color32::WHITE, rgb(246, 246, 248)],
         checkbox_hover: [Color32::WHITE, rgb(236, 236, 241)],
         checkbox_edge: black(120),
-        slider_rail: rgb(196, 196, 203),
+        slider_rail: rgb(136, 136, 143),
         slider_rail_edge: Color32::TRANSPARENT,
         thumb: [Color32::WHITE, rgb(246, 246, 248)],
         thumb_pressed: rgb(226, 226, 231),
@@ -565,7 +576,11 @@ pub fn visuals(p: &Palette) -> egui::Visuals {
     visuals.extreme_bg_color = p.field;
     visuals.text_edit_bg_color = Some(p.field);
     visuals.faint_bg_color = p.faint;
-    visuals.override_text_color = Some(p.text);
+    // No `override_text_color`: it would win over `weak_text_color`, so hints and weak text
+    // would read as body text. Every widget state's `fg_stroke` is `p.text` instead.
+    visuals.weak_text_color = Some(p.muted);
+    visuals.error_fg_color = p.error;
+    visuals.warn_fg_color = p.warning;
     visuals.window_corner_radius = CornerRadius::same(10);
     visuals.menu_corner_radius = CornerRadius::same(7);
     visuals.window_stroke = Stroke::new(1.0_f32, p.border);
@@ -624,8 +639,8 @@ pub fn menu_style(style: &mut egui::Style, palette: &Palette) {
         &mut style.visuals.widgets.open,
     ] {
         widget.corner_radius = CornerRadius::same(4);
-        widget.weak_bg_fill = palette.accent;
-        widget.bg_fill = palette.accent;
+        widget.weak_bg_fill = palette.accent_fill;
+        widget.bg_fill = palette.accent_fill;
         widget.fg_stroke.color = palette.on_accent_text;
     }
     // Let each row take its state's text colour, so a highlighted row's text sits on the
@@ -654,38 +669,103 @@ pub fn palette_for(
     }
 }
 
+/// Text on an accent fill must reach this against every shade it sits on (WCAG AA).
+pub const ON_ACCENT_TEXT_RATIO: f32 = 4.5;
+/// Accent lines and marks must reach this against the surfaces (WCAG 1.4.11).
+pub const ACCENT_SURFACE_RATIO: f32 = 3.0;
+
+/// `c` moved toward `target` in twentieths, from not at all to all the way.
+fn steps_toward(c: Color32, target: Color32) -> impl Iterator<Item = Color32> {
+    (0..=20).map(move |step| c.lerp_to_gamma(target, step as f32 / 20.0))
+}
+
+/// `c` moved up to `t` toward `target`, but only as far as `ok` still holds.
+fn shade(c: Color32, target: Color32, t: f32, ok: impl Fn(Color32) -> bool) -> Color32 {
+    (0..=10)
+        .rev()
+        .map(|step| c.lerp_to_gamma(target, t * step as f32 / 10.0))
+        .find(|c| ok(*c))
+        .unwrap_or(c)
+}
+
 impl Palette {
-    /// This palette with `accent` in place of Xuan's blue. The colour is first made lighter or
-    /// darker until it reads as a control on the panels and text on it stays readable (4.5:1
-    /// for the light palette's white text, 3:1 for the dark palette's light grey, as with
-    /// Xuan's own blue); the gradient, pressed and checkbox shades are derived from it.
+    /// This palette with `accent` in place of Xuan's blue.
+    ///
+    /// The colour is made lighter (dark palette) or darker (light palette) until it stands out
+    /// from the panels and windows by 3:1, for focus rings and other accent marks. Fills that
+    /// carry text are derived from it separately: with light text the fill is darkened, with
+    /// dark text (for a light accent such as yellow) it is lightened, whichever needs the
+    /// smaller change, until the text and its muted hints reach 4.5:1 on every shade of the
+    /// menu highlight and the default button's gradient.
     pub fn with_accent(mut self, accent: Color32) -> Self {
         let accent = Color32::from_rgb(accent.r(), accent.g(), accent.b());
-        let fits = |c: Color32| {
-            let text = contrast_ratio(self.on_accent_text, c);
-            let surface = contrast_ratio(c, self.panel);
-            if self.dark {
-                text >= 3.0 && surface >= 3.0
-            } else {
-                text >= 4.5 && surface >= 3.0
-            }
+        let stands_out = |c: Color32| {
+            contrast_ratio(c, self.panel) >= ACCENT_SURFACE_RATIO
+                && contrast_ratio(c, self.window) >= ACCENT_SURFACE_RATIO
         };
-        // Too light for its text: darken. Too dark against a dark panel: lighten.
-        let toward = if !self.dark || contrast_ratio(self.on_accent_text, accent) < 3.0 {
-            Color32::BLACK
-        } else {
+        let away = if self.dark {
             Color32::WHITE
+        } else {
+            Color32::BLACK
         };
-        let accent = (0..=20)
-            .map(|step| accent.lerp_to_gamma(toward, step as f32 / 20.0))
-            .find(|c| fits(*c))
+        let accent = steps_toward(accent, away)
+            .find(|c| stands_out(*c))
             .unwrap_or(self.accent);
+
+        // Light text on a darkened fill, or dark text on a lightened one.
+        let light_text = (self.on_accent_text, self.on_accent_muted);
+        let light_text = if luminance(light_text.0) > 0.5 {
+            light_text
+        } else {
+            (Color32::WHITE, gray(214))
+        };
+        let dark_text = (gray(16), gray(60));
+        let fill_for = |(text, muted): (Color32, Color32), toward: Color32| {
+            steps_toward(accent, toward).enumerate().find(|(_, c)| {
+                contrast_ratio(text, *c) >= ON_ACCENT_TEXT_RATIO
+                    && contrast_ratio(muted, *c) >= ON_ACCENT_TEXT_RATIO
+            })
+        };
+        let on_light = fill_for(dark_text, Color32::WHITE);
+        let on_dark = fill_for(light_text, Color32::BLACK);
+        let ((text, muted), fill) = match (on_dark, on_light) {
+            (Some((a, dark_fill)), Some((b, _))) if a <= b => (light_text, dark_fill),
+            (_, Some((_, light_fill))) => (dark_text, light_fill),
+            (Some((_, dark_fill)), None) => (light_text, dark_fill),
+            (None, None) => (
+                (self.on_accent_text, self.on_accent_muted),
+                self.accent_fill,
+            ),
+        };
+        let readable = |c: Color32| contrast_ratio(text, c) >= ON_ACCENT_TEXT_RATIO;
+
+        self.accent = accent;
+        self.accent_fill = fill;
+        self.on_accent_text = text;
+        self.on_accent_muted = muted;
+        self.accent_gradient = [
+            shade(fill, Color32::WHITE, 0.2, readable),
+            shade(fill, Color32::BLACK, 0.1, readable),
+        ];
+        self.accent_pressed = [
+            shade(fill, Color32::BLACK, 0.18, readable),
+            shade(fill, Color32::BLACK, 0.3, readable),
+        ];
         let lighter = |t| accent.lerp_to_gamma(Color32::WHITE, t);
         let darker = |t| accent.lerp_to_gamma(Color32::BLACK, t);
-        self.accent = accent;
-        self.accent_gradient = [lighter(0.2), darker(0.1)];
-        self.accent_pressed = [darker(0.18), darker(0.3)];
         self.check = [lighter(0.18), darker(0.1)];
+        // The check mark: white or near-black, whichever reads better on both shades.
+        let worst = |mark: Color32| {
+            self.check
+                .iter()
+                .map(|c| contrast_ratio(mark, *c))
+                .fold(f32::INFINITY, f32::min)
+        };
+        self.on_accent = if worst(Color32::WHITE) >= worst(gray(16)) {
+            Color32::WHITE
+        } else {
+            gray(16)
+        };
         if !self.dark {
             self.row_selected = self.panel.lerp_to_gamma(accent, 0.16);
         }

@@ -44,6 +44,35 @@ fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egu
     );
 }
 
+/// A menu row: the label and a right-aligned shortcut hint.
+///
+/// The hint sits on the accent fill while the row is highlighted, where egui's weak text colour
+/// is unreadable, so its colour follows the row's state. That state is only known once the
+/// button is added: it is read from the button's last response, with a repaint if it has
+/// changed since.
+fn item_button(ui: &mut egui::Ui, enabled: bool, label: &str, shortcut: &str) -> egui::Response {
+    // Without a shortcut the accessible label is just the name, with no trailing space.
+    if shortcut.is_empty() {
+        return ui.add_enabled(enabled, Button::new(label));
+    }
+    let lit = |response: &egui::Response| {
+        response.hovered()
+            || response.has_focus()
+            || response.highlighted()
+            || response.is_pointer_button_down_on()
+    };
+    let id = ui.next_auto_id();
+    let was_lit = enabled && ui.ctx().read_response(id).is_some_and(|r| lit(&r));
+    let p = ui.palette();
+    let hint = if was_lit { p.on_accent_muted } else { p.muted };
+    let button = Button::new(label).shortcut_text(egui::RichText::new(shortcut).color(hint));
+    let response = ui.add_enabled(enabled, button);
+    if enabled && lit(&response) != was_lit {
+        ui.ctx().request_repaint();
+    }
+    response
+}
+
 /// Entries plugins added to a menu.
 fn plugin_items(
     ui: &mut egui::Ui,
@@ -55,13 +84,7 @@ fn plugin_items(
     };
     ui.separator();
     for item in items {
-        let mut button = Button::new(&item.label);
-        // An empty shortcut would still add a space to the accessible name.
-        if !item.shortcut.is_empty() {
-            button = button.shortcut_text(&item.shortcut);
-        }
-        let response = ui
-            .add_enabled(item.enabled, button)
+        let response = item_button(ui, item.enabled, &item.label, &item.shortcut)
             .on_hover_text(&item.source)
             .on_disabled_hover_text(&item.source);
         if response.clicked() {
@@ -103,13 +126,8 @@ fn labelled(
     action: &mut Option<&'static str>,
 ) {
     let (enabled, shortcut) = items.get(command);
-    // Without a shortcut the accessible label is just the name, with no trailing space.
-    let button = if shortcut.is_empty() {
-        Button::new(label)
-    } else {
-        Button::new(label).shortcut_text(shortcut)
-    };
-    if ui.add_enabled(enabled, button).clicked() {
+    let response = item_button(ui, enabled, label, shortcut);
+    if response.clicked() {
         *action = Some(command);
         ui.close();
     }

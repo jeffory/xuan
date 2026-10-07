@@ -13,7 +13,9 @@ mod legacy {
     pub const TITLEBAR: Color32 = Color32::from_rgb(45, 45, 45);
 }
 
-/// egui's visuals exactly as the dark-only `theme::apply` set them up.
+/// egui's visuals as the dark-only `theme::apply` set them up, with the changes made on
+/// purpose since: no `override_text_color` and themed weak, error and warning text (#78, #77),
+/// and widget outlines that reach 3:1 against the panel (#77).
 fn legacy_visuals() -> egui::Visuals {
     use legacy::*;
     let mut v = egui::Visuals::dark();
@@ -22,7 +24,9 @@ fn legacy_visuals() -> egui::Visuals {
     v.extreme_bg_color = FIELD;
     v.text_edit_bg_color = Some(FIELD);
     v.faint_bg_color = Color32::from_gray(40);
-    v.override_text_color = Some(TEXT);
+    v.weak_text_color = Some(MUTED);
+    v.error_fg_color = Color32::from_rgb(255, 128, 128);
+    v.warn_fg_color = Color32::from_rgb(255, 170, 60);
     v.window_corner_radius = CornerRadius::same(10);
     v.menu_corner_radius = CornerRadius::same(7);
     v.window_stroke = Stroke::new(1.0_f32, Color32::from_gray(83));
@@ -54,10 +58,10 @@ fn legacy_visuals() -> egui::Visuals {
     }
     v.widgets.inactive.bg_fill = Color32::from_gray(72);
     v.widgets.inactive.weak_bg_fill = Color32::from_gray(62);
-    v.widgets.inactive.bg_stroke = Stroke::new(0.7_f32, Color32::from_gray(91));
+    v.widgets.inactive.bg_stroke = Stroke::new(0.7_f32, Color32::from_gray(122));
     v.widgets.hovered.bg_fill = Color32::from_gray(88);
     v.widgets.hovered.weak_bg_fill = Color32::from_gray(78);
-    v.widgets.hovered.bg_stroke = Stroke::new(0.7_f32, Color32::from_gray(112));
+    v.widgets.hovered.bg_stroke = Stroke::new(0.7_f32, Color32::from_gray(150));
     v.widgets.active.bg_fill = Color32::from_gray(52);
     v.widgets.active.weak_bg_fill = Color32::from_gray(52);
     v.widgets.open.weak_bg_fill = Color32::from_gray(68);
@@ -139,7 +143,8 @@ fn text_meets_wcag_aa_in_both_palettes() {
             ("accent/window", p.accent, p.window),
             ("plot line/plot", p.plot_line, p.plot),
             ("ruler tick/ruler", p.ruler_tick, p.ruler),
-            ("on accent/accent", p.on_accent, p.accent),
+            ("check mark/check top", p.on_accent, p.check[0]),
+            ("check mark/check bottom", p.on_accent, p.check[1]),
             (
                 "text/selected tab",
                 p.text,
@@ -150,12 +155,161 @@ fn text_meets_wcag_aa_in_both_palettes() {
             assert!(r >= 3.0, "{name} {label}: {r:.2}");
         }
     }
-    // Highlighted menu rows. The dark palette keeps macOS's light-on-blue rows (about 3:1);
-    // the light palette's white on a deeper blue reaches 4.5:1.
-    let light = Palette::LIGHT;
-    assert!(ratio(light.on_accent_text, light.accent) >= 4.5);
-    assert!(ratio(light.on_accent_muted, light.accent) >= 4.5);
-    assert!(ratio(Palette::DARK.on_accent_text, Palette::DARK.accent) >= 3.0);
+}
+
+/// `fg` (translucent or not) painted over `under`, compared with the surface `bg` round the
+/// control: how well a control's outline separates it from what it sits on.
+fn edge_ratio(fg: Color32, under: Color32, bg: Color32) -> f32 {
+    contrast_ratio(under.blend(fg), bg)
+}
+
+/// Every pair from the contrast review (#77), with the ratio it needs: 4.5:1 for text, 3:1 for
+/// the outlines that show where a control is. Outlines are checked against both surfaces a
+/// control sits on, the panel and the dialog window.
+fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
+    let v = visuals(p);
+    let mut pairs: Vec<(String, f32, f32)> = [
+        // Default buttons (Done, Apply, OK, Develop): the label on every shade of the
+        // gradient, the lightest stop included, and while pressed.
+        (
+            "primary label/gradient top",
+            ratio(p.on_accent_text, p.accent_gradient[0]),
+        ),
+        (
+            "primary label/gradient bottom",
+            ratio(p.on_accent_text, p.accent_gradient[1]),
+        ),
+        (
+            "primary label/pressed top",
+            ratio(p.on_accent_text, p.accent_pressed[0]),
+        ),
+        (
+            "primary label/pressed bottom",
+            ratio(p.on_accent_text, p.accent_pressed[1]),
+        ),
+        // Highlighted menu rows: `menus.rs` item buttons and `widgets::menu_check`.
+        (
+            "menu text/highlight",
+            ratio(p.on_accent_text, p.accent_fill),
+        ),
+        (
+            "menu shortcut hint/highlight",
+            ratio(p.on_accent_muted, p.accent_fill),
+        ),
+        ("menu shortcut hint/window", ratio(p.muted, p.window)),
+        // Error text in dialogs (Paths, plugin install), and egui's own error and warning
+        // colours, which come from the palette.
+        ("error/window", ratio(p.error, p.window)),
+        ("error/panel", ratio(p.error, p.panel)),
+        (
+            "egui error_fg_color/window",
+            ratio(v.error_fg_color, p.window),
+        ),
+        (
+            "egui warn_fg_color/window",
+            ratio(v.warn_fg_color, p.window),
+        ),
+        // Hints and weak text (#78).
+        ("egui weak text/field", ratio(v.weak_text_color(), p.field)),
+    ]
+    .into_iter()
+    .map(|(label, r)| (label.to_owned(), r, 4.5))
+    .collect();
+    for (surface, bg) in [("panel", p.panel), ("window", p.window)] {
+        for (label, r) in [
+            (
+                "secondary button edge (top)",
+                edge_ratio(p.control_edge, p.control[0], bg),
+            ),
+            (
+                "secondary button edge (bottom)",
+                edge_ratio(p.control_edge, p.control[1], bg),
+            ),
+            (
+                "text field border",
+                ratio(v.widgets.inactive.bg_stroke.color, bg),
+            ),
+            ("number field border", ratio(p.widget_stroke, bg)),
+            ("slider rail", ratio(p.slider_rail, bg)),
+            ("keyboard focus ring", ratio(p.accent, bg)),
+        ] {
+            pairs.push((format!("{label}/{surface}"), r, 3.0));
+        }
+    }
+    pairs
+}
+
+#[test]
+fn every_reviewed_pair_meets_its_contrast_in_both_palettes() {
+    let mut failures = Vec::new();
+    for p in [Palette::DARK, Palette::LIGHT] {
+        let name = if p.dark { "dark" } else { "light" };
+        for (label, r, needs) in contrast_pairs(&p) {
+            if r < needs {
+                failures.push(format!("{name} {label}: {r:.2} < {needs}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The colours a `TextEdit`'s hint and a plain label are painted in once the palette is
+/// installed, as their text shapes resolve them.
+fn painted_text_colors(p: &Palette) -> (Color32, Color32) {
+    fn find(shape: &egui::Shape, needle: &str) -> Option<Color32> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == needle => {
+                let section = t.galley.job.sections.first()?.format.color;
+                let color = if section == Color32::PLACEHOLDER {
+                    t.fallback_color
+                } else {
+                    section
+                };
+                Some(t.override_text_color.unwrap_or(color))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, needle)),
+            _ => None,
+        }
+    }
+    let ctx = egui::Context::default();
+    set_palette(&ctx, p);
+    let mut text = String::new();
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.label("Body label");
+            ui.add(egui::TextEdit::singleline(&mut text).hint_text("Type a command…"));
+        });
+    });
+    let color = |needle: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| find(&clipped.shape, needle))
+            .unwrap_or_else(|| panic!("no text shape for {needle:?}"))
+    };
+    (color("Type a command…"), color("Body label"))
+}
+
+#[test]
+fn text_edit_hints_are_muted_and_labels_keep_the_text_colour() {
+    for p in [Palette::DARK, Palette::LIGHT] {
+        let name = if p.dark { "dark" } else { "light" };
+        let (hint, label) = painted_text_colors(&p);
+        assert_eq!(label, p.text, "{name}: a plain label keeps the text colour");
+        assert_ne!(
+            hint, p.text,
+            "{name}: the hint must not look like typed text"
+        );
+        assert_eq!(hint, p.muted, "{name}: the hint is muted");
+        let r = ratio(hint, p.field);
+        assert!(r >= 4.5, "{name} hint/field: {r:.2}");
+        // Visibly weaker than typed text on the same field.
+        let text = ratio(p.text, p.field);
+        assert!(
+            text / r > 1.5,
+            "{name}: hint {r:.2} too close to text {text:.2}"
+        );
+    }
 }
 
 #[test]
@@ -163,7 +317,10 @@ fn light_palette_uses_light_visuals() {
     let v = visuals(&Palette::LIGHT);
     assert!(!v.dark_mode);
     assert_eq!(v.panel_fill, Palette::LIGHT.panel);
-    assert_eq!(v.override_text_color, Some(Palette::LIGHT.text));
+    assert_eq!(v.override_text_color, None);
+    assert_eq!(v.weak_text_color, Some(Palette::LIGHT.muted));
+    assert_eq!(v.error_fg_color, Palette::LIGHT.error);
+    assert_eq!(v.warn_fg_color, Palette::LIGHT.warning);
     assert!(visuals(&Palette::DARK).dark_mode);
 }
 
@@ -195,20 +352,49 @@ fn a_system_accent_replaces_the_blue_and_stays_readable() {
         Color32::WHITE,
         Color32::BLACK,
     ];
+    // Every reviewed pair holds whatever accent the desktop asks for, Xuan's own included.
+    let mut failures = Vec::new();
     for base in [Palette::DARK, Palette::LIGHT] {
-        for accent in accents {
+        let name = if base.dark { "dark" } else { "light" };
+        for accent in accents.into_iter().chain([base.accent]) {
             let p = base.with_accent(accent);
-            let text = if p.dark { 3.0 } else { 4.5 };
-            assert!(
-                ratio(p.on_accent_text, p.accent) >= text,
-                "{accent:?} on {}",
-                p.dark
-            );
-            assert!(ratio(p.accent, p.panel) >= 3.0, "{accent:?} on {}", p.dark);
-            assert!(ratio(p.text, p.row_selected) >= 4.5);
-            assert_ne!(p.accent_gradient, base.accent_gradient);
+            let mut pairs = contrast_pairs(&p);
+            pairs.extend([
+                (
+                    "text/selected row".into(),
+                    ratio(p.text, p.row_selected),
+                    4.5,
+                ),
+                ("check mark/top".into(), ratio(p.on_accent, p.check[0]), 3.0),
+                (
+                    "check mark/bottom".into(),
+                    ratio(p.on_accent, p.check[1]),
+                    3.0,
+                ),
+            ]);
+            for (label, r, needs) in pairs {
+                if r < needs {
+                    failures.push(format!("{name} {accent:?} {label}: {r:.2} < {needs}"));
+                }
+            }
+            if accent != base.accent {
+                assert_ne!(p.accent_gradient, base.accent_gradient, "{accent:?}");
+            }
         }
     }
+    assert!(failures.is_empty(), "{failures:#?}");
+    // A light accent keeps its colour and takes dark text, rather than turning muddy.
+    let yellow = Color32::from_rgb(255, 255, 0);
+    let p = Palette::DARK.with_accent(yellow);
+    assert_eq!(p.accent_fill, yellow);
+    assert!(luminance(p.on_accent_text) < 0.1);
+    // Xuan's blue keeps light text.
+    assert_eq!(
+        Palette::LIGHT
+            .with_accent(Palette::LIGHT.accent)
+            .on_accent_text,
+        Color32::WHITE
+    );
     // A colour that already fits is kept as it is.
     let windows_blue = Color32::from_rgb(0, 103, 192);
     assert_eq!(

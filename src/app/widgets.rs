@@ -78,7 +78,7 @@ fn focus_ring(ui: &Ui, response: &Response, radius: f32) {
         ui.painter().rect_stroke(
             response.rect.expand(2.0),
             radius + 2.0,
-            Stroke::new(2.0_f32, ui.palette().accent.gamma_multiply(0.8)),
+            Stroke::new(2.0_f32, ui.palette().accent),
             StrokeKind::Outside,
         );
     }
@@ -282,7 +282,7 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
                 widget.corner_radius = CornerRadius::same(4);
                 widget.bg_fill = p.field;
                 widget.weak_bg_fill = p.field;
-                widget.bg_stroke = Stroke::new(1.0_f32, p.border);
+                widget.bg_stroke = Stroke::new(1.0_f32, p.widget_stroke);
                 widget.expansion = 0.0;
             }
             let mut number = egui::DragValue::new(&mut *self.value)
@@ -1350,7 +1350,7 @@ pub fn selectable_value<T: PartialEq>(
     let p = ui.palette();
     let highlighted = response.hovered() || response.has_focus();
     let text = if highlighted {
-        ui.painter().rect_filled(rect, 4.0, p.accent);
+        ui.painter().rect_filled(rect, 4.0, p.accent_fill);
         p.on_accent_text
     } else {
         p.text
@@ -1412,7 +1412,7 @@ pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Re
     let p = ui.palette();
     let highlighted = enabled && (response.hovered() || response.has_focus());
     let (text, hint_color) = if highlighted {
-        ui.painter().rect_filled(rect, 4.0, p.accent);
+        ui.painter().rect_filled(rect, 4.0, p.accent_fill);
         (p.on_accent_text, p.on_accent_muted)
     } else if enabled {
         (p.text, p.muted)
