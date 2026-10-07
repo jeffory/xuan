@@ -171,7 +171,7 @@ impl Tool {
                 "Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels",
             ),
             Self::Wand => {
-                tr("Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect")
+                tr("Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect")
             }
             Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
             Self::Pencil => tr(
@@ -497,7 +497,7 @@ pub struct EditorApp {
     pen: pen_tool::PenState,
     expand_amount: u32,
     contract_amount: u32,
-    /// Select → Color Range…, while open; and the Fuzziness it remembers.
+    /// Select → Colour Range…, while open; and the Fuzziness it remembers.
     color_range: Option<color_range::ColorRangeEdit>,
     color_range_fuzziness: u32,
     /// Why the last command used a built-in algorithm instead of the chosen provider.
@@ -1875,7 +1875,7 @@ impl EditorApp {
                 format!(
                     "{}{} —  Xuan",
                     s.title,
-                    if s.history.dirty() { " •" } else { "" }
+                    if s.history.edited() { " •" } else { "" }
                 )
             })
         };

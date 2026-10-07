@@ -691,7 +691,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_alt(Key::A)])
         .host(Edit)
         .aliases(&["foreground", "cutout", "grabcut"]),
-    cmd("color_range", "Color Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
+    cmd("color_range", "Colour Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
     cmd("expand_selection", "Expand Selection…", C::Select)
         .when(has_selection)
         .aliases(&["grow", "dilate"]),
@@ -709,7 +709,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .aliases(&["cutout", "transparent", "subject", "grabcut"]),
     cmd(
         "remove_flat_background",
-        "Remove Flat Background (edge colors)",
+        "Remove Flat Background (edge colours)",
         C::Filter,
     )
     .when(image_layer)
@@ -913,13 +913,13 @@ pub(super) const COMMANDS: &[Command] = &[
     tool("tool_zoom", "Zoom", &[bare(Key::Z)], Run::Tool(Tool::Zoom)),
     tool(
         "swap_colors",
-        "Swap Colors",
+        "Swap Colours",
         &[bare(Key::X)],
         Run::App(swap_colors),
     ),
     tool(
         "reset_colors",
-        "Reset Colors",
+        "Reset Colours",
         &[bare(Key::D)],
         Run::App(reset_colors),
     ),

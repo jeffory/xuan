@@ -39,6 +39,9 @@ mod settings_shortcuts;
 #[path = "ui_tool_rail.rs"]
 mod tool_rail;
 
+#[path = "ui_polish.rs"]
+mod polish;
+
 #[path = "ui_focus.rs"]
 mod focus;
 
@@ -779,7 +782,7 @@ mod layer_appearance {
         }
         let y = |ui: &UiTest, name: &str| ui.harness.get_by_label(name).rect().top();
         assert!(y(&ui, "Dissolve") < y(&ui, "Darken"));
-        assert!(y(&ui, "Linear Burn") < y(&ui, "Darker Color"));
+        assert!(y(&ui, "Linear Burn") < y(&ui, "Darker Colour"));
         assert!(y(&ui, "Pin Light") < y(&ui, "Hard Mix"));
         assert!(y(&ui, "Divide") < y(&ui, "Hue"));
         // The menu opens where it fits the window.
@@ -960,7 +963,7 @@ mod layer_appearance {
 
         ui.open_menu("Layer");
         ui.click("New Adjustment Layer ⏵");
-        ui.click("Color Balance");
+        ui.click("Colour Balance");
         assert!(ui.has("Cyan – Red") && ui.has("Preserve Luminosity"));
         // Each tonal range has its own sliders.
         ui.click("Shadows");
@@ -1183,7 +1186,7 @@ mod color_range {
         let mut ui = halves();
         let revision = ui.app().session().unwrap().history.revision;
         ui.open_menu("Select");
-        ui.click("Color Range…");
+        ui.click("Colour Range…");
         assert!(ui.app().color_range.is_some());
         assert!(ui.has("Fuzziness"));
         // The menus' commands wait while the dialog is open.
@@ -1209,7 +1212,7 @@ mod color_range {
     fn cancel_puts_back_the_old_selection() {
         let mut ui = halves();
         ui.open_menu("Select");
-        ui.click("Color Range…");
+        ui.click("Colour Range…");
         let pos = at(&ui, 15.5, 4.5);
         ui.click_at(pos);
         assert!(selected(&ui).is_some());
@@ -1218,7 +1221,7 @@ mod color_range {
         assert_eq!(selected(&ui), None);
         assert_ne!(
             ui.app().session().unwrap().history.undo_name(),
-            Some("Color Range")
+            Some("Colour Range")
         );
     }
 }

@@ -416,7 +416,7 @@ impl EditorApp {
                                 .max_decimals(1),
                         );
                         ui.add_space(12.0);
-                        ui.label(tr("Color"));
+                        ui.label(tr("Colour"));
                         widgets::color_well(ui, &mut edit.style.color);
                     });
                     ui.horizontal(|ui| {

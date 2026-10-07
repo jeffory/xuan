@@ -69,9 +69,9 @@ fn it_opens_from_the_help_menu() {
 #[test]
 fn typing_filters_the_list() {
     let (_directory, mut ui) = open();
-    assert!(ui.has("Swap Colors, Tools") && ui.has("Open…, File"));
+    assert!(ui.has("Swap Colours, Tools") && ui.has("Open…, File"));
     ui.type_keys("swap");
-    assert!(ui.has("Swap Colors, Tools"));
+    assert!(ui.has("Swap Colours, Tools"));
     assert!(!ui.has("Open…, File"));
     assert_eq!(listed(&ui).first().map(String::as_str), Some("swap_colors"));
     ui.type_keys("zzzz");
@@ -159,7 +159,7 @@ fn clicking_a_row_runs_it_and_remembers_it() {
     ui.app_mut().brush.color = [1, 2, 3, 255];
     ui.app_mut().background = [4, 5, 6, 255];
     ui.type_keys("swap");
-    ui.click("Swap Colors, Tools");
+    ui.click("Swap Colours, Tools");
     assert!(!is_open(&ui));
     assert_eq!(ui.app().brush.color, [4, 5, 6, 255]);
     let saved = std::fs::read_to_string(directory.path().join("config.toml")).unwrap();

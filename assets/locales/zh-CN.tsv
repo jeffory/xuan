@@ -125,7 +125,7 @@ Zoom	缩放
 Click to select · Click outside to deselect · Drag to move · Handles to resize · Space to pan	单击选择 · 单击外部取消选择 · 拖动移动 · 手柄调整大小 · 空格平移
 Drag to select · Shift add · Alt subtract · Ctrl+D deselect · Delete clears	拖动选择 · Shift 添加 · Alt 减去 · Ctrl+D 取消选择 · Delete 清除
 Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels	绘制选区 · Shift 添加 · Alt 减去 · Enter 闭合多边形 · Escape 取消
-Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect	单击选择相似颜色 · Shift 添加 · Alt 减去 · Ctrl+D 取消选择
+Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect	单击选择相似颜色 · Shift 添加 · Alt 减去 · Ctrl+D 取消选择
 Drag to crop · Enter applies · Escape cancels · Space to pan	拖动裁剪 · Enter 应用 · Escape 取消 · 空格平移
 Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan	拖动绘画 · [ ] 大小 · Shift 单击绘制直线 · 1–0 不透明度 · 空格平移
 Paint over blemishes · [ ] size · Space to pan	涂抹瑕疵进行修复 · [ ] 大小 · 空格平移
@@ -198,19 +198,19 @@ Soft Light	柔光
 Hard Light	强光
 Darken	变暗
 Lighten	变亮
-Color Dodge	颜色减淡
-Color Burn	颜色加深
+Colour Dodge	颜色减淡
+Colour Burn	颜色加深
 Linear Dodge	线性减淡
 Linear Burn	线性加深
 Difference	差值
 Exclusion	排除
 Hue	色相
 Saturation	饱和度
-Color	颜色
+Colour	颜色
 Luminosity	明度
 Dissolve	溶解
-Darker Color	深色
-Lighter Color	浅色
+Darker Colour	深色
+Lighter Colour	浅色
 Linear Dodge (Add)	线性减淡（添加）
 Vivid Light	亮光
 Linear Light	线性光
@@ -243,10 +243,10 @@ Edit adjustment…	编辑调整…
 Edit filter…	编辑滤镜…
 Non-destructive effect layer	无损效果图层
 RAW · Embedded · Double-click to develop	RAW · 已嵌入 · 双击冲洗
-Foreground color	前景色
-Background color	背景色
-Swap colors (X)	交换颜色 (X)
-Default colors (D)	默认颜色 (D)
+Foreground colour	前景色
+Background colour	背景色
+Swap colours (X)	交换颜色 (X)
+Default colours (D)	默认颜色 (D)
 Canvas size	画布大小
 Image size	图像大小
 Create canvas	创建画布
@@ -289,7 +289,7 @@ Gradient / Shape / Eyedropper / Hand / Zoom	渐变 / 形状 / 吸管 / 抓手 / 
 Brush size / Hardness	画笔大小 / 硬度
 Brush or layer opacity	画笔或图层不透明度
 Set clone source	设置仿制来源
-Swap / Reset colors	交换 / 重置颜色
+Swap / Reset colours	交换 / 重置颜色
 Pan canvas	平移画布
 Pan canvas horizontally	水平平移画布
 Horizontal wheel / Shift+wheel	水平滚轮 / Shift+滚轮
@@ -326,7 +326,7 @@ Curves	曲线
 Exposure	曝光
 Gradient Map	渐变映射
 Black & White	黑白
-Color Balance	色彩平衡
+Colour Balance	色彩平衡
 Midtones	中间调
 Preserve Luminosity	保持明度
 Default	默认值
@@ -353,13 +353,13 @@ Greens	绿色
 Cyans	青色
 Blues	蓝色
 Magentas	洋红
-Colorize	着色
-Color range falloff	颜色范围衰减
+Colourise	着色
+Colour range falloff	颜色范围衰减
 Range start	范围起点
 Range end	范围终点
 Falloff start	衰减起点
 Falloff end	衰减终点
-Invert selected color range	反转所选颜色范围
+Invert selected colour range	反转所选颜色范围
 Click to add a point · Drag points to reshape the curve	单击添加控制点 · 拖动控制点调整曲线
 Amount	数量
 Distance	距离
@@ -431,7 +431,7 @@ Vibrance	自然饱和度
 Tone curve	色调曲线
 S curve	S 曲线
 Lift blacks	抬高黑场
-Color mixer	混色器
+Colour mixer	混色器
 Orange	橙色
 Yellow	黄色
 Aqua	青色
@@ -520,7 +520,7 @@ Blue base	蓝色片基
 Red density	红色密度
 Green density	绿色密度
 Blue density	蓝色密度
-Use film color balance in the Negative tab instead of camera white balance.	请使用“负片”选项卡中的颜色平衡控件调整色彩。
+Use film colour balance in the Negative tab instead of camera white balance.	请使用“负片”选项卡中的颜色平衡控件调整色彩。
 Click an unexposed film edge to sample the orange mask	单击未曝光的胶片边缘取样橙色片基
 Cannot sample this area. Choose a clear, unexposed film edge.	无法取样此区域。请选择清晰且未曝光的胶片边缘。
 Project saved	项目已保存
@@ -558,7 +558,7 @@ Add Mask from Selection	从选区添加蒙版
 Toggle Mask	切换蒙版
 Reorder Layer	重排图层
 Remove Background	移除背景
-Remove Flat Background (edge colors)	移除纯色背景（边缘颜色）
+Remove Flat Background (edge colours)	移除纯色背景（边缘颜色）
 Nudge	微移
 Untitled	未命名
 Images and Xuan projects	图像和 Xuan 项目
@@ -638,7 +638,7 @@ A subdivision every	每隔
 pixels.	像素一条子网格线。
 Use no more subdivisions than the pixels between gridlines.	子网格数不能超过网格线之间的像素数。
 Restore Defaults	恢复默认值
-Choose a custom grid color	选择自定义网格颜色
+Choose a custom grid colour	选择自定义网格颜色
 Light Gray	浅灰色
 Light Blue	浅蓝色
 Light Red	浅红色
@@ -658,7 +658,7 @@ Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
 Layer effects on folders or adjustment layers	文件夹或调整图层上的图层效果
 Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
-Per-letter text colors (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
+Per-letter text colours (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
 Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
 Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以像素导入）
 Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
@@ -668,7 +668,7 @@ Layer Effects	图层效果
 Layer Effects…	图层效果…
 Stroke	描边
 Drop Shadow	投影
-Color Overlay	颜色叠加
+Colour Overlay	颜色叠加
 Inner Shadow	内阴影
 Outer Glow	外发光
 Inner Glow	内发光
@@ -693,8 +693,8 @@ Plugins	插件
 Switch Rectangle / Ellipse Marquee	切换矩形 / 椭圆选框
 Switch Freehand / Polygonal Lasso	切换自由 / 多边形套索
 Switch Rectangle / Ellipse Shape	切换矩形 / 椭圆形状
-Swap Colors	交换颜色
-Reset Colors	复位颜色
+Swap Colours	交换颜色
+Reset Colours	复位颜色
 Decrease Brush Size	减小画笔大小
 Increase Brush Size	增大画笔大小
 Decrease Brush Hardness	降低画笔硬度
@@ -740,7 +740,7 @@ The Photoshop file's layers don't fit in the 100-megapixel limit, even when crop
 This is not a Photoshop file	这不是 Photoshop 文件
 This Photoshop file version isn't supported	不支持此 Photoshop 文件版本
 Only 8-bit RGB Photoshop files can be imported. In Photoshop, choose Image → Mode → RGB Color and 8 Bits/Channel, then save again.	只能导入 8 位 RGB 的 Photoshop 文件。请在 Photoshop 中选择“图像 → 模式 → RGB 颜色”和“8 位/通道”，然后重新存储。
-This Photoshop file uses the {} color mode.	此 Photoshop 文件使用 {} 颜色模式。
+This Photoshop file uses the {} colour mode.	此 Photoshop 文件使用 {} 颜色模式。
 This Photoshop file uses {} bits per channel.	此 Photoshop 文件每通道 {} 位。
 Bitmap	位图
 Grayscale	灰度
@@ -894,8 +894,8 @@ Select Layer's Pixels	选择图层像素
 Select Mask's Black Areas	选择蒙版黑色区域
 Expand Selection…	扩展选区…
 Contract Selection…	收缩选区…
-Color Range	色彩范围
-Color Range…	色彩范围…
+Colour Range	色彩范围
+Colour Range…	色彩范围…
 Pick	拾取
 Remove	移除
 Fuzziness	容差

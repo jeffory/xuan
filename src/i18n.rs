@@ -21,7 +21,23 @@ fn chinese() -> &'static HashMap<&'static str, &'static str> {
     })
 }
 
+/// Names that document data and file formats spell the American way (blend modes, adjustment
+/// and effect kinds), shown with the UI's British spelling.
+fn british(text: &str) -> &str {
+    match text {
+        "Color" => "Colour",
+        "Color Dodge" => "Colour Dodge",
+        "Color Burn" => "Colour Burn",
+        "Darker Color" => "Darker Colour",
+        "Lighter Color" => "Lighter Colour",
+        "Color Balance" => "Colour Balance",
+        "Color Overlay" => "Colour Overlay",
+        _ => text,
+    }
+}
+
 pub fn tr(text: &str) -> &str {
+    let text = british(text);
     if LANGUAGE.get() == Language::SimplifiedChinese {
         chinese().get(text).copied().unwrap_or(text)
     } else {
