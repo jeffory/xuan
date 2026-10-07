@@ -1,14 +1,14 @@
 # macOS port
 
 Xuan ships for Linux and Windows. This page tracks the work to add macOS (Apple Silicon first) as a
-third platform. It replaces four tracking issues; tick items off as they land.
+third platform, in four parts tracked by issues #127 to #130; tick items off as they land.
 
 The engine already ports cleanly: decoders are pure Rust, shaders use only baseline WebGPU features,
 fonts are bundled, and the `cfg(unix)` code (process groups, file modes, atomic saves) suits macOS.
 A cross-compiled `cargo clippy --target aarch64-apple-darwin` of `develop` built every dependency
 and the library. The work is in four parts.
 
-## 1. Build, start and test on a Mac
+## 1. Build, start and test on a Mac (#127)
 
 - [x] Enable wgpu's `metal` backend for macOS. eframe turns wgpu's defaults off, so without it a Mac
   build finds no adapter at startup.
@@ -20,7 +20,7 @@ and the library. The work is in four parts.
   `xuan-macos-arm64-unsigned` artifact.
 - [x] `scripts/fetch-raw-fixtures.sh` falls back to `shasum -a 256` where GNU `sha256sum` is missing.
 
-## 2. Mac keyboard and window conventions
+## 2. Mac keyboard and window conventions (#128)
 
 - [x] **Command shortcuts.** Commands keep one primary modifier, written `Ctrl` in the
   configuration and the docs. On macOS it is ⌘ Command (the Control key also works), and menus,
@@ -54,7 +54,7 @@ These need a real Mac; CI only builds, tests and screenshots the app.
   it and double-clicking zooms.
 - Floating panels close from the dot on their left.
 
-## 3. App bundle and distribution (unsigned for now)
+## 3. App bundle and distribution, unsigned for now (#129)
 
 - [ ] `scripts/package-macos.py`: `Xuan.app` with an `Info.plist` declaring `.xuan` and the import
   types (from `packaging/me.silverl.xuan.xml`), an `.icns` from the existing PNG icons, and a DMG.
@@ -69,7 +69,7 @@ These need a real Mac; CI only builds, tests and screenshots the app.
 - [ ] Later: Developer ID signing and notarization (hardened runtime, no App Sandbox, which would
   stop plugins from running).
 
-## 4. Platform features and docs
+## 4. Platform features and docs (#130)
 
 - [ ] Pen pressure, tilt and eraser: a `tablet/macos.rs` backend reading `NSEvent` tablet events.
 - [ ] System theme (`src/app/system_theme.rs`): read `AppleInterfaceStyle` and `AppleAccentColor`
