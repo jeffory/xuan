@@ -1,4 +1,4 @@
-use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, emath::GuiRounding as _, pos2, vec2};
+use egui::{FontId, Rect, Sense, Stroke, StrokeKind, emath::GuiRounding as _, pos2, vec2};
 #[cfg(target_os = "linux")]
 use xuan::config::WindowButtons;
 use xuan::{config::TitleBar, i18n::tr};
@@ -10,6 +10,40 @@ use super::{
 
 /// Size of one compact-style window button.
 pub(super) const BUTTON_SIZE: egui::Vec2 = vec2(30.0, 22.0);
+
+/// macOS keeps its own window buttons and resize edges: a Compact title bar runs under them, in
+/// a full-size content view, instead of replacing them.
+pub(super) const NATIVE_BUTTONS: bool = cfg!(target_os = "macos");
+
+/// Room the macOS window buttons take at the start of the title bar, after its margin.
+const NATIVE_BUTTONS_WIDTH: f32 = 62.0;
+
+/// Sets up the native window for a title bar style. Transparency (for the rounded corners Xuan
+/// draws) and macOS's full-size content view are fixed when the window is created.
+pub fn native_window(builder: egui::ViewportBuilder, style: TitleBar) -> egui::ViewportBuilder {
+    let builder = builder
+        .with_decorations(decorated(style, NATIVE_BUTTONS))
+        .with_transparent(transparent(style, NATIVE_BUTTONS));
+    if NATIVE_BUTTONS && style.client_side() {
+        builder
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+    } else {
+        builder
+    }
+}
+
+/// Whether the window keeps the system's decorations: always where they include the window
+/// buttons Xuan uses.
+fn decorated(style: TitleBar, native_buttons: bool) -> bool {
+    !style.client_side() || native_buttons
+}
+
+/// Whether the window is created transparent, for the rounded corners of Xuan's own title bar.
+fn transparent(style: TitleBar, native_buttons: bool) -> bool {
+    style.client_side() && !native_buttons
+}
 
 pub(super) fn title_bar(
     palette: &theme::Palette,
@@ -182,7 +216,8 @@ pub(super) struct ButtonStyle {
 /// The title bar settings the dialogs in `widgets::Window` follow, published every frame.
 #[derive(Clone)]
 pub(super) struct DialogChrome {
-    pub title_bar: TitleBar,
+    /// The system draws the window buttons (macOS).
+    pub native_buttons: bool,
     pub layout: ButtonLayout,
     pub style: ButtonStyle,
 }
@@ -358,9 +393,9 @@ fn paint_theme_button(
     let fit = (rect.width() / size.x).min(rect.height() / size.y).min(1.0);
     let image = Rect::from_center_size(rect.center().round_to_pixel_center(ppp), size * fit);
     let color = if dim && !asset.symbolic {
-        Color32::WHITE.gamma_multiply(0.6)
+        egui::Color32::WHITE.gamma_multiply(0.6)
     } else {
-        Color32::WHITE
+        egui::Color32::WHITE
     };
     painter.image(
         texture,
@@ -372,10 +407,20 @@ fn paint_theme_button(
 }
 
 impl EditorApp {
+    /// The title bar style the window shows. With the system's window buttons (macOS) that is
+    /// the style it was created with, as the full-size content view cannot change until restart.
+    pub(super) fn title_bar_style(&self) -> TitleBar {
+        if self.native_buttons {
+            self.startup_title_bar
+        } else {
+            self.config.title_bar
+        }
+    }
+
     /// The window draws rounded corners only with a client-side title bar on a
     /// window that was created transparent, and never when it fills the screen.
     pub(super) fn window_corner_radius(&self, ctx: &egui::Context) -> u8 {
-        if self.config.title_bar.client_side() && self.transparent_window {
+        if self.title_bar_style().client_side() && self.transparent_window {
             theme::window_corner_radius(ctx)
         } else {
             0
@@ -385,7 +430,7 @@ impl EditorApp {
     /// Applies the title bar style's decorations. egui can switch decorations
     /// at runtime; transparency (and so rounded corners) is fixed at startup.
     pub(super) fn sync_decorations(&mut self, ctx: &egui::Context) {
-        let decorated = !self.config.title_bar.client_side();
+        let decorated = decorated(self.title_bar_style(), self.native_buttons);
         if self.decorated != decorated {
             self.decorated = decorated;
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(decorated));
@@ -394,15 +439,17 @@ impl EditorApp {
 
     /// Records how the native window was created, before the first frame.
     pub fn set_startup_title_bar(&mut self, style: TitleBar) {
-        self.transparent_window = style.client_side();
-        self.decorated = !style.client_side();
+        self.startup_title_bar = style;
+        self.transparent_window = transparent(style, self.native_buttons);
+        self.decorated = decorated(style, self.native_buttons);
     }
 
     /// Title-bar items before the menus.
     pub(super) fn leading_window_controls(&mut self, ui: &mut egui::Ui) {
-        match self.config.title_bar {
+        match self.title_bar_style() {
             TitleBar::System => {}
-            TitleBar::MacOs => self.traffic_lights(ui),
+            // The system draws its window buttons there.
+            TitleBar::Compact if self.native_buttons => ui.add_space(NATIVE_BUTTONS_WIDTH),
             TitleBar::Compact => {
                 let buttons = self.button_layout.left.clone();
                 if !buttons.is_empty() {
@@ -416,10 +463,10 @@ impl EditorApp {
     /// Title-bar items after the menus: the centered title, which also moves
     /// the window, and any right-hand window buttons.
     pub(super) fn trailing_window_controls(&mut self, ui: &mut egui::Ui) {
-        let buttons = match self.config.title_bar {
+        let buttons = match self.title_bar_style() {
             // The system title bar shows the title and moves the window.
             TitleBar::System => return,
-            TitleBar::MacOs => Vec::new(),
+            TitleBar::Compact if self.native_buttons => Vec::new(),
             TitleBar::Compact => self.button_layout.right.clone(),
         };
         let reserve = if buttons.is_empty() {
@@ -443,7 +490,7 @@ impl EditorApp {
     /// Hands the title bar style to the dialogs, which are drawn without access to the app.
     pub(super) fn publish_dialog_chrome(&self, ctx: &egui::Context) {
         let chrome = DialogChrome {
-            title_bar: self.config.title_bar,
+            native_buttons: self.native_buttons,
             layout: self.button_layout.clone(),
             style: self.button_style(),
         };
@@ -524,95 +571,6 @@ impl EditorApp {
         }
     }
 
-    /// macOS-style close, minimize and maximize buttons.
-    fn traffic_lights(&mut self, ui: &mut egui::Ui) {
-        let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
-        let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
-        let (group, _) = ui.allocate_exact_size(vec2(62.0, 22.0), Sense::hover());
-        let hovered = ui.rect_contains_pointer(group);
-        for (index, color, label) in [
-            (0, Color32::from_rgb(255, 95, 87), tr("Close window")),
-            (1, Color32::from_rgb(254, 188, 46), tr("Minimize window")),
-            (
-                2,
-                Color32::from_rgb(40, 200, 64),
-                if maximized {
-                    tr("Restore window")
-                } else {
-                    tr("Maximize window")
-                },
-            ),
-        ] {
-            let center = pos2(group.left() + 7.0 + index as f32 * 20.0, group.center().y);
-            let rect = Rect::from_center_size(center, vec2(18.0, 22.0));
-            let response = ui.interact(
-                rect,
-                ui.id().with(("window_control", index)),
-                Sense::click(),
-            );
-            response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-            let color = if focused || hovered {
-                color
-            } else {
-                ui.palette().traffic_inactive
-            };
-            ui.painter().circle_filled(
-                center,
-                6.0,
-                if response.is_pointer_button_down_on() {
-                    color.gamma_multiply(0.75)
-                } else {
-                    color
-                },
-            );
-            ui.painter().circle_stroke(
-                center,
-                6.0,
-                Stroke::new(0.6_f32, Color32::from_black_alpha(65)),
-            );
-            if hovered || response.has_focus() {
-                let stroke = Stroke::new(1.0_f32, Color32::from_black_alpha(170));
-                match index {
-                    0 => {
-                        ui.painter().line_segment(
-                            [center - vec2(2.3, 2.3), center + vec2(2.3, 2.3)],
-                            stroke,
-                        );
-                        ui.painter().line_segment(
-                            [center + vec2(-2.3, 2.3), center + vec2(2.3, -2.3)],
-                            stroke,
-                        );
-                    }
-                    1 => {
-                        ui.painter().line_segment(
-                            [center - vec2(3.0, 0.0), center + vec2(3.0, 0.0)],
-                            stroke,
-                        );
-                    }
-                    _ => {
-                        ui.painter().rect_stroke(
-                            Rect::from_center_size(center, vec2(5.0, 5.0)),
-                            0.0,
-                            stroke,
-                            StrokeKind::Inside,
-                        );
-                    }
-                }
-            }
-            if response.clicked() {
-                let button = match index {
-                    0 => WindowButton::Close,
-                    1 => WindowButton::Minimize,
-                    _ => WindowButton::Maximize,
-                };
-                self.window_button_action(ui.ctx(), button, maximized);
-            }
-            response.on_hover_text(label);
-        }
-        ui.add_space(8.0);
-    }
-
     fn titlebar_drag(&self, ui: &mut egui::Ui, reserve: f32) {
         let (rect, response) = ui.allocate_exact_size(
             vec2((ui.available_width() - reserve).max(0.0), 22.0),
@@ -654,7 +612,8 @@ impl EditorApp {
     /// Undecorated Wayland/X11 windows need client-provided edge hit targets.
     pub(super) fn window_resize(&self, ctx: &egui::Context) {
         // System decorations come with the window manager's own resize borders.
-        if !self.config.title_bar.client_side()
+        if !self.title_bar_style().client_side()
+            || self.native_buttons
             || ctx.input(|i| {
                 i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
             })

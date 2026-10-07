@@ -177,8 +177,6 @@ pub struct Palette {
     pub thumbnail_placeholder: Color32,
     /// A floating panel's close dot, idle and hovered.
     pub close_dot: [Color32; 2],
-    /// macOS-style window buttons when the window is not focused.
-    pub traffic_inactive: Color32,
 
     // Document tabs
     pub tab_fill: Color32,
@@ -304,7 +302,6 @@ impl Palette {
         thumbnail_edge: white(75),
         thumbnail_placeholder: gray(48),
         close_dot: [gray(98), gray(143)],
-        traffic_inactive: gray(83),
 
         tab_fill: Color32::TRANSPARENT,
         tab_hover: white(19),
@@ -424,7 +421,6 @@ impl Palette {
         thumbnail_edge: black(56),
         thumbnail_placeholder: rgb(222, 222, 227),
         close_dot: [rgb(178, 178, 185), rgb(120, 120, 128)],
-        traffic_inactive: rgb(206, 206, 211),
 
         tab_fill: Color32::TRANSPARENT,
         tab_hover: black(16),

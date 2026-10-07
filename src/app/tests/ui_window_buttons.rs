@@ -127,8 +127,12 @@ fn dialog_close_button_follows_the_button_layout_side() {
 }
 
 #[test]
-fn macos_dialog_close_dot_stays_on_the_left_whatever_the_layout() {
-    let (_directory, mut ui) = dialog(xuan::config::TitleBar::MacOs, ButtonLayout::default());
+fn with_native_window_buttons_the_dialog_close_dot_stays_on_the_left() {
+    let (_directory, mut ui) = dialog(xuan::config::TitleBar::Compact, ButtonLayout::default());
+    assert!(dialog_close_side(&ui) > 0.0);
+    // macOS: the system draws the window buttons, and dialogs close from a dot on the left.
+    ui.app_mut().native_buttons = true;
+    ui.settle();
     assert!(dialog_close_side(&ui) < 0.0);
     assert!(ui.has_role(egui::accesskit::Role::Button, "Close panel"));
     ui.click("Close panel");
@@ -136,13 +140,16 @@ fn macos_dialog_close_dot_stays_on_the_left_whatever_the_layout() {
 }
 
 #[test]
-fn changing_the_title_bar_style_updates_an_open_dialog() {
-    use xuan::config::TitleBar;
-    let (_directory, mut ui) = dialog(TitleBar::MacOs, ButtonLayout::default());
-    assert!(dialog_close_side(&ui) < 0.0);
-    ui.app_mut().config.title_bar = TitleBar::Compact;
-    ui.settle();
+fn changing_the_button_layout_updates_an_open_dialog() {
+    use WindowButton::*;
+    let (_directory, mut ui) = dialog(xuan::config::TitleBar::Compact, ButtonLayout::default());
     assert!(dialog_close_side(&ui) > 0.0);
+    ui.app_mut().button_layout = ButtonLayout {
+        left: vec![Close],
+        right: vec![Minimize, Maximize],
+    };
+    ui.settle();
+    assert!(dialog_close_side(&ui) < 0.0);
 }
 
 #[test]

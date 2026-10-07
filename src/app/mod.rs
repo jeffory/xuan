@@ -60,6 +60,8 @@ mod widgets;
 #[cfg(target_os = "linux")]
 mod window_theme;
 
+pub use chrome::native_window;
+
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -563,6 +565,10 @@ pub struct EditorApp {
     transparent_window: bool,
     /// The decorations last requested from the window system.
     decorated: bool,
+    /// The system draws the window buttons and resize edges (macOS), see [`chrome::NATIVE_BUTTONS`].
+    native_buttons: bool,
+    /// The title bar style the window was created with.
+    startup_title_bar: xuan::config::TitleBar,
     button_layout: chrome::ButtonLayout,
     /// Window-button artwork from the desktop theme, loaded on first use.
     #[cfg(target_os = "linux")]
@@ -748,6 +754,9 @@ impl EditorApp {
             command_trace: None,
             transparent_window: true,
             decorated: false,
+            // Tests see the Linux and Windows title bar wherever they run.
+            native_buttons: chrome::NATIVE_BUTTONS && !cfg!(test),
+            startup_title_bar: xuan::config::TitleBar::Compact,
             button_layout: Default::default(),
             #[cfg(target_os = "linux")]
             window_theme: Default::default(),

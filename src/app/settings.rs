@@ -302,19 +302,21 @@ impl EditorApp {
                     "Highlights take your desktop's accent colour instead of Xuan's blue, when it has one.",
                 )),
             );
-            let apply_note = if config.title_bar.client_side() && !self.transparent_window {
+            let apply_note = if self.native_buttons {
+                tr("Title bar changes apply after restarting Xuan.")
+            } else if config.title_bar.client_side() && !self.transparent_window {
                 tr("Rounded window corners appear after restarting Xuan.")
             } else {
                 tr("Title bar changes apply immediately.")
             };
             let title_note = match config.title_bar {
                 TitleBar::System => tr("Use the title bar and window buttons of your desktop."),
+                TitleBar::Compact if self.native_buttons => {
+                    tr("Show the menus in the title bar, beside the window buttons.")
+                }
                 TitleBar::Compact => {
                     tr("Show the menus in the title bar, with window buttons on the right.")
                 }
-                TitleBar::MacOs => tr(
-                    "Show the menus in the title bar, with macOS-style window buttons on the left.",
-                ),
             };
             settings_row(
                 ui,

@@ -22,19 +22,37 @@ and the library. The work is in four parts.
 
 ## 2. Mac keyboard and window conventions
 
-- [ ] **Command shortcuts.** Commands keep one primary modifier, written `Ctrl` in the
+- [x] **Command shortcuts.** Commands keep one primary modifier, written `Ctrl` in the
   configuration and the docs. On macOS it is ⌘ Command (the Control key also works), and menus,
-  tool tips and Settings show Mac symbols such as ⇧⌘S. Ctrl+click actions are ⌘-click.
-- [ ] **Safe quit.** winit's default app menu quits with `terminate:` and never asks the app, so
+  tool tips and Settings show Mac symbols such as ⇧⌘S. Ctrl+click actions are ⌘-click. ⌘H
+  hides the app, so Show Transform Controls has no default shortcut there.
+- [x] **Safe quit.** winit's default app menu quits with `terminate:` and never asks the app, so
   ⌘Q, Quit in the Dock and logging out would skip the unsaved-changes prompt. Xuan now answers
   `applicationShouldTerminate:`: it quits at once when nothing is unsaved, and otherwise cancels
   and shows the prompt.
-- [ ] **Native title bar.** The drawn macOS-style title bar is retired on every platform. On macOS the
-  Compact style keeps the system's own window buttons over a full-size content view, with Xuan's
-  menus beside them; System keeps a standard title bar. Configuration files that say
-  `title_bar = "macos"` load as Compact.
+- [x] **Native title bar.** The drawn macOS-style title bar is retired on every platform. On macOS
+  the Compact style keeps the system's own window buttons, resize edges and corners over a
+  full-size content view, with Xuan's menus beside them; System keeps a standard title bar. The
+  content view is fixed when the window is created, so a change applies after restarting.
+  Configuration files that say `title_bar = "macos"` load as Compact.
 - [ ] A native menu bar at the top of the screen, generated from the command registry (for example
   with `muda`), with About, Settings… (⌘,) and the Window menu where Mac users expect them.
+- [ ] Double-clicking the title follows the system's "Double-click a window's title bar to" setting
+  (`AppleActionOnDoubleClick`) rather than always zooming.
+
+### Checking part 2 on a Mac
+
+These need a real Mac; CI only builds, tests and screenshots the app.
+
+- ⌘S, ⌘Z, ⇧⌘Z, ⌘O, ⌘W and ⌘K work, Control+Tab switches tabs, and the menus show ⌘ symbols.
+- ⌘-click selects layers with the Move tool and toggles rows in the Layers panel; ⌘-drag on a
+  corner handle distorts.
+- With unsaved changes, ⌘Q, Quit in the Dock and logging out show the prompt; Cancel keeps Xuan
+  open. Without changes they quit at once and the window size is remembered.
+- The red, yellow and green buttons sit at the left of Xuan's title bar, line up with the menus
+  and work, including full screen; the window resizes from every edge; dragging the title moves
+  it and double-clicking zooms.
+- Floating panels close from the dot on their left.
 
 ## 3. App bundle and distribution (unsigned for now)
 

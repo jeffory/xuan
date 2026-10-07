@@ -30,33 +30,23 @@ impl Language {
 }
 
 /// How the main window draws its title bar and window controls.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TitleBar {
     /// Native decorations from the window manager; the menu bar is a normal panel.
     #[serde(rename = "system")]
     System,
-    /// Client-side title bar holding the menus, with monochrome controls.
-    #[serde(rename = "compact")]
+    /// Client-side title bar holding the menus: with Xuan's own window buttons on Linux and
+    /// Windows, and under the system's on macOS. `macos` names the drawn macOS-style title bar
+    /// of earlier releases, which this replaces.
+    #[default]
+    #[serde(rename = "compact", alias = "macos")]
     Compact,
-    /// Client-side title bar with macOS traffic-light controls on the left.
-    #[serde(rename = "macos")]
-    MacOs,
-}
-
-impl Default for TitleBar {
-    fn default() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::MacOs
-        } else {
-            Self::Compact
-        }
-    }
 }
 
 impl TitleBar {
-    pub const ALL: [Self; 3] = [Self::System, Self::Compact, Self::MacOs];
+    pub const ALL: [Self; 2] = [Self::System, Self::Compact];
 
-    /// The app draws the title bar itself, with system decorations turned off.
+    /// The app draws the title bar itself.
     pub fn client_side(self) -> bool {
         self != Self::System
     }
@@ -66,7 +56,6 @@ impl TitleBar {
         match self {
             Self::System => "System",
             Self::Compact => "Compact",
-            Self::MacOs => "macOS",
         }
     }
 }
@@ -553,7 +542,7 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), Config::default());
         let chinese = Config {
             language: Language::SimplifiedChinese,
-            title_bar: TitleBar::MacOs,
+            title_bar: TitleBar::System,
             pixel_grid: false,
             pixel_grid_percent: 1200,
             ..Config::default()
@@ -810,10 +799,7 @@ mod tests {
     #[test]
     fn title_bar_style_persists_and_defaults_to_compact() {
         let config: Config = toml::from_str("language = 'en'").unwrap();
-        assert_eq!(config.title_bar, TitleBar::default());
-        if !cfg!(target_os = "macos") {
-            assert_eq!(TitleBar::default(), TitleBar::Compact);
-        }
+        assert_eq!(config.title_bar, TitleBar::Compact);
         for style in TitleBar::ALL {
             let config = Config {
                 title_bar: style,
@@ -825,7 +811,22 @@ mod tests {
         let config: Config = toml::from_str("title_bar = 'system'").unwrap();
         assert_eq!(config.title_bar, TitleBar::System);
         assert!(!TitleBar::System.client_side());
-        assert!(TitleBar::Compact.client_side() && TitleBar::MacOs.client_side());
+        assert!(TitleBar::Compact.client_side());
+    }
+
+    #[test]
+    fn the_retired_macos_title_bar_loads_as_compact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "title_bar = 'macos'\n").unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.title_bar, TitleBar::Compact);
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("title_bar = \"compact\"")
+        );
     }
 
     #[test]

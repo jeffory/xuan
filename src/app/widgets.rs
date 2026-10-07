@@ -1010,16 +1010,14 @@ pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
     }
 }
 
-/// The dialog's close control, drawn in the main window's title bar style: a traffic-light
-/// dot on the left for macOS, else the compact window button on the side the button layout
-/// puts it. Returns whether it was clicked.
+/// The dialog's close control, drawn in the main window's title bar style: a close dot on the
+/// left where the system draws the window buttons (macOS), else the compact window button on the
+/// side the button layout puts it. Returns whether it was clicked.
 fn close_control(ui: &mut Ui, bar: Rect, id: egui::Id) -> bool {
     use super::chrome::{BUTTON_SIZE, DialogChrome, WindowButton, paint_window_button};
     let chrome: Option<DialogChrome> = ui.data(|data| data.get_temp(DialogChrome::id()));
     let label = tr("Close panel");
-    let compact = chrome
-        .as_ref()
-        .filter(|chrome| chrome.title_bar != xuan::config::TitleBar::MacOs);
+    let compact = chrome.as_ref().filter(|chrome| !chrome.native_buttons);
     let Some(chrome) = compact else {
         let center = pos2(bar.left() + 15.0, bar.center().y);
         let response = ui.interact(
