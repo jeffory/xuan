@@ -670,8 +670,8 @@ impl EditorApp {
             widgets::focus_ring_at(
                 ui,
                 &close,
-                close_rect(rect).intersect(viewport).shrink(1.0),
-                9.0,
+                close_rect(rect).intersect(viewport),
+                10.0,
                 widgets::FocusRing::Inside,
             );
             if index + 1 < keys.len() {
