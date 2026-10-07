@@ -7,26 +7,50 @@ use xuan::{
     i18n::tr,
     plugins::{
         jobs::Region,
-        manifest::{InputKind, Surface},
+        manifest::{Action, Input, InputKind, Surface},
     },
 };
 
 use super::{
     EditorApp,
-    plugin_dialogs::input_widget,
+    plugin_dialogs::{input_id, input_widget},
     plugins::region_limit,
-    surfaces::{SurfacePopup, SurfaceRun},
+    surfaces::{SurfacePopup, SurfaceRun, SurfaceStart},
     theme::{self, PaletteExt as _},
     widgets,
 };
 
-fn has_text(ai_box: &AiBox) -> bool {
-    (ai_box.region.fields.values()).any(|v| v.as_str().is_some_and(|t| !t.trim().is_empty()))
+/// Where an action keeps the prompt Generate needs: the first basic text
+/// field of its boxes, else its first basic text input.
+enum PromptAt {
+    Field(String),
+    Input(String),
+    /// The action asks for no text: a box is ready as it is.
+    Nothing,
 }
+
+fn prompt_at(spec: &Action) -> PromptAt {
+    let text = |input: &&Input| {
+        !input.advanced
+            && input.shown_on(Surface::Region)
+            && matches!(input.kind, InputKind::Text | InputKind::Multiline)
+    };
+    if let Some(field) = (spec.regions_input()).and_then(|r| r.fields.iter().find(text)) {
+        return PromptAt::Field(field.id.clone());
+    }
+    match spec.inputs.iter().find(text) {
+        Some(input) => PromptAt::Input(input.id.clone()),
+        None => PromptAt::Nothing,
+    }
+}
+
+/// Box ids, so a run removes exactly the boxes it sent.
+static NEXT_BOX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// A box drawn with the AI Region tool.
 #[derive(Clone, Debug)]
 pub(super) struct AiBox {
+    pub id: u64,
     /// Document pixels; `fields` hold the action's region fields.
     pub region: Region,
     pub plugin: String,
@@ -49,6 +73,7 @@ impl EditorApp {
             .map(|i| (i.id.clone(), i.initial()))
             .collect();
         Some(AiBox {
+            id: NEXT_BOX.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             region,
             plugin,
             action,
@@ -127,8 +152,29 @@ impl EditorApp {
         self.surface_popup = None;
     }
 
+    /// The text of a box's prompt, or None when its action asks for none.
+    fn box_prompt(&self, ai_box: &AiBox) -> Option<String> {
+        let spec = self
+            .plugins
+            .manifest(&ai_box.plugin)?
+            .action(&ai_box.action)?;
+        let value = match prompt_at(spec) {
+            PromptAt::Field(id) => ai_box.region.fields.get(&id),
+            PromptAt::Input(id) => ai_box.values.get(&id),
+            PromptAt::Nothing => return None,
+        };
+        Some(value.and_then(Value::as_str).unwrap_or_default().to_owned())
+    }
+
+    /// Whether Generate may send a box: its prompt has text, or its action
+    /// asks for none.
+    fn box_ready(&self, ai_box: &AiBox) -> bool {
+        self.box_prompt(ai_box)
+            .is_none_or(|text| !text.trim().is_empty())
+    }
+
     /// Change a box's verb: the new action's defaults, keeping the box's
-    /// first text (its prompt) when the new action has a text field.
+    /// prompt when both actions have one.
     pub(super) fn set_ai_box_action(&mut self, index: usize, plugin: &str, action: &str) {
         let Some(spec) = (self.plugins.manifest(plugin))
             .and_then(|m| m.action(action))
@@ -139,11 +185,12 @@ impl EditorApp {
         let Some(regions) = spec.regions_input().cloned() else {
             return;
         };
+        let prompt = (self.session().and_then(|s| s.ai_boxes.get(index)))
+            .and_then(|b| self.box_prompt(b))
+            .filter(|text| !text.is_empty());
         let Some(ai_box) = self.session_mut().and_then(|s| s.ai_boxes.get_mut(index)) else {
             return;
         };
-        let prompt = (ai_box.region.fields.values())
-            .find_map(|v| v.as_str().filter(|t| !t.is_empty()).map(str::to_owned));
         ai_box.region.fields.clear();
         for field in &regions.fields {
             ai_box
@@ -151,15 +198,19 @@ impl EditorApp {
                 .fields
                 .insert(field.id.clone(), field.initial());
         }
-        let text_field = (regions.fields.iter())
-            .find(|f| matches!(f.kind, InputKind::Text | InputKind::Multiline));
-        if let (Some(prompt), Some(field)) = (prompt, text_field) {
-            ai_box.region.fields.insert(field.id.clone(), prompt.into());
-        }
         ai_box.values = (spec.inputs.iter())
             .filter(|i| i.kind != InputKind::Regions)
             .map(|i| (i.id.clone(), i.initial()))
             .collect();
+        match (prompt, prompt_at(&spec)) {
+            (Some(prompt), PromptAt::Field(id)) => {
+                ai_box.region.fields.insert(id, prompt.into());
+            }
+            (Some(prompt), PromptAt::Input(id)) => {
+                ai_box.values.insert(id, prompt.into());
+            }
+            _ => {}
+        }
         (ai_box.plugin, ai_box.action) = (plugin.into(), action.into());
     }
 
@@ -173,8 +224,8 @@ impl EditorApp {
     }
 
     /// The boxes Generate on box `index` sends, as groups of one job each:
-    /// all boxes of its action with text when that action takes several,
-    /// else the box alone (when it has text).
+    /// all ready boxes of its action when that action takes several, else
+    /// the box alone (when it is ready).
     fn ai_box_groups(&self, index: usize) -> Vec<Vec<usize>> {
         let Some(session) = self.session() else {
             return Vec::new();
@@ -183,14 +234,16 @@ impl EditorApp {
             return Vec::new();
         };
         if !self.sends_together(chosen) {
-            return if has_text(chosen) {
+            return if self.box_ready(chosen) {
                 vec![vec![index]]
             } else {
                 Vec::new()
             };
         }
         let together: Vec<usize> = (session.ai_boxes.iter().enumerate())
-            .filter(|(_, b)| b.plugin == chosen.plugin && b.action == chosen.action && has_text(b))
+            .filter(|(_, b)| {
+                b.plugin == chosen.plugin && b.action == chosen.action && self.box_ready(b)
+            })
             .map(|(i, _)| i)
             .collect();
         if together.is_empty() {
@@ -201,16 +254,16 @@ impl EditorApp {
     }
 
     /// Run the box at `index` (with the other boxes of its action when that
-    /// action takes several). Boxes without text are left; sent boxes are
-    /// removed. A prompt (permission, send consent) stops it after the job
-    /// waiting for it. Returns the jobs started or waiting.
+    /// action takes several). Boxes without their prompt are left. A box
+    /// leaves when its job starts; one waiting for a prompt (permission, send
+    /// consent) or that cannot start stays, and stops the rest. Returns the
+    /// jobs started.
     pub(super) fn generate_ai_boxes(&mut self, index: usize) -> usize {
         let groups = self.ai_box_groups(index);
         let Some(session) = self.session() else {
             return 0;
         };
         let boxes = session.ai_boxes.clone();
-        let mut sent = Vec::new();
         let mut started = 0;
         for group in groups {
             let picked: Vec<&AiBox> = group.iter().map(|i| &boxes[*i]).collect();
@@ -232,32 +285,28 @@ impl EditorApp {
                 target,
                 exact: false,
                 resolution: 72.0,
+                boxes: picked.iter().map(|b| b.id).collect(),
             };
             let first = picked[0];
             let regions = picked.iter().map(|b| b.region.clone()).collect();
-            if self.run_from_surface(&first.plugin, &first.action, &first.values, regions, run) {
-                started += 1;
-                sent.extend(group.iter().copied());
-            }
-            if self.dialog.is_some() {
-                break;
+            match self.run_from_surface(&first.plugin, &first.action, &first.values, regions, run) {
+                SurfaceStart::Started => started += 1,
+                SurfaceStart::Waiting | SurfaceStart::NotStarted => break,
             }
         }
-        if let Some(session) = self.session_mut() {
-            sent.sort_unstable();
-            for i in sent.iter().rev() {
-                session.ai_boxes.remove(*i);
+        if started > 0 {
+            if let Some(session) = self.session_mut() {
+                session.ai_selected = None;
             }
-            session.ai_selected = None;
+            self.surface_popup = None;
         }
-        self.surface_popup = None;
         started
     }
 
     /// The box's region fields and its action's inputs: basic first, then a
-    /// collapsed "Advanced" section. Returns whether its first text field
-    /// has text, which Generate needs.
-    fn ai_box_form(&mut self, ui: &mut egui::Ui, index: usize) -> bool {
+    /// collapsed "Advanced" section. Returns whether the box is ready to send.
+    /// `focus` puts typing in its prompt.
+    fn ai_box_form(&mut self, ui: &mut egui::Ui, index: usize, focus: bool) -> bool {
         let Some(ai_box) = self.session().and_then(|s| s.ai_boxes.get(index)).cloned() else {
             return false;
         };
@@ -280,17 +329,22 @@ impl EditorApp {
             return false;
         };
         let salt = ("ai_box", index);
-        let mut ready = true;
-        let mut first_text = true;
+        let focused = match prompt_at(&spec) {
+            PromptAt::Field(id) if focus => Some(input_id(
+                fields.iter().find(|f| f.id == id).expect("prompt field"),
+                (salt, "field"),
+            )),
+            PromptAt::Input(id) if focus => Some(input_id(
+                inputs.iter().find(|i| i.id == id).expect("prompt input"),
+                (salt, "input"),
+            )),
+            _ => None,
+        };
         for field in fields.iter().filter(|f| !f.advanced) {
             let value = (ai_box.region.fields)
                 .entry(field.id.clone())
                 .or_insert_with(|| field.initial());
             input_widget(ui, field, value, (salt, "field"));
-            if first_text && matches!(field.kind, InputKind::Text | InputKind::Multiline) {
-                ready = value.as_str().is_some_and(|t| !t.trim().is_empty());
-                first_text = false;
-            }
         }
         for input in inputs.iter().filter(|i| !i.advanced) {
             let value = (ai_box.values)
@@ -319,7 +373,10 @@ impl EditorApp {
                     }
                 });
         }
-        ready
+        if let Some(id) = focused {
+            ui.memory_mut(|m| m.request_focus(id));
+        }
+        (self.session().and_then(|s| s.ai_boxes.get(index))).is_some_and(|b| self.box_ready(b))
     }
 
     fn verb_of(&self, plugin: &str, action: &str) -> String {
@@ -373,6 +430,7 @@ impl EditorApp {
         let mut change = None;
         let mut generate = false;
         let mut delete = false;
+        let fresh = self.surface_popup_fresh;
         let response = egui::Area::new(egui::Id::new(("region_popup", index)))
             .order(egui::Order::Foreground)
             .fixed_pos(anchor)
@@ -393,7 +451,8 @@ impl EditorApp {
                             });
                             ui.add_space(4.0);
                         }
-                        let ready = self.ai_box_form(ui, index);
+                        let ready = self.ai_box_form(ui, index, fresh);
+                        self.surface_estimate_line(ui, &ai_box.plugin, &ai_box.action);
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             delete = widgets::button(ui, tr("Delete")).clicked();
@@ -411,15 +470,17 @@ impl EditorApp {
                         });
                     });
             });
-        let fresh = std::mem::take(&mut self.surface_popup_fresh);
+        self.surface_popup_fresh = false;
         // Clicks on the canvas with the tool pick or draw boxes themselves.
         let outside = !fresh
+            && !self.surface_popup_picking
             && response.response.clicked_elsewhere()
             && !ctx
                 .input(|i| i.pointer.interact_pos())
                 .is_some_and(|p| viewport.contains(p));
         if let Some((plugin, action)) = change {
             self.set_ai_box_action(index, &plugin, &action);
+            self.request_surface_estimate(&plugin, &action);
         } else if delete {
             self.delete_ai_box(index);
         } else if generate {

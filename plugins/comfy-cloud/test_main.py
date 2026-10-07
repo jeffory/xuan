@@ -24,6 +24,7 @@ import comfy_api  # noqa: E402
 from catalog import Catalog, recipe_key  # noqa: E402
 from recipes import ACTIONS, RECIPES  # noqa: E402
 from test_recipes import entry_for  # noqa: E402
+from xuan_plugin import RpcError  # noqa: E402
 
 BASE = "https://cloud.comfy.org"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -240,7 +241,8 @@ class FakeJob:
 
 
 class FakeServer:
-    """Answers like Comfy Cloud; ``refuse`` makes the first job fail validation."""
+    """Answers like Comfy Cloud; ``refuse`` (True or the message) makes the
+    first job fail validation."""
 
     def __init__(self, refuse=False):
         self.refuse = refuse
@@ -259,8 +261,9 @@ class FakeServer:
 
     def job(self, job_id):
         if self.refuse and job_id == "job-1":
+            message = self.refuse if isinstance(self.refuse, str) else "Prompt outputs failed validation: model.size_preset"
             return {"status": "failed", "started_at": None, "outputs": [],
-                    "error": {"code": "node_execution_error", "message": "Prompt outputs failed validation: model.size_preset"}}
+                    "error": {"code": "node_execution_error", "message": message}}
         saves = [k for k, n in self.submitted[-1].items() if n["class_type"] in ("SaveImageAdvanced", "SaveImage")]
         outputs = [{"node_id": "99", "type": "image", "name": "preview.png", "url": "https://storage.googleapis.com/p"}]
         for node in saves:
@@ -287,9 +290,12 @@ class Running(unittest.TestCase):
         self.original = (main.make_client, main._catalog)
         main.make_client = lambda: self.server
         main._catalog = Catalog(self.server, self.tmp.name, os.path.join(self.tmp.name, "none"), clock=lambda: 0)
+        self.host_info = main.plugin.host_info
+        main.plugin.host_info = {"name": "Xuan", "version": "0.5.0", "features": ["surfaces", "fit_cover"]}
 
     def tearDown(self):
         main.make_client, main._catalog = self.original
+        main.plugin.host_info = self.host_info
         self.tmp.cleanup()
 
     def install(self, recipe, current, last_good=None):
@@ -325,6 +331,30 @@ class Running(unittest.TestCase):
         notes = [o["text"] for o in outputs if o["kind"] == "text"]
         self.assertTrue(any("2026-07-08" in n and "failed validation" in n for n in notes), notes)
         self.assertEqual(main._catalog.state(recipe)["current"]["template_sha256"], "old")
+
+    def test_a_size_the_model_refuses_does_not_mark_a_good_template_bad(self):
+        # The template is fine; the size asked for is what was refused.
+        self.server.refuse = "Prompt outputs failed validation: ByteDanceSeedreamNodeV3: model.height 112 is below 1024"
+        recipe = RECIPES["seedream-pro"]
+        good = entry_for(recipe)
+        new = copy.deepcopy(good)
+        new["template_sha256"], good["template_sha256"] = "new", "old"
+        self.install(recipe, new, good)
+        job = FakeJob(self.tmp.name, inputs={"prompt": "a fox", "surface": "document", "target": {"width": 1600, "height": 900}})
+        with self.assertRaises(RpcError) as caught:
+            main.generate(job)
+        self.assertIn("model.height", caught.exception.message)
+        self.assertEqual(len(self.server.submitted), 1)
+        self.assertEqual(main._catalog.state(recipe)["current"]["template_sha256"], "new")
+
+    def test_an_older_xuan_gets_results_it_can_place(self):
+        # Xuan 0.4 knows only fit "source"; a paid result must still land.
+        main.plugin.host_info = {"name": "Xuan", "version": "0.4.0"}
+        recipe = RECIPES["ideogram-edit"]
+        self.install(recipe, entry_for(recipe))
+        source = {"path": os.path.join(self.tmp.name, "source.png"), "width": 800, "height": 600}
+        outputs = main.edit(FakeJob(self.tmp.name, action="edit", inputs={"prompt": "night", "seed": 2}, source=source))
+        self.assertEqual(outputs[0]["fit"], "source")
 
     def test_edit_uploads_the_source_and_places_the_result_over_it(self):
         recipe = RECIPES["ideogram-edit"]

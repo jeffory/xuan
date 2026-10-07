@@ -150,8 +150,10 @@ def recipe_for(action, model=None):
 def cover_size(target, spec_w, spec_h, step=0):
     """The smallest size of the target's shape the model accepts that is at
     least ``target``, as ``(width, height, under)``: rounded up to the step,
-    scaled up evenly to the minimum, and only scaled down (``under``) when
-    the model's maximum is smaller."""
+    scaled up evenly to the minimum, and only scaled down when the model's
+    maximum is smaller. A shape the limits cannot hold (a long banner) keeps
+    each side within them; Xuan's cover placement absorbs the change of
+    shape. ``under`` says the size is smaller than the target."""
     ow, oh = (spec_w[1] if len(spec_w) > 1 else {}), (spec_h[1] if len(spec_h) > 1 else {})
     step = step or max(int(ow.get("step") or 1), int(oh.get("step") or 1), 1)
     lo_w, hi_w = ow.get("min", 1), ow.get("max", 1 << 16)
@@ -160,15 +162,16 @@ def cover_size(target, spec_w, spec_h, step=0):
     grow = max(lo_w / w, lo_h / h, 1.0)
     w, h = w * grow, h * grow
     shrink = min(hi_w / w, hi_h / h, 1.0)
-    under = shrink < 1.0
     w, h = w * shrink, h * shrink
 
-    def snap(value):
+    def snap(value, lo, hi):
         # Rounded first so float noise (2048.0000001) does not add a step.
         steps = round(value / step, 6)
-        return int((math.floor(steps) if under else math.ceil(steps)) * step)
+        value = int((math.floor(steps) if shrink < 1.0 else math.ceil(steps)) * step)
+        return min(max(value, math.ceil(lo / step) * step), math.floor(hi / step) * step)
 
-    return snap(w), snap(h), under
+    w, h = snap(w, lo_w, hi_w), snap(h, lo_h, hi_h)
+    return w, h, w < target[0] or h < target[1]
 
 
 def preset_at_least(options, target, tolerance=0.03):

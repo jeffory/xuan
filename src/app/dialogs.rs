@@ -9,7 +9,12 @@ use xuan::{
     io, operations, render,
 };
 
-use super::{Dialog, EditorApp, commands::Category, surfaces::SurfaceRun, theme::PaletteExt};
+use super::{
+    Dialog, EditorApp,
+    commands::Category,
+    surfaces::{SurfaceRun, SurfaceStart},
+    theme::PaletteExt,
+};
 use xuan::plugins::manifest::Surface;
 
 impl EditorApp {
@@ -313,7 +318,14 @@ impl EditorApp {
                                 }
                             });
                     }
-                    ready = self.surface_form(ui, &plugin, &action, Surface::Document, "new_image");
+                    ready = self.surface_form(
+                        ui,
+                        &plugin,
+                        &action,
+                        Surface::Document,
+                        "new_image",
+                        false,
+                    );
                     widgets::checkbox(ui, &mut self.new_image_exact, tr("Exact size"))
                         .on_hover_text(tr(
                             "Make the canvas exactly W × H; the image covers it and can be moved",
@@ -358,11 +370,11 @@ impl EditorApp {
                 target: (self.dimensions[0], self.dimensions[1]),
                 exact: self.new_image_exact,
                 resolution: self.resolution,
+                boxes: Vec::new(),
             };
             // A permission or consent prompt takes the dialog's place.
-            if self.run_from_surface(&plugin, &action, &values, Vec::new(), run)
-                && self.dialog == Some(Dialog::New)
-            {
+            let started = self.run_from_surface(&plugin, &action, &values, Vec::new(), run);
+            if started != SurfaceStart::NotStarted && self.dialog == Some(Dialog::New) {
                 self.dialog = None;
             }
         } else if apply {

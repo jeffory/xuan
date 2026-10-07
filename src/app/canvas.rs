@@ -687,7 +687,9 @@ impl EditorApp {
                 let accent = ui.palette().accent;
                 if let Some(edit) = &self.plugins.action {
                     draw_region_boxes(&painter, &map, edit.regions.iter(), edit.selected, accent);
-                } else if let Some(session) = self.session() {
+                } else if self.tool == Tool::Region
+                    && let Some(session) = self.session()
+                {
                     let boxes = session.ai_boxes.iter().map(|b| &b.region);
                     draw_region_boxes(&painter, &map, boxes, session.ai_selected, accent);
                 }

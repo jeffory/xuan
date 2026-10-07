@@ -596,6 +596,8 @@ pub struct EditorApp {
     /// The popover opened this frame: the click that opened it is not a
     /// click outside it.
     surface_popup_fresh: bool,
+    /// A drop-down list was open when this frame's popovers were drawn.
+    surface_popup_picking: bool,
     /// Area the canvas occupied last frame, for the Navigator's viewport box.
     canvas_viewport: Option<egui::Rect>,
     /// Viewport, zoom and pan the Navigator last drew; a change schedules a repaint.
@@ -784,6 +786,7 @@ impl EditorApp {
             canvas_rect: None,
             surface_popup: None,
             surface_popup_fresh: false,
+            surface_popup_picking: false,
             canvas_viewport: None,
             navigator_view: None,
         };

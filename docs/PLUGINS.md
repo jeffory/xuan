@@ -848,7 +848,7 @@ directories the host owns; messages carry paths, never pixels.
 
 | Request (host → plugin) | Params | Result |
 | --- | --- | --- |
-| `initialize` | `protocol`, `host: {name, version}`, `plugin_dir`, `data_dir`, `models_dir`, `models: {id: path}`, `settings`, `secrets` | `{protocol}` |
+| `initialize` | `protocol`, `host: {name, version, features}`, `plugin_dir`, `data_dir`, `models_dir`, `models: {id: path}`, `settings`, `secrets` | `{protocol}` |
 | `shutdown` | — | `null`; the process must exit |
 
 `data_dir` is a per-plugin folder that persists between runs. Temporary files
@@ -925,7 +925,9 @@ source with a higher pixel density. `"fit": "source"` stretches a result
 whose shape differs from the source; `"fit": "cover"` instead scales it
 evenly so that it covers those bounds, centred, and keeps what hangs over
 in the layer (nothing is cropped), which suits models that only render
-certain sizes. `cover` cannot be used with `result.into = "replace"`. For an extended source those bounds
+certain sizes. `cover` cannot be used with `result.into = "replace"`, and
+older versions of Xuan refuse it: send it only when `initialize`'s
+`host.features` lists `fit_cover` (actions on surfaces need `surfaces`). For an extended source those bounds
 include the new canvas (see [Extending the
 canvas](#extending-the-canvas-outpainting)). `fit` cannot be combined with `width` or
 `height`, and an action without a source cannot use `fit`. Sizes must be

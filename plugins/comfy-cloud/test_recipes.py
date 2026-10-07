@@ -171,6 +171,18 @@ class SizeRuleTest(unittest.TestCase):
         w, h, under = cover_size((8000, 4000), self.W, self.W, 16)
         self.assertTrue(under and w <= 3840 and h <= 3840 and abs(w / h - 2) < 0.02)
 
+    def test_extreme_shapes_stay_within_the_models_limits(self):
+        # A long banner: each side stays within the model's limits and Xuan's
+        # cover placement absorbs the change of shape.
+        for target in [(4000, 100), (100, 4000), (20000, 300)]:
+            for spec, step in [(self.S, 2), (self.W, 16)]:
+                with self.subTest(target=target, spec=spec):
+                    w, h, under = cover_size(target, spec, spec, step)
+                    lo, hi = spec[1]["min"], spec[1]["max"]
+                    self.assertTrue(lo <= w <= hi and lo <= h <= hi, (w, h))
+                    self.assertEqual(under, w < target[0] or h < target[1])
+        self.assertEqual(cover_size((4000, 100), self.S, self.S, 2), (4514, 1024, False))
+
     def test_presets_take_the_smallest_big_enough(self):
         options = ["auto", "(1K) 1024x1024 (1:1)", "(2K) 2048x2048 (1:1)", "(1K) 1280x720 (16:9)", "(2K) 2560x1440 (16:9)"]
         self.assertEqual(preset_at_least(options, (1000, 1000)), ("(1K) 1024x1024 (1:1)", False))

@@ -56,6 +56,8 @@ fn split_pane_key(key: &str) -> Option<(&str, &str)> {
 pub(super) struct PluginState {
     /// The values each action's surface popover last used, this session.
     pub surface_values: HashMap<(String, String), Map<String, Value>>,
+    /// The latest estimate of each action shown on a surface.
+    pub surface_estimates: HashMap<(String, String), String>,
     pub manifests: Vec<Manifest>,
     pub errors: Vec<LoadError>,
     processes: HashMap<String, Process>,
@@ -140,6 +142,8 @@ enum Pending {
     Format(Uuid),
     Render(String),
     Estimate(String, String),
+    /// An estimate for a surface popover: plugin and action.
+    SurfaceEstimate(String, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -755,7 +759,12 @@ impl EditorApp {
             // messages, and what is sent meanwhile waits in the process.
             let id = process.initialize(json!({
                 "protocol": plugins::manifest::PROTOCOL,
-                "host": {"name": "Xuan", "version": env!("CARGO_PKG_VERSION")},
+                "host": {
+                    "name": "Xuan",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    // What this Xuan understands beyond its protocol version.
+                    "features": ["surfaces", "fit_cover"],
+                },
                 "plugin_dir": manifest.dir,
                 "data_dir": data_dir,
                 "models_dir": models_dir,
@@ -1431,16 +1440,16 @@ impl EditorApp {
                     && edit.action == action
                     && let Ok(value) = result
                 {
-                    let cost = value.get("cost").and_then(Value::as_str).unwrap_or("");
-                    let seconds = value.get("seconds").and_then(Value::as_f64);
-                    let mut text = cost.to_owned();
-                    if let Some(seconds) = seconds {
-                        if !text.is_empty() {
-                            text.push_str(" · ");
-                        }
-                        text.push_str(&format!("≈{seconds:.0} s"));
-                    }
-                    edit.estimate = (!text.is_empty()).then_some(text);
+                    edit.estimate = estimate_text(&value);
+                }
+            }
+            Pending::SurfaceEstimate(plugin_id, action) => {
+                if let Ok(value) = result
+                    && let Some(text) = estimate_text(&value)
+                {
+                    self.plugins
+                        .surface_estimates
+                        .insert((plugin_id, action), text);
                 }
             }
         }
@@ -1552,28 +1561,8 @@ impl EditorApp {
         if !self.action_models_ready(plugin, action, inputs) {
             return;
         }
-        if spec.needs_image()
-            && self
-                .session()
-                .and_then(|s| s.document.active())
-                .is_none_or(|layer| layer.pixels.is_none() || layer.group)
-            && spec.source.from == plugins::manifest::SourceKind::Layer
-        {
-            self.error = Some(tr("Select an image layer first").into());
-            return;
-        }
-        if spec.kind != ActionKind::Generate && self.session().is_none() {
-            self.error = Some(tr("Open a document first").into());
-            return;
-        }
-        if spec.needs_image()
-            && spec.source.mask == plugins::manifest::SourceMask::Selection
-            && spec.source.mask_empty == plugins::manifest::MaskEmpty::Error
-            && self
-                .session()
-                .is_some_and(|s| s.document.selection.is_none())
-        {
-            self.error = Some(tr("Select an area first").into());
+        if let Some(problem) = self.action_start_problem(&spec) {
+            self.error = Some(problem.into());
             return;
         }
         let mut values = Map::new();
@@ -1632,6 +1621,71 @@ impl EditorApp {
             self.set_tool(Tool::Region);
         }
         self.request_estimate();
+    }
+
+    /// Why `spec` cannot start on the current document, if it cannot: the
+    /// checks the menu and the surfaces share.
+    pub(super) fn action_start_problem(&self, spec: &Action) -> Option<&'static str> {
+        if spec.needs_image()
+            && self
+                .session()
+                .and_then(|s| s.document.active())
+                .is_none_or(|layer| layer.pixels.is_none() || layer.group)
+            && spec.source.from == plugins::manifest::SourceKind::Layer
+        {
+            return Some(tr("Select an image layer first"));
+        }
+        if spec.kind != ActionKind::Generate && self.session().is_none() {
+            return Some(tr("Open a document first"));
+        }
+        if spec.needs_image()
+            && spec.source.mask == plugins::manifest::SourceMask::Selection
+            && spec.source.mask_empty == plugins::manifest::MaskEmpty::Error
+            && self
+                .session()
+                .is_some_and(|s| s.document.selection.is_none())
+        {
+            return Some(tr("Select an area first"));
+        }
+        None
+    }
+
+    /// Send `action/estimate` for a surface: the action's values, no source
+    /// or regions (nothing from the document goes before a run).
+    pub(super) fn send_surface_estimate(
+        &mut self,
+        plugin: &str,
+        action: &str,
+        values: Map<String, Value>,
+    ) {
+        let Ok(work_dir) = self.plugins.scratch_dir(plugin) else {
+            return;
+        };
+        let params = json!({
+            "job": Uuid::new_v4(),
+            "action": action,
+            "work_dir": work_dir,
+            "inputs": values,
+            "source": Value::Null,
+            "document": Value::Null,
+        });
+        let Ok(process) = self.plugin_process(plugin) else {
+            return;
+        };
+        if let Ok(id) = process.request("action/estimate", params) {
+            self.plugins.pending.insert(
+                (plugin.to_owned(), id),
+                Pending::SurfaceEstimate(plugin.to_owned(), action.to_owned()),
+            );
+        }
+    }
+
+    /// Whether the open action shows its dialog: surface runs never do.
+    pub(super) fn plugin_action_dialog_shown(&self) -> bool {
+        self.plugins
+            .action
+            .as_ref()
+            .is_some_and(|edit| edit.surface.is_none())
     }
 
     pub(super) fn close_plugin_action(&mut self) {
@@ -1848,14 +1902,35 @@ impl EditorApp {
                 cancelled: false,
                 consented,
                 provider,
-                surface,
+                surface: surface.clone(),
             });
             Ok(())
         })();
         match result {
             // The status bar shows the running job, so no "started" message.
-            Ok(()) => self.close_plugin_action(),
-            Err(error) => self.error = Some(format!("{error:#}")),
+            Ok(()) => {
+                self.close_plugin_action();
+                // AI Region boxes leave once their job runs.
+                if let Some(run) = surface.filter(|run| !run.boxes.is_empty())
+                    && let Some(session) =
+                        (self.sessions.iter_mut()).find(|s| Some(s.document.id) == document)
+                {
+                    session.ai_boxes.retain(|b| !run.boxes.contains(&b.id));
+                    session.ai_selected = None;
+                }
+            }
+            Err(error) => {
+                self.error = Some(format!("{error:#}"));
+                // A surface run has no dialog to go back to.
+                if self
+                    .plugins
+                    .action
+                    .as_ref()
+                    .is_some_and(|e| e.surface.is_some())
+                {
+                    self.plugins.action = None;
+                }
+            }
         }
     }
 
@@ -2904,6 +2979,20 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
 }
 
 /// The most regions an action's regions input takes.
+/// An `action/estimate` answer as one line: "cost · ≈N s".
+fn estimate_text(value: &Value) -> Option<String> {
+    let cost = value.get("cost").and_then(Value::as_str).unwrap_or("");
+    let seconds = value.get("seconds").and_then(Value::as_f64);
+    let mut text = cost.to_owned();
+    if let Some(seconds) = seconds {
+        if !text.is_empty() {
+            text.push_str(" · ");
+        }
+        text.push_str(&format!("≈{seconds:.0} s"));
+    }
+    (!text.is_empty()).then_some(text)
+}
+
 pub(super) fn region_limit(input: &plugins::manifest::Input) -> usize {
     input.max.map_or(plugins::manifest::MAX_REGIONS, |max| {
         (max.max(0.0) as usize).min(plugins::manifest::MAX_REGIONS)

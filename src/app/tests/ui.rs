@@ -1231,6 +1231,13 @@ id = "seed"
 type = "seed"
 label = "Seed"
 advanced = true
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+values = [{ id = "a", label = "Model A" }, { id = "b", label = "Model B" }]
+advanced = true
 "#,
         )
         .unwrap();
@@ -1421,5 +1428,74 @@ label = "Prompt"
         let run = ui.app().plugins.jobs[0].surface.clone().unwrap();
         assert_eq!(run.surface, xuan::plugins::manifest::Surface::Document);
         assert_eq!((run.target, run.exact), ((1600, 900), true));
+    }
+
+    #[test]
+    fn choosing_an_advanced_option_keeps_the_popover_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install(&mut ui, dir.path());
+        ui.settle();
+        ui.click("New layer with AI");
+        ui.click("Advanced");
+        ui.click("Model A");
+        ui.click("Model B");
+        assert!(ui.app().surface_popup.is_some());
+        let values = &ui.app().plugins.surface_values[&("ai".to_owned(), "layer".to_owned())];
+        assert_eq!(values["model"], serde_json::json!("b"));
+    }
+
+    #[test]
+    fn both_popovers_show_their_actions_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install(&mut ui, dir.path());
+        ui.app_mut()
+            .open_surface_popup(crate::app::surfaces::SurfacePopup::Layer {
+                plugin: "ai".into(),
+                action: "layer".into(),
+                anchor: egui::pos2(200.0, 400.0),
+            });
+        (ui.app_mut().plugins.surface_estimates)
+            .insert(("ai".into(), "layer".into()), "About 4 credits".into());
+        ui.settle();
+        assert!(ui.has("About 4 credits"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        ui.app_mut().set_tool(Tool::Region);
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        (ui.app_mut().plugins.surface_estimates)
+            .insert(("ai".into(), "edit".into()), "About 9 credits".into());
+        ui.settle();
+        assert!(ui.has("About 9 credits"));
+    }
+
+    #[test]
+    fn a_new_box_takes_typing_and_its_popover_goes_with_the_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        ui.app_mut().set_tool(Tool::Region);
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        ui.settle();
+        // The instruction has focus: typing goes there, not to tool shortcuts.
+        ui.harness.event(egui::Event::Text("hat".into()));
+        ui.settle();
+        assert_eq!(ui.app().tool, Tool::Region);
+        assert_eq!(
+            ui.app().session().unwrap().ai_boxes[0].region.fields["desc"],
+            serde_json::json!("hat")
+        );
+        ui.app_mut().set_tool(Tool::Brush);
+        ui.settle();
+        assert!(ui.app().surface_popup.is_none());
     }
 }

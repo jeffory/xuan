@@ -1041,3 +1041,4 @@ Generate image	生成图像
 Exact size	精确尺寸
 Make the canvas exactly W × H; the image covers it and can be moved	画布精确为 宽 × 高；图像铺满画布，可移动调整
 Describe the image; it is made at least this size.	描述图像；生成的图像至少为此尺寸。
+Finish or close the open plugin action first	请先完成或关闭已打开的插件操作

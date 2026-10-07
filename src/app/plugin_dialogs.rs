@@ -29,6 +29,11 @@ fn grant_folder_text(dir: &std::path::Path, actual: &std::path::Path) -> String 
     }
 }
 
+/// The id `input_widget` gives an input's widget, for focusing it.
+pub(super) fn input_id(input: &Input, salt: impl std::hash::Hash) -> egui::Id {
+    egui::Id::new(("plugin_input", &input.id, salt))
+}
+
 /// Draw one input and update its JSON value. Returns whether it changed.
 pub(super) fn input_widget(
     ui: &mut egui::Ui,
@@ -36,7 +41,7 @@ pub(super) fn input_widget(
     value: &mut Value,
     salt: impl std::hash::Hash,
 ) -> bool {
-    let id = egui::Id::new(("plugin_input", &input.id, salt));
+    let id = input_id(input, salt);
     let mut changed = false;
     let label = |ui: &mut egui::Ui| {
         let response = ui.label(input.label());
@@ -184,6 +189,10 @@ pub(super) fn input_widget(
 
 impl EditorApp {
     pub(super) fn plugin_action_dialog(&mut self, ctx: &egui::Context) {
+        // A surface run waiting on a prompt has no dialog.
+        if !self.plugin_action_dialog_shown() {
+            return;
+        }
         let Some((plugin, action)) = self
             .plugins
             .action

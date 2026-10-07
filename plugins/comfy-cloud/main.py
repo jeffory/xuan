@@ -114,6 +114,22 @@ def error_text(status):
     return str(error.get("message") or error.get("code") or "no details")[:600]
 
 
+def size_refused(version, recipe, values, status):
+    """Whether Comfy refused the size this run asked for rather than the
+    template: the error names a size input set for the target. The template
+    is still good, so it is not marked bad."""
+    if not values.get("target"):
+        return False
+    text = error_text(status)
+    return any(name.split(".", 1)[-1] in text for name in choose_size(version, recipe, values["target"])[0])
+
+
+def fit():
+    """How results are placed: covering their area where Xuan says it can
+    (``fit_cover``), else over the source, which older Xuan understands."""
+    return "cover" if "fit_cover" in (plugin.host_info.get("features") or []) else "source"
+
+
 @dataclass
 class Result:
     images: list  # downloaded images of the recipe's output node, in order
@@ -161,7 +177,7 @@ def run(job, recipe, values, image_path=None, reference_path=None, post=None, do
         status = wait_for(job, client, job_id, stage)
         if str(status.get("status")).lower() in SUCCEEDED:
             break
-        if attempt == 1 and rejected_before_running(status):
+        if attempt == 1 and rejected_before_running(status) and not size_refused(version, recipe, values, status):
             fallback = books.mark_bad(recipe, error_text(status))
             if fallback:
                 state = fallback
@@ -288,7 +304,7 @@ def edit(job):
     if not values["prompt"].strip():
         raise RpcError(INVALID_PARAMS, "Describe the change")
     result = run(job, recipe, values, image_path=job.source_path)
-    images = [Job.image(path, name=recipe.label, fit="cover", provenance=result.provenance) for path in result.images]
+    images = [Job.image(path, name=recipe.label, fit=fit(), provenance=result.provenance) for path in result.images]
     return images + texts(result.notes)
 
 
@@ -301,7 +317,7 @@ def precise_edit(job):
     values = {"seed": seed_of(job), "source_size": source_size(job), "regions": regions,
               "quality": job.inputs.get("quality") or "medium", "background": job.inputs.get("background") or ""}
     result = run(job, recipe, values, image_path=job.source_path)
-    images = [Job.image(path, name="Precise Edit", fit="cover", provenance=result.provenance) for path in result.images]
+    images = [Job.image(path, name="Precise Edit", fit=fit(), provenance=result.provenance) for path in result.images]
     return images + texts(result.notes)
 
 
@@ -349,7 +365,7 @@ def draw_and_lift(job, recipe, prompt, values):
 def as_layers(paths, prompt, record):
     name = layer_name(prompt)
     names = [name] if len(paths) == 1 else [f"{name} {n}" for n in range(1, len(paths) + 1)]
-    return [Job.image(path, name=layer, fit="cover", provenance=record) for path, layer in zip(paths, names)]
+    return [Job.image(path, name=layer, fit=fit(), provenance=record) for path, layer in zip(paths, names)]
 
 
 @plugin.action("generate-layer")
