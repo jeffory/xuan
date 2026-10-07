@@ -991,11 +991,8 @@ mod window_menu {
         let mut ui = UiTest::with_document();
         ui.isolate_config(config.path());
         short_plugin_panes(&mut ui, plugin.path());
-        let header = |ui: &UiTest, title: &str| {
-            ui.harness
-                .get_by_role_and_label(Role::Button, title)
-                .rect()
-        };
+        let header =
+            |ui: &UiTest, title: &str| ui.harness.get_by_role_and_label(Role::Button, title).rect();
         let layers = header(&ui, "Layers");
         let next = header(&ui, "Short A");
         let row = ui.harness.get_by_label("Layer 1").rect();
@@ -1040,7 +1037,10 @@ mod window_menu {
         };
         let short = gap(&ui);
         assert!(short < 120.0, "{short}");
-        ui.app_mut().config.panes.set_height("plugin:short/a", 150.0);
+        ui.app_mut()
+            .config
+            .panes
+            .set_height("plugin:short/a", 150.0);
         ui.harness.run_steps(5);
         assert!(gap(&ui) >= 150.0, "{}", gap(&ui));
         ui.app_mut().config.panes.toggle_collapsed("plugin:short/a");

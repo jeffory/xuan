@@ -42,10 +42,18 @@ fn drawn_id(id: &str) -> egui::Id {
 }
 
 impl Entry {
-    /// The body height to reserve: the pane's height, or less if its content
-    /// drew shorter last frame and the user has not sized it.
+    /// Whether the body height follows what the content draws. Built-in panes
+    /// size their content to the room they get, so measuring them would
+    /// shrink them every frame.
+    fn measured(&self) -> bool {
+        !self.fill && self.id.starts_with("plugin:")
+    }
+
+    /// The body height to reserve: the pane's height, or for a plugin pane
+    /// less if its content drew shorter last frame and the user has not sized
+    /// it.
     fn reserved(&self, ctx: &egui::Context) -> f32 {
-        if self.sized {
+        if self.sized || !self.measured() {
             return self.height;
         }
         let drawn = ctx.data(|data| data.get_temp::<f32>(drawn_id(&self.id)));
@@ -140,7 +148,8 @@ impl EditorApp {
                             }
                     })
                     .sum();
-                let fill_height = (ui.available_height() - fixed).max(MIN_HEIGHT.max(FILL_MIN_HEIGHT));
+                let fill_height =
+                    (ui.available_height() - fixed).max(MIN_HEIGHT.max(FILL_MIN_HEIGHT));
                 let mut rects = Vec::with_capacity(entries.len());
                 for entry in &entries {
                     let top = ui.cursor().top();
@@ -168,7 +177,7 @@ impl EditorApp {
                         });
                         // A scope leaves the cursor under what it drew; keep the full height.
                         ui.advance_cursor_after_rect(rect);
-                        if !entry.fill {
+                        if entry.measured() {
                             // Remember how much the content used, so a short pane gives
                             // the rest of its height to the fill pane next frame.
                             let drawn = body.response.rect.height();
@@ -202,10 +211,8 @@ impl EditorApp {
                                 ),
                             );
                             if splitter.dragged() {
-                                resized = Some((
-                                    entry.id.clone(),
-                                    height + splitter.drag_delta().y,
-                                ));
+                                resized =
+                                    Some((entry.id.clone(), height + splitter.drag_delta().y));
                             }
                             resize_done |= splitter.drag_stopped();
                         }
