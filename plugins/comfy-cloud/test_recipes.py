@@ -96,6 +96,32 @@ class RecipesTest(unittest.TestCase):
         self.assertIs(inputs["model.crop_layers"], False)
         self.assertIn("model.prompt_optimization", inputs)
 
+    def test_generate_layer_is_transparent_and_follows_the_canvas(self):
+        recipe = RECIPES["gpt-flare-layer"]
+        values = {"prompt": "a red kite", "seed": 4, "quality": "medium", "source_size": (1152, 864)}
+        graph = apply(entry_for(recipe), recipe, values)
+        inputs = node_of(graph, "OpenAIGPTImageNodeV2")["inputs"]
+        self.assertEqual(inputs["model.background"], "transparent")
+        self.assertEqual(inputs["model.size"], "Custom")
+        width, height = inputs["model.custom_width"], inputs["model.custom_height"]
+        self.assertEqual((width % 16, height % 16), (0, 0))
+        self.assertAlmostEqual(width / height, 4 / 3, places=2)
+        self.assertEqual(inputs["model.quality"], "medium")
+        self.assertNotIn("model.images.image_1", inputs)  # no reference sent
+        self.assertNotIn("LoadImage", {n["class_type"] for n in graph.values()})
+
+    def test_generate_layer_can_take_the_flattened_image_as_a_reference(self):
+        recipe = RECIPES["gpt-sunburst-layer"]
+        values = {"prompt": "a kite", "seed": 4, "source_size": (800, 800), "reference": ASSET}
+        graph = apply(entry_for(recipe), recipe, values)
+        inputs = node_of(graph, "OpenAIGPTImageNodeV2")["inputs"]
+        self.assertEqual(graph[inputs["model.images.image_1"][0]]["inputs"]["image"], ASSET)
+
+    def test_remove_background_sends_the_layer_to_bria(self):
+        recipe = RECIPES["bria-remove-background"]
+        graph = apply(entry_for(recipe), recipe, {"image": ASSET})
+        self.assertEqual(sorted(n["class_type"] for n in graph.values()), ["BriaRemoveImageBackground", "LoadImage", "SaveImage"])
+
     def test_a_template_without_the_bound_input_is_refused(self):
         recipe = RECIPES["seedream-pro"]
         entry = entry_for(recipe)
@@ -133,6 +159,7 @@ class SizesTest(unittest.TestCase):
         self.assertEqual(pick_preset(self.OPTIONS, "1:1", "1K"), "(1K) 1024x1024 (1:1)")
         self.assertEqual(pick_preset(self.OPTIONS, "1920:1080", "2K"), "(2K) 2848x1600 (16:9)")  # closest shape
         self.assertIsNone(pick_preset(["auto", "source"], "16:9", "2K"))
+        self.assertEqual(pick_preset(["auto", "1024x1024", "1536x1024", "1024x1536"], "3:2", "2K"), "1536x1024")  # plain sizes
 
     def test_fit_size(self):
         w_spec = ["INT", {"min": 1024, "max": 4514, "step": 2}]

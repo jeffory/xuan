@@ -1,45 +1,317 @@
 {
   "_comment": "Literal inputs of the executed graph Comfy's own converter builds for each template (comfy-cloud MCP get_template_schema, 2026-10-07). Linked inputs are left out; prompts Comfy truncated are left out too. Inputs Comfy's frontend adds that the node definitions do not have (PreviewAny.preview_*, ImageCompare.compare_view) are not compared.",
   "api_bytedance_seedream_5_0_pro_t2i": {
-    "2": {"class_type": "SaveImageAdvanced", "inputs": {"filename_prefix": "Seedream5.0_Pro_T2I", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB"}},
-    "3": {"class_type": "ByteDanceSeedreamNodeV3", "inputs": {"model": "seedream 5.0 pro", "model.size_preset": "(1K) 1024x1024 (1:1)", "model.width": 2048, "model.height": 2048, "model.prompt_optimization": "standard", "model.seed": 42, "model.watermark": false, "model.thinking": true}}
+    "2": {
+      "class_type": "SaveImageAdvanced",
+      "inputs": {
+        "filename_prefix": "Seedream5.0_Pro_T2I",
+        "format": "png",
+        "format.bit_depth": "8-bit",
+        "format.input_color_space": "sRGB"
+      }
+    },
+    "3": {
+      "class_type": "ByteDanceSeedreamNodeV3",
+      "inputs": {
+        "model": "seedream 5.0 pro",
+        "model.size_preset": "(1K) 1024x1024 (1:1)",
+        "model.width": 2048,
+        "model.height": 2048,
+        "model.prompt_optimization": "standard",
+        "model.seed": 42,
+        "model.watermark": false,
+        "model.thinking": true
+      }
+    }
   },
   "api_bytedance_seedream_5_0_flash_t2i": {
-    "35": {"class_type": "ByteDanceSeedreamNodeV3", "inputs": {"prompt": "High-fashion sports magazine editorial video. A powerful athletic runner sprinting forward across the frame against a glowing monochromatic amber-orange studio background. Artistic motion blur trails capturing explosive speed and fluid movement. Minimalist sleek black compression sportswear, no logos. Dramatic rim lighting, deep contrast shadows, dynamic high-impact composition, cinematic 4k aesthetic.", "model": "seedream 5.0 flash", "model.size_preset": "(1K) 1024x1024 (1:1)", "model.width": 2048, "model.height": 2048, "model.seed": 1161452782, "model.watermark": false}},
-    "37": {"class_type": "SaveImageAdvanced", "inputs": {"filename_prefix": "Seedream5.0_flash", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB"}}
+    "35": {
+      "class_type": "ByteDanceSeedreamNodeV3",
+      "inputs": {
+        "prompt": "High-fashion sports magazine editorial video. A powerful athletic runner sprinting forward across the frame against a glowing monochromatic amber-orange studio background. Artistic motion blur trails capturing explosive speed and fluid movement. Minimalist sleek black compression sportswear, no logos. Dramatic rim lighting, deep contrast shadows, dynamic high-impact composition, cinematic 4k aesthetic.",
+        "model": "seedream 5.0 flash",
+        "model.size_preset": "(1K) 1024x1024 (1:1)",
+        "model.width": 2048,
+        "model.height": 2048,
+        "model.seed": 1161452782,
+        "model.watermark": false
+      }
+    },
+    "37": {
+      "class_type": "SaveImageAdvanced",
+      "inputs": {
+        "filename_prefix": "Seedream5.0_flash",
+        "format": "png",
+        "format.bit_depth": "8-bit",
+        "format.input_color_space": "sRGB"
+      }
+    }
   },
   "api_ideogram_v4_5_t2i": {
-    "1": {"class_type": "IdeogramTextToImageApi", "inputs": {"model": "ideogram-4.5", "model.size": "auto", "model.quality": "medium", "model.magic_prompt": "auto", "model.seed": 388697105}},
-    "5": {"class_type": "SaveImageAdvanced", "inputs": {"filename_prefix": "Ideogram4.5_t2i", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB"}}
+    "1": {
+      "class_type": "IdeogramTextToImageApi",
+      "inputs": {
+        "model": "ideogram-4.5",
+        "model.size": "auto",
+        "model.quality": "medium",
+        "model.magic_prompt": "auto",
+        "model.seed": 388697105
+      }
+    },
+    "5": {
+      "class_type": "SaveImageAdvanced",
+      "inputs": {
+        "filename_prefix": "Ideogram4.5_t2i",
+        "format": "png",
+        "format.bit_depth": "8-bit",
+        "format.input_color_space": "sRGB"
+      }
+    }
   },
   "api_ideogram_v4_5_image_edit": {
-    "1": {"class_type": "IdeogramEditApi", "inputs": {"model": "ideogram-4.5", "model.size": "source", "model.width": 2048, "model.height": 2048, "model.quality": "medium", "model.seed": 1491935687}},
-    "2": {"class_type": "LoadImage", "inputs": {"image": "interior_orange_sofa.png"}},
-    "3": {"class_type": "BuildJsonPromptIdeogram", "inputs": {"high_level_description": "", "background": "", "style": "none", "aesthetics": "", "lighting": "", "medium": ""}},
-    "4": {"class_type": "CreateBoundingBoxes", "inputs": {"width": 896, "height": 1152, "last_incoming": {"__value__": []}}},
-    "5": {"class_type": "PreviewAny", "inputs": {}},
-    "7": {"class_type": "SaveImageAdvanced", "inputs": {"filename_prefix": "ideogram4.5_image_edit", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB"}}
+    "1": {
+      "class_type": "IdeogramEditApi",
+      "inputs": {
+        "model": "ideogram-4.5",
+        "model.size": "source",
+        "model.width": 2048,
+        "model.height": 2048,
+        "model.quality": "medium",
+        "model.seed": 1491935687
+      }
+    },
+    "2": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "interior_orange_sofa.png"
+      }
+    },
+    "3": {
+      "class_type": "BuildJsonPromptIdeogram",
+      "inputs": {
+        "high_level_description": "",
+        "background": "",
+        "style": "none",
+        "aesthetics": "",
+        "lighting": "",
+        "medium": ""
+      }
+    },
+    "4": {
+      "class_type": "CreateBoundingBoxes",
+      "inputs": {
+        "width": 896,
+        "height": 1152,
+        "last_incoming": {
+          "__value__": []
+        }
+      }
+    },
+    "5": {
+      "class_type": "PreviewAny",
+      "inputs": {}
+    },
+    "7": {
+      "class_type": "SaveImageAdvanced",
+      "inputs": {
+        "filename_prefix": "ideogram4.5_image_edit",
+        "format": "png",
+        "format.bit_depth": "8-bit",
+        "format.input_color_space": "sRGB"
+      }
+    }
   },
   "api_bytedance_seedream_5_0_pro_image_edit": {
-    "2": {"class_type": "SaveImageAdvanced", "inputs": {"filename_prefix": "Seedream5.0_Pro_image_edit", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB"}},
-    "3": {"class_type": "LoadImage", "inputs": {"image": "interior_college.png"}},
-    "7": {"class_type": "Painter", "inputs": {"mask": "", "width": 1024, "height": 1024, "bg_color": "#000000"}},
-    "8": {"class_type": "ByteDanceSeedreamNodeV3", "inputs": {"prompt": "Convert the entire collage into a cohesive, realistic interior design photo of a cozy living room. Render the sketched bay window area on the left into a real window filled with potted plants, including Swiss cheese plants and a fiddle-leaf fig, with a lush forest view outside. Transform the sketched snake plant in the bottom-left into a real potted snake plant. Blend the elements seamlessly under warm, natural afternoon sunlight.", "model": "seedream 5.0 pro", "model.size_preset": "(1K) 1024x1024 (1:1)", "model.width": 2048, "model.height": 2048, "model.prompt_optimization": "standard", "model.seed": 42, "model.watermark": false, "model.thinking": true}}
+    "2": {
+      "class_type": "SaveImageAdvanced",
+      "inputs": {
+        "filename_prefix": "Seedream5.0_Pro_image_edit",
+        "format": "png",
+        "format.bit_depth": "8-bit",
+        "format.input_color_space": "sRGB"
+      }
+    },
+    "3": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "interior_college.png"
+      }
+    },
+    "7": {
+      "class_type": "Painter",
+      "inputs": {
+        "mask": "",
+        "width": 1024,
+        "height": 1024,
+        "bg_color": "#000000"
+      }
+    },
+    "8": {
+      "class_type": "ByteDanceSeedreamNodeV3",
+      "inputs": {
+        "prompt": "Convert the entire collage into a cohesive, realistic interior design photo of a cozy living room. Render the sketched bay window area on the left into a real window filled with potted plants, including Swiss cheese plants and a fiddle-leaf fig, with a lush forest view outside. Transform the sketched snake plant in the bottom-left into a real potted snake plant. Blend the elements seamlessly under warm, natural afternoon sunlight.",
+        "model": "seedream 5.0 pro",
+        "model.size_preset": "(1K) 1024x1024 (1:1)",
+        "model.width": 2048,
+        "model.height": 2048,
+        "model.prompt_optimization": "standard",
+        "model.seed": 42,
+        "model.watermark": false,
+        "model.thinking": true
+      }
+    }
   },
   "api_ideogram_v4_5_precise_image_edit": {
-    "2": {"class_type": "LoadImage", "inputs": {"image": "redhair_girl_portrait.png"}},
-    "3": {"class_type": "BuildJsonPromptIdeogram", "inputs": {"high_level_description": "", "background": "", "style": "none", "aesthetics": "", "lighting": "", "medium": ""}},
-    "4": {"class_type": "CreateBoundingBoxes", "inputs": {"width": 896, "height": 1152, "last_incoming": {"__value__": []}}},
-    "5": {"class_type": "PreviewAny", "inputs": {}},
-    "7": {"class_type": "SaveImageAdvanced", "inputs": {"filename_prefix": "ideogram4.5_image_edit", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB"}},
-    "20": {"class_type": "IdeogramPreciseEditApi", "inputs": {"model": "ideogram-4.5", "model.quality": "medium", "model.seed": 564797084}}
+    "2": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "redhair_girl_portrait.png"
+      }
+    },
+    "3": {
+      "class_type": "BuildJsonPromptIdeogram",
+      "inputs": {
+        "high_level_description": "",
+        "background": "",
+        "style": "none",
+        "aesthetics": "",
+        "lighting": "",
+        "medium": ""
+      }
+    },
+    "4": {
+      "class_type": "CreateBoundingBoxes",
+      "inputs": {
+        "width": 896,
+        "height": 1152,
+        "last_incoming": {
+          "__value__": []
+        }
+      }
+    },
+    "5": {
+      "class_type": "PreviewAny",
+      "inputs": {}
+    },
+    "7": {
+      "class_type": "SaveImageAdvanced",
+      "inputs": {
+        "filename_prefix": "ideogram4.5_image_edit",
+        "format": "png",
+        "format.bit_depth": "8-bit",
+        "format.input_color_space": "sRGB"
+      }
+    },
+    "20": {
+      "class_type": "IdeogramPreciseEditApi",
+      "inputs": {
+        "model": "ideogram-4.5",
+        "model.quality": "medium",
+        "model.seed": 564797084
+      }
+    }
   },
   "api_bytedance_seedream_5_0_layer_separation": {
-    "15": {"class_type": "LoadImage", "inputs": {"image": "victory_cover.png"}},
-    "20": {"class_type": "BatchImagesNode", "inputs": {}},
-    "22": {"class_type": "BatchMasksNode", "inputs": {}},
-    "23": {"class_type": "SaveImageAdvanced", "inputs": {"filename_prefix": "layers/image_layer", "format": "png", "format.bit_depth": "8-bit", "format.input_color_space": "sRGB"}},
-    "31": {"class_type": "JoinImageWithAlpha", "inputs": {}},
-    "32": {"class_type": "ByteDanceSeedreamLayerSeparationNodeV2", "inputs": {"model": "seedream 5.0 flash", "model.prompt": "Separate the image into three layers: the main character and the ship; the background; text, icons, and graphic elements.", "model.size": "auto", "model.seed": 498392743, "model.watermark": false, "model.crop_layers": false}}
+    "15": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "victory_cover.png"
+      }
+    },
+    "20": {
+      "class_type": "BatchImagesNode",
+      "inputs": {}
+    },
+    "22": {
+      "class_type": "BatchMasksNode",
+      "inputs": {}
+    },
+    "23": {
+      "class_type": "SaveImageAdvanced",
+      "inputs": {
+        "filename_prefix": "layers/image_layer",
+        "format": "png",
+        "format.bit_depth": "8-bit",
+        "format.input_color_space": "sRGB"
+      }
+    },
+    "31": {
+      "class_type": "JoinImageWithAlpha",
+      "inputs": {}
+    },
+    "32": {
+      "class_type": "ByteDanceSeedreamLayerSeparationNodeV2",
+      "inputs": {
+        "model": "seedream 5.0 flash",
+        "model.prompt": "Separate the image into three layers: the main character and the ship; the background; text, icons, and graphic elements.",
+        "model.size": "auto",
+        "model.seed": 498392743,
+        "model.watermark": false,
+        "model.crop_layers": false
+      }
+    }
+  },
+  "api_openai_gpt_image_25_flare_t2i": {
+    "269": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "GPT_image_2.5_flare_t2i"
+      }
+    },
+    "271": {
+      "class_type": "OpenAIGPTImageNodeV2",
+      "inputs": {
+        "model": "gpt-image-2.5-flare",
+        "model.size": "auto",
+        "model.custom_width": 1024,
+        "model.custom_height": 1024,
+        "model.background": "auto",
+        "model.quality": "low",
+        "n": 1,
+        "seed": 122545540
+      }
+    }
+  },
+  "api_openai_gpt_image_25_sunburst_t2i": {
+    "269": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "GPT_image_2.5_sunburst_t2i"
+      }
+    },
+    "271": {
+      "class_type": "OpenAIGPTImageNodeV2",
+      "inputs": {
+        "model": "gpt-image-2.5-sunburst",
+        "model.size": "auto",
+        "model.custom_width": 1024,
+        "model.custom_height": 1024,
+        "model.background": "auto",
+        "model.quality": "low",
+        "n": 1,
+        "seed": 831748761
+      }
+    }
+  },
+  "utility_bria_remove_image_background": {
+    "26": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "denim_girl.png"
+      }
+    },
+    "27": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "ComfyUI"
+      }
+    },
+    "32": {
+      "class_type": "BriaRemoveImageBackground",
+      "inputs": {
+        "moderation": "false",
+        "seed": 0
+      }
+    }
   }
 }

@@ -186,7 +186,69 @@ id = "seed"
 type = "seed"
 label = "Seed"
 
+[[actions]]
+id = "generate-layer"
+label = "Generate Layer…"
+menu = "Layer"
+kind = "edit"
+description = "Generate an object on a transparent background with GPT Image 2.5 and add it as a new layer the size of the canvas. With Match the picture on, the flattened image goes along so the new layer fits its colours, light and layout."
+source = { from = "composite", max_side = 1536 }
+result = { into = "layer" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "What to add"
+placeholder = "A red kite with a long ribbon tail, flying above the lighthouse"
+
+[[actions.inputs]]
+id = "reference"
+type = "bool"
+label = "Match the picture"
+help = "Send the flattened image along so the new layer fits its colours, lighting and layout."
+default = true
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+values = [
+  { id = "gpt-flare-layer", label = "GPT Image 2.5 Flare (faster)" },
+  { id = "gpt-sunburst-layer", label = "GPT Image 2.5 Sunburst (more detail)" },
+]
+default = "gpt-flare-layer"
+
+[[actions.inputs]]
+id = "quality"
+type = "enum"
+label = "Quality"
+values = [{ id = "low", label = "Low" }, { id = "medium", label = "Medium" }, { id = "high", label = "High" }]
+default = "medium"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+
+[[actions]]
+id = "remove-background"
+label = "Remove Background (Bria)"
+menu = "Filter"
+kind = "edit"
+description = "Bria RMBG 2.0 cuts the subject out of the active layer, as a new layer. Choose Comfy Cloud under Settings → Selection to use it for Filter → Remove Background (a layer mask) and Select → Subject."
+source = { from = "layer", max_side = 2048 }
+result = { into = "layer" }
+
+[[provides]]
+capability = "remove_background"
+action = "remove-background"
+
+[[provides]]
+capability = "select_subject"
+action = "remove-background"
+
 [[panes]]
 id = "comfy"
 title = "Comfy Cloud"
 refresh = "manual"
+placement = "settings"

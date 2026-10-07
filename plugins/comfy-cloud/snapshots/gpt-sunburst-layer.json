@@ -1,0 +1,144 @@
+{
+ "template": "api_openai_gpt_image_25_sunburst_t2i",
+ "template_sha256": "fc75bc1b4f659ddf026ad0e96d4e962edbc47500f97b030e58cd5d4ed4b988ba",
+ "template_date": "2026-09-09",
+ "converted_at": "2026-10-07T01:02:15+00:00",
+ "output": "269",
+ "api": {
+  "269": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "271",
+     0
+    ],
+    "filename_prefix": "GPT_image_2.5_sunburst_t2i"
+   },
+   "_meta": {
+    "title": "Save Image"
+   }
+  },
+  "271": {
+   "class_type": "OpenAIGPTImageNodeV2",
+   "inputs": {
+    "prompt": "1:1 square editorial fashion poster, futuristic desert motorcycle rally scene. A rugged male biker with long dark hair and weathered leather jacket stands beside a giant black armored motorcycle in the center, surrounded by enormous rusty mechanical towers, glowing energy gates and drifting sandstorms. He has a confident expression, arms crossed, leaning slightly against the bike. Large oversized display typography spelling the exact text \u201cGPT IMAGE 2.5\u201d in bold industrial sans-serif font, burnt orange, letters weaving through the upper half of the frame, some behind the biker, some in front, overlapping motorcycle parts and desert towers, the only text in the scene. Small scattered graphic elements: circular speed badge upper right, rubber-stamp style icon lower left, thin wavy line doodles, tiny star icons, small crescent near bottom, vertical stack of colourful abstract symbols on right edge, small sun-shaped emblem bottom right. Short justified caption-style text block lower right, subtitle line above it in thin tracked-out caps. Asymmetric grid layout, burnt orange, black, desert beige and electric blue palette, hyperrealistic 3D render, cinematic depth of field, intricate details, soft grainy film texture, premium print quality.",
+    "model": "gpt-image-2.5-sunburst",
+    "model.size": "auto",
+    "model.custom_width": 1024,
+    "model.custom_height": 1024,
+    "model.background": "auto",
+    "model.quality": "low",
+    "n": 1,
+    "seed": 831748761
+   },
+   "_meta": {
+    "title": "OpenAI GPT Image 2.5"
+   }
+  }
+ },
+ "specs": {
+  "OpenAIGPTImageNodeV2.prompt": [
+   "STRING",
+   {
+    "tooltip": "Text prompt for GPT Image",
+    "default": "",
+    "multiline": true
+   }
+  ],
+  "OpenAIGPTImageNodeV2.seed": [
+   "INT",
+   {
+    "tooltip": "not implemented yet in backend",
+    "default": 0,
+    "min": 0,
+    "max": 2147483647,
+    "step": 1,
+    "control_after_generate": true,
+    "display": "number"
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.images.image_1": [
+   "IMAGE",
+   {}
+  ],
+  "OpenAIGPTImageNodeV2.model.background": [
+   "COMBO",
+   {
+    "tooltip": "Return image with or without background.",
+    "default": "auto",
+    "multiselect": false,
+    "options": [
+     "auto",
+     "opaque",
+     "transparent"
+    ]
+   }
+  ],
+  "OpenAIGPTImageNodeV2.n": [
+   "INT",
+   {
+    "tooltip": "How many images to generate",
+    "default": 1,
+    "min": 1,
+    "max": 8,
+    "step": 1,
+    "display": "number"
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.quality": [
+   "COMBO",
+   {
+    "tooltip": "Image quality, affects cost and generation time.",
+    "default": "low",
+    "multiselect": false,
+    "options": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.size": [
+   "COMBO",
+   {
+    "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+    "default": "auto",
+    "multiselect": false,
+    "options": [
+     "auto",
+     "1024x1024",
+     "1024x1536",
+     "1536x1024",
+     "2048x2048",
+     "2048x1152",
+     "1152x2048",
+     "3840x2160",
+     "2160x3840",
+     "Custom"
+    ]
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.custom_width": [
+   "INT",
+   {
+    "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+    "default": 1024,
+    "min": 480,
+    "max": 3840,
+    "step": 16
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.custom_height": [
+   "INT",
+   {
+    "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+    "default": 1024,
+    "min": 480,
+    "max": 3840,
+    "step": 16
+   }
+  ]
+ }
+}

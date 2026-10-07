@@ -1,0 +1,51 @@
+{
+ "template": "utility_bria_remove_image_background",
+ "template_sha256": "9073e45deb887912ace1a9a03d85a51bd23b4d5496aaa78b1723ddd48688a75f",
+ "template_date": "2026-02-16",
+ "converted_at": "2026-10-07T01:02:15+00:00",
+ "output": "27",
+ "api": {
+  "27": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "32",
+     0
+    ],
+    "filename_prefix": "ComfyUI"
+   },
+   "_meta": {
+    "title": "Save Image"
+   }
+  },
+  "32": {
+   "class_type": "BriaRemoveImageBackground",
+   "inputs": {
+    "image": [
+     "26",
+     0
+    ],
+    "moderation": "false",
+    "seed": 0
+   },
+   "_meta": {
+    "title": "Bria Remove Image Background"
+   }
+  },
+  "26": {
+   "class_type": "LoadImage",
+   "inputs": {
+    "image": "denim_girl.png"
+   },
+   "_meta": {
+    "title": "Load Image"
+   }
+  }
+ },
+ "specs": {
+  "BriaRemoveImageBackground.image": [
+   "IMAGE",
+   {}
+  ]
+ }
+}

@@ -20,6 +20,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import main  # noqa: E402
+import xuan_plugin  # noqa: E402
 import comfy_api  # noqa: E402
 from catalog import Catalog  # noqa: E402
 from recipes import ACTIONS, RECIPES  # noqa: E402
@@ -230,6 +231,7 @@ class FakeServer:
 
     def __init__(self, refuse=False):
         self.refuse = refuse
+        self.png = None  # bytes to download instead of the output's name
         self.base = BASE
         self.submitted = []
         self.uploads = []
@@ -246,7 +248,7 @@ class FakeServer:
         if self.refuse and job_id == "job-1":
             return {"status": "failed", "started_at": None, "outputs": [],
                     "error": {"code": "node_execution_error", "message": "Prompt outputs failed validation: model.size_preset"}}
-        output = next(k for k, n in self.submitted[-1].items() if n["class_type"] == "SaveImageAdvanced")
+        output = next(k for k, n in self.submitted[-1].items() if n["class_type"] in ("SaveImageAdvanced", "SaveImage"))
         return {"status": "succeeded", "started_at": "now", "outputs": [
             {"node_id": "99", "type": "image", "name": "preview.png", "url": "https://storage.googleapis.com/p"},
             {"node_id": output, "type": "image", "name": "b.png", "url": "https://storage.googleapis.com/b"},
@@ -257,6 +259,10 @@ class FakeServer:
         pass
 
     def download(self, output, destination):
+        if self.png:
+            with open(destination, "wb") as handle:
+                handle.write(self.png)
+            return
         with open(destination, "w", encoding="utf-8") as handle:
             handle.write(output["name"])
 
@@ -314,6 +320,36 @@ class Running(unittest.TestCase):
         self.assertEqual(outputs[0]["fit"], "source")
         load = next(n for n in self.server.submitted[0].values() if n["class_type"] == "LoadImage")
         self.assertEqual(load["inputs"]["image"], {"__type": "core/ASSET", "info": {"id": "asset-1"}})
+
+    def test_generate_layer_sends_the_picture_only_when_asked(self):
+        source = {"path": os.path.join(self.tmp.name, "flat.png"), "width": 1152, "height": 864}
+        for reference, uploads in ((True, [source["path"]]), (False, [])):
+            with self.subTest(reference=reference):
+                self.server.uploads, self.server.submitted = [], []
+                recipe = RECIPES["gpt-flare-layer"]
+                self.install(recipe, entry_for(recipe))
+                job = FakeJob(self.tmp.name, "generate-layer", {"prompt": "a red kite", "reference": reference, "seed": 1}, source)
+                outputs = main.generate_layer(job)
+                self.assertEqual(self.server.uploads, uploads)
+                node = next(n for n in self.server.submitted[0].values() if n["class_type"] == "OpenAIGPTImageNodeV2")
+                self.assertEqual(node["inputs"]["model.background"], "transparent")
+                self.assertEqual("model.images.image_1" in node["inputs"], reference)
+                self.assertIn("a red kite", node["inputs"]["prompt"])
+                self.assertEqual(outputs[0]["fit"], "source")
+                self.assertEqual(outputs[0]["name"], "a red kite")
+
+    def test_remove_background_answers_xuan_with_the_alpha_as_a_mask(self):
+        recipe = RECIPES["bria-remove-background"]
+        self.install(recipe, entry_for(recipe))
+        self.server.png = xuan_plugin.encode_png(2, 1, bytes([200, 10, 10, 255, 0, 0, 0, 0]))
+        source = {"path": os.path.join(self.tmp.name, "layer.png"), "width": 2, "height": 1}
+        provider = main.remove_background(FakeJob(self.tmp.name, "remove-background", {"capability": "remove_background"}, source))
+        self.assertEqual(provider[0]["kind"], "mask")
+        with open(provider[0]["path"], "rb") as handle:
+            width, height, rgba = main.decode_png(handle.read())
+        self.assertEqual((width, height, rgba[0], rgba[4]), (2, 1, 255, 0))
+        menu = main.remove_background(FakeJob(self.tmp.name, "remove-background", {}, source))
+        self.assertEqual((menu[0]["kind"], menu[0]["name"]), ("image", "Cut-out"))
 
     def test_actions_refuse_missing_input_before_anything_is_sent(self):
         source = {"path": "/tmp/x.png", "width": 300, "height": 300}

@@ -24,6 +24,8 @@ from xuan_plugin import (  # noqa: E402
     NeedsSetup,
     Plugin,
     RpcError,
+    decode_png,
+    encode_gray_png,
     ui,
 )
 
@@ -35,8 +37,6 @@ plugin = Plugin()
 HERE = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOTS = os.path.join(HERE, "snapshots")
 PANE = "comfy"
-history = []  # recent jobs for the pane
-history_lock = threading.Lock()
 _catalog = None
 _catalog_lock = threading.Lock()
 _checking = threading.Event()
@@ -77,31 +77,33 @@ def provenance(recipe, version, values, request_id, base):
     return record
 
 
-def wait_for(job, client, job_id, entry):
-    """Poll the job until it ends; cancels it on the user's cancel or the timeout."""
+def wait_for(job, client, job_id):
+    """Poll the job until it ends; cancels it on the user's cancel or the timeout.
+    Progress is only a fraction once Comfy reports one: partner models such as
+    Seedream report none, so Xuan shows a spinner with the state instead."""
     deadline = time.time() + float(plugin.settings.get("timeout") or 600)
     delay = 1.0
     while True:
         if job.cancelled:
             client.cancel(job_id)
-            entry["state"] = "cancelled"
             raise Cancelled()
         if time.time() > deadline:
             client.cancel(job_id)
-            entry["state"] = "timed out"
             raise RpcError(INTERNAL_ERROR, "the job did not finish in time")
         status = client.job(job_id)
         state = str(status.get("status") or "").lower()
-        entry["state"] = state or "running"
         progress = status.get("progress") or {}
-        if isinstance(progress, dict) and progress.get("value") is not None:
-            job.progress(0.1 + 0.8 * float(progress["value"]), progress.get("message") or state)
+        if isinstance(progress, dict) and progress.get("value"):
+            job.progress(float(progress["value"]), progress.get("message") or state.capitalize())
         else:
-            job.progress(None, state or "running")
+            job.progress(None, STATES.get(state, state.capitalize() or "Running"))
         if state in TERMINAL:
             return status
         time.sleep(delay)
         delay = min(delay * 1.5, 5.0)
+
+
+STATES = {"queued": "Queued on Comfy Cloud", "running": "Running on Comfy Cloud", "succeeded": "Finishing"}
 
 
 def error_text(status):
@@ -111,64 +113,51 @@ def error_text(status):
     return str(error.get("message") or error.get("code") or "no details")[:600]
 
 
-def run(job, recipe, values, image_path=None):
-    """Run ``recipe`` with ``values``; returns ``(paths, provenance, notes)``.
+def run(job, recipe, values, image_path=None, reference_path=None):
+    """Run ``recipe`` with ``values``, uploading the source image and the
+    reference image first when given; returns ``(paths, provenance, notes)``.
     When Comfy refuses a newly converted workflow before running it, the
     previous version is tried once instead."""
     client = make_client()
-    entry = {"id": job.id[:8], "action": job.action, "model": recipe.label, "state": "preparing", "started": time.time()}
-    with history_lock:
-        history.insert(0, entry)
-        del history[10:]
-    try:
-        job.progress(0.02, "Checking the workflow")
-        books = catalog(client)
-        state = books.ensure(recipe)
-        notes = [state["warning"]] if state.get("warning") else []
-        if image_path:
+    job.progress(None, "Checking the workflow")
+    books = catalog(client)
+    state = books.ensure(recipe)
+    notes = [state["warning"]] if state.get("warning") else []
+    for role, path in (("image", image_path), ("reference", reference_path)):
+        if path:
             job.check_cancelled()
-            entry["state"] = "uploading"
-            job.progress(0.05, "Uploading")
-            values = dict(values, image=asset_ref(client.upload(image_path)))
-        for attempt in (1, 2):
-            version = state["current"]
-            workflow = apply(version, recipe, values)
-            job.check_cancelled()
-            job.progress(0.1, "Submitting")
-            job_id = client.submit(workflow).get("id")
-            if not job_id:
-                raise RpcError(INTERNAL_ERROR, "the server did not return a job id")
-            entry.update(state="queued", remote=job_id)
-            status = wait_for(job, client, job_id, entry)
-            if str(status.get("status")).lower() in SUCCEEDED:
-                break
-            if attempt == 1 and rejected_before_running(status):
-                fallback = books.mark_bad(recipe, error_text(status))
-                if fallback:
-                    state = fallback
-                    notes.append(fallback["warning"])
-                    continue
-            raise RpcError(INTERNAL_ERROR, f"Comfy job {status.get('status')}: {error_text(status)}")
-        outputs = [o for o in status.get("outputs") or [] if isinstance(o, dict) and o.get("type", "image") == "image"]
-        mine = [o for o in outputs if str(o.get("node_id")) == str(version["output"])]
-        images = sorted(mine or outputs, key=lambda o: str(o.get("name", "")))
-        if not images:
-            raise RpcError(INTERNAL_ERROR, "the workflow produced no images")
-        job.progress(0.95, "Downloading")
-        paths = []
-        for index, output in enumerate(images):
-            destination = job.path(f"result-{index + 1}.png")
-            client.download(output, destination)
-            paths.append(destination)
-        entry["state"] = "done"
-        return paths, provenance(recipe, version, values, job_id, client.base), notes
-    except Cancelled:
-        entry["state"] = "cancelled"
-        raise
-    except Exception:
-        if entry["state"] not in ("cancelled", "timed out"):
-            entry["state"] = "failed"
-        raise
+            job.progress(None, "Uploading the image")
+            values = dict(values, **{role: asset_ref(client.upload(path))})
+    for attempt in (1, 2):
+        version = state["current"]
+        workflow = apply(version, recipe, values)
+        job.check_cancelled()
+        job.progress(None, "Submitting")
+        job_id = client.submit(workflow).get("id")
+        if not job_id:
+            raise RpcError(INTERNAL_ERROR, "the server did not return a job id")
+        status = wait_for(job, client, job_id)
+        if str(status.get("status")).lower() in SUCCEEDED:
+            break
+        if attempt == 1 and rejected_before_running(status):
+            fallback = books.mark_bad(recipe, error_text(status))
+            if fallback:
+                state = fallback
+                notes.append(fallback["warning"])
+                continue
+        raise RpcError(INTERNAL_ERROR, f"Comfy job {status.get('status')}: {error_text(status)}")
+    outputs = [o for o in status.get("outputs") or [] if isinstance(o, dict) and o.get("type", "image") == "image"]
+    mine = [o for o in outputs if str(o.get("node_id")) == str(version["output"])]
+    images = sorted(mine or outputs, key=lambda o: str(o.get("name", "")))
+    if not images:
+        raise RpcError(INTERNAL_ERROR, "the workflow produced no images")
+    job.progress(None, "Downloading")
+    paths = []
+    for index, output in enumerate(images):
+        destination = job.path(f"result-{index + 1}.png")
+        client.download(output, destination)
+        paths.append(destination)
+    return paths, provenance(recipe, version, values, job_id, client.base), notes
 
 
 def texts(notes):
@@ -239,6 +228,52 @@ def split_layers(job):
     return outputs + texts(notes)
 
 
+# Sent with the user's prompt when the flattened image goes along as a reference.
+LAYER_WITH_REFERENCE = (
+    "Image 1 is the picture this will be added to as a new layer. Draw only what is described below, "
+    "on a transparent background, placed where it belongs in Image 1 and matching its colours, lighting, "
+    "perspective and style. Do not redraw anything else from Image 1.\n\n"
+)
+LAYER_ALONE = "\n\nOn a transparent background, with nothing else in the picture."
+
+
+@plugin.action("generate-layer")
+def generate_layer(job):
+    recipe = recipe_for("generate-layer", job.inputs.get("model"))
+    prompt = (job.inputs.get("prompt") or "").strip()
+    if not prompt:
+        raise RpcError(INVALID_PARAMS, "Describe what to put on the new layer")
+    reference = job.inputs.get("reference", True) is not False
+    values = {"prompt": LAYER_WITH_REFERENCE + prompt if reference else prompt + LAYER_ALONE,
+              "seed": seed_of(job), "source_size": source_size(job), "quality": job.inputs.get("quality") or "medium"}
+    paths, record, notes = run(job, recipe, values, reference_path=job.source_path if reference else None)
+    name = prompt if len(prompt) <= 40 else prompt[:39].rstrip() + "…"
+    return [Job.image(path, name=name, fit_source=True, provenance=record) for path in paths] + texts(notes)
+
+
+def alpha_mask(cutout, destination):
+    """The cut-out's alpha channel as a grey mask PNG."""
+    with open(cutout, "rb") as handle:
+        width, height, rgba = decode_png(handle.read())
+    with open(destination, "wb") as handle:
+        handle.write(encode_gray_png(width, height, bytes(rgba[3::4])))
+    return destination
+
+
+@plugin.action("remove-background")
+def remove_background(job):
+    """From the menu: a cut-out copy as a new layer. As Xuan's Remove
+    Background or Select Subject (``inputs.capability``): the cut-out's alpha
+    as a mask, which Xuan turns into a layer mask or the selection."""
+    recipe = recipe_for("remove-background")
+    source_size(job)
+    paths, record, notes = run(job, recipe, {}, image_path=job.source_path)
+    if job.inputs.get("capability"):
+        mask = alpha_mask(paths[0], job.path("mask.png"))
+        return [Job.mask(mask, fit_source=True)] + texts(notes)
+    return [Job.image(paths[0], name="Cut-out", fit_source=True, provenance=record)] + texts(notes)
+
+
 def estimate(job):
     return {"cost": "Comfy Cloud credits apply", "seconds": 60 if job.action == "split-layers" else 30}
 
@@ -266,7 +301,8 @@ def check_all():
         plugin.update_pane(PANE, pane_tree())
 
 
-ACTION_LABELS = {"generate": "Generate Image", "edit": "Edit Image", "precise-edit": "Precise Edit", "split-layers": "Split into Layers"}
+ACTION_LABELS = {"generate": "Generate Image", "edit": "Edit Image", "precise-edit": "Precise Edit",
+                 "split-layers": "Split into Layers", "generate-layer": "Generate Layer", "remove-background": "Remove Background"}
 
 
 def pane_tree():
@@ -285,14 +321,6 @@ def pane_tree():
         rows.append(ui.progress(None, "Checking Comfy for updates…"))
     else:
         rows.append(ui.button("check", "Check for updates"))
-    rows += [ui.separator(), ui.heading("Recent jobs")]
-    with history_lock:
-        entries = list(history)
-    if entries:
-        items = [ui.item(e["id"], f"{e['model']} · {e['state']}", time.strftime("%H:%M:%S", time.localtime(e["started"]))) for e in entries]
-        rows.append(ui.listing("history", items))
-    else:
-        rows.append(ui.label("No Comfy jobs yet.", muted=True))
     rows.append(ui.link("Comfy Cloud", "https://cloud.comfy.org"))
     return ui.column(*rows)
 

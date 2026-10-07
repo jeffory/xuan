@@ -28,7 +28,7 @@ def template(name):
 
 
 def save_node(workflow):
-    return next(str(n["id"]) for n in workflow["nodes"] if n["type"] == "SaveImageAdvanced")
+    return next(str(n["id"]) for n in workflow["nodes"] if n["type"] in ("SaveImageAdvanced", "SaveImage"))
 
 
 class TemplatesTest(unittest.TestCase):

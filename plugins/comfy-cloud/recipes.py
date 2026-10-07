@@ -21,8 +21,11 @@ class Recipe:
     prompt: Tuple[str, ...] = ()
     seed: Tuple[str, ...] = ()
     image: Tuple[str, ...] = ()  # each gets the uploaded source image
+    reference: Tuple[str, ...] = ()  # each gets the uploaded reference image, when one is sent
     size: Optional[str] = None  # a combo of "(2K) 2848x1600 (16:9)"-style presets
     match_size: Optional[Tuple[str, str, str]] = None  # (preset combo, width, height): follow the source's shape
+    match_area: int = 2048 * 2048  # pixels match_size aims for
+    match_step: int = 0  # width and height are multiples of this; 0 takes the inputs' own step
     quality: Optional[str] = None
     background: Optional[str] = None
     regions: Optional[str] = None  # a CreateBoundingBoxes node
@@ -31,7 +34,7 @@ class Recipe:
 
     def targets(self):
         """Every input this recipe sets."""
-        found = list(self.prompt) + list(self.seed) + list(self.image) + list(self.fixed)
+        found = list(self.prompt) + list(self.seed) + list(self.image) + list(self.reference) + list(self.fixed)
         found += [t for t in (self.size, self.quality, self.background) if t]
         if self.match_size:
             found += list(self.match_size)
@@ -45,6 +48,8 @@ IDEOGRAM_T2I = "IdeogramTextToImageApi"
 IDEOGRAM_EDIT = "IdeogramEditApi"
 IDEOGRAM_PRECISE = "IdeogramPreciseEditApi"
 SEPARATION = "ByteDanceSeedreamLayerSeparationNodeV2"
+GPT = "OpenAIGPTImageNodeV2"
+BRIA = "BriaRemoveImageBackground"
 
 _SEEDREAM_T2I = dict(
     output="SaveImageAdvanced",
@@ -52,6 +57,17 @@ _SEEDREAM_T2I = dict(
     seed=(f"{SEEDREAM}.model.seed",),
     size=f"{SEEDREAM}.model.size_preset",
     fixed={f"{SEEDREAM}.model.watermark": False},
+)
+_GPT_LAYER = dict(
+    output="SaveImage",
+    prompt=(f"{GPT}.prompt",),
+    seed=(f"{GPT}.seed",),
+    reference=(f"{GPT}.model.images.image_1",),
+    match_size=(f"{GPT}.model.size", f"{GPT}.model.custom_width", f"{GPT}.model.custom_height"),
+    match_area=1536 * 1536,
+    match_step=16,
+    quality=f"{GPT}.model.quality",
+    fixed={f"{GPT}.model.background": "transparent", f"{GPT}.n": 1},
 )
 _SEPARATION = dict(
     template="api_bytedance_seedream_5_0_layer_separation",
@@ -89,6 +105,9 @@ RECIPES = {
         ),
         Recipe("split-flash", "Seedream 5.0 Flash", **_SEPARATION),
         Recipe("split-pro", "Seedream 5.0 Pro", select={f"{SEPARATION}.model": "seedream 5.0 pro"}, **_SEPARATION),
+        Recipe("gpt-flare-layer", "GPT Image 2.5 Flare", "api_openai_gpt_image_25_flare_t2i", **_GPT_LAYER),
+        Recipe("gpt-sunburst-layer", "GPT Image 2.5 Sunburst", "api_openai_gpt_image_25_sunburst_t2i", **_GPT_LAYER),
+        Recipe("bria-remove-background", "Bria RMBG 2.0", "utility_bria_remove_image_background", "SaveImage", image=(f"{BRIA}.image",)),
     )
 }
 
@@ -98,6 +117,8 @@ ACTIONS = {
     "edit": ("ideogram-edit", "seedream-pro-edit"),
     "precise-edit": ("ideogram-precise",),
     "split-layers": ("split-pro", "split-flash"),
+    "generate-layer": ("gpt-flare-layer", "gpt-sunburst-layer"),
+    "remove-background": ("bria-remove-background",),
 }
 
 
@@ -108,7 +129,8 @@ def recipe_for(action, model=None):
 
 # --- Filling in a converted workflow -------------------------------------
 
-PRESET = re.compile(r"^\((?P<tier>[\d.]+K)\) (?P<w>\d+)x(?P<h>\d+) \((?P<a>\d+):(?P<b>\d+)\)$")
+# "(2K) 2848x1600 (16:9)" or plain "1536x1024"
+PRESET = re.compile(r"^(?:\((?P<tier>[\d.]+K)\) )?(?P<w>\d+)x(?P<h>\d+)(?: \((?P<a>\d+):(?P<b>\d+)\))?$")
 
 
 def _find(graph, target):
@@ -138,7 +160,7 @@ def pick_preset(options, aspect, tier):
     closest shape in that tier, else None."""
     presets = [(o, PRESET.match(o)) for o in options or [] if isinstance(o, str)]
     presets = [(o, m) for o, m in presets if m]
-    exact = [o for o, m in presets if m["tier"] == tier and f"{m['a']}:{m['b']}" == aspect]
+    exact = [o for o, m in presets if m["tier"] == tier and m["a"] and f"{m['a']}:{m['b']}" == aspect]
     if exact:
         return exact[0]
     try:
@@ -152,14 +174,14 @@ def pick_preset(options, aspect, tier):
     return min(same_tier, key=lambda om: abs(math.log(int(om[1]["w"]) / int(om[1]["h"])) - want))[0]
 
 
-def fit_size(width, height, spec_w, spec_h, area=2048 * 2048):
+def fit_size(width, height, spec_w, spec_h, area=2048 * 2048, step=0):
     """A size with the source's shape and about ``area`` pixels inside the
     width/height limits, or None when the shape cannot fit them."""
     opts_w, opts_h = (spec_w[1] if len(spec_w) > 1 else {}), (spec_h[1] if len(spec_h) > 1 else {})
     if width <= 0 or height <= 0:
         return None
     scale = math.sqrt(area / (width * height))
-    step = max(int(opts_w.get("step") or 1), int(opts_h.get("step") or 1), 1)
+    step = step or max(int(opts_w.get("step") or 1), int(opts_h.get("step") or 1), 1)
     w = int(round(width * scale / step)) * step
     h = int(round(height * scale / step)) * step
     lo_w, hi_w = opts_w.get("min", 1), opts_w.get("max", 1 << 16)
@@ -220,14 +242,19 @@ def apply(entry, recipe, values):
     if values.get("seed") is not None:
         for target in recipe.seed:
             put(target, int(values["seed"]) % 2147483648)
+    def load(asset, targets, title):
+        numeric = [int(k) for k in graph if str(k).isdigit()]
+        node_id = str(max(numeric, default=0) + 1)
+        graph[node_id] = {"class_type": "LoadImage", "inputs": {"image": asset}, "_meta": {"title": title}}
+        for target in targets:
+            put(target, [node_id, 0], link=True)
+
     if recipe.image:
         if values.get("image") is None:
             raise ValueError("this workflow needs an image")
-        numeric = [int(k) for k in graph if str(k).isdigit()]
-        source_id = str(max(numeric, default=0) + 1)
-        graph[source_id] = {"class_type": "LoadImage", "inputs": {"image": values["image"]}, "_meta": {"title": "Xuan source"}}
-        for target in recipe.image:
-            put(target, [source_id, 0], link=True)
+        load(values["image"], recipe.image, "Xuan source")
+    if recipe.reference and values.get("reference") is not None:
+        load(values["reference"], recipe.reference, "Xuan reference")
     if recipe.size and values.get("aspect"):
         options = (specs.get(recipe.size) or [None, {}])[1].get("options")
         preset = pick_preset(options, values["aspect"], values.get("tier") or "2K")
@@ -235,7 +262,8 @@ def apply(entry, recipe, values):
             put(recipe.size, preset)
     if recipe.match_size and values.get("source_size"):
         combo, width, height = recipe.match_size
-        size = fit_size(*values["source_size"], specs.get(width) or ["INT", {}], specs.get(height) or ["INT", {}])
+        size = fit_size(*values["source_size"], specs.get(width) or ["INT", {}], specs.get(height) or ["INT", {}],
+                        area=recipe.match_area, step=recipe.match_step)
         options = (specs.get(combo) or [None, {}])[1].get("options") or []
         if size and "Custom" in options:
             put(combo, "Custom")

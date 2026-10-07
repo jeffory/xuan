@@ -242,6 +242,8 @@ def _convert_node(node_id, node, definition, source, select):
                 # Slots are sockets named "<input>.<slot>"; only linked ones count.
                 template = ((opts.get("template") or {}).get("input") or {}).get("required") or {}
                 slot_spec = next(iter(template.values()), ["*"])
+                for slot_name in (opts.get("template") or {}).get("names") or []:
+                    specs[f"{full}.{slot_name}"] = slot_spec
                 for socket_name, slot in sockets.items():
                     if socket_name and socket_name.startswith(full + "."):
                         specs[socket_name] = slot_spec

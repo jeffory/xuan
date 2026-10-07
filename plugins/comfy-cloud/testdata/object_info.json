@@ -124,6 +124,123 @@
   "essentials_category": null,
   "has_intermediate_output": false
  },
+ "BriaRemoveImageBackground": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "moderation": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "Moderation settings",
+      "options": [
+       {
+        "key": "false",
+        "inputs": {
+         "required": {}
+        }
+       },
+       {
+        "key": "true",
+        "inputs": {
+         "required": {
+          "visual_input_moderation": [
+           "BOOLEAN",
+           {
+            "default": false
+           }
+          ],
+          "visual_output_moderation": [
+           "BOOLEAN",
+           {
+            "default": true
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "tooltip": "Seed controls whether the node should re-run; results are non-deterministic regardless of seed.",
+      "default": 0,
+      "min": 0,
+      "max": 2147483647,
+      "control_after_generate": true,
+      "display": "number"
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "moderation",
+    "seed"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "BriaRemoveImageBackground",
+  "display_name": "Bria Remove Image Background",
+  "description": "Remove the background from an image using Bria RMBG 2.0.",
+  "python_module": "comfy_api_nodes.nodes_bria",
+  "category": "partner/image/Bria",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [],
+    "inputs": [],
+    "input_groups": []
+   },
+   "expr": "{\"type\":\"usd\",\"usd\":0.018}"
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
  "BuildJsonPromptIdeogram": {
   "input": {
    "required": {
@@ -2167,6 +2284,664 @@
   ],
   "essentials_category": "Basics"
  },
+ "OpenAIGPTImageNodeV2": {
+  "input": {
+   "required": {
+    "prompt": [
+     "STRING",
+     {
+      "tooltip": "Text prompt for GPT Image",
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "model": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "options": [
+       {
+        "key": "gpt-image-2.5-flare",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024",
+             "2048x2048",
+             "2048x1152",
+             "1152x2048",
+             "3840x2160",
+             "2160x3840",
+             "Custom"
+            ]
+           }
+          ],
+          "custom_width": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "custom_height": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high",
+             "xhigh",
+             "max"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-2.5-sunburst",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024",
+             "2048x2048",
+             "2048x1152",
+             "1152x2048",
+             "3840x2160",
+             "2160x3840",
+             "Custom"
+            ]
+           }
+          ],
+          "custom_width": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "custom_height": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high",
+             "xhigh",
+             "max"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-2",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024",
+             "2048x2048",
+             "2048x1152",
+             "1152x2048",
+             "3840x2160",
+             "2160x3840",
+             "Custom"
+            ]
+           }
+          ],
+          "custom_width": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "custom_height": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-1.5",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024"
+            ]
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-1",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024"
+            ]
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "n": [
+     "INT",
+     {
+      "tooltip": "How many images to generate",
+      "default": 1,
+      "min": 1,
+      "max": 8,
+      "step": 1,
+      "display": "number"
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "tooltip": "not implemented yet in backend",
+      "default": 0,
+      "min": 0,
+      "max": 2147483647,
+      "step": 1,
+      "control_after_generate": true,
+      "display": "number"
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "prompt",
+    "model",
+    "n",
+    "seed"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "OpenAIGPTImageNodeV2",
+  "display_name": "OpenAI GPT Image 2.5",
+  "description": "Generates images via OpenAI's GPT Image endpoint.",
+  "python_module": "comfy_api_nodes.nodes_openai",
+  "category": "partner/image/OpenAI",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [
+     {
+      "name": "model",
+      "type": "COMFY_DYNAMICCOMBO_V3"
+     },
+     {
+      "name": "model.quality",
+      "type": "COMBO"
+     },
+     {
+      "name": "model.size",
+      "type": "COMBO"
+     },
+     {
+      "name": "n",
+      "type": "INT"
+     }
+    ],
+    "inputs": [],
+    "input_groups": [
+     "model.images"
+    ]
+   },
+   "expr": "\n                (\n                  $ranges := {\n                    \"gpt-image-1\": {\n                      \"low\":    [0.011, 0.02],\n                      \"medium\": [0.042, 0.07],\n                      \"high\":   [0.167, 0.25]\n                    },\n                    \"gpt-image-1.5\": {\n                      \"low\":    [0.009, 0.02],\n                      \"medium\": [0.034, 0.062],\n                      \"high\":   [0.133, 0.22]\n                    },\n                    \"gpt-image-2\": {\n                      \"low\":    [0.0019, 0.0237],\n                      \"medium\": [0.0186, 0.2135],\n                      \"high\":   [0.0744, 0.8539]\n                    },\n                    \"gpt-image-2.5-flare\": {\n                      \"low\":    [0.0023, 0.0283],\n                      \"medium\": [0.0056, 0.0636],\n                      \"high\":   [0.0222, 0.2544],\n                      \"xhigh\":  [0.0388, 0.4523],\n                      \"max\":    [0.0887, 1.0175]\n                    },\n                    \"gpt-image-2.5-sunburst\": {\n                      \"low\":    [0.0023, 0.0283],\n                      \"medium\": [0.0056, 0.0636],\n                      \"high\":   [0.0222, 0.2544],\n                      \"xhigh\":  [0.0388, 0.4523],\n                      \"max\":    [0.0887, 1.0175]\n                    }\n                  };\n                  $presets := {\n                    \"gpt-image-2\": {\n                      \"low\": {\"1024x1024\": 0.0071, \"1024x1536\": 0.0057, \"1536x1024\": 0.0057, \"2048x2048\": 0.0143, \"2048x1152\": 0.0057, \"1152x2048\": 0.0057, \"3840x2160\": 0.0134, \"2160x3840\": 0.0134},\n                      \"medium\": {\"1024x1024\": 0.0632, \"1024x1536\": 0.0494, \"1536x1024\": 0.0494, \"2048x2048\": 0.1284, \"2048x1152\": 0.0509, \"1152x2048\": 0.0509, \"3840x2160\": 0.1201, \"2160x3840\": 0.1201},\n                      \"high\": {\"1024x1024\": 0.2529, \"1024x1536\": 0.1976, \"1536x1024\": 0.1976, \"2048x2048\": 0.5138, \"2048x1152\": 0.2034, \"1152x2048\": 0.2034, \"3840x2160\": 0.4803, \"2160x3840\": 0.4803}\n                    },\n                    \"gpt-image-2.5\": {\n                      \"low\": {\"1024x1024\": 0.0084, \"1024x1536\": 0.0068, \"1536x1024\": 0.0068, \"2048x2048\": 0.0170, \"2048x1152\": 0.0067, \"1152x2048\": 0.0067, \"3840x2160\": 0.0159, \"2160x3840\": 0.0159},\n                      \"medium\": {\"1024x1024\": 0.0188, \"1024x1536\": 0.0147, \"1536x1024\": 0.0147, \"2048x2048\": 0.0383, \"2048x1152\": 0.0157, \"1152x2048\": 0.0157, \"3840x2160\": 0.0371, \"2160x3840\": 0.0371},\n                      \"high\": {\"1024x1024\": 0.0753, \"1024x1536\": 0.0589, \"1536x1024\": 0.0589, \"2048x2048\": 0.1531, \"2048x1152\": 0.0606, \"1152x2048\": 0.0606, \"3840x2160\": 0.1431, \"2160x3840\": 0.1431},\n                      \"xhigh\": {\"1024x1024\": 0.1339, \"1024x1536\": 0.1055, \"1536x1024\": 0.1055, \"2048x2048\": 0.2721, \"2048x1152\": 0.1077, \"1152x2048\": 0.1077, \"3840x2160\": 0.2544, \"2160x3840\": 0.2544},\n                      \"max\": {\"1024x1024\": 0.3013, \"1024x1536\": 0.2354, \"1536x1024\": 0.2354, \"2048x2048\": 0.6123, \"2048x1152\": 0.2424, \"1152x2048\": 0.2424, \"3840x2160\": 0.5724, \"2160x3840\": 0.5724}\n                    }\n                  };\n                  $perImage := {\n                    \"gpt-image-1\": [0.0019, 0.0019],\n                    \"gpt-image-1.5\": [0.0016, 0.0016],\n                    \"gpt-image-2\": [0.0098, 0.0147],\n                    \"gpt-image-2.5-flare\": [0.0117, 0.0176],\n                    \"gpt-image-2.5-sunburst\": [0.0117, 0.0176]\n                  };\n                  $model := widgets.model;\n                  $family := ($model = \"gpt-image-2.5-flare\" or $model = \"gpt-image-2.5-sunburst\") ? \"gpt-image-2.5\" : $model;\n                  $qualityRaw := $lookup(widgets, \"model.quality\");\n                  $quality := ($qualityRaw != null) ? $qualityRaw : \"\";\n                  $sizeRaw := $lookup(widgets, \"model.size\");\n                  $size := ($sizeRaw != null) ? $sizeRaw : \"\";\n                  $range := $lookup($lookup($ranges, $model), $quality);\n                  $preset := $lookup($lookup($lookup($presets, $family), $quality), $size);\n                  $out := ($preset != null) ? [$preset, $preset] : $range;\n                  $image := $lookup($perImage, $model);\n                  $refsRaw := $lookup(inputGroups, \"model.images\");\n                  $refs := ($refsRaw != null) ? $refsRaw : 0;\n                  $nRaw := widgets.n;\n                  $n := ($nRaw != null and $nRaw != 0) ? $nRaw : 1;\n                  $min := ($out[0] + $refs * $image[0]) * $n;\n                  $max := ($out[1] + $refs * $image[1]) * $n;\n                  $format := ($n = 1) ? {\"approximate\": true} : {\"suffix\": \"/Run\", \"approximate\": true};\n                  ($min = $max)\n                    ? {\"type\": \"usd\", \"usd\": $min, \"format\": $format}\n                    : {\"type\": \"range_usd\", \"min_usd\": $min, \"max_usd\": $max, \"format\": $format}\n                )\n                "
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
  "Painter": {
   "input": {
    "required": {
@@ -2349,6 +3124,65 @@
    "view image",
    "display image",
    "image viewer"
+  ],
+  "essentials_category": "Basics"
+ },
+ "SaveImage": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE",
+     {
+      "tooltip": "The images to save."
+     }
+    ],
+    "filename_prefix": [
+     "STRING",
+     {
+      "default": "ComfyUI",
+      "tooltip": "The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."
+     }
+    ]
+   },
+   "hidden": {
+    "prompt": "PROMPT",
+    "extra_pnginfo": "EXTRA_PNGINFO"
+   }
+  },
+  "input_order": {
+   "required": [
+    "images",
+    "filename_prefix"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "images"
+  ],
+  "name": "SaveImage",
+  "display_name": "Save Image",
+  "description": "Saves the input images to your ComfyUI output directory.",
+  "python_module": "nodes",
+  "category": "image",
+  "output_node": true,
+  "has_intermediate_output": false,
+  "search_aliases": [
+   "save",
+   "save image",
+   "export image",
+   "output image",
+   "write image",
+   "download"
   ],
   "essentials_category": "Basics"
  },
