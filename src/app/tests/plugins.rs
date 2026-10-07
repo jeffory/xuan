@@ -1964,9 +1964,9 @@ fn the_install_review_shows_the_plugin_before_anything_is_copied() {
     assert!(ui.has("Runs: sh plugin.sh"));
     assert!(ui.has("Says it connects to: example.com"));
     assert!(ui.has("Edits documents directly (as undoable steps)"));
-    assert!(ui.has(
-        "Installing does not allow it to run: Xuan asks for that the first time it starts."
-    ));
+    assert!(
+        ui.has("Installing does not allow it to run: Xuan asks for that the first time it starts.")
+    );
     assert!(!target.exists());
     ui.click("Cancel");
     assert_eq!(ui.app().dialog, None);
