@@ -236,6 +236,8 @@ def apply(entry, recipe, values):
 
     for target, value in recipe.fixed.items():
         put(target, value)
+    for target, value in (values.get("overrides") or {}).items():
+        put(target, value)
     if values.get("prompt") is not None:
         for target in recipe.prompt:
             put(target, values["prompt"])
@@ -289,3 +291,17 @@ def apply(entry, recipe, values):
         graph[node_id]["inputs"]["last_incoming"] = {"__value__": []}
     return upstream(graph, entry["output"])
 
+
+def add_alpha_mask(graph, kind):
+    """Save the alpha of the image the ``kind`` node outputs as a grey image
+    (white is opaque), next to the workflow's own output. Returns the id of
+    the new save node."""
+    source = next(node_id for node_id, node in graph.items() if node.get("class_type") == kind)
+    first = max((int(k) for k in graph if str(k).isdigit()), default=0) + 1
+    split, invert, image, save = (str(first + n) for n in range(4))
+    # SplitImageWithAlpha gives the mask as ComfyUI keeps it: 1 - alpha.
+    graph[split] = {"class_type": "SplitImageWithAlpha", "inputs": {"image": [source, 0]}}
+    graph[invert] = {"class_type": "InvertMask", "inputs": {"mask": [split, 1]}}
+    graph[image] = {"class_type": "MaskToImage", "inputs": {"mask": [invert, 0]}}
+    graph[save] = {"class_type": "SaveImage", "inputs": {"images": [image, 0], "filename_prefix": "xuan_mask"}}
+    return save

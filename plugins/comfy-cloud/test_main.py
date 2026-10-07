@@ -20,7 +20,6 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import main  # noqa: E402
-import xuan_plugin  # noqa: E402
 import comfy_api  # noqa: E402
 from catalog import Catalog  # noqa: E402
 from recipes import ACTIONS, RECIPES  # noqa: E402
@@ -248,12 +247,12 @@ class FakeServer:
         if self.refuse and job_id == "job-1":
             return {"status": "failed", "started_at": None, "outputs": [],
                     "error": {"code": "node_execution_error", "message": "Prompt outputs failed validation: model.size_preset"}}
-        output = next(k for k, n in self.submitted[-1].items() if n["class_type"] in ("SaveImageAdvanced", "SaveImage"))
-        return {"status": "succeeded", "started_at": "now", "outputs": [
-            {"node_id": "99", "type": "image", "name": "preview.png", "url": "https://storage.googleapis.com/p"},
-            {"node_id": output, "type": "image", "name": "b.png", "url": "https://storage.googleapis.com/b"},
-            {"node_id": output, "type": "image", "name": "a.png", "url": "https://storage.googleapis.com/a"},
-        ]}
+        saves = [k for k, n in self.submitted[-1].items() if n["class_type"] in ("SaveImageAdvanced", "SaveImage")]
+        outputs = [{"node_id": "99", "type": "image", "name": "preview.png", "url": "https://storage.googleapis.com/p"}]
+        for node in saves:
+            outputs += [{"node_id": node, "type": "image", "name": name, "url": f"https://storage.googleapis.com/{name}"}
+                        for name in ("b.png", "a.png")]
+        return {"status": "succeeded", "started_at": "now", "outputs": outputs}
 
     def cancel(self, job_id):
         pass
@@ -321,35 +320,55 @@ class Running(unittest.TestCase):
         load = next(n for n in self.server.submitted[0].values() if n["class_type"] == "LoadImage")
         self.assertEqual(load["inputs"]["image"], {"__type": "core/ASSET", "info": {"id": "asset-1"}})
 
-    def test_generate_layer_sends_the_picture_only_when_asked(self):
+    def test_generate_layer_alone_asks_gpt_for_a_transparent_background(self):
+        recipe = RECIPES["gpt-flare-layer"]
+        self.install(recipe, entry_for(recipe))
         source = {"path": os.path.join(self.tmp.name, "flat.png"), "width": 1152, "height": 864}
-        for reference, uploads in ((True, [source["path"]]), (False, [])):
-            with self.subTest(reference=reference):
-                self.server.uploads, self.server.submitted = [], []
-                recipe = RECIPES["gpt-flare-layer"]
-                self.install(recipe, entry_for(recipe))
-                job = FakeJob(self.tmp.name, "generate-layer", {"prompt": "a red kite", "reference": reference, "seed": 1}, source)
-                outputs = main.generate_layer(job)
-                self.assertEqual(self.server.uploads, uploads)
-                node = next(n for n in self.server.submitted[0].values() if n["class_type"] == "OpenAIGPTImageNodeV2")
-                self.assertEqual(node["inputs"]["model.background"], "transparent")
-                self.assertEqual("model.images.image_1" in node["inputs"], reference)
-                self.assertIn("a red kite", node["inputs"]["prompt"])
-                self.assertEqual(outputs[0]["fit"], "source")
-                self.assertEqual(outputs[0]["name"], "a red kite")
+        job = FakeJob(self.tmp.name, "generate-layer", {"prompt": "a red kite", "reference": False, "seed": 1}, source)
+        outputs = main.generate_layer(job)
+        self.assertEqual(self.server.uploads, [])
+        node = next(n for n in self.server.submitted[0].values() if n["class_type"] == "OpenAIGPTImageNodeV2")
+        self.assertEqual(node["inputs"]["model.background"], "transparent")
+        self.assertNotIn("model.images.image_1", node["inputs"])
+        self.assertEqual(outputs[0]["fit"], "source")
+        self.assertTrue(outputs[0]["name"].startswith("a red kite"))
 
-    def test_remove_background_answers_xuan_with_the_alpha_as_a_mask(self):
+    def test_generate_layer_draws_into_the_picture_then_lifts_the_object_out(self):
+        for recipe_id in ("gpt-sunburst-layer", main.LIFT_RECIPE):
+            self.install(RECIPES[recipe_id], entry_for(RECIPES[recipe_id]))
+        source = {"path": os.path.join(self.tmp.name, "flat.png"), "width": 1152, "height": 864}
+        job = FakeJob(self.tmp.name, "generate-layer",
+                      {"prompt": "a red kite", "model": "gpt-sunburst-layer", "seed": 1}, source)
+        outputs = main.generate_layer(job)
+        scene, lift = self.server.submitted
+        gpt = next(n for n in scene.values() if n["class_type"] == "OpenAIGPTImageNodeV2")["inputs"]
+        self.assertEqual(gpt["model.background"], "opaque")
+        self.assertIn("a red kite", gpt["prompt"])
+        self.assertEqual(scene[gpt["model.images.image_1"][0]]["class_type"], "LoadImage")
+        separation = next(n for n in lift.values() if n["class_type"] == "ByteDanceSeedreamLayerSeparationNodeV2")["inputs"]
+        self.assertIn("a red kite", separation["model.prompt"])
+        # The flattened image goes up first, then the picture GPT drew.
+        self.assertEqual(self.server.uploads[0], source["path"])
+        self.assertTrue(self.server.uploads[1].startswith(self.tmp.name))
+        # The first separated image is the background plate; the rest are the object.
+        images = [o for o in outputs if o["kind"] == "image"]
+        self.assertEqual([read(o["path"]) for o in images], ["b.png"])
+        self.assertEqual(images[0]["name"], "a red kite")
+        self.assertIn("+", images[0]["provenance"]["model"])
+
+    def test_remove_background_answers_xuan_with_a_mask_comfy_made(self):
         recipe = RECIPES["bria-remove-background"]
         self.install(recipe, entry_for(recipe))
-        self.server.png = xuan_plugin.encode_png(2, 1, bytes([200, 10, 10, 255, 0, 0, 0, 0]))
         source = {"path": os.path.join(self.tmp.name, "layer.png"), "width": 2, "height": 1}
         provider = main.remove_background(FakeJob(self.tmp.name, "remove-background", {"capability": "remove_background"}, source))
         self.assertEqual(provider[0]["kind"], "mask")
-        with open(provider[0]["path"], "rb") as handle:
-            width, height, rgba = main.decode_png(handle.read())
-        self.assertEqual((width, height, rgba[0], rgba[4]), (2, 1, 255, 0))
+        self.assertEqual(read(provider[0]["path"]), "a.png")  # only the mask was downloaded
+        graph = self.server.submitted[0]
+        kinds = {n["class_type"] for n in graph.values()}
+        self.assertTrue({"SplitImageWithAlpha", "InvertMask", "MaskToImage"} <= kinds)
         menu = main.remove_background(FakeJob(self.tmp.name, "remove-background", {}, source))
         self.assertEqual((menu[0]["kind"], menu[0]["name"]), ("image", "Cut-out"))
+        self.assertNotIn("SplitImageWithAlpha", {n["class_type"] for n in self.server.submitted[1].values()})
 
     def test_actions_refuse_missing_input_before_anything_is_sent(self):
         source = {"path": "/tmp/x.png", "width": 300, "height": 300}

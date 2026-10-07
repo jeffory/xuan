@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sdk", "python"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -24,14 +25,12 @@ from xuan_plugin import (  # noqa: E402
     NeedsSetup,
     Plugin,
     RpcError,
-    decode_png,
-    encode_gray_png,
     ui,
 )
 
 from catalog import Catalog, describe  # noqa: E402
 from comfy_api import SUCCEEDED, TERMINAL, Client, asset_ref, rejected_before_running  # noqa: E402
-from recipes import ACTIONS, RECIPES, apply, recipe_for  # noqa: E402
+from recipes import ACTIONS, BRIA, GPT, RECIPES, add_alpha_mask, apply, recipe_for  # noqa: E402
 
 plugin = Plugin()
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,7 +76,7 @@ def provenance(recipe, version, values, request_id, base):
     return record
 
 
-def wait_for(job, client, job_id):
+def wait_for(job, client, job_id, stage=""):
     """Poll the job until it ends; cancels it on the user's cancel or the timeout.
     Progress is only a fraction once Comfy reports one: partner models such as
     Seedream report none, so Xuan shows a spinner with the state instead."""
@@ -94,9 +93,9 @@ def wait_for(job, client, job_id):
         state = str(status.get("status") or "").lower()
         progress = status.get("progress") or {}
         if isinstance(progress, dict) and progress.get("value"):
-            job.progress(float(progress["value"]), progress.get("message") or state.capitalize())
+            job.progress(float(progress["value"]), stage + (progress.get("message") or state.capitalize()))
         else:
-            job.progress(None, STATES.get(state, state.capitalize() or "Running"))
+            job.progress(None, stage + STATES.get(state, state.capitalize() or "Running"))
         if state in TERMINAL:
             return status
         time.sleep(delay)
@@ -113,30 +112,47 @@ def error_text(status):
     return str(error.get("message") or error.get("code") or "no details")[:600]
 
 
-def run(job, recipe, values, image_path=None, reference_path=None):
+@dataclass
+class Result:
+    images: list  # downloaded images of the recipe's output node, in order
+    assets: list  # those images' records on the server
+    provenance: dict
+    notes: list
+    extra: dict = field(default_factory=dict)  # name -> downloaded images of nodes `post` added
+
+
+def run(job, recipe, values, image_path=None, reference_path=None, post=None, download=True, stage=""):
     """Run ``recipe`` with ``values``, uploading the source image and the
-    reference image first when given; returns ``(paths, provenance, notes)``.
+    reference image first when given. ``post(workflow)`` may add nodes to the
+    workflow and returns ``{name: node id}``; their images land in
+    ``Result.extra``. Progress messages start with ``stage``.
+
     When Comfy refuses a newly converted workflow before running it, the
     previous version is tried once instead."""
     client = make_client()
-    job.progress(None, "Checking the workflow")
+
+    def say(message):
+        job.progress(None, stage + message)
+
+    say("Checking the workflow")
     books = catalog(client)
     state = books.ensure(recipe)
     notes = [state["warning"]] if state.get("warning") else []
     for role, path in (("image", image_path), ("reference", reference_path)):
         if path:
             job.check_cancelled()
-            job.progress(None, "Uploading the image")
+            say("Uploading the image")
             values = dict(values, **{role: asset_ref(client.upload(path))})
     for attempt in (1, 2):
         version = state["current"]
         workflow = apply(version, recipe, values)
+        added = post(workflow) if post else {}
         job.check_cancelled()
-        job.progress(None, "Submitting")
+        say("Submitting")
         job_id = client.submit(workflow).get("id")
         if not job_id:
             raise RpcError(INTERNAL_ERROR, "the server did not return a job id")
-        status = wait_for(job, client, job_id)
+        status = wait_for(job, client, job_id, stage)
         if str(status.get("status")).lower() in SUCCEEDED:
             break
         if attempt == 1 and rejected_before_running(status):
@@ -147,17 +163,28 @@ def run(job, recipe, values, image_path=None, reference_path=None):
                 continue
         raise RpcError(INTERNAL_ERROR, f"Comfy job {status.get('status')}: {error_text(status)}")
     outputs = [o for o in status.get("outputs") or [] if isinstance(o, dict) and o.get("type", "image") == "image"]
-    mine = [o for o in outputs if str(o.get("node_id")) == str(version["output"])]
-    images = sorted(mine or outputs, key=lambda o: str(o.get("name", "")))
-    if not images:
+
+    def of(node_id):
+        return sorted((o for o in outputs if str(o.get("node_id")) == str(node_id)), key=lambda o: str(o.get("name", "")))
+
+    assets = of(version["output"]) or ([] if added else sorted(outputs, key=lambda o: str(o.get("name", ""))))
+    if not assets:
         raise RpcError(INTERNAL_ERROR, "the workflow produced no images")
-    job.progress(None, "Downloading")
-    paths = []
-    for index, output in enumerate(images):
-        destination = job.path(f"result-{index + 1}.png")
-        client.download(output, destination)
-        paths.append(destination)
-    return paths, provenance(recipe, version, values, job_id, client.base), notes
+    say("Downloading")
+    count = [0]
+
+    def fetch(records):
+        paths = []
+        for output in records:
+            count[0] += 1
+            destination = job.path(f"{recipe.id}-{count[0]}.png")
+            client.download(output, destination)
+            paths.append(destination)
+        return paths
+
+    images = fetch(assets) if download else []
+    extra = {name: fetch(of(node_id)) for name, node_id in added.items()}
+    return Result(images, assets, provenance(recipe, version, values, job_id, client.base), notes, extra)
 
 
 def texts(notes):
@@ -188,8 +215,8 @@ def generate(job):
               "aspect": job.inputs.get("aspect") or "1:1", "tier": job.inputs.get("resolution") or "2K"}
     if not values["prompt"].strip():
         raise RpcError(INVALID_PARAMS, "Describe the image to generate")
-    paths, record, notes = run(job, recipe, values)
-    return [Job.image(path, name=recipe.label, provenance=record) for path in paths] + texts(notes)
+    result = run(job, recipe, values)
+    return [Job.image(path, name=recipe.label, provenance=result.provenance) for path in result.images] + texts(result.notes)
 
 
 @plugin.action("edit")
@@ -198,8 +225,9 @@ def edit(job):
     values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job), "source_size": source_size(job)}
     if not values["prompt"].strip():
         raise RpcError(INVALID_PARAMS, "Describe the change")
-    paths, record, notes = run(job, recipe, values, image_path=job.source_path)
-    return [Job.image(path, name=recipe.label, fit_source=True, provenance=record) for path in paths] + texts(notes)
+    result = run(job, recipe, values, image_path=job.source_path)
+    images = [Job.image(path, name=recipe.label, fit_source=True, provenance=result.provenance) for path in result.images]
+    return images + texts(result.notes)
 
 
 @plugin.action("precise-edit")
@@ -210,8 +238,9 @@ def precise_edit(job):
         raise RpcError(INVALID_PARAMS, "Draw a box and describe what to change in it")
     values = {"seed": seed_of(job), "source_size": source_size(job), "regions": regions,
               "quality": job.inputs.get("quality") or "medium", "background": job.inputs.get("background") or ""}
-    paths, record, notes = run(job, recipe, values, image_path=job.source_path)
-    return [Job.image(path, name="Precise Edit", fit_source=True, provenance=record) for path in paths] + texts(notes)
+    result = run(job, recipe, values, image_path=job.source_path)
+    images = [Job.image(path, name="Precise Edit", fit_source=True, provenance=result.provenance) for path in result.images]
+    return images + texts(result.notes)
 
 
 @plugin.action("split-layers")
@@ -221,20 +250,22 @@ def split_layers(job):
     if min(width, height) < 512:
         raise RpcError(INVALID_PARAMS, "Seedream needs an image of at least 512 × 512 pixels")
     values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job), "source_size": (width, height)}
-    paths, record, notes = run(job, recipe, values, image_path=job.source_path)
+    result = run(job, recipe, values, image_path=job.source_path)
     # The workflow saves the background plate first, then the layers.
-    names = ["Background"] + [f"Layer {n}" for n in range(1, len(paths))]
-    outputs = [Job.image(path, name=name, fit_source=True, provenance=record) for path, name in zip(paths, names)]
-    return outputs + texts(notes)
+    names = ["Background"] + [f"Layer {n}" for n in range(1, len(result.images))]
+    outputs = [Job.image(path, name=name, fit_source=True, provenance=result.provenance)
+               for path, name in zip(result.images, names)]
+    return outputs + texts(result.notes)
 
 
-# Sent with the user's prompt when the flattened image goes along as a reference.
-LAYER_WITH_REFERENCE = (
-    "Image 1 is the picture this will be added to as a new layer. Draw only what is described below, "
-    "on a transparent background, placed where it belongs in Image 1 and matching its colours, lighting, "
-    "perspective and style. Do not redraw anything else from Image 1.\n\n"
-)
+# With Match the picture, GPT first draws the object into the flattened image
+# (asked for a transparent background alongside a reference image, it redraws
+# the whole scene instead), then Seedream lifts just that object out.
+SCENE = ("Add what is described below to this picture, where it belongs, matching the picture's colours, "
+         "lighting, perspective and style. Change nothing else.\n\n")
+LIFT = "Separate only this into its own layer: {}. Everything else stays in the background."
 LAYER_ALONE = "\n\nOn a transparent background, with nothing else in the picture."
+LIFT_RECIPE = "split-flash"
 
 
 @plugin.action("generate-layer")
@@ -243,35 +274,43 @@ def generate_layer(job):
     prompt = (job.inputs.get("prompt") or "").strip()
     if not prompt:
         raise RpcError(INVALID_PARAMS, "Describe what to put on the new layer")
-    reference = job.inputs.get("reference", True) is not False
-    values = {"prompt": LAYER_WITH_REFERENCE + prompt if reference else prompt + LAYER_ALONE,
-              "seed": seed_of(job), "source_size": source_size(job), "quality": job.inputs.get("quality") or "medium"}
-    paths, record, notes = run(job, recipe, values, reference_path=job.source_path if reference else None)
+    values = {"seed": seed_of(job), "source_size": source_size(job), "quality": job.inputs.get("quality") or "medium"}
+    if job.inputs.get("reference", True) is False:
+        result = run(job, recipe, dict(values, prompt=prompt + LAYER_ALONE))
+        layers, record, notes = result.images, result.provenance, result.notes
+    else:
+        scene = run(job, recipe, dict(values, prompt=SCENE + prompt, overrides={f"{GPT}.model.background": "opaque"}),
+                    reference_path=job.source_path, stage="Drawing it into the picture: ")
+        lift_recipe = RECIPES[LIFT_RECIPE]
+        lift = run(job, lift_recipe, {"prompt": LIFT.format(prompt), "seed": values["seed"]},
+                   image_path=scene.images[0], stage="Lifting it out: ")
+        layers = lift.images[1:]  # the first is the background plate
+        if not layers:
+            raise RpcError(INTERNAL_ERROR, "Seedream found nothing to lift out of the picture; try describing it differently")
+        record = dict(scene.provenance, model=f"{recipe.label} + {lift_recipe.label}")
+        record["extra"] = dict(scene.provenance["extra"], lifted_with=lift_recipe.template)
+        notes = scene.notes + lift.notes
     name = prompt if len(prompt) <= 40 else prompt[:39].rstrip() + "…"
-    return [Job.image(path, name=name, fit_source=True, provenance=record) for path in paths] + texts(notes)
-
-
-def alpha_mask(cutout, destination):
-    """The cut-out's alpha channel as a grey mask PNG."""
-    with open(cutout, "rb") as handle:
-        width, height, rgba = decode_png(handle.read())
-    with open(destination, "wb") as handle:
-        handle.write(encode_gray_png(width, height, bytes(rgba[3::4])))
-    return destination
+    names = [name] if len(layers) == 1 else [f"{name} {n}" for n in range(1, len(layers) + 1)]
+    return [Job.image(path, name=layer, fit_source=True, provenance=record) for path, layer in zip(layers, names)] + texts(notes)
 
 
 @plugin.action("remove-background")
 def remove_background(job):
     """From the menu: a cut-out copy as a new layer. As Xuan's Remove
     Background or Select Subject (``inputs.capability``): the cut-out's alpha
-    as a mask, which Xuan turns into a layer mask or the selection."""
+    as a mask, which Xuan turns into a layer mask or the selection. Comfy
+    saves that mask as its own image, so the plugin never decodes a PNG."""
     recipe = recipe_for("remove-background")
     source_size(job)
-    paths, record, notes = run(job, recipe, {}, image_path=job.source_path)
     if job.inputs.get("capability"):
-        mask = alpha_mask(paths[0], job.path("mask.png"))
-        return [Job.mask(mask, fit_source=True)] + texts(notes)
-    return [Job.image(paths[0], name="Cut-out", fit_source=True, provenance=record)] + texts(notes)
+        result = run(job, recipe, {}, image_path=job.source_path, download=False,
+                     post=lambda workflow: {"mask": add_alpha_mask(workflow, BRIA)})
+        if not result.extra.get("mask"):
+            raise RpcError(INTERNAL_ERROR, "Comfy returned no mask")
+        return [Job.mask(result.extra["mask"][0], fit_source=True)] + texts(result.notes)
+    result = run(job, recipe, {}, image_path=job.source_path)
+    return [Job.image(result.images[0], name="Cut-out", fit_source=True, provenance=result.provenance)] + texts(result.notes)
 
 
 def estimate(job):
