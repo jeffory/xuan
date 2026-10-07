@@ -69,6 +69,9 @@ def main():
         )
         for folder in ("plugins/mcp-server", "sdk/xuan-plugin"):
             shutil.copytree(ROOT / folder, source / folder, ignore=plugin_ignore)
+        # So does the Python plugin SDK, for Python plugins.
+        (source / "sdk/python").mkdir(parents=True)
+        shutil.copy2(ROOT / "sdk/python/xuan_plugin.py", source / "sdk/python")
         for filename in (
             "build.rs",
             "Cargo.toml",

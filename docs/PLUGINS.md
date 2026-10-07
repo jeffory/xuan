@@ -30,7 +30,9 @@ so a handler may call the editor (`host.document()`, `host.export_layer()`, …)
 while a job runs. In Python, decorate functions on a `Plugin`; in Rust, chain
 closures on `Plugin::new()` and call `run()`. `cargo build --release` in
 `plugins/invert-regions` builds the Rust example; the Python examples run as
-they are with `python3` on `PATH`.
+they are with `python3` on `PATH`, from the repository or copied into the
+plugins directory: Xuan ships the Python SDK and puts it on every plugin's
+import path (see [The Python SDK](#the-python-sdk)).
 
 ## Installing
 
@@ -46,6 +48,38 @@ every folder in the user plugins directory at start-up and from
 Set `XUAN_PLUGIN_PATH` (a `:`/`;`-separated list of directories) to load plugins
 from other places, for example a development checkout. Folders whose name starts
 with `.` are skipped.
+
+A Python plugin that imports `xuan_plugin` needs nothing else in its folder:
+Xuan provides the [SDK](#the-python-sdk) that matches it. Third-party Python
+packages a plugin uses are its own business (its README says how to install
+them).
+
+### The Python SDK
+
+Every package installs the Python SDK, `xuan_plugin.py` from
+`sdk/python/`, beside the bundled plugins:
+
+| Package | Python SDK folder |
+| --- | --- |
+| deb, rpm | `/usr/lib/xuan/sdk/python/` |
+| Linux tar.gz | `lib/xuan/sdk/python/` in the extracted folder; `scripts/install.sh` copies it to `<prefix>/lib/xuan/sdk/python/` (from a source checkout, `sdk/python/xuan_plugin.py`) |
+| AppImage | `usr/lib/xuan/sdk/python/` inside the image (`AppRun` names it in `XUAN_PLUGIN_SDK`) |
+| Windows zip | `sdk\python\` next to `xuan.exe` |
+
+Xuan starts every plugin with that folder first on `PYTHONPATH` (any
+`PYTHONPATH` Xuan itself was started with follows it) and named in
+`XUAN_PLUGIN_SDK`, so a plain `import xuan_plugin` works wherever the plugin is
+installed, and the SDK always matches the app's protocol. Plugins in other
+languages can find the folder in `XUAN_PLUGIN_SDK` too. Xuan looks for it, in
+order: in `XUAN_PLUGIN_SDK` when that is set to an absolute path before Xuan
+starts; in `sdk/python` beside the bundled plugins folder (`<prefix>/lib/xuan`
+on Linux, the folder of `xuan.exe` on Windows); and, for a development build,
+in the `sdk/python` of the checkout it was built from. When none holds
+`xuan_plugin.py`, plugins start without either variable.
+
+The Python examples also add the repository's `sdk/python` to the end of
+`sys.path`, so they run from a checkout with any Xuan; the SDK on `PYTHONPATH`
+comes before it.
 
 ### Bundled plugins
 
@@ -783,8 +817,11 @@ for a job go in the `work_dir` the host passes with each job and are removed whe
 the job ends. `models_dir` is the plugin's [models folder](#models) and
 `models` maps the id of each declared model that is downloaded and verified to
 its file; a model that is missing, downloading or corrupt is left out. The
-plugin process also gets `XUAN_PLUGIN_ID`, `XUAN_DATA_DIR` and
-`XUAN_MODELS_DIR` in its environment. In the SDKs, `job.model_path("id")`
+plugin process also gets `XUAN_PLUGIN_ID`, `XUAN_DATA_DIR`,
+`XUAN_MODELS_DIR` and `PYTHONUNBUFFERED=1` in its environment, and, when Xuan
+finds the [Python SDK](#the-python-sdk), `XUAN_PLUGIN_SDK` (the SDK's folder)
+and `PYTHONPATH` with that folder first, followed by the value Xuan was started
+with. In the SDKs, `job.model_path("id")`
 returns the path or fails with a setup error, and `plugin.model_path("id")`
 (Python) or `settings.model_path("id")` and `host.model_path("id")` (Rust)
 return it or nothing.

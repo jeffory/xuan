@@ -42,6 +42,9 @@ mod selection;
 #[path = "tests/paths.rs"]
 mod paths;
 
+#[path = "tests/pencil_cursor.rs"]
+mod pencil_cursor;
+
 #[path = "tests/pen.rs"]
 mod pen;
 
