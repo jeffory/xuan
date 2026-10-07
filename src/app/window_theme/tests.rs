@@ -10,16 +10,22 @@ pub(in crate::app) struct Fixture {
 impl Fixture {
     pub fn new(kde: bool) -> (Self, Env) {
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let env = Env {
+        let fixture = Self { dir };
+        let env = fixture.env(kde);
+        (fixture, env)
+    }
+
+    /// A fresh environment over this fixture's folders.
+    pub fn env(&self, kde: bool) -> Env {
+        let home = self.dir.path().join("home");
+        Env {
             config_home: home.join(".config"),
             data_home: home.join(".local/share"),
-            data_dirs: vec![dir.path().join("usr/share")],
+            data_dirs: vec![self.dir.path().join("usr/share")],
             home,
             kde,
             ..Env::default()
-        };
-        (Self { dir }, env)
+        }
     }
 
     pub fn write(&self, relative: &str, content: impl AsRef<[u8]>) {
