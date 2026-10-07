@@ -209,19 +209,6 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
             "egui warn_fg_color/window",
             ratio(v.warn_fg_color, p.window),
         ),
-        // The row being edited in a list (Layer Effects, Settings, Plugins): selection fill under
-        // the selected row's text, on the dialog window and on a panel (#87).
-        (
-            "selected row text/window",
-            ratio(
-                v.selection.stroke.color,
-                p.window.blend(v.selection.bg_fill),
-            ),
-        ),
-        (
-            "selected row text/panel",
-            ratio(v.selection.stroke.color, p.panel.blend(v.selection.bg_fill)),
-        ),
         // Hints and weak text (#78).
         ("egui weak text/field", ratio(v.weak_text_color(), p.field)),
     ]
@@ -420,6 +407,20 @@ fn a_system_accent_replaces_the_blue_and_stays_readable() {
         palette_for(xuan::config::Theme::Dark, None, Some(windows_blue)),
         Palette::DARK.with_accent(windows_blue)
     );
+}
+
+/// The row being edited in a list (Layer Effects, Settings, Plugins) is the selection fill under
+/// the selected text (#87). Checked on Xuan's own palettes, not on arbitrary system accents: the
+/// fill is egui's translucent accent, which also paints text selections.
+#[test]
+fn selected_list_rows_are_readable_in_both_palettes() {
+    for p in [Palette::DARK, Palette::LIGHT] {
+        let v = visuals(&p);
+        for (surface, bg) in [("window", p.window), ("panel", p.panel)] {
+            let r = ratio(v.selection.stroke.color, bg.blend(v.selection.bg_fill));
+            assert!(r >= 4.5, "dark={} selected row/{surface}: {r:.2}", p.dark);
+        }
+    }
 }
 
 #[test]

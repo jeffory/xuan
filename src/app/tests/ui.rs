@@ -847,14 +847,30 @@ mod layer_appearance {
         ui.settle();
         ui.open_menu("Layer");
         ui.click("Layer Effects…");
-        let selected =
-            |ui: &UiTest, name: &str| ui.harness.get_by_label(name).accesskit_node().is_selected();
-        assert_eq!(selected(&ui, "Stroke"), Some(true));
-        assert_eq!(selected(&ui, "Drop Shadow"), Some(false));
+        let selected = |ui: &UiTest, name: &str| {
+            ui.harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, name)
+                .accesskit_node()
+                .toggled()
+        };
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Drop Shadow"),
+            Some(egui::accesskit::Toggled::False)
+        );
         // Clicking a name selects the row; it does not turn the effect on.
         ui.click("Inner Glow");
-        assert_eq!(selected(&ui, "Inner Glow"), Some(true));
-        assert_eq!(selected(&ui, "Stroke"), Some(false));
+        assert_eq!(
+            selected(&ui, "Inner Glow"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::False)
+        );
         let edit = ui.app().layer_effects.as_ref().unwrap();
         assert_eq!(edit.selected, EffectKind::InnerGlow);
         assert!(edit.effects.is_empty());

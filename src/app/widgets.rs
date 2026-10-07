@@ -1337,11 +1337,22 @@ pub fn subheading(ui: &mut Ui, text: impl Into<String>) -> Response {
 /// A list row that is highlighted while it is the one being edited, like the Settings pages and the
 /// Plugins list: the selection fill, no check mark. Fills the width left in the row.
 pub fn selected_row(ui: &mut Ui, selected: bool, label: impl Into<String>) -> Response {
+    let label = label.into();
     let width = ui.available_width();
-    ui.add(
-        egui::Button::selectable(selected, label.into())
+    let response = ui.add(
+        egui::Button::selectable(selected, (label.clone(), egui::Atom::grow()))
             .min_size(vec2(width, ui.spacing().interact_size.y)),
-    )
+    );
+    // Tell assistive technology which row is the selected one.
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            &label,
+        )
+    });
+    response
 }
 
 pub fn selectable_value<T: PartialEq>(
