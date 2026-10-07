@@ -24,7 +24,7 @@ Results should use the best quality for the size they will cover without going u
 - **New layer with AI:** a compact popover under the button.
 - **New Image, Generate tab:**
   - The document keeps the model's size, which is at least W×H.
-  - An **Exact size** checkbox scales or crops the result to exactly W×H.
+  - An **Exact size** checkbox makes the canvas exactly W×H, with the result as a layer that covers it. Nothing is cropped: the result can be moved to reframe it.
 
 ## Part 1: Xuan (host, manifest, SDK)
 
@@ -65,7 +65,11 @@ surfaces = ["menu"]             # new: only where listed ("menu" = the full dial
 
 - `layer` and `region` results are placed as today, using `fit: "source"`, `crop_to_regions` and `mask_to_regions`.
 - `document` results open a new document at the image's own pixel size, with the dialog's ppi.
-- With **Exact size**, Xuan resizes the result to W×H with `render::resize_quality`. If the aspect ratio differs, it first crops from the centre to W:H. Cropping is preferred to stretching.
+- With **Exact size**, the new document is exactly W×H and the result becomes its only layer:
+  - The layer is scaled to **cover** the canvas, centred, with no empty edge. Any extra hangs past the edges on the longer side.
+  - The image is not resampled. As with every plugin result, it keeps the model's pixels and is placed through the layer's transform.
+  - Nothing is cropped. The parts past the canvas are kept, so the user can move the layer to reframe; the canvas only clips on export.
+  - When the layer extends past the canvas, the status bar says "Move the layer to reframe".
 
 ### UI
 
@@ -105,7 +109,7 @@ Values are remembered per action for the session, so the next popover starts fro
 - **Generate** keeps the W×H and ppi fields and adds:
   - an action picker, shown only when there are several;
   - the action's basic inputs;
-  - an **Exact size** checkbox, off by default, with the hint "Scale or crop to exactly W × H";
+  - an **Exact size** checkbox, off by default, with the hint "Make the canvas exactly W × H; the image covers it and can be moved";
   - Advanced;
   - the primary button **Generate** in place of Create canvas.
 - The new document is named after the prompt and opens when the job finishes.
@@ -199,9 +203,9 @@ From the menu (no target), Generate Image keeps its Shape and Size inputs. The m
   - **New Image:**
     - the Generate tab appears only with a `document` action;
     - the job produces a document;
-    - Exact size crops and resizes to W×H;
+    - Exact size makes a W×H canvas with one layer that covers it, centred, keeping the image's own pixels;
     - the ppi carries over.
-  - The exact-resize function: centre crop and size.
+  - The cover placement: the scale, the centring, and that nothing is cropped.
 - **Plugin:**
   - the size rule for each model (exact, rounded up, scaled up to the minimum, preset choice, too big);
   - the new recipes against fixtures and Comfy's own conversion;
