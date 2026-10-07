@@ -431,11 +431,14 @@ impl EditorApp {
                     self.run_plugin_action();
                 } else {
                     self.status = tr("Cancelled; nothing was sent").into();
-                    // Without inputs there is no dialog to go back to.
+                    // Without inputs, or from a surface, there is no dialog
+                    // to go back to.
                     let inputs = (self.plugins.manifest(&plugin))
                         .and_then(|m| m.action(&action))
                         .is_some_and(|spec| !spec.inputs.is_empty());
-                    if !inputs {
+                    let surface =
+                        (self.plugins.action.as_ref()).is_some_and(|e| e.surface.is_some());
+                    if !inputs || surface {
                         self.close_plugin_action();
                     }
                 }

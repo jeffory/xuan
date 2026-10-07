@@ -50,7 +50,12 @@ fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egu
 /// is unreadable, so its colour follows the row's state. That state is only known once the
 /// button is added: it is read from the button's last response, with a repaint if it has
 /// changed since.
-fn item_button(ui: &mut egui::Ui, enabled: bool, label: &str, shortcut: &str) -> egui::Response {
+pub(super) fn item_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    shortcut: &str,
+) -> egui::Response {
     // Without a shortcut the accessible label is just the name, with no trailing space.
     if shortcut.is_empty() {
         return ui.add_enabled(enabled, Button::new(label));

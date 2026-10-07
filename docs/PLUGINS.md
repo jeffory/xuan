@@ -19,7 +19,7 @@ plugins under `plugins/`:
 | --- | --- | --- |
 | `plugins/histogram` | Python | A pane that follows the document, settings, data-URL images |
 | `plugins/invert-regions` | Rust | A region action with per-region fields, a pane that reads the composite |
-| `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; three actions |
+| `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; several layers from one result; a pane with a button that works in the background |
 | `plugins/local-upscale` | Python | A local, offline job with no permissions beyond reading; a swappable model backend |
 | `plugins/select-bright` | Python | A `mask` result that becomes the selection; a placeholder for a segmentation model |
 | `plugins/extend-edges` | Python | Outpainting: an extended source, `extend_canvas` in a result, an image fitted to the new canvas; a placeholder for a generative model |
@@ -458,6 +458,8 @@ kind = "edit"                     # "edit" needs an image, "generate" does not, 
 source = { from = "layer", max_side = 2048, crop_to_regions = true, padding = 0.25 }
 result = { into = "layer", mask_to_regions = true }
 description = "Draw boxes over the parts to change and describe each one."
+surfaces = ["region"]             # also in the AI Region tool; "layer" and "document" too, see "Surfaces"
+verb = "Edit"                     # its label in the AI Region popover
 
 [[actions.inputs]]
 id = "regions"
@@ -466,7 +468,7 @@ label = "Edits"
 min = 1
 fields = [
   { id = "desc", type = "text", label = "Instruction" },
-  { id = "type", type = "enum", label = "Kind", values = ["obj", "text"], default = "obj" },
+  { id = "type", type = "enum", label = "Kind", values = ["obj", "text"], default = "obj", advanced = true },
 ]
 
 [[actions.inputs]]
@@ -475,15 +477,17 @@ type = "enum"
 label = "Model"
 values = [{ id = "ideogram-4.5", label = "Ideogram 4.5" }]
 default = "ideogram-4.5"
+advanced = true                   # behind "Advanced" in popovers; surfaces = ["menu"] shows it only in the dialog
 
 [[actions.inputs]]
 id = "seed"
 type = "seed"                     # integer with a "random" button
 
 [[panes]]
-id = "jobs"
-title = "Comfy jobs"
+id = "comfy"
+title = "Comfy Cloud"
 refresh = "manual"                # or "document" to re-render after edits
+placement = "sidebar"             # or "settings": on the plugin's page in Manage Plugins
 
 [[formats]]
 id = "jxl"
@@ -590,7 +594,7 @@ as a mask", and the file lives only in the job's work directory, which the
 host deletes with the job. The Rust SDK reads it with
 `job.selection_mask_path()` and the Python SDK with `job.selection_mask_path`.
 A plugin can return the same file as the `mask` of its image output so the
-result layer is masked by the selection (see `plugins/comfy-cloud`). `regions`
+result layer is masked by the selection. `regions`
 stay the right tool for several separate edits with their own text; the
 selection mask is for one area.
 
@@ -796,6 +800,86 @@ is chosen, the command runs its action instead:
 and [GENERATIVE.md](GENERATIVE.md) describe how an ONNX segmentation plugin
 fits this slot.
 
+### Surfaces
+
+Every action is in its menu and runs from its dialog. An action can also
+appear in Xuan's own UI, as a small popover that shows a prompt first and
+the rest under **Advanced**, by listing **surfaces**:
+
+```toml
+[[actions]]
+id = "generate-layer"
+label = "Generate Layer…"
+surfaces = ["layer"]          # "layer", "region" and/or "document"
+source = { from = "composite" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"            # the first text input is the prompt Generate needs
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+advanced = true               # inside the collapsed "Advanced" section
+
+[[actions.inputs]]
+id = "aspect"
+type = "enum"
+values = ["1:1", "16:9"]
+surfaces = ["menu"]           # only in the full dialog
+```
+
+| Surface | Where | The action must be |
+| --- | --- | --- |
+| `layer` | **New layer with AI**, the sparkles button in the Layers panel (a menu first when several actions offer it) | `generate`, or `edit` with a `composite` source; `result.into = "layer"`; `document = "edit"` |
+| `region` | The **AI Region** tool: the user draws a box (or turns the selection into one), and its popover offers every region action by its `verb` | `edit` with a `regions` input, a `verb` of at most 24 characters, `document = "edit"` |
+| `document` | The **Generate** tab of **File → New…** | `generate` with `result.into` of `document` or `ask` |
+
+The manifest is refused when an action does not fit a surface it lists, when
+it lists one twice or lists `menu` (every action has its menu), when it has
+a `verb` without the `region` surface, or when the verb is not plain text (no
+control, bidi or invisible characters).
+
+**Inputs.** `advanced = true` (on an action input or a region field) puts it in
+the collapsed **Advanced** section of popovers and the New Image tab; the full
+dialog shows everything. `surfaces = [...]` on an input shows it only where
+listed, `menu` being the dialog; it may list `menu` and the action's own
+surfaces, each once. Generate needs the first text input of the
+basic ones to have text. A popover remembers its values per action for the
+session.
+
+**What the plugin gets.** A surface run has two more inputs:
+
+- `inputs.surface`: `"layer"`, `"region"` or `"document"` (absent from the menu);
+- `inputs.target`: `{width, height}`, the document pixels the result will cover:
+  the canvas for `layer`, the box (or the bounds of the boxes sent together)
+  for `region`, the width and height typed for `document`.
+
+A plugin should render at least `target`, and exactly when its model allows,
+then place the result with `"fit": "cover"`: the layer keeps every pixel the
+model made, covering its area without stretching.
+
+**Regions.** Each AI Region box keeps its own verb and values. Generate in a
+box's popover runs that box alone when its action's `regions` input has
+`max = 1`. When the input takes several boxes (no `max`, or `max` above 1), it
+runs every box with that verb that has its prompt: boxes with the same values
+go in one job, up to `max` boxes each, and boxes whose values differ (another
+model, say) go in jobs of their own, since a job has one set of inputs. Sent
+boxes are hidden while their job runs and come back if it fails, is cancelled
+or its result is refused; several jobs may run on a document at once. Boxes
+are kept for the session beside their document and are never edits of it.
+
+Xuan sets the inputs `surface` and `target` on surface runs and `capability`,
+`point` and `rect` on provider runs, so an action cannot declare inputs with
+those ids. An action whose result replaces a layer does not start while
+another job is replacing the same layer.
+
+**Documents.** The result opens as a new document at the image's own size and
+the dialog's resolution. With **Exact size** the canvas is exactly the width
+and height typed and the image becomes a layer that covers it, centred and not
+cropped, so it can be moved to reframe it; the status bar says so when it
+hangs over the canvas.
+
 ## Protocol
 
 Messages are JSON-RPC 2.0 objects, one per line, UTF-8, over the plugin's stdin
@@ -809,7 +893,7 @@ directories the host owns; messages carry paths, never pixels.
 
 | Request (host → plugin) | Params | Result |
 | --- | --- | --- |
-| `initialize` | `protocol`, `host: {name, version}`, `plugin_dir`, `data_dir`, `models_dir`, `models: {id: path}`, `settings`, `secrets` | `{protocol}` |
+| `initialize` | `protocol`, `host: {name, version, features}`, `plugin_dir`, `data_dir`, `models_dir`, `models: {id: path}`, `settings`, `secrets` | `{protocol}` |
 | `shutdown` | — | `null`; the process must exit |
 
 `data_dir` is a per-plugin folder that persists between runs. Temporary files
@@ -885,7 +969,15 @@ it a size instead and the pixels are fitted to that size: `width` and/or
 `height` in document units (one side alone keeps the aspect ratio), or
 `"fit": "source"` to cover the bounds of the source that was sent, at `x`,`y`
 from its top-left. A higher-resolution result then sits exactly over the
-source with a higher pixel density. For an extended source those bounds
+source with a higher pixel density. `"fit": "source"` stretches a result
+whose shape differs from the source; `"fit": "cover"` instead scales it
+evenly so that it covers those bounds, centred, and keeps what hangs over
+in the layer (nothing is cropped), which suits models that only render
+certain sizes. `cover` cannot be used with `result.into = "replace"`, and
+older versions of Xuan refuse it: send it only when `initialize`'s
+`host.features` lists `fit_cover` (actions on surfaces need `surfaces`):
+`plugin.host_info["features"]` in Python, `job.host.supports("fit_cover")`
+or `Settings::host` in Rust. For an extended source those bounds
 include the new canvas (see [Extending the
 canvas](#extending-the-canvas-outpainting)). `fit` cannot be combined with `width` or
 `height`, and an action without a source cannot use `fit`. Sizes must be
@@ -893,8 +985,9 @@ finite, above 0 and at most 30,000 document units; the image's own pixels
 still count against the size and 100-megapixel limits. With `result.into =
 "replace"` the result is resampled to the size it is placed at, in the source
 layer's pixels. The SDKs have helpers: `job.image(path, fit_source=True)` or
-`width=`/`height=` in Python, and `Output::image(..).fit_source()` or
-`.with_size(width, height)` in Rust.
+`width=`/`height=` in Python (`fit="cover"` for cover), and
+`Output::image(..).fit_source()`, `.fit_cover()` or `.with_size(width,
+height)` in Rust.
 
 **Masks.** A `mask` output turns a grey PNG into the document's selection:
 
@@ -1438,6 +1531,15 @@ editor's own widgets, in the editor's theme:
 A plugin may also notify `pane/update` `{pane, tree}` at any time, for example
 when a background job finishes.
 
+A pane is shown in the sidebar unless it sets `placement = "settings"`. Such a
+pane is drawn on the plugin's page in **Plugins → Manage Plugins…**, below its
+settings, as tall as its contents (up to a limit, then it scrolls). It suits
+status and controls that belong with the plugin's settings, such as an account
+or a **Check for updates** button, rather than something used while editing.
+It is never added to the sidebar or the **Window** menu, and it is rendered
+only while that page is open. Xuan versions without `placement` show it in the
+sidebar.
+
 Widget tree nodes (`type` plus fields):
 
 | Type | Fields |
@@ -1504,8 +1606,15 @@ request](#withdrawing-a-request)).
   process group on Unix, its Job Object on Windows) shortly after.
 - The host answers plugin requests on the UI thread between frames; a plugin
   must not expect sub-frame latency.
-- Jobs run in the background and the editor remains usable. Only one job per
-  document is in flight; a job is cancelled if its document tab closes.
+- Jobs run in the background and the editor remains usable. Several jobs may
+  run on one document at once. Their results are applied one at a time in the
+  order the jobs finish: while one is shown as a proposal, the next waits until
+  it is accepted or discarded. A job is cancelled if its document tab closes.
+- Running jobs are shown in the status bar, with Cancel: the job's label and
+  its latest `job/progress` message, a progress bar once it reports a
+  `fraction` (a spinner until then), and a count such as **1 of 3** that lists
+  every running job. A plugin that cannot measure its progress should send
+  messages without a `fraction` rather than a made-up one.
 - Wherever a plugin's own words appear, Xuan says which plugin they come
   from: menu items and the shortcut list show `Action label · Plugin name`
   (hover a menu item for the plugin's id and folder), and permission

@@ -264,6 +264,15 @@ class Host:
         self.request("host/open", {"path": path} if path else {"url": url})
 
 
+def _fit(output: Dict[str, Any], fit: Optional[str]) -> None:
+    """Set an image or mask output's ``fit``: ``source`` or ``cover``."""
+    if fit is None:
+        return
+    if fit not in ("source", "cover"):
+        raise ValueError('fit is "source" or "cover"')
+    output["fit"] = fit
+
+
 class Job:
     """One ``action/run``: its inputs, source image and output helpers."""
 
@@ -355,6 +364,7 @@ class Job:
         height: Optional[float] = None,
         fit_source: bool = False,
         provenance: Optional[Dict[str, Any]] = None,
+        fit: Optional[str] = None,
     ) -> Dict[str, Any]:
         """An image output. Unless the action's ``result.into`` is
         ``document`` (a new tab), it changes the open document, so the manifest
@@ -362,6 +372,8 @@ class Job:
         ``width``/``height`` (document units) or
         ``fit_source=True`` (cover the source that was sent) place a result of
         any pixel size at that size, so extra pixels become higher density.
+        ``fit="cover"`` instead scales it evenly to cover the source, centred,
+        without stretching; what hangs over the source stays in the layer.
 
         ``provenance`` records how the image was made; it is shown in the
         layer's info and saved with the project. Known keys: ``model``,
@@ -381,8 +393,7 @@ class Job:
             output["width"] = width
         if height is not None:
             output["height"] = height
-        if fit_source:
-            output["fit"] = "source"
+        _fit(output, "source" if fit_source and not fit else fit)
         if provenance:
             output["provenance"] = provenance
         return output
@@ -398,6 +409,7 @@ class Job:
         width: Optional[float] = None,
         height: Optional[float] = None,
         fit_source: bool = False,
+        fit: Optional[str] = None,
     ) -> Dict[str, Any]:
         """A mask output: a grey PNG (white selected, black not, grey partly)
         that becomes the document's selection once the user accepts it.
@@ -413,8 +425,7 @@ class Job:
             output["width"] = width
         if height is not None:
             output["height"] = height
-        if fit_source:
-            output["fit"] = "source"
+        _fit(output, "source" if fit_source and not fit else fit)
         return output
 
     @staticmethod

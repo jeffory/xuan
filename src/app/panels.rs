@@ -363,6 +363,14 @@ impl EditorApp {
                                         );
                                         widgets::color_well(ui, &mut self.brush.color);
                                     }
+                                    Tool::Region if self.plugins.action.is_none() => {
+                                        if widgets::button(ui, tr("Use Selection")).clicked() {
+                                            self.add_ai_box_from_selection();
+                                        }
+                                        if widgets::button(ui, tr("Clear")).clicked() {
+                                            self.clear_ai_boxes();
+                                        }
+                                    }
                                     Tool::Hand | Tool::Zoom => {
                                         ui.label(
                                         RichText::new(
@@ -438,21 +446,49 @@ impl EditorApp {
                                 .color(ui.palette().muted),
                         );
                     }
-                    let hint = if has_document {
-                        self.tool.hint().to_owned()
-                    } else {
+                    let hint = if !has_document {
                         self.empty_hint()
+                    } else if self.tool == Tool::Region && self.plugins.action.is_none() {
+                        tr("Drag a box and say what to do there · Click a box to change it · Delete removes it").to_owned()
+                    } else {
+                        self.tool.hint().to_owned()
                     };
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(hint).size(11.0).color(ui.palette().muted),
-                            )
-                            .truncate(),
-                        );
+                        // Running jobs, even with no document open (New Image can
+                        // generate one), else the latest status message for a few
+                        // seconds, else the hint.
+                        let jobs = self.running_jobs();
+                        if !jobs.is_empty() {
+                            self.job_status(ui, &jobs);
+                        } else if let Some(status) = self.recent_status(ui.ctx()) {
+                            ui.add(egui::Label::new(RichText::new(status).size(11.0)).truncate());
+                        } else {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(hint).size(11.0).color(ui.palette().muted),
+                                )
+                                .truncate(),
+                            );
+                        }
                     });
                 });
             });
+    }
+
+    /// The status message while it is new: for `STATUS_SECONDS` after it
+    /// last changed. Only its first line is shown.
+    fn recent_status(&mut self, ctx: &egui::Context) -> Option<String> {
+        const STATUS_SECONDS: f64 = 8.0;
+        let now = ctx.input(|i| i.time);
+        if self.status != self.status_shown.0 {
+            self.status_shown = (self.status.clone(), now);
+        }
+        let age = now - self.status_shown.1;
+        if self.status.is_empty() || age >= STATUS_SECONDS {
+            return None;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(STATUS_SECONDS - age));
+        self.status.lines().next().map(str::to_owned)
     }
 
     pub(super) fn tool_rail(&mut self, ctx: &egui::Context) {
@@ -466,7 +502,7 @@ impl EditorApp {
         const FOOTER_HEIGHT: f32 = FOOTER_ABOVE + 1.0 + FOOTER_BELOW + widgets::PALETTE_HEIGHT;
         let tools: Vec<Tool> = Tool::ALL
             .into_iter()
-            .filter(|t| *t != Tool::Region || self.plugins.action.is_some())
+            .filter(|t| *t != Tool::Region || self.region_tool_available())
             .collect();
         // One column unless the tools would run into the swatches; then as few as fit, up to three.
         let room = ctx.available_rect().height() - 2.0 * f32::from(MARGIN_Y) - FOOTER_HEIGHT;

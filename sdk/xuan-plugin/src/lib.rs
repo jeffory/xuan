@@ -278,10 +278,41 @@ pub struct Host {
     pub timeout: Duration,
     /// The verified model files, by id, as the editor last sent them.
     models: Arc<Mutex<BTreeMap<String, PathBuf>>>,
+    /// The editor, from `initialize`; see [`Host::info`].
+    info: Arc<Mutex<HostInfo>>,
     /// Sent as `session` with every request; see [`Host::with_session`].
     session: Option<String>,
     /// Withdraws this host's requests; see [`Host::with_cancel`].
     cancel: Option<CancelToken>,
+}
+
+/// The editor that started the plugin, as `initialize` describes it under
+/// `host`: its name, version, and what it understands beyond the protocol
+/// version (`"surfaces"`, `"fit_cover"`, …). Empty when an older editor did
+/// not say. Check a feature before relying on it, for example send
+/// [`Output::fit_cover`] only when `supports("fit_cover")`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostInfo {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
+impl HostInfo {
+    fn from_params(params: &Value) -> Self {
+        params
+            .get("host")
+            .and_then(|host| serde_json::from_value(host.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// Whether the editor named `feature` among its features.
+    pub fn supports(&self, feature: &str) -> bool {
+        self.features.iter().any(|f| f == feature)
+    }
 }
 
 /// The verified models in `initialize` or `models/changed` params.
@@ -304,9 +335,23 @@ impl Host {
             transport,
             timeout: Duration::from_secs(120),
             models: Arc::default(),
+            info: Arc::default(),
             session: None,
             cancel: None,
         }
+    }
+
+    /// The editor that started the plugin; see [`HostInfo`].
+    pub fn info(&self) -> HostInfo {
+        self.info
+            .lock()
+            .map(|info| info.clone())
+            .unwrap_or_default()
+    }
+
+    /// Whether the editor understands `feature`; see [`HostInfo::supports`].
+    pub fn supports(&self, feature: &str) -> bool {
+        self.info.lock().is_ok_and(|info| info.supports(feature))
     }
 
     /// The path of a `[[models]]` file the editor downloaded and verified,
@@ -823,6 +868,23 @@ impl Output {
         self
     }
 
+    /// Scale an image or mask evenly to cover the source that was sent,
+    /// centred (`fit = "cover"`); what hangs over stays in the layer.
+    pub fn fit_cover(mut self) -> Self {
+        if let Self::Image {
+            width, height, fit, ..
+        }
+        | Self::Mask {
+            width, height, fit, ..
+        } = &mut self
+        {
+            *width = None;
+            *height = None;
+            *fit = Some("cover".into());
+        }
+        self
+    }
+
     /// A grey PNG (white selected, black not, grey partly) that becomes the
     /// document's selection once the user accepts the result, combined with
     /// the current selection by `mode`. Placed like an image at `x`, `y` in
@@ -941,6 +1003,8 @@ pub struct Settings {
     pub models_dir: PathBuf,
     /// The verified model files, by id.
     pub models: BTreeMap<String, PathBuf>,
+    /// The editor that started the plugin.
+    pub host: HostInfo,
 }
 
 impl std::fmt::Debug for Settings {
@@ -962,6 +1026,7 @@ impl std::fmt::Debug for Settings {
             .field("data_dir", &self.data_dir)
             .field("models_dir", &self.models_dir)
             .field("models", &self.models)
+            .field("host", &self.host)
             .finish()
     }
 }
@@ -1167,8 +1232,12 @@ impl Runtime {
                     data_dir: PathBuf::from(string("data_dir")),
                     models_dir: PathBuf::from(string("models_dir")),
                     models: models_from(&params),
+                    host: HostInfo::from_params(&params),
                 };
                 self.host.set_models(settings.models.clone());
+                if let Ok(mut info) = self.host.info.lock() {
+                    *info = settings.host.clone();
+                }
                 if let Some(handler) = &self.plugin.on_settings {
                     handler(&settings);
                 }
@@ -1416,6 +1485,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plugins_learn_the_editor_and_its_features_from_initialize() {
+        let runtime = Runtime {
+            plugin: Plugin::new().estimate("go", |job| {
+                Ok(json!({"cover": job.host.supports("fit_cover")}))
+            }),
+            host: Host::over(Arc::new(Transport::new(Box::new(std::io::sink())))),
+            settings: Mutex::new(Settings::default()),
+            jobs: Mutex::new(HashMap::new()),
+        };
+        // Before initialize, and from an editor that does not say: nothing.
+        assert_eq!(runtime.host.info(), HostInfo::default());
+        runtime.dispatch("initialize", json!({})).unwrap();
+        assert!(!runtime.host.supports("fit_cover"));
+        let host =
+            json!({"name": "Xuan", "version": "0.5.0", "features": ["surfaces", "fit_cover"]});
+        runtime
+            .dispatch("initialize", json!({ "host": host }))
+            .unwrap();
+        let info = runtime.host.info();
+        assert_eq!(
+            (info.name.as_str(), info.version.as_str()),
+            ("Xuan", "0.5.0")
+        );
+        assert!(info.supports("surfaces") && !info.supports("teleport"));
+        assert_eq!(runtime.settings.lock().unwrap().host, info);
+        // Jobs see it through their host.
+        let estimate = runtime
+            .dispatch("action/estimate", json!({"action": "go", "job": "1"}))
+            .unwrap();
+        assert_eq!(estimate, json!({"cover": true}));
+    }
+
+    #[test]
     fn settings_debug_output_hides_secret_values() {
         let settings = Settings {
             settings: json!({"max_side": 1024}),
@@ -1509,6 +1611,17 @@ mod tests {
         assert!(value.get("fit").is_none() && value.get("width").is_none());
         // Only images and masks have a placement.
         assert_eq!(Output::text("hi").fit_source(), Output::text("hi"));
+        let covered = Output::image("/tmp/out.png", None, 0.0, 0.0)
+            .with_size(Some(40.0), None)
+            .fit_cover();
+        let value = serde_json::to_value(&covered).unwrap();
+        assert_eq!(value["fit"], "cover");
+        assert!(value.get("width").is_none());
+        assert_eq!(
+            serde_json::to_value(Output::mask("/tmp/m.png", MaskMode::default()).fit_cover())
+                .unwrap()["fit"],
+            "cover"
+        );
         assert_eq!(ui::png_data_url(b"hi"), "data:image/png;base64,aGk=");
         assert_eq!(ui::png_data_url(b"hello"), "data:image/png;base64,aGVsbG8=");
     }

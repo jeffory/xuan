@@ -414,10 +414,25 @@ exporting for it opens the usual save dialog, titled with the plugin's name,
 where you choose the place, and opening a file it names asks first, showing
 the file's path.
 
+Plugin actions run in the background while you keep working, and you can
+start another one, even on the same document. Running jobs are shown at the
+right of the status bar with their progress and **Cancel**; with several, a
+count such as **1 of 2** lists them all. Their results arrive one at a time as
+proposals to **Accept** or **Discard**. Messages from plugins and from Xuan
+appear in the same place for a few seconds.
+
+Plugins that generate images can also offer them where you work, not only in
+their menus: the sparkles button next to New Layer (**New layer with AI**), the
+**AI Region** tool in the toolbox (draw a box, say what to do there: edit,
+add or replace), and a **Generate** tab in **File → New…**, where **Exact
+size** makes the canvas exactly the size typed, with the image as a layer you
+can move to reframe it. Each shows just a prompt and **Generate**; the model,
+quality and other options are under **Advanced**.
+
 The repository ships examples under `plugins/`: a histogram pane (Python), a
-region inverter (Rust) and a Comfy Cloud client that edits or generates images
-with ComfyUI workflows. See [plugins](PLUGINS.md) for the manifest, the
-protocol and the SDKs.
+region inverter (Rust) and a Comfy Cloud client that generates and edits images
+and layers with Comfy's own workflow templates. See [plugins](PLUGINS.md) for
+the manifest, the protocol and the SDKs.
 
 ## Current limits
 

@@ -1,0 +1,125 @@
+{
+ "template": "api_bytedance_seedream_5_0_flash_t2i",
+ "template_sha256": "3767e275148baaed6c91d38acb130c9706ab2c7b465de2ecb720f8dc316dd541",
+ "template_date": "2026-09-24",
+ "converted_at": "2026-10-07T03:37:45+00:00",
+ "output": "37",
+ "api": {
+  "37": {
+   "class_type": "SaveImageAdvanced",
+   "inputs": {
+    "images": [
+     "35",
+     0
+    ],
+    "filename_prefix": "Seedream5.0_flash",
+    "format": "png",
+    "format.bit_depth": "8-bit",
+    "format.input_color_space": "sRGB"
+   },
+   "_meta": {
+    "title": "Save Image (Advanced)"
+   }
+  },
+  "35": {
+   "class_type": "ByteDanceSeedreamNodeV3",
+   "inputs": {
+    "prompt": "High-fashion sports magazine editorial video. A powerful athletic runner sprinting forward across the frame against a glowing monochromatic amber-orange studio background. Artistic motion blur trails capturing explosive speed and fluid movement. Minimalist sleek black compression sportswear, no logos. Dramatic rim lighting, deep contrast shadows, dynamic high-impact composition, cinematic 4k aesthetic.",
+    "model": "seedream 5.0 flash",
+    "model.size_preset": "(1K) 1024x1024 (1:1)",
+    "model.width": 2048,
+    "model.height": 2048,
+    "model.seed": 1161452782,
+    "model.watermark": false
+   },
+   "_meta": {
+    "title": "ByteDance Seedream 4.5 & 5.0"
+   }
+  }
+ },
+ "specs": {
+  "ByteDanceSeedreamNodeV3.prompt": [
+   "STRING",
+   {
+    "tooltip": "Text prompt for creating or editing an image.",
+    "default": "",
+    "multiline": true
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.seed": [
+   "INT",
+   {
+    "tooltip": "Seed to use for generation.",
+    "default": 42,
+    "min": 0,
+    "max": 2147483647,
+    "step": 1,
+    "control_after_generate": true,
+    "display": "number"
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.watermark": [
+   "BOOLEAN",
+   {
+    "tooltip": "Whether to add an \"AI generated\" watermark to the image.",
+    "advanced": true,
+    "default": false
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.size_preset": [
+   "COMBO",
+   {
+    "tooltip": "Pick a recommended size. Select Custom to use the width and height below.",
+    "multiselect": false,
+    "options": [
+     "(1K) 1024x1024 (1:1)",
+     "(1K) 864x1152 (3:4)",
+     "(1K) 1152x864 (4:3)",
+     "(1K) 1424x800 (16:9)",
+     "(1K) 800x1424 (9:16)",
+     "(1K) 832x1248 (2:3)",
+     "(1K) 1248x832 (3:2)",
+     "(1K) 1568x672 (21:9)",
+     "(1.5K) 1536x1536 (1:1)",
+     "(1.5K) 1344x1792 (3:4)",
+     "(1.5K) 1792x1344 (4:3)",
+     "(1.5K) 2048x1152 (16:9)",
+     "(1.5K) 1152x2048 (9:16)",
+     "(1.5K) 1248x1872 (2:3)",
+     "(1.5K) 1872x1248 (3:2)",
+     "(1.5K) 2352x1008 (21:9)",
+     "(2K) 2048x2048 (1:1)",
+     "(2K) 1776x2368 (3:4)",
+     "(2K) 2368x1776 (4:3)",
+     "(2K) 2816x1584 (16:9)",
+     "(2K) 1584x2816 (9:16)",
+     "(2K) 1664x2496 (2:3)",
+     "(2K) 2496x1664 (3:2)",
+     "(2K) 3136x1344 (21:9)",
+     "Custom"
+    ]
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.width": [
+   "INT",
+   {
+    "tooltip": "Custom width for image. Value is working only if `size_preset` is set to `Custom`",
+    "default": 2048,
+    "min": 1024,
+    "max": 4514,
+    "step": 2
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.height": [
+   "INT",
+   {
+    "tooltip": "Custom height for image. Value is working only if `size_preset` is set to `Custom`",
+    "default": 2048,
+    "min": 1024,
+    "max": 4514,
+    "step": 2
+   }
+  ]
+ },
+ "recipe_key": "461fd4268f630fb1"
+}

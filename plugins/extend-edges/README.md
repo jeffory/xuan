@@ -75,5 +75,5 @@ return the whole image as the model painted it.
 3. A model on a server (ComfyUI, a hosted API) needs its host in
    `permissions.network`. Xuan then asks before it sends the image and says
    that it is "extended by" the chosen amounts. The `comfy-cloud` example
-   shows the network side: upload `source.png` with `extend.png` as the
-   inpainting mask.
+   shows the network side: uploading `source.png` and running a workflow on
+   the server. An outpainting workflow would upload `extend.png` as its mask.

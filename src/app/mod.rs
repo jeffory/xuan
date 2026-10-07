@@ -1,5 +1,6 @@
 use theme::PaletteExt as _;
 use xuan::i18n::tr;
+mod ai_regions;
 mod canvas;
 mod chrome;
 mod clipboard;
@@ -48,6 +49,7 @@ mod settings;
 mod shortcuts;
 mod snap;
 mod stroke_smoothing;
+mod surfaces;
 mod system_theme;
 mod tablet;
 mod tabs;
@@ -149,7 +151,7 @@ impl Tool {
             Self::Dropper => tr("Eyedropper"),
             Self::Hand => tr("Hand"),
             Self::Zoom => tr("Zoom"),
-            Self::Region => tr("Region"),
+            Self::Region => tr("AI Region"),
         }
     }
     fn is_brush(self) -> bool {
@@ -228,6 +230,9 @@ struct Session {
     sample_cache: Option<eyedropper::SampleCache>,
     /// Full renders made for eyedropper sampling; lets tests check the cache.
     sample_renders: usize,
+    /// Boxes drawn with the AI Region tool, and the selected one.
+    ai_boxes: Vec<ai_regions::AiBox>,
+    ai_selected: Option<usize>,
 }
 
 impl Session {
@@ -254,6 +259,8 @@ impl Session {
             collapsed: HashSet::new(),
             sample_cache: None,
             sample_renders: 0,
+            ai_boxes: Vec::new(),
+            ai_selected: None,
         }
     }
 
@@ -544,6 +551,11 @@ pub struct EditorApp {
     dialog: Option<Dialog>,
     dimensions: [u32; 2],
     resolution: f32,
+    /// New Image: the Generate tab instead of a blank canvas, its Exact
+    /// size option and the document action it runs (plugin, action).
+    new_image_generate: bool,
+    new_image_exact: bool,
+    new_image_action: Option<(String, String)>,
     anchor: [f32; 2],
     effect: Option<EffectEdit>,
     /// Layer → Layer Effects… while it is open.
@@ -553,7 +565,10 @@ pub struct EditorApp {
     notice: Option<String>,
     /// Photoshop files read and waiting for their conversion report to be accepted.
     photoshop_imports: photoshop::PendingImports,
+    /// The latest status message, shown in the status bar for a few seconds.
     status: String,
+    /// The status text the status bar last saw and when it changed (UI time).
+    status_shown: (String, f64),
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
     /// The tab bar's scroll position, closed-tab history and pending closes.
@@ -584,6 +599,13 @@ pub struct EditorApp {
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
+    /// A popover a surface opened (New layer with AI, an AI Region box).
+    surface_popup: Option<surfaces::SurfacePopup>,
+    /// The popover opened this frame: the click that opened it is not a
+    /// click outside it.
+    surface_popup_fresh: bool,
+    /// A drop-down list was open when this frame's popovers were drawn.
+    surface_popup_picking: bool,
     /// Area the canvas occupied last frame, for the Navigator's viewport box.
     canvas_viewport: Option<egui::Rect>,
     /// Viewport, zoom and pan the Navigator last drew; a change schedules a repaint.
@@ -736,6 +758,9 @@ impl EditorApp {
             dialog: None,
             dimensions: [1920, 1080],
             resolution: 72.0,
+            new_image_generate: false,
+            new_image_exact: false,
+            new_image_action: None,
             anchor: [0.5, 0.5],
             effect: None,
             layer_effects: None,
@@ -743,6 +768,7 @@ impl EditorApp {
             notice: None,
             photoshop_imports: Default::default(),
             status: String::new(),
+            status_shown: (String::new(), 0.0),
             rename: None,
             close_tab: None,
             tab_strip: Default::default(),
@@ -768,6 +794,9 @@ impl EditorApp {
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
+            surface_popup: None,
+            surface_popup_fresh: false,
+            surface_popup_picking: false,
             canvas_viewport: None,
             navigator_view: None,
         };
@@ -1894,8 +1923,8 @@ impl EditorApp {
             self.sidebar(ctx);
             self.canvas(ctx);
             self.plugin_action_dialog(ctx);
+            self.surface_popups(ctx);
             self.color_range_dialog(ctx);
-            self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
         self.command_palette(ctx);

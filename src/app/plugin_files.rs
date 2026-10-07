@@ -131,21 +131,10 @@ fn suggested_name(suggested: Option<&str>, fallback: &str) -> String {
         .unwrap_or_else(|| "Untitled".to_owned())
 }
 
-/// Characters that are invisible or reorder text: bidi embeddings,
-/// overrides, isolates and marks (which can make `gpj.exe` read as
-/// `exe.jpg`), zero-width characters and the byte order mark.
-fn invisible(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{061C}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2069}'
-            | '\u{FEFF}'
-            | '\u{FFF9}'..='\u{FFFB}'
-    )
+/// Characters that are invisible or reorder text; see
+/// [`xuan::plugins::manifest::invisible`].
+pub(super) fn invisible(c: char) -> bool {
+    xuan::plugins::manifest::invisible(c)
 }
 
 /// Whether Windows treats a name as a device (`CON`, `NUL`, `COM1`, …),
