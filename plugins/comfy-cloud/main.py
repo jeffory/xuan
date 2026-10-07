@@ -30,7 +30,7 @@ from xuan_plugin import (  # noqa: E402
 
 from catalog import Catalog, describe  # noqa: E402
 from comfy_api import SUCCEEDED, TERMINAL, Client, asset_ref, rejected_before_running  # noqa: E402
-from recipes import ACTIONS, BRIA, GPT, RECIPES, add_alpha_mask, apply, recipe_for  # noqa: E402
+from recipes import ACTIONS, BRIA, GPT, RECIPES, add_alpha_mask, apply, choose_size, recipe_for  # noqa: E402
 
 plugin = Plugin()
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -147,6 +147,10 @@ def run(job, recipe, values, image_path=None, reference_path=None, post=None, do
         version = state["current"]
         workflow = apply(version, recipe, values)
         added = post(workflow) if post else {}
+        if attempt == 1 and values.get("target"):
+            note = choose_size(version, recipe, values["target"])[1]
+            if note:
+                notes.append(note)
         job.check_cancelled()
         say("Submitting")
         job_id = client.submit(workflow).get("id")

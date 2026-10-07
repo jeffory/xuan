@@ -26,6 +26,10 @@ class Recipe:
     match_size: Optional[Tuple[str, str, str]] = None  # (preset combo, width, height): follow the source's shape
     match_area: int = 2048 * 2048  # pixels match_size aims for
     match_step: int = 0  # width and height are multiples of this; 0 takes the inputs' own step
+    # How the model's size follows inputs.target: "custom" (match_size
+    # inputs), "presets" (the size combo), "source" (it keeps image 1's size)
+    # or "none".
+    size_rule: str = "none"
     quality: Optional[str] = None
     background: Optional[str] = None
     regions: Optional[str] = None  # a CreateBoundingBoxes node
@@ -56,6 +60,8 @@ _SEEDREAM_T2I = dict(
     prompt=(f"{SEEDREAM}.prompt",),
     seed=(f"{SEEDREAM}.model.seed",),
     size=f"{SEEDREAM}.model.size_preset",
+    match_size=(f"{SEEDREAM}.model.size_preset", f"{SEEDREAM}.model.width", f"{SEEDREAM}.model.height"),
+    size_rule="custom",
     fixed={f"{SEEDREAM}.model.watermark": False},
 )
 _GPT_LAYER = dict(
@@ -67,6 +73,7 @@ _GPT_LAYER = dict(
     match_area=1536 * 1536,
     match_step=16,
     quality=f"{GPT}.model.quality",
+    size_rule="custom",
     fixed={f"{GPT}.model.background": "transparent", f"{GPT}.n": 1},
 )
 _SEPARATION = dict(
@@ -86,22 +93,26 @@ RECIPES = {
         Recipe(
             "ideogram", "Ideogram 4.5", "api_ideogram_v4_5_t2i", "SaveImageAdvanced",
             prompt=(f"{IDEOGRAM_T2I}.model.prompt",), seed=(f"{IDEOGRAM_T2I}.model.seed",), size=f"{IDEOGRAM_T2I}.model.size",
+            size_rule="presets",
         ),
         Recipe(
             "ideogram-edit", "Ideogram 4.5 Edit", "api_ideogram_v4_5_image_edit", "SaveImageAdvanced",
             prompt=(f"{IDEOGRAM_EDIT}.model.prompt",), seed=(f"{IDEOGRAM_EDIT}.model.seed",),
             image=(f"{IDEOGRAM_EDIT}.model.images.image_1",), fixed={f"{IDEOGRAM_EDIT}.model.size": "source"},
+            size_rule="source",
         ),
         Recipe(
             "seedream-pro-edit", "Seedream 5.0 Pro Edit", "api_bytedance_seedream_5_0_pro_image_edit", "SaveImageAdvanced",
             prompt=(f"{SEEDREAM}.prompt",), seed=(f"{SEEDREAM}.model.seed",), image=(f"{SEEDREAM}.model.images.image_1",),
             match_size=(f"{SEEDREAM}.model.size_preset", f"{SEEDREAM}.model.width", f"{SEEDREAM}.model.height"),
+            size_rule="custom",
             fixed={f"{SEEDREAM}.model.watermark": False},
         ),
         Recipe(
             "ideogram-precise", "Ideogram 4.5 Precise Edit", "api_ideogram_v4_5_precise_image_edit", "SaveImageAdvanced",
             seed=(f"{IDEOGRAM_PRECISE}.model.seed",), image=(f"{IDEOGRAM_PRECISE}.model.images.image_1", "CreateBoundingBoxes.background"),
             quality=f"{IDEOGRAM_PRECISE}.model.quality", background="BuildJsonPromptIdeogram.background", regions="CreateBoundingBoxes",
+            size_rule="source",
         ),
         Recipe("split-flash", "Seedream 5.0 Flash", **_SEPARATION),
         Recipe("split-pro", "Seedream 5.0 Pro", select={f"{SEPARATION}.model": "seedream 5.0 pro"}, **_SEPARATION),
@@ -128,6 +139,68 @@ def recipe_for(action, model=None):
 
 
 # --- Filling in a converted workflow -------------------------------------
+
+def cover_size(target, spec_w, spec_h, step=0):
+    """The smallest size of the target's shape the model accepts that is at
+    least ``target``, as ``(width, height, under)``: rounded up to the step,
+    scaled up evenly to the minimum, and only scaled down (``under``) when
+    the model's maximum is smaller."""
+    ow, oh = (spec_w[1] if len(spec_w) > 1 else {}), (spec_h[1] if len(spec_h) > 1 else {})
+    step = step or max(int(ow.get("step") or 1), int(oh.get("step") or 1), 1)
+    lo_w, hi_w = ow.get("min", 1), ow.get("max", 1 << 16)
+    lo_h, hi_h = oh.get("min", 1), oh.get("max", 1 << 16)
+    w, h = float(max(target[0], 1)), float(max(target[1], 1))
+    grow = max(lo_w / w, lo_h / h, 1.0)
+    w, h = w * grow, h * grow
+    shrink = min(hi_w / w, hi_h / h, 1.0)
+    under = shrink < 1.0
+    w, h = w * shrink, h * shrink
+
+    def snap(value):
+        # Rounded first so float noise (2048.0000001) does not add a step.
+        steps = round(value / step, 6)
+        return int((math.floor(steps) if under else math.ceil(steps)) * step)
+
+    return snap(w), snap(h), under
+
+
+def preset_at_least(options, target, tolerance=0.03):
+    """The smallest preset of the target's shape that covers it, as
+    ``(label, False)``; else the largest of the closest shape, ``(label,
+    True)``; None without presets."""
+    want = target[0] / max(target[1], 1)
+    sized = []
+    for option in options or []:
+        match = PRESET.match(option) if isinstance(option, str) else None
+        if match:
+            sized.append((option, int(match["w"]), int(match["h"])))
+    if not sized:
+        return None
+    shape = [s for s in sized if abs(math.log((s[1] / s[2]) / want)) <= tolerance]
+    big = [s for s in shape if s[1] >= target[0] and s[2] >= target[1]]
+    if big:
+        return min(big, key=lambda s: s[1] * s[2])[0], False
+    pool = shape or sorted(sized, key=lambda s: abs(math.log((s[1] / s[2]) / want)))[:1]
+    return max(pool, key=lambda s: s[1] * s[2])[0], True
+
+
+def choose_size(entry, recipe, target):
+    """The size inputs to set so the model renders at least ``target``, as
+    ``({input: value}, note)``; the note says when it cannot."""
+    specs = entry.get("specs") or {}
+    if recipe.size_rule == "custom" and recipe.match_size:
+        combo, width, height = recipe.match_size
+        w, h, under = cover_size(target, specs.get(width) or ["INT", {}], specs.get(height) or ["INT", {}], recipe.match_step)
+        options = (specs.get(combo) or [None, {}])[1].get("options") or []
+        note = f"{recipe.label} renders at most {w}×{h}; Xuan scales it up to {target[0]}×{target[1]}" if under else None
+        return {combo: "Custom" if "Custom" in options else "custom", width: w, height: h}, note
+    if recipe.size_rule == "presets" and recipe.size:
+        chosen = preset_at_least((specs.get(recipe.size) or [None, {}])[1].get("options"), target)
+        if chosen:
+            note = f"{recipe.label} renders at most {chosen[0]}; Xuan scales it up" if chosen[1] else None
+            return {recipe.size: chosen[0]}, note
+    return {}, None
+
 
 # "(2K) 2848x1600 (16:9)" or plain "1536x1024"
 PRESET = re.compile(r"^(?:\((?P<tier>[\d.]+K)\) )?(?P<w>\d+)x(?P<h>\d+)(?: \((?P<a>\d+):(?P<b>\d+)\))?$")
@@ -257,12 +330,17 @@ def apply(entry, recipe, values):
         load(values["image"], recipe.image, "Xuan source")
     if recipe.reference and values.get("reference") is not None:
         load(values["reference"], recipe.reference, "Xuan reference")
-    if recipe.size and values.get("aspect"):
+    target = values.get("target")
+    if target:
+        sets, _ = choose_size(entry, recipe, target)
+        for name, value in sets.items():
+            put(name, value)
+    elif recipe.size and values.get("aspect"):
         options = (specs.get(recipe.size) or [None, {}])[1].get("options")
         preset = pick_preset(options, values["aspect"], values.get("tier") or "2K")
         if preset:
             put(recipe.size, preset)
-    if recipe.match_size and values.get("source_size"):
+    if not target and recipe.match_size and values.get("source_size"):
         combo, width, height = recipe.match_size
         size = fit_size(*values["source_size"], specs.get(width) or ["INT", {}], specs.get(height) or ["INT", {}],
                         area=recipe.match_area, step=recipe.match_step)

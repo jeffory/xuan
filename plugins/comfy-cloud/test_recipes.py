@@ -6,7 +6,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from convert import Unsupported, to_api  # noqa: E402
-from recipes import ACTIONS, RECIPES, apply, bounding_boxes, check, fit_size, pick_preset, recipe_for, target_specs  # noqa: E402
+from recipes import ACTIONS, RECIPES, apply, bounding_boxes, check, choose_size, cover_size, fit_size, pick_preset, preset_at_least, recipe_for, target_specs  # noqa: E402
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata")
 with open(os.path.join(DATA, "object_info.json"), "r", encoding="utf-8") as handle:
@@ -149,6 +149,44 @@ class SnapshotsTest(unittest.TestCase):
                     raw = handle.read()
                 if hashlib.sha256(raw).hexdigest() == snapshot["template_sha256"]:
                     self.assertEqual(snapshot["api"], entry_for(recipe)["api"])
+
+
+class SizeRuleTest(unittest.TestCase):
+    W = ["INT", {"min": 480, "max": 3840, "step": 16}]
+    S = ["INT", {"min": 1024, "max": 4514, "step": 2}]
+
+    def test_custom_renders_exactly_or_just_above_never_under(self):
+        self.assertEqual(cover_size((1500, 1000), self.W, self.W, 16), (1504, 1008, False))
+        self.assertEqual(cover_size((2000, 1000), self.S, self.S, 2), (2048, 1024, False))  # min side scaled up evenly
+        self.assertEqual(cover_size((300, 200), self.W, self.W, 16), (720, 480, False))
+        w, h, under = cover_size((8000, 4000), self.W, self.W, 16)
+        self.assertTrue(under and w <= 3840 and h <= 3840 and abs(w / h - 2) < 0.02)
+
+    def test_presets_take_the_smallest_big_enough(self):
+        options = ["auto", "(1K) 1024x1024 (1:1)", "(2K) 2048x2048 (1:1)", "(1K) 1280x720 (16:9)", "(2K) 2560x1440 (16:9)"]
+        self.assertEqual(preset_at_least(options, (1000, 1000)), ("(1K) 1024x1024 (1:1)", False))
+        self.assertEqual(preset_at_least(options, (1100, 1100)), ("(2K) 2048x2048 (1:1)", False))
+        self.assertEqual(preset_at_least(options, (1920, 1080)), ("(2K) 2560x1440 (16:9)", False))
+        self.assertEqual(preset_at_least(options, (4000, 4000)), ("(2K) 2048x2048 (1:1)", True))
+
+    def test_apply_uses_the_target_for_every_model(self):
+        cases = {"seedream-pro": ("ByteDanceSeedreamNodeV3", "model.width", 2048),
+                 "gpt-flare-layer": ("OpenAIGPTImageNodeV2", "model.custom_width", 2048),
+                 "ideogram": ("IdeogramTextToImageApi", "model.size", "(2K) 2048x2048 (1:1)")}
+        for recipe_id, (kind, key, expected) in cases.items():
+            with self.subTest(recipe=recipe_id):
+                recipe = RECIPES[recipe_id]
+                graph = apply(entry_for(recipe), recipe, {"prompt": "x", "seed": 1, "target": (2048, 2048)})
+                self.assertEqual(node_of(graph, kind)["inputs"][key], expected)
+
+    def test_choose_size_says_when_a_model_cannot_reach_the_target(self):
+        recipe = RECIPES["gpt-flare-layer"]
+        entry = entry_for(recipe)
+        sets, note = choose_size(entry, recipe, (8000, 4000))
+        self.assertIn("renders at most", note)
+        self.assertEqual(sets["OpenAIGPTImageNodeV2.model.size"], "Custom")
+        _, note = choose_size(entry, recipe, (1500, 1000))
+        self.assertIsNone(note)
 
 
 class SizesTest(unittest.TestCase):
