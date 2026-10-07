@@ -1328,11 +1328,14 @@ The rules for a `path` in `file/save_as` and `file/export`:
 
 **Always Allow** stores `save_without_asking` in the plugin's grant, like
 the edit prompt's auto mode: from then on its writes to a path, and
-`file/save`, happen without the prompt. The exception is replacing a file
-Xuan did not write since it started (a project or image saved or exported by
-anyone, the user included, in this run of Xuan; the document's own file for
-`file/save` counts too): that still shows the prompt, even with
-`overwrite: true`, so a plugin cannot silently replace the user's other files.
+`file/save`, happen without the prompt. The exception is replacing an
+existing file that Xuan did not write for this same plugin since it started
+(through the plugin's own `file/save_as`, `file/export` or `file/save`,
+asked or not): a file the user saved or exported themselves, or one written
+for another plugin, still shows the prompt, even with `overwrite: true`, so a
+plugin cannot silently replace the user's work. `file/save` writes the
+document's own project without asking, as Ctrl+S. The plugin's list of files
+is kept until Xuan quits, and forgotten when its grant is revoked or changes.
 Each write made without asking is shown in the status bar ("Exported without
 asking: …", with the whole path) and in the plugin's log in **Plugins →
 Manage Plugins…**, and the answer says `asked: false`. The setting shows as

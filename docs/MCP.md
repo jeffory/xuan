@@ -321,11 +321,16 @@ decision: ask the user the first time, and offer to always allow.
 - **Overwrites.** Replacing a file always needs `overwrite: true`, prompt or
   not; without it the request fails before any prompt, so a client cannot
   replace a file by accident. With Always Allow, a write replaces a file
-  without asking only if Xuan wrote that file since it started (saved or
-  exported by anyone in this run), or for `file/save`, the document's own
-  project; replacing any other file shows the prompt again, which says it
-  replaces the file. So the grant covers new files and Xuan's own output,
-  never the user's other files. Folders and symbolic links at the path are
+  without asking only if Xuan wrote that file for the same plugin since it
+  started (through its own `file/save_as`, `file/export` or `file/save`,
+  asked or not), or for `file/save`, the document's own project. A file the
+  user saved or exported themselves, or one written for another plugin,
+  shows the prompt again, which says it replaces the file. The review of the
+  first version caught that a run-wide list let an agent replace a project
+  the user had just saved (say `B.xuan`) with another document; the list is
+  now per plugin, kept until Xuan quits and forgotten when the plugin's grant
+  is revoked or changes. So the grant covers new files and the plugin's own
+  output, never the user's work. Folders and symbolic links at the path are
   never replaced, and a file that appears at a path the prompt called new is
   not replaced.
 - **Path rules.** The path must be absolute and its folder must exist; the

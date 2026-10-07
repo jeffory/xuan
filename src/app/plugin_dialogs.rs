@@ -632,7 +632,7 @@ impl EditorApp {
                             {
                                 let mut save = self.saves_without_asking(&id);
                                 if widgets::checkbox(ui, &mut save, tr("Save and export without asking"))
-                                    .on_hover_text(tr("Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files Xuan wrote since it started, without asking; the status bar shows each one. Replacing any other file still asks."))
+                                    .on_hover_text(tr("Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files it wrote since Xuan started, without asking; the status bar shows each one. Replacing any other file still asks."))
                                     .changed()
                                 {
                                     save_mode = Some((id.clone(), save));

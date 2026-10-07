@@ -126,10 +126,12 @@ pub(super) struct PluginState {
     /// When a plugin last switched the current document; see
     /// `ACTIVATE_INTERVAL`.
     pub activated_at: HashMap<String, std::time::Instant>,
-    /// Files Xuan wrote in this run (saved projects and exported images,
-    /// whoever asked), canonicalized: a plugin allowed to save without
-    /// asking may replace these without asking, and no others.
-    pub written_files: std::collections::HashSet<PathBuf>,
+    /// By plugin, the files Xuan wrote for its `file/save_as`, `file/export`
+    /// and `file/save` requests in this run, canonicalized: a plugin allowed
+    /// to save without asking may replace these without asking, and no
+    /// others (not the user's own saves, nor another plugin's files).
+    /// Forgotten when its grant is revoked or changes.
+    pub written_files: HashMap<String, std::collections::HashSet<PathBuf>>,
 }
 
 enum Pending {
@@ -564,6 +566,7 @@ impl EditorApp {
             new.save_without_asking = old.save_without_asking;
         } else {
             self.plugins.forget_session(plugin);
+            self.plugins.written_files.remove(plugin);
         }
         // Secrets were entered for the folder the user allowed before; never
         // hand them to a plugin with the same id from another folder.

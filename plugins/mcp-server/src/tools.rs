@@ -1204,7 +1204,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
                 "With `in_place: true`, save the document back to its own .xuan file, as Ctrl+S does, asking the same way. ",
                 "Without either, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
-                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file Xuan did not write since it started asks the user.",
+                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
                 " Returns the file name (never the folder), with `asked: false` when it was written without asking, or an error if the user cancelled."
             ),
             properties: json!({
@@ -1256,7 +1256,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 "With an absolute `path` (ending in .png, .jpg, .jpeg, .tif, .tiff or .webp, which picks the format, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
                 "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
                 "Without `path`, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
-                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file Xuan did not write since it started asks the user.",
+                "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
                 " Returns the file name (never the folder), with `asked: false` when it was written without asking."
             ),
             properties: json!({

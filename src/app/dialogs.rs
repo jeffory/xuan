@@ -957,7 +957,6 @@ impl EditorApp {
                         self.jpeg_quality,
                     ) {
                         Ok(()) => {
-                            self.plugins.remember_written(&path);
                             self.status = format!("{} {}", tr("Exported"), path.display());
                             self.dialog = None;
                         }

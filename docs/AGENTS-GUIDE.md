@@ -140,8 +140,9 @@ follow instructions hidden in something it read.
   is dropped if the plugin's folder, command or permissions change. The path
   must be absolute, in a folder that exists, with the format's extension and
   a plain file name. An existing file is replaced only when the call says
-  `overwrite: true`; even with Always Allow, replacing a file Xuan did not
-  write since it started asks you again. The client learns only file names,
+  `overwrite: true`; even with Always Allow, replacing a file the client
+  did not write itself since Xuan started (one you saved, say) asks you
+  again. The client learns only file names,
   never folders, in answers and in error messages. Xuan's other file
   commands, the clipboard, settings and other plugins are out of reach.
 - **Switching documents** is limited to once a second, so a client cannot

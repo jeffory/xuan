@@ -7,8 +7,8 @@
 //! its folder and whether it replaces a file: **Save**, **Always Allow** or
 //! **Cancel**. Always Allow is `save_without_asking` in the plugin's grant:
 //! later writes happen without the prompt, shown in the status bar and the
-//! plugin's log, except replacing a file Xuan did not write in this run,
-//! which still asks. Replacing any file needs `overwrite: true`. `file/open`
+//! plugin's log, except replacing a file Xuan did not write for this
+//! plugin in this run, which still asks. Replacing any file needs `overwrite: true`. `file/open`
 //! names the file in a prompt the user must accept. See "Files the user
 //! chooses" in `docs/PLUGINS.md`.
 use std::{
@@ -379,11 +379,11 @@ fn still_the_target(write: &Write) -> Result<(), RpcError> {
 }
 
 impl super::plugins::PluginState {
-    /// Note a file Xuan wrote, so a plugin allowed to save without asking
-    /// may replace it.
-    pub(super) fn remember_written(&mut self, path: &Path) {
+    /// Note a file Xuan wrote for this plugin's request, so the plugin may
+    /// replace it without asking once it is allowed to save without asking.
+    pub(super) fn remember_written(&mut self, plugin: &str, path: &Path) {
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        self.written_files.insert(path);
+        (self.written_files.entry(plugin.to_owned()).or_default()).insert(path);
     }
 }
 
@@ -674,7 +674,7 @@ impl EditorApp {
                 self.status = format!("{} · {source}", tr("Project saved"));
             }
         }
-        self.plugins.remember_written(&path);
+        self.plugins.remember_written(plugin, &path);
         // Only the file name: where the user keeps files is not the
         // plugin's business.
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -721,12 +721,14 @@ impl EditorApp {
 
     /// Whether this write happens without the prompt: the grant allows it,
     /// and it writes a new file, the document's own project, or a file Xuan
-    /// wrote in this run. Replacing any other file asks, even then.
+    /// wrote for this plugin in this run. Replacing any other file asks,
+    /// even then: one the user saved, or another plugin's.
     fn writes_without_asking(&self, plugin: &str, write: &Write) -> bool {
         self.saves_without_asking(plugin)
             && (write.in_place
                 || !write.replaces
-                || self.plugins.written_files.contains(&write.path))
+                || (self.plugins.written_files.get(plugin))
+                    .is_some_and(|files| files.contains(&write.path)))
     }
 
     /// Write a document where the plugin said, once the user agreed or the
@@ -779,7 +781,7 @@ impl EditorApp {
                 }
             }
         };
-        self.plugins.remember_written(path);
+        self.plugins.remember_written(plugin, path);
         // The user sees each write, with the whole path: in the status bar,
         // and for writes nobody was asked about, in the plugin's log too.
         self.status = format!("{done} {} · {source}", path.display());
@@ -991,7 +993,7 @@ impl EditorApp {
                 ui.add(
                     egui::Label::new(
                         RichText::new(tr(
-                            "Always Allow lets this plugin save and export without asking until you turn it off in Plugins → Manage Plugins…. It still asks before replacing a file Xuan did not write since it started.",
+                            "Always Allow lets this plugin save and export without asking until you turn it off in Plugins → Manage Plugins…. It still asks before replacing a file it did not write since Xuan started.",
                         ))
                         .small()
                         .color(ui.palette().muted),

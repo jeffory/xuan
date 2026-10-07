@@ -5188,6 +5188,53 @@ done
         assert_eq!(wait(&context, &mut app, 709)["result"]["asked"], true);
         assert!(xuan::io::import_image(&theirs).is_ok());
 
+        // A project the user saved with Save is theirs, even in this run:
+        // replacing it with another document asks, and Cancel keeps it.
+        let users = out.path().join("B.xuan");
+        app.new_document();
+        app.session_mut().unwrap().path = Some(users.clone());
+        assert!(app.save_current(false));
+        let kept = std::fs::read(&users).unwrap();
+        app.current = 0;
+        ask(
+            &context,
+            &mut app,
+            720,
+            "file/save_as",
+            json!({"path": users, "overwrite": true}),
+        );
+        assert!(
+            prompted_write(&app)
+                .expect("asked about the user's project")
+                .replaces
+        );
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 720)["error"]["code"], CANCELLED);
+        assert_eq!(std::fs::read(&users).unwrap(), kept);
+        app.plugins.file_refused_at.clear();
+        app.sessions.pop();
+        app.current = 0;
+        // So does a file written for another plugin.
+        let others = out.path().join("other.png");
+        std::fs::write(&others, b"another plugin's export").unwrap();
+        app.plugins.remember_written("other", &others);
+        ask(
+            &context,
+            &mut app,
+            721,
+            "file/export",
+            json!({"path": others, "overwrite": true}),
+        );
+        assert!(
+            prompted_write(&app)
+                .expect("asked about another plugin's file")
+                .replaces
+        );
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 721)["error"]["code"], CANCELLED);
+        assert_eq!(std::fs::read(&others).unwrap(), b"another plugin's export");
+        app.plugins.file_refused_at.clear();
+
         // `file/save` writes the document back to its own project.
         app.command("fill_fg");
         assert!(app.session().unwrap().history.dirty());
@@ -5245,6 +5292,9 @@ done
         app.grant_plugin("mock", true);
         assert!(!app.stored_grant("mock").unwrap().save_without_asking);
         assert!(!app.saves_without_asking("mock"));
+        // The files it wrote are forgotten with the grant.
+        assert!(!app.plugins.written_files.contains_key("mock"));
+        assert!(app.plugins.written_files.contains_key("other"));
         app.stop_plugin("mock");
         assert!(app.error.is_none(), "{:?}", app.error);
     }

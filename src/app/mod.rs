@@ -1104,8 +1104,6 @@ impl EditorApp {
         let session = self.session_mut().unwrap();
         match io::save(&session.document, &path) {
             Ok(()) => {
-                self.plugins.remember_written(&path);
-                let session = self.session_mut().unwrap();
                 session.title = path
                     .file_stem()
                     .unwrap_or_default()
