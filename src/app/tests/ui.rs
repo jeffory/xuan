@@ -36,6 +36,9 @@ mod dialogs;
 #[path = "ui_tool_rail.rs"]
 mod tool_rail;
 
+#[path = "ui_focus.rs"]
+mod focus;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

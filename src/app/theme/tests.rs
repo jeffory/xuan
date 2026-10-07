@@ -232,10 +232,55 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
             ("number field border", ratio(p.widget_stroke, bg)),
             ("slider rail", ratio(p.slider_rail, bg)),
             ("keyboard focus ring", ratio(p.accent, bg)),
+            // Colour wells and the tool rail's swatches (#79).
+            ("colour well and swatch outline", ratio(p.widget_stroke, bg)),
         ] {
             pairs.push((format!("{label}/{surface}"), r, 3.0));
         }
     }
+    // Keyboard focus rings on the controls that lacked one (#81), against what each ring
+    // borders. Rings round number fields, swatches, layer actions and the dialog close dot sit
+    // on the panel or the window, checked above as "keyboard focus ring".
+    for (label, bg) in [
+        // The tool rail's ring is flush with the button's edge, bordering the panel.
+        ("tool rail focus ring/panel", p.panel),
+        // Unselected document tabs, the New canvas button, a dialog's close control.
+        ("tab focus ring/titlebar", p.titlebar),
+        ("tab focus ring/selected tab", p.panel),
+        // Eye, lock and thumbnail rings in the selected layer row.
+        ("layer icon focus ring/selected row", p.row_selected),
+        // An unselected segment's ring, inside the track.
+        ("segment focus ring/track top", p.segment_track[0]),
+        ("segment focus ring/track bottom", p.segment_track[1]),
+    ] {
+        pairs.push((label.into(), ratio(p.accent, bg), 3.0));
+    }
+    // Disabled buttons, segments, pop-ups and number fields (#89): a flat fill with text that
+    // stays readable at 3:1 but is clearly dimmer than secondary text. Painted at full opacity,
+    // so these are the colours on screen.
+    for (label, bg) in [
+        ("disabled text/disabled fill", p.control_disabled),
+        ("disabled text/panel", p.panel),
+        ("disabled text/window", p.window),
+    ] {
+        pairs.push((label.into(), ratio(p.disabled_text, bg), 3.0));
+    }
+    pairs.push((
+        "disabled text dimmer than muted (ratio of ratios)".into(),
+        ratio(p.muted, p.control_disabled) / ratio(p.disabled_text, p.control_disabled),
+        1.25,
+    ));
+    // The reset-colours icon's outline, round its white and black squares (#79).
+    pairs.push((
+        "reset colours outline/panel".into(),
+        ratio(p.muted, p.panel),
+        3.0,
+    ));
+    // The checker behind layer thumbnails and colour wells is the canvas's (#79): its squares
+    // tell apart, but stay quiet (under 2:1) behind the image.
+    let checker = contrast_ratio(p.checker[0], p.checker[1]);
+    pairs.push(("checker squares tell apart".into(), checker, 1.2));
+    pairs.push(("checker squares stay quiet".into(), 2.0 / checker, 1.0));
     pairs
 }
 
