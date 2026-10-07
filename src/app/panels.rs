@@ -460,7 +460,7 @@ impl EditorApp {
                         let jobs = self.running_jobs();
                         if !jobs.is_empty() {
                             self.job_status(ui, &jobs);
-                        } else if let Some(status) = self.recent_status(ui.ctx()) {
+                        } else if let Some(status) = self.status_message(ui.ctx()) {
                             ui.add(egui::Label::new(RichText::new(status).size(11.0)).truncate());
                         } else {
                             ui.add(
@@ -477,7 +477,7 @@ impl EditorApp {
 
     /// The status message while it is new: for `STATUS_SECONDS` after it
     /// last changed. Only its first line is shown.
-    fn recent_status(&mut self, ctx: &egui::Context) -> Option<String> {
+    fn status_message(&mut self, ctx: &egui::Context) -> Option<String> {
         const STATUS_SECONDS: f64 = 8.0;
         let now = ctx.input(|i| i.time);
         if self.status != self.status_shown.0 {
