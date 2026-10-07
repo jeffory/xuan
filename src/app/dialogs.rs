@@ -323,10 +323,11 @@ impl EditorApp {
         let mut apply = false;
         let mut cancel = false;
         let mut changed = false;
+        let mut preview_changed = false;
         widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(440.0)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 ui.add_space(8.0);
                 if let Some(adjustment) = &mut edit.adjustment {
                     match adjustment {
@@ -707,11 +708,10 @@ impl EditorApp {
                         }
                     });
                 }
-                ui.add_space(14.0);
-                ui.separator();
+            }, |ui, ()| {
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(!edit.filter_preview.applying, |ui| {
-                        changed |=
+                        preview_changed =
                             widgets::checkbox(ui, &mut edit.preview, tr("Preview")).changed();
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -739,6 +739,7 @@ impl EditorApp {
                     );
                 }
             });
+        changed |= preview_changed;
         if cancel || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if let Some(s) = self.session_mut() {
                 s.history.cancel(&mut s.document);
@@ -877,7 +878,7 @@ impl EditorApp {
         widgets::Window::new(tr("Export image"))
             .open(&mut open)
             .default_width(650.0)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 if let Some(texture) = &self.export_texture {
                     let size = texture.size_vec2();
                     let factor = (600.0 / size.x).min(350.0 / size.y).min(1.0);
@@ -920,7 +921,7 @@ impl EditorApp {
                             .color(ui.palette().muted),
                     );
                 }
-                ui.add_space(12.0);
+            }, |ui, ()| {
                 ui.horizontal(|ui| {
                     cancel = widgets::button(ui, tr("Cancel")).clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

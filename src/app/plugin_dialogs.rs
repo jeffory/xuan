@@ -496,7 +496,7 @@ impl EditorApp {
             .id("plugin_manager")
             .default_width(680.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let mut separator = None;
                 let columns = ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
@@ -718,10 +718,19 @@ impl EditorApp {
                     widgets::checkbox(ui, &mut block, tr("Block network for plugins that don't declare it"))
                         .on_hover_text(tr("Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
                 }
+                if let Some(dir) = &plugin_dir {
+                    // A long path would widen the window: elide it, with the whole path on hover.
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display()))
+                                .small()
+                                .color(ui.palette().muted),
+                        )
+                        .truncate(),
+                    );
+                }
+            }, |ui, ()| {
                 ui.horizontal(|ui| {
-                    if let Some(dir) = &plugin_dir {
-                        ui.label(RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display())).small().color(ui.palette().muted));
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::primary_button(ui, tr("Done")).clicked() {
                             done = true;

@@ -27,6 +27,9 @@ mod appearance;
 #[path = "ui_tabs.rs"]
 mod tabs;
 
+#[path = "ui_dialogs.rs"]
+mod dialogs;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;
@@ -39,8 +42,13 @@ pub(super) struct UiTest {
 impl UiTest {
     /// An empty editor: no documents open.
     pub(super) fn new() -> Self {
+        Self::sized(Vec2::new(1280.0, 860.0))
+    }
+
+    /// An empty editor in a window of this size.
+    pub(super) fn sized(size: Vec2) -> Self {
         let mut harness = Harness::builder()
-            .with_size(Vec2::new(1280.0, 860.0))
+            .with_size(size)
             .build_state(
                 |ctx, app: &mut Option<EditorApp>| {
                     if let Some(app) = app {

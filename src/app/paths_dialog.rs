@@ -233,7 +233,7 @@ impl EditorApp {
         widgets::Window::new(tr("Paths"))
             .id("paths")
             .open(&mut open)
-            .default_width(380.0)
+            .default_width(420.0)
             .show(ctx, |ui| {
                 if paths.is_empty() {
                     ui.label(tr("This document has no paths yet."));
@@ -254,7 +254,13 @@ impl EditorApp {
                 ui.add_enabled_ui(edit.selected.is_some(), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(tr("Name"));
-                        ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(160.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut edit.name)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                    // The buttons get their own row, so they never widen the window.
+                    ui.horizontal_wrapped(|ui| {
                         if widgets::button(ui, tr("Rename")).clicked() {
                             action = Some(PathAction::Rename);
                         }

@@ -103,7 +103,7 @@ impl EditorApp {
             .id("app_settings")
             .default_width(680.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.set_height(height);
                     ui.vertical(|ui| {
@@ -161,7 +161,7 @@ impl EditorApp {
                         }
                     });
                 });
-                ui.separator();
+            }, |ui, ()| {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::primary_button(ui, tr("Done")).clicked() {
