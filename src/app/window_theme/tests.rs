@@ -10,16 +10,22 @@ pub(in crate::app) struct Fixture {
 impl Fixture {
     pub fn new(kde: bool) -> (Self, Env) {
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let env = Env {
+        let fixture = Self { dir };
+        let env = fixture.env(kde);
+        (fixture, env)
+    }
+
+    /// A fresh environment over this fixture's folders.
+    pub fn env(&self, kde: bool) -> Env {
+        let home = self.dir.path().join("home");
+        Env {
             config_home: home.join(".config"),
             data_home: home.join(".local/share"),
-            data_dirs: vec![dir.path().join("usr/share")],
+            data_dirs: vec![self.dir.path().join("usr/share")],
             home,
             kde,
             ..Env::default()
-        };
-        (Self { dir }, env)
+        }
     }
 
     pub fn write(&self, relative: &str, content: impl AsRef<[u8]>) {
@@ -944,4 +950,172 @@ fn gtk_assets_for_close_hover_and_pressed_are_drawn_unmodified() {
     let pressed = only_hover.pick(Kind::Close, State::Active, 1.0).unwrap();
     assert!(pressed.asset.path.ends_with("h.png"));
     assert_eq!(pressed.highlight, Highlight::None);
+}
+
+/// A stroke-only 16 px SVG: a plus sign in `color` on transparency, like kde-gtk-config's.
+fn stroke_svg(fx: &Fixture, relative: &str, color: &str) {
+    fx.write(
+        relative,
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="{color}" stroke-width="2" fill="none"/></svg>"#
+        ),
+    );
+}
+
+/// Breeze-style symbolic icons in the icon theme.
+fn breeze_icons(fx: &Fixture) {
+    fx.write("home/.config/kdeglobals", "[Icons]\nTheme=breeze\n");
+    icon_theme(
+        fx,
+        "breeze",
+        "[Icon Theme]\nDirectories=actions\n[actions]\nSize=16\nType=Fixed\n",
+    );
+    for name in ["minimize", "maximize", "restore", "close"] {
+        fx.svg(
+            &format!("usr/share/icons/breeze/actions/window-{name}-symbolic.svg"),
+            "#000",
+        );
+    }
+}
+
+/// kde-gtk-config assets whose glyphs are `glyph`, with or without symbolic icons behind them.
+fn glyph_theme(glyph: &str, icons: bool) -> (Fixture, Resolved) {
+    let (fx, env) = Fixture::new(true);
+    let mut css = String::new();
+    for name in ["close", "minimize", "maximize"] {
+        stroke_svg(
+            &fx,
+            &format!("home/.config/gtk-3.0/assets/{name}-normal.svg"),
+            glyph,
+        );
+        css += &format!(
+            ".titlebar button.titlebutton.{name} {{ background-image: url(\"assets/{name}-normal.svg\") }}\n"
+        );
+    }
+    fx.write("home/.config/gtk-3.0/window_decorations.css", css);
+    if icons {
+        breeze_icons(&fx);
+    }
+    let resolved = resolve_env(&env).unwrap();
+    assert_eq!(resolved.source, Source::KdeGtkConfig);
+    (fx, resolved)
+}
+
+fn picked_symbolic(resolved: &Resolved, titlebar: Color32) -> Option<bool> {
+    resolved
+        .readable_pick(Kind::Close, State::Normal, 1.0, titlebar)
+        .map(|p| p.asset.symbolic)
+}
+
+#[test]
+fn a_light_glyph_on_a_light_title_bar_falls_back_to_the_symbolic_icon() {
+    // Issue 71: `#e7e1e2` strokes (Breeze Dark's foreground) on Xuan's Light title bar.
+    let (_fx, resolved) = glyph_theme("#e7e1e2", true);
+    let light_bar = Color32::from_gray(235);
+    let glyph = resolved
+        .pick(Kind::Close, State::Normal, 1.0)
+        .unwrap()
+        .asset
+        .glyph
+        .unwrap();
+    assert_eq!(glyph.background, None);
+    assert!(glyph.color.iter().all(|c| (0xe0..=0xe8).contains(c)));
+    assert!(!glyph.readable_on(light_bar));
+    assert_eq!(picked_symbolic(&resolved, light_bar), Some(true));
+    for kind in [Kind::Minimize, Kind::Maximize] {
+        let pick = resolved
+            .readable_pick(kind, State::Hover, 1.0, light_bar)
+            .unwrap();
+        assert!(pick.asset.symbolic);
+        assert_eq!(pick.highlight, Highlight::Hover);
+    }
+}
+
+#[test]
+fn readable_images_are_kept_and_the_opposite_pairing_falls_back() {
+    let (_fx, light_glyph) = glyph_theme("#e7e1e2", true);
+    assert_eq!(
+        picked_symbolic(&light_glyph, Color32::from_gray(45)),
+        Some(false)
+    );
+    let (_fx, dark_glyph) = glyph_theme("#232629", true);
+    assert_eq!(
+        picked_symbolic(&dark_glyph, Color32::from_gray(235)),
+        Some(false)
+    );
+    assert_eq!(
+        picked_symbolic(&dark_glyph, Color32::from_gray(45)),
+        Some(true)
+    );
+}
+
+#[test]
+fn without_symbolic_icons_an_unreadable_image_leaves_the_built_in_glyphs() {
+    let (_fx, resolved) = glyph_theme("#e7e1e2", false);
+    let pick =
+        |bar| resolved.readable_pick(Kind::Close, State::Normal, 1.0, Color32::from_gray(bar));
+    assert!(pick(235).is_none());
+    assert!(pick(45).is_some());
+}
+
+#[test]
+fn an_image_with_its_own_background_is_judged_against_that_background() {
+    // Breeze's close button: a red disc with a white cross, transparent in the corners.
+    let (fx, env) = Fixture::new(true);
+    fx.write(
+        "home/.config/gtk-3.0/assets/close.svg",
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" fill="#da4453"/><path d="M5 5l6 6M11 5l-6 6" stroke="#ffffff" stroke-width="2"/></svg>"##,
+    );
+    for name in ["minimize", "maximize"] {
+        stroke_svg(
+            &fx,
+            &format!("home/.config/gtk-3.0/assets/{name}.svg"),
+            "#000",
+        );
+    }
+    fx.write(
+        "home/.config/gtk-3.0/window_decorations.css",
+        ".titlebar button.titlebutton.close { background-image: url(\"assets/close.svg\") }\n\
+         .titlebar button.titlebutton.minimize { background-image: url(\"assets/minimize.svg\") }\n\
+         .titlebar button.titlebutton.maximize { background-image: url(\"assets/maximize.svg\") }\n",
+    );
+    let resolved = resolve_env(&env).unwrap();
+    let glyph = resolved
+        .pick(Kind::Close, State::Normal, 1.0)
+        .unwrap()
+        .asset
+        .glyph
+        .unwrap();
+    let [r, g, b] = glyph.background.expect("the disc is the background");
+    assert!(r > 200 && g < 100 && b < 100, "{r} {g} {b}");
+    assert!(glyph.color.iter().all(|&c| c > 200), "{:?}", glyph.color);
+    // White on red reads on any bar, so the image stays.
+    for bar in [Color32::from_gray(235), Color32::from_gray(45)] {
+        assert_eq!(picked_symbolic(&resolved, bar), Some(false));
+    }
+}
+
+#[test]
+fn symbolic_icons_still_go_through_the_tint_contrast_check() {
+    let (fx, env) = Fixture::new(true);
+    breeze_icons(&fx);
+    fx.write(
+        "home/.config/kdeglobals",
+        "[Icons]\nTheme=breeze\n[Colors:Header]\nForegroundNormal=#e7e1e2\n",
+    );
+    let resolved = resolve_env(&env).unwrap();
+    // Symbolic icons carry no measured glyph and are never swapped.
+    let pick = resolved
+        .readable_pick(Kind::Close, State::Normal, 1.0, Color32::from_gray(235))
+        .unwrap();
+    assert!(pick.asset.symbolic && pick.asset.glyph.is_none());
+    // The desktop's light foreground is dropped on a light bar, kept on a dark one.
+    let fallback = Color32::from_gray(20);
+    let tint = |bar| {
+        resolved
+            .tints
+            .color(false, Color32::from_gray(bar), fallback)
+    };
+    assert_eq!(tint(235), fallback);
+    assert_eq!(tint(45), Color32::from_rgb(0xe7, 0xe1, 0xe2));
 }
