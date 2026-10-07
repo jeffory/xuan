@@ -968,6 +968,86 @@ mod window_menu {
         assert!(ui.has("Navigator"));
     }
 
+    /// A plugin with three panes that only say they need permission.
+    fn short_plugin_panes(ui: &mut UiTest, directory: &Path) {
+        let mut manifest = String::from(
+            "[plugin]\nid = \"short\"\nname = \"Short\"\nversion = \"1\"\ncommand = [\"sh\", \"x\"]\n",
+        );
+        for (id, title) in [("a", "Short A"), ("b", "Short B"), ("c", "Short C")] {
+            manifest.push_str(&format!(
+                "\n[[panes]]\nid = \"{id}\"\ntitle = \"{title}\"\n"
+            ));
+        }
+        std::fs::write(directory.join("plugin.toml"), manifest).unwrap();
+        let manifest = xuan::plugins::Manifest::load(directory).unwrap();
+        ui.app_mut().install_plugins(vec![manifest], vec![]);
+        ui.harness.run_steps(8);
+    }
+
+    #[test]
+    fn short_panes_below_layers_leave_it_room_for_rows() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        short_plugin_panes(&mut ui, plugin.path());
+        let header = |ui: &UiTest, title: &str| {
+            ui.harness
+                .get_by_role_and_label(Role::CollapsingHeader, title)
+                .rect()
+        };
+        let layers = header(&ui, "Layers");
+        let next = header(&ui, "Short A");
+        let row = ui.harness.get_by_label("Layer 1").rect();
+        assert!(
+            row.top() >= layers.bottom() && row.bottom() <= next.top(),
+            "the layer row {row:?} should sit between {layers:?} and {next:?}"
+        );
+        // The list has room for several rows, not just one.
+        assert!(
+            next.top() - layers.bottom() >= 200.0,
+            "Layers is too short: {layers:?} to {next:?}"
+        );
+        // The short panes give back what they do not draw: no big gap below.
+        let last = header(&ui, "Short C");
+        assert!(
+            last.bottom() + 150.0 > ui.harness.ctx.content_rect().bottom() - 40.0,
+            "gap under the last pane: {last:?}"
+        );
+        // Stable: more frames change nothing.
+        let before = header(&ui, "Short A");
+        ui.harness.run_steps(5);
+        assert_eq!(header(&ui, "Short A"), before);
+    }
+
+    #[test]
+    fn a_resized_pane_keeps_its_height_and_collapsing_gives_it_back() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        short_plugin_panes(&mut ui, plugin.path());
+        let gap = |ui: &UiTest| {
+            let a = ui
+                .harness
+                .get_by_role_and_label(Role::CollapsingHeader, "Short A")
+                .rect();
+            let b = ui
+                .harness
+                .get_by_role_and_label(Role::CollapsingHeader, "Short B")
+                .rect();
+            b.top() - a.bottom()
+        };
+        let short = gap(&ui);
+        assert!(short < 120.0, "{short}");
+        ui.app_mut().config.panes.set_height("plugin:short/a", 150.0);
+        ui.harness.run_steps(5);
+        assert!(gap(&ui) >= 150.0, "{}", gap(&ui));
+        ui.app_mut().config.panes.toggle_collapsed("plugin:short/a");
+        ui.harness.run_steps(5);
+        assert!(gap(&ui) < 40.0, "{}", gap(&ui));
+    }
+
     #[test]
     fn a_collapsed_navigator_stops_drawing_and_asking_for_repaints() {
         let mut ui = UiTest::with_document();

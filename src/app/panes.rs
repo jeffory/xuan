@@ -12,6 +12,11 @@ use super::EditorApp;
 
 const HEADER_HEIGHT: f32 = 26.0;
 const SPLITTER_HEIGHT: f32 = 5.0;
+/// Least height the fill pane keeps, so the Layers list always has rows to show
+/// below its controls and above its footer.
+const FILL_MIN_HEIGHT: f32 = 240.0;
+/// Panes smaller than this keep their splitter and header usable.
+const MIN_DRAWN_HEIGHT: f32 = 24.0;
 
 /// A pane header being dragged to a new position.
 pub(super) struct PaneDrag {
@@ -26,7 +31,28 @@ struct Entry {
     detail: Option<String>,
     collapsed: bool,
     height: f32,
+    /// The user dragged the splitter, so `height` is kept even if the content is shorter.
+    sized: bool,
     fill: bool,
+}
+
+/// Where the height a pane's content drew last frame is remembered.
+fn drawn_id(id: &str) -> egui::Id {
+    egui::Id::new(("pane_drawn_height", id))
+}
+
+impl Entry {
+    /// The body height to reserve: the pane's height, or less if its content
+    /// drew shorter last frame and the user has not sized it.
+    fn reserved(&self, ctx: &egui::Context) -> f32 {
+        if self.sized {
+            return self.height;
+        }
+        let drawn = ctx.data(|data| data.get_temp::<f32>(drawn_id(&self.id)));
+        drawn.map_or(self.height, |drawn| {
+            drawn.ceil().clamp(MIN_DRAWN_HEIGHT, self.height)
+        })
+    }
 }
 
 impl EditorApp {
@@ -87,6 +113,7 @@ impl EditorApp {
                 detail: self.pane_detail(&pane.id),
                 collapsed: pane.collapsed,
                 height: pane.body_height(),
+                sized: pane.height > 0.0,
                 fill: fill.as_deref() == Some(pane.id.as_str()),
             })
             .collect();
@@ -113,7 +140,7 @@ impl EditorApp {
                             }
                     })
                     .sum();
-                let fill_height = (ui.available_height() - fixed).max(MIN_HEIGHT);
+                let fill_height = (ui.available_height() - fixed).max(MIN_HEIGHT.max(FILL_MIN_HEIGHT));
                 let mut rects = Vec::with_capacity(entries.len());
                 for entry in &entries {
                     let top = ui.cursor().top();
@@ -131,14 +158,25 @@ impl EditorApp {
                         let height = if entry.fill {
                             fill_height
                         } else {
-                            entry.height
+                            entry.reserved(ctx)
                         };
                         let (_, rect) = ui.allocate_space(vec2(ui.available_width(), height));
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        let body = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
                             ui.spacing_mut().item_spacing.y = 0.0;
                             self.pane_body(ui, &entry.id, enabled);
                         });
+                        if !entry.fill {
+                            // Remember how much the content used, so a short pane gives
+                            // the rest of its height to the fill pane next frame.
+                            let drawn = body.response.rect.height();
+                            let key = drawn_id(&entry.id);
+                            let before = ctx.data(|data| data.get_temp::<f32>(key));
+                            ctx.data_mut(|data| data.insert_temp(key, drawn));
+                            if before.is_none_or(|before| (before - drawn).abs() > 0.5) {
+                                ctx.request_repaint();
+                            }
+                        }
                         if !entry.fill {
                             let splitter = ui.allocate_response(
                                 vec2(ui.available_width(), SPLITTER_HEIGHT),
@@ -164,7 +202,7 @@ impl EditorApp {
                             if splitter.dragged() {
                                 resized = Some((
                                     entry.id.clone(),
-                                    entry.height + splitter.drag_delta().y,
+                                    height + splitter.drag_delta().y,
                                 ));
                             }
                             resize_done |= splitter.drag_stopped();
