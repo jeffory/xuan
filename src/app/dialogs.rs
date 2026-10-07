@@ -211,6 +211,10 @@ impl EditorApp {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
+        // Focus Width, with its value selected, once when the dialog opens.
+        let focused = egui::Id::new("size_dialog_focused");
+        let focus_width =
+            ctx.data(|d| d.get_temp::<Option<Dialog>>(focused).flatten()) != Some(dialog);
         widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(410.0)
@@ -232,12 +236,31 @@ impl EditorApp {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.label(tr("Width"));
-                            ui.add(
+                            let width = ui.add(
                                 widgets::Number::new(&mut self.dimensions[0])
                                     .range(1..=30_000)
                                     .suffix(" px")
                                     .speed(1.0),
                             );
+                            if focus_width {
+                                if width.has_focus() {
+                                    // The field is editing now: select its text so typing
+                                    // replaces it, and stop asking for focus.
+                                    let end = self.dimensions[0].to_string().chars().count();
+                                    let mut state = egui::TextEdit::load_state(ui.ctx(), width.id)
+                                        .unwrap_or_default();
+                                    state.cursor.set_char_range(Some(
+                                        egui::text::CCursorRange::two(
+                                            egui::text::CCursor::new(0),
+                                            egui::text::CCursor::new(end),
+                                        ),
+                                    ));
+                                    state.store(ui.ctx(), width.id);
+                                    ui.ctx().data_mut(|d| d.insert_temp(focused, Some(dialog)));
+                                } else {
+                                    width.request_focus();
+                                }
+                            }
                         });
                         ui.add_space(15.0);
                         ui.vertical(|ui| {
@@ -333,6 +356,9 @@ impl EditorApp {
             }
         } else if cancel || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.dialog = None;
+        }
+        if self.dialog != Some(dialog) {
+            ctx.data_mut(|d| d.remove_temp::<Option<Dialog>>(focused));
         }
     }
 
