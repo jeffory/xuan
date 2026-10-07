@@ -580,6 +580,11 @@ pub struct EditorApp {
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
+    /// A popover a surface opened (New layer with AI, an AI Region box).
+    surface_popup: Option<surfaces::SurfacePopup>,
+    /// The popover opened this frame: the click that opened it is not a
+    /// click outside it.
+    surface_popup_fresh: bool,
     /// Area the canvas occupied last frame, for the Navigator's viewport box.
     canvas_viewport: Option<egui::Rect>,
     /// Viewport, zoom and pan the Navigator last drew; a change schedules a repaint.
@@ -763,6 +768,8 @@ impl EditorApp {
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
+            surface_popup: None,
+            surface_popup_fresh: false,
             canvas_viewport: None,
             navigator_view: None,
         };
@@ -1851,6 +1858,7 @@ impl EditorApp {
             self.sidebar(ctx);
             self.canvas(ctx);
             self.plugin_action_dialog(ctx);
+            self.surface_popups(ctx);
             self.color_range_dialog(ctx);
         }
         self.dialogs(ctx);

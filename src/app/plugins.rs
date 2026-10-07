@@ -54,6 +54,8 @@ fn split_pane_key(key: &str) -> Option<(&str, &str)> {
 /// Everything the editor keeps about plugins.
 #[derive(Default)]
 pub(super) struct PluginState {
+    /// The values each action's surface popover last used, this session.
+    pub surface_values: HashMap<(String, String), Map<String, Value>>,
     pub manifests: Vec<Manifest>,
     pub errors: Vec<LoadError>,
     processes: HashMap<String, Process>,

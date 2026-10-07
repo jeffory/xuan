@@ -1196,3 +1196,79 @@ mod status_bar {
         assert!(ui.has(&hint));
     }
 }
+
+/// Plugin actions in the Layers panel, the toolbox and New Image.
+mod surfaces {
+    use super::*;
+
+    /// A plugin with a layer action whose prompt is basic and seed advanced.
+    pub(super) fn install(ui: &mut UiTest, dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[permissions]
+document = "edit"
+
+[[actions]]
+id = "layer"
+label = "Generate Layer…"
+surfaces = ["layer"]
+source = { from = "composite" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "What to add"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+"#,
+        )
+        .unwrap();
+        let manifest = xuan::plugins::Manifest::load(dir).unwrap();
+        ui.app_mut().install_plugins(vec![manifest], vec![]);
+        ui.app_mut().grant_plugin("ai", true);
+    }
+
+    #[test]
+    fn the_ai_layer_button_opens_a_prompt_first_popover() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        assert!(!ui.has("New layer with AI"));
+        install(&mut ui, dir.path());
+        ui.settle();
+        ui.click("New layer with AI");
+        assert!(ui.has("What to add"));
+        assert!(ui.has("Advanced"));
+        assert!(!ui.has("Seed"), "advanced inputs start collapsed");
+        // Review focus 2: no prompt, no Generate.
+        assert!(!ui.enabled("Generate"));
+        // The prompt is multiline; the Layers pane has a single-line field.
+        ui.harness.get_by_role(Role::MultilineTextInput).click();
+        ui.harness.step();
+        ui.harness
+            .get_by_role(Role::MultilineTextInput)
+            .type_text("a red kite");
+        ui.settle();
+        assert!(ui.enabled("Generate"));
+        ui.click("Advanced");
+        assert!(ui.has("Seed"));
+        // Generate runs the action as a layer surface over the whole canvas.
+        ui.click("Generate");
+        assert!(ui.app().surface_popup.is_none());
+        let job = &ui.app().plugins.jobs[0];
+        let run = job.surface.clone().unwrap();
+        assert_eq!(run.surface, xuan::plugins::manifest::Surface::Layer);
+        assert_eq!(run.target, (20, 16));
+        assert_eq!(job.inputs["prompt"], serde_json::json!("a red kite"));
+    }
+}
