@@ -150,6 +150,31 @@ tree (`src/plugins/ui.rs`, `src/app/plugin_dialogs.rs`, `plugin_panes.rs`).
 **Recommendation.** No new UI system. Add the `selection` input only if the
 region route proves awkward in the first inpainting plugin.
 
+**Surfaces (done).** Generative actions also appear in Xuan's own UI, so they
+feel built in rather than reachable only through a menu and a dialog: the
+**AI Region** tool, **New layer with AI** in the Layers panel and the
+**Generate** tab of New Image (see [Surfaces](PLUGINS.md#surfaces)). The rule
+is *keep the simple edits simple; the advanced options are there when needed*:
+each surface first shows only a prompt and Generate, the rest sits under a
+collapsed **Advanced**, and the full dialog stays in the menus. Plugins
+declare where their actions appear and Xuan draws them with its own widgets.
+Two alternatives were turned down: plugin-drawn popovers (inconsistent, and a
+plugin's UI would sit inside Xuan's chrome) and Comfy-specific UI in core
+(ties core to one backend, against keeping ML in plugins).
+
+Results use the best quality for the area they cover without going under it:
+a surface run tells the plugin the document pixels it will cover
+(`inputs.target`), the plugin renders at least that, exactly when its model
+allows, and places the result with `fit = "cover"`, which scales evenly and
+keeps what hangs over in the layer, so nothing is stretched or cropped. New
+Image keeps the model's size, at least the size typed; **Exact size** makes
+the canvas exactly that size with the result as a movable layer covering it,
+for reframing.
+
+Not done yet: per-size cost estimates (Comfy's price formulas could drive
+them), keeping popover values after Xuan restarts, and plugin-drawn UI inside
+surfaces.
+
 ## 4. Backends
 
 **Have.** The Comfy Cloud example (`plugins/comfy-cloud`) does text-to-image,
