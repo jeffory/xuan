@@ -1056,16 +1056,23 @@ impl EditorApp {
         if let Some(target) = self.develop_close_requested {
             let mut discard = false;
             let mut keep = false;
-            widgets::Window::new(tr("Finish developing?")).show(ctx, |ui| {
-                ui.label(if matches!(target, DevelopClose::Window) && !self.inactive_develop.is_empty() {
+            let several =
+                matches!(target, DevelopClose::Window) && !self.inactive_develop.is_empty();
+            widgets::Window::new(tr("Finish developing?")).show_with_footer(ctx, |ui| {
+                ui.label(if several {
                     tr("Develop the images to keep your RAW adjustments in projects, or discard all open Develop sessions.")
                 } else {
                     tr("Develop the image to keep your RAW adjustments in a project, or discard this Develop session.")
                 });
-                ui.horizontal(|ui| {
-                    keep = widgets::primary_button(ui, tr("Keep developing")).clicked();
-                    discard = widgets::button(ui, tr("Discard and close")).clicked();
-                });
+            }, |ui, ()| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::single(tr("Keep developing"))
+                        .destructive(tr("Discard and close")),
+                    |_| {},
+                );
+                keep = response.commit;
+                discard = response.destructive;
             });
             if keep {
                 self.develop_close_requested = None;

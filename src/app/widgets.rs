@@ -87,6 +87,7 @@ fn focus_ring(ui: &Ui, response: &Response, radius: f32) {
 pub struct Button {
     label: String,
     primary: bool,
+    destructive: bool,
     size: egui::Vec2,
 }
 
@@ -95,11 +96,18 @@ impl Button {
         Self {
             label: label.into(),
             primary: false,
+            destructive: false,
             size: vec2(0.0, 22.0),
         }
     }
     pub fn primary(mut self) -> Self {
         self.primary = true;
+        self
+    }
+    /// An action that throws work away, such as Discard changes: a plain bezel with the label in
+    /// the error colour, so it never looks like the default button.
+    pub fn destructive(mut self) -> Self {
+        self.destructive = true;
         self
     }
     pub fn min_size(mut self, size: egui::Vec2) -> Self {
@@ -113,6 +121,8 @@ impl Widget for Button {
         let p = ui.palette();
         let text = if self.primary {
             p.on_accent_text
+        } else if self.destructive && ui.is_enabled() {
+            p.error
         } else {
             p.text
         };
@@ -898,26 +908,126 @@ impl<'a> Window<'a> {
         self.width = width;
         self
     }
-    pub fn show<R>(mut self, ctx: &egui::Context, content: impl FnOnce(&mut Ui) -> R) {
+    /// Shows the window with `content` as its whole body, scrolled when it is taller than the
+    /// space the window has.
+    pub fn show<R>(self, ctx: &egui::Context, content: impl FnOnce(&mut Ui) -> R) {
+        self.show_parts(ctx, content, None::<fn(&mut Ui, R)>);
+    }
+
+    /// Shows the window with a scrolled `body` and a `footer` below it that never scrolls, so the
+    /// dialog's buttons stay in sight however small the main window is. The footer gets what the
+    /// body returned, such as whether the form is valid; draw it with [`dialog_footer`].
+    pub fn show_with_footer<R>(
+        self,
+        ctx: &egui::Context,
+        body: impl FnOnce(&mut Ui) -> R,
+        footer: impl FnOnce(&mut Ui, R),
+    ) {
+        self.show_parts(ctx, body, Some(footer));
+    }
+
+    fn show_parts<R>(
+        mut self,
+        ctx: &egui::Context,
+        body: impl FnOnce(&mut Ui) -> R,
+        footer: Option<impl FnOnce(&mut Ui, R)>,
+    ) {
         if self.open.as_deref() == Some(&false) {
             return;
         }
+        let id = self.id.unwrap_or_else(|| egui::Id::new(&self.title));
+        // Keep clear of the title and menu bar at the top and of the window's bottom edge.
+        let bounds = dialog_bounds(ctx);
+        let footer_height_id = id.with("footer_height");
         let mut close = false;
         egui::Window::new(&self.title)
-            .id(self.id.unwrap_or_else(|| egui::Id::new(&self.title)))
+            .id(id)
             .title_bar(false)
             .auto_sized()
             .pivot(self.place.map_or(egui::Align2::CENTER_CENTER, |p| p.0))
-            .default_pos(self.place.map_or(ctx.content_rect().center(), |p| p.1))
+            .default_pos(self.place.map_or(bounds.center(), |p| p.1))
             .default_width(self.width)
+            .constrain_to(bounds)
             .frame(egui::Frame::window(&ctx.style()).inner_margin(0))
             .show(ctx, |ui| {
                 ui.set_width(self.width);
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let (rect, response) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+                // Reserve the title bar now and paint it last, at the width the content gave
+                // the window.
+                let (bar, response) =
+                    ui.allocate_exact_size(vec2(self.width, TITLE_HEIGHT), Sense::hover());
+                // The footer's height from the last frame, or a guess for the first (sizing) one.
+                let footer_height = match footer {
+                    Some(_) => ui
+                        .data(|data| data.get_temp::<f32>(footer_height_id))
+                        .unwrap_or(FOOTER_GUESS),
+                    None => 0.0,
+                };
+                let inset = DIALOG_INSET as f32;
+                let bottom = if footer.is_some() { 0.0 } else { inset };
+                let max_body =
+                    (bounds.height() - TITLE_HEIGHT - inset - bottom - footer_height - 2.0)
+                        .max(MIN_BODY_HEIGHT);
+                let result = egui::Frame::new()
+                    .inner_margin(egui::Margin {
+                        left: DIALOG_INSET,
+                        // The scroll bar sits in the right inset, clear of the content.
+                        right: DIALOG_INSET - SCROLL_GUTTER,
+                        top: DIALOG_INSET,
+                        bottom: bottom as i8,
+                    })
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 12.0;
+                        ui.spacing_mut().slider_width =
+                            (self.width - 2.0 * inset - SLIDER_FIELD_WIDTH).max(90.0);
+                        ui.set_width(self.width - 2.0 * inset + SCROLL_GUTTER as f32);
+                        // Show the bar whenever the body overflows, not only on hover.
+                        ui.spacing_mut().scroll.dormant_handle_opacity = 0.5;
+                        ui.spacing_mut().scroll.dormant_background_opacity = 0.0;
+                        let output = egui::ScrollArea::vertical()
+                            .max_height(max_body)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.set_width(self.width - 2.0 * inset);
+                                body(ui)
+                            });
+                        overflow_fades(ui, &output);
+                        output.inner
+                    })
+                    .inner;
+                if let Some(footer) = footer {
+                    let top = ui.cursor().top();
+                    let width = ui.min_rect().width().max(self.width);
+                    // One rule and gap above every dialog's buttons.
+                    ui.add_space(FOOTER_GAP);
+                    let rule = ui.cursor().top();
+                    ui.add_space(FOOTER_GAP);
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: DIALOG_INSET,
+                            right: DIALOG_INSET,
+                            top: 0,
+                            bottom: DIALOG_INSET,
+                        })
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 8.0;
+                            ui.set_width(width - 2.0 * inset);
+                            footer(ui, result);
+                        });
+                    let height = ui.min_rect().bottom() - top;
+                    ui.data_mut(|data| data.insert_temp(footer_height_id, height));
+                    ui.painter().hline(
+                        ui.min_rect().x_range(),
+                        rule,
+                        Stroke::new(1.0_f32, ui.palette().divider),
+                    );
+                }
+                let bar = Rect::from_min_size(
+                    bar.min,
+                    vec2(ui.min_rect().width().max(bar.width()), TITLE_HEIGHT),
+                );
                 ui.painter().rect_filled(
-                    rect,
+                    bar,
                     CornerRadius {
                         nw: 10,
                         ne: 10,
@@ -927,34 +1037,198 @@ impl<'a> Window<'a> {
                     ui.palette().titlebar,
                 );
                 ui.painter().line_segment(
-                    [rect.left_bottom(), rect.right_bottom()],
+                    [bar.left_bottom(), bar.right_bottom()],
                     Stroke::new(1.0_f32, ui.palette().header_rule),
                 );
                 // The same title text as the main title bar's.
                 ui.painter().text(
-                    rect.center(),
+                    bar.center(),
                     egui::Align2::CENTER_CENTER,
                     &self.title,
                     FontId::proportional(12.0),
                     ui.palette().muted,
                 );
                 if self.open.is_some() {
-                    close = close_control(ui, rect, response.id.with("close"));
+                    close = close_control(ui, bar, response.id.with("close"));
                 }
-                egui::Frame::new().inner_margin(24).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 12.0;
-                    ui.spacing_mut().slider_width =
-                        (self.width - 48.0 - SLIDER_FIELD_WIDTH).max(90.0);
-                    ui.set_width(self.width - 48.0);
-                    egui::ScrollArea::vertical()
-                        .max_height((ctx.content_rect().height() - 100.0).max(120.0))
-                        .auto_shrink([false, true])
-                        .show(ui, content)
-                });
             });
         if close && let Some(open) = self.open.as_mut() {
             **open = false;
         }
+    }
+}
+
+/// The buttons in a dialog footer; see [`dialog_footer`].
+pub struct FooterButtons<'a> {
+    commit: Option<&'a str>,
+    commit_enabled: bool,
+    cancel: Option<&'a str>,
+    destructive: Option<&'a str>,
+}
+
+impl<'a> FooterButtons<'a> {
+    /// [Cancel][`commit`], the usual pair.
+    pub fn commit(label: &'a str) -> Self {
+        Self {
+            commit: Some(label),
+            commit_enabled: true,
+            cancel: Some(tr("Cancel")),
+            destructive: None,
+        }
+    }
+    /// A single button with no Cancel: OK on an alert, Done on a settings window.
+    pub fn single(label: &'a str) -> Self {
+        Self {
+            cancel: None,
+            ..Self::commit(label)
+        }
+    }
+    /// Only Cancel, for work in progress.
+    pub fn cancel_only() -> Self {
+        Self {
+            commit: None,
+            ..Self::commit("")
+        }
+    }
+    /// Names the cancelling button for what it does, such as Deny.
+    pub fn cancel_label(mut self, label: &'a str) -> Self {
+        self.cancel = Some(label);
+        self
+    }
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.commit_enabled = enabled;
+        self
+    }
+    /// Adds a button that throws work away, such as Discard changes.
+    pub fn destructive(mut self, label: &'a str) -> Self {
+        self.destructive = Some(label);
+        self
+    }
+}
+
+/// What a dialog footer's buttons did this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FooterResponse {
+    pub commit: bool,
+    pub cancel: bool,
+    pub destructive: bool,
+}
+
+/// The width the commit and cancel buttons have at least, so short labels such as OK still
+/// make a comfortable target and the pair lines up from dialog to dialog.
+const FOOTER_BUTTON_WIDTH: f32 = 76.0;
+
+/// Draws a dialog's button row in the one layout every dialog uses:
+///
+/// `[Destructive] [left …]                    [Cancel] [Commit]`
+///
+/// - The commit button is the default (accent) button, rightmost, with Cancel on its left. This is
+///   the order KDE and GNOME use, and macOS too, so it is where Linux and Mac users look, and it
+///   is the order most of Xuan's dialogs already had.
+/// - A destructive button (Discard changes) goes at the far left, away from the commit button so
+///   neither is clicked for the other, and is drawn with its label in the error colour.
+/// - `left` adds anything else after it: a Preview checkbox, an estimate, a secondary choice such
+///   as Always Allow or Restore Defaults.
+///
+/// Draw it in [`Window::show_with_footer`]'s footer, which puts the same rule and gap above every
+/// dialog's buttons and keeps them out of the scrolled body.
+///
+/// Commit labels:
+/// - **Apply** for edits with a live preview, and for a form whose values take effect only when
+///   it is committed (adjustments, filters, Layer Effects, Text, Color Range, Grid).
+/// - **Done** for settings windows, where each change takes effect as it is made; they have no
+///   Cancel.
+/// - **A specific verb** when one says what happens: Create canvas, Resize, Export…, Save,
+///   Reassign, Run, Allow, Install, Download, Import, Insert as layer.
+/// - **OK** only on alerts that just report something.
+pub fn dialog_footer(
+    ui: &mut Ui,
+    buttons: FooterButtons,
+    left: impl FnOnce(&mut Ui),
+) -> FooterResponse {
+    let mut response = FooterResponse::default();
+    let size = vec2(FOOTER_BUTTON_WIDTH, 22.0);
+    ui.horizontal(|ui| {
+        if let Some(label) = buttons.destructive {
+            response.destructive = ui.add(Button::new(label).destructive()).clicked();
+        }
+        left(ui);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(label) = buttons.commit {
+                response.commit = ui
+                    .add_enabled(
+                        buttons.commit_enabled,
+                        Button::new(label).primary().min_size(size),
+                    )
+                    .clicked();
+            }
+            if let Some(label) = buttons.cancel {
+                response.cancel = ui.add(Button::new(label).min_size(size)).clicked();
+            }
+        });
+    });
+    response
+}
+
+const TITLE_HEIGHT: f32 = 32.0;
+/// The space round a dialog's body and footer.
+const DIALOG_INSET: i8 = 24;
+/// How much of the right inset the body's scroll bar may use.
+const SCROLL_GUTTER: i8 = 12;
+/// The gap on either side of the rule above a dialog's buttons.
+const FOOTER_GAP: f32 = 12.0;
+/// A footer's height before it has been measured: the rule, its gaps, a button row, the inset.
+const FOOTER_GUESS: f32 = 2.0 * FOOTER_GAP + 22.0 + DIALOG_INSET as f32;
+const MIN_BODY_HEIGHT: f32 = 60.0;
+/// The space a dialog keeps from the window's edges.
+const DIALOG_MARGIN: f32 = 8.0;
+
+/// Where dialogs may sit: the window below the title and menu bar, less a margin.
+pub fn dialog_bounds(ctx: &egui::Context) -> Rect {
+    let content = ctx.content_rect();
+    let top = (content.top() + TITLE_HEIGHT + DIALOG_MARGIN).min(content.bottom());
+    Rect::from_min_max(
+        pos2(content.left() + DIALOG_MARGIN, top),
+        pos2(
+            content.right() - DIALOG_MARGIN,
+            (content.bottom() - DIALOG_MARGIN).max(top),
+        ),
+    )
+}
+
+/// Fades the body's edges into the window where more of it is scrolled out of sight.
+fn overflow_fades<R>(ui: &Ui, output: &egui::scroll_area::ScrollAreaOutput<R>) {
+    let view = output.inner_rect;
+    let hidden = output.content_size.y - view.height();
+    if hidden <= 0.5 {
+        return;
+    }
+    let fill = ui.visuals().window_fill;
+    let clear = fill.gamma_multiply(0.0);
+    let offset = output.state.offset.y;
+    let depth = 24.0_f32.min(view.height() / 3.0);
+    // The bar's gutter stays clear so the bar shows over the fade.
+    let right = view.right() - ui.spacing().scroll.bar_width - 2.0;
+    if offset < hidden - 0.5 {
+        gradient(
+            ui,
+            Rect::from_min_max(
+                pos2(view.left(), view.bottom() - depth),
+                pos2(right, view.bottom()),
+            ),
+            0.0,
+            clear,
+            fill,
+        );
+    }
+    if offset > 0.5 {
+        gradient(
+            ui,
+            Rect::from_min_max(view.left_top(), pos2(right, view.top() + depth)),
+            0.0,
+            fill,
+            clear,
+        );
     }
 }
 

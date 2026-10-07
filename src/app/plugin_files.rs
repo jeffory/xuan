@@ -890,42 +890,48 @@ impl EditorApp {
             .id(("plugin_file", plugin))
             .default_width(440.0)
             .open(&mut open)
-            .show(ctx, |ui| {
-                ui.add(
-                    egui::Label::new(format!("{source} {}", tr("asks Xuan to open this file:")))
-                        .wrap(),
-                );
-                ui.add_space(4.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(one_line(&path.display().to_string(), 1000)).monospace(),
-                    )
-                    .wrap(),
-                );
-                ui.add_space(8.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(tr(
-                            "It opens as a new document. Open it only if you expected this.",
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.add(
+                        egui::Label::new(format!(
+                            "{source} {}",
+                            tr("asks Xuan to open this file:")
                         ))
-                        .small()
-                        .color(ui.palette().muted),
-                    )
-                    .wrap(),
-                );
-                ui.add_space(4.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Open")).clicked() {
-                            answer = Some(FileAnswer::Accept);
-                        }
-                        if widgets::button(ui, tr("Cancel")).clicked() {
-                            answer = Some(FileAnswer::Cancel);
-                        }
-                    });
-                });
-            });
+                        .wrap(),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(one_line(&path.display().to_string(), 1000)).monospace(),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(8.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(tr(
+                                "It opens as a new document. Open it only if you expected this.",
+                            ))
+                            .small()
+                            .color(ui.palette().muted),
+                        )
+                        .wrap(),
+                    );
+                },
+                |ui, ()| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Open")),
+                        |_| {},
+                    );
+                    if response.commit {
+                        answer = Some(FileAnswer::Accept);
+                    } else if response.cancel {
+                        answer = Some(FileAnswer::Cancel);
+                    }
+                },
+            );
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) || !open {
             answer = Some(FileAnswer::Cancel);
         }
@@ -958,7 +964,7 @@ impl EditorApp {
             .id(("plugin_file", plugin))
             .default_width(460.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 ui.add(egui::Label::new(format!("{source} {lead} “{title}”:")).wrap());
                 ui.add_space(4.0);
                 ui.add(
@@ -1000,20 +1006,19 @@ impl EditorApp {
                     )
                     .wrap(),
                 );
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if widgets::button(ui, tr("Always Allow")).clicked() {
-                        answer = Some(FileAnswer::Always);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Save")).clicked() {
-                            answer = Some(FileAnswer::Accept);
-                        }
-                        if widgets::button(ui, tr("Cancel")).clicked() {
-                            answer = Some(FileAnswer::Cancel);
-                        }
+            }, |ui, ()| {
+                let mut always = false;
+                let response =
+                    widgets::dialog_footer(ui, widgets::FooterButtons::commit(tr("Save")), |ui| {
+                        always = widgets::button(ui, tr("Always Allow")).clicked();
                     });
-                });
+                if always {
+                    answer = Some(FileAnswer::Always);
+                } else if response.commit {
+                    answer = Some(FileAnswer::Accept);
+                } else if response.cancel {
+                    answer = Some(FileAnswer::Cancel);
+                }
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) || !open {
             answer = Some(FileAnswer::Cancel);

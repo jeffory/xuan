@@ -103,7 +103,7 @@ impl EditorApp {
             .id("app_settings")
             .default_width(680.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.set_height(height);
                     ui.vertical(|ui| {
@@ -161,14 +161,9 @@ impl EditorApp {
                         }
                     });
                 });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Done")).clicked() {
-                            done = true;
-                        }
-                    });
-                });
+            }, |ui, ()| {
+                done = widgets::dialog_footer(ui, widgets::FooterButtons::single(tr("Done")), |_| {})
+                    .commit;
             });
         ctx.data_mut(|d| d.insert_temp(page_id, page));
         if config != self.config {

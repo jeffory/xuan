@@ -252,14 +252,16 @@ pub(super) fn page(
                     )
                     .wrap(),
                 );
-                ui.horizontal(|ui| {
-                    if widgets::primary_button(ui, tr("Reassign")).clicked() {
-                        answer = Some(true);
-                    }
-                    if widgets::button(ui, tr("Cancel")).clicked() {
-                        answer = Some(false);
-                    }
-                });
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Reassign")),
+                    |_| {},
+                );
+                if response.commit {
+                    answer = Some(true);
+                } else if response.cancel {
+                    answer = Some(false);
+                }
             });
         match answer {
             Some(true) => editor.reassign(keymap, overrides),
