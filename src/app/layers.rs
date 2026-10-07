@@ -9,7 +9,7 @@ use xuan::{
     document::{Adjustment, Document, Layer},
 };
 
-use super::{EditorApp, LayerDrag, icons, menus, theme::PaletteExt};
+use super::{EditorApp, LayerDrag, commands::ctrl_or_cmd, icons, menus, theme::PaletteExt};
 
 pub(super) struct LayerRename {
     project: Uuid,
@@ -781,7 +781,7 @@ impl EditorApp {
             });
         }
         if let Some((id, mask)) = actions.select {
-            let extend = ctx.input(|i| i.modifiers.shift || i.modifiers.ctrl);
+            let extend = ctx.input(|i| i.modifiers.shift || ctrl_or_cmd(i.modifiers));
             if let Some(session) = self.session_mut() {
                 session.document.select(id, extend);
             }

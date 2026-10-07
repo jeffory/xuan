@@ -344,8 +344,11 @@ impl EditorApp {
     }
 
     pub(super) fn text_dialog(&mut self, ctx: &egui::Context) {
-        let apply_shortcut =
-            ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter));
+        let apply_shortcut = ctx.input_mut(|input| {
+            // Ctrl+Enter, or ⌘Return on macOS.
+            input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+                || input.consume_key(egui::Modifiers::MAC_CMD, egui::Key::Enter)
+        });
         let paths: Vec<String> = self
             .session()
             .map(|s| s.document.paths.iter().map(|p| p.name.clone()).collect())

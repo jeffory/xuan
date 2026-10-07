@@ -184,6 +184,93 @@ fn chords_parse_print_and_label() {
     }
 }
 
+/// ⌘ as egui-winit reports it on macOS.
+const CMD: Modifiers = Modifiers {
+    mac_cmd: true,
+    command: true,
+    ..Modifiers::NONE
+};
+
+#[test]
+fn mac_labels_use_the_menu_symbols() {
+    for (text, label) in [
+        ("Ctrl+S", "⌘S"),
+        ("Ctrl+Alt+Shift+S", "⌥⇧⌘S"),
+        ("Ctrl+Plus", "⌘+"),
+        ("Ctrl+Minus", "⌘−"),
+        ("Ctrl+,", "⌘,"),
+        // ⌘Tab switches apps; tabs switch with Control+Tab.
+        ("Ctrl+Tab", "⌃Tab"),
+        ("Ctrl+Shift+Tab", "⌃⇧Tab"),
+        ("Alt+Backspace", "⌥Backspace"),
+        ("Shift+[", "⇧["),
+        ("F1", "F1"),
+    ] {
+        assert_eq!(chord(text).label_for(true), label, "{text}");
+        assert_eq!(chord(text).label_for(false), chord(text).label(), "{text}");
+    }
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    context.fonts_mut(|fonts| {
+        assert!(fonts.has_glyphs(&egui::FontId::proportional(12.0), "⌃⌥⇧⌘−"));
+    });
+}
+
+#[test]
+fn macos_leaves_out_the_defaults_the_system_keeps() {
+    let toggle = commands::find("toggle_controls").unwrap();
+    assert_eq!(commands::platform_defaults(toggle.keys, false), toggle.keys);
+    // ⌘H hides the app.
+    assert!(commands::platform_defaults(toggle.keys, true).is_empty());
+    for command in COMMANDS.iter().filter(|c| c.id != "toggle_controls") {
+        assert_eq!(
+            commands::platform_defaults(command.keys, true),
+            command.keys,
+            "{}",
+            command.id
+        );
+    }
+}
+
+#[test]
+fn command_key_presses_run_ctrl_shortcuts() {
+    let keymap = Keymap::default();
+    let id = |mods, key| keymap.lookup(mods, key, false).map(|e| e.id.as_str());
+    assert_eq!(id(CMD, Key::E), Some("merge"));
+    assert_eq!(id(CMD | Modifiers::SHIFT, Key::I), Some("invert_selection"));
+    assert_eq!(id(CMD | Modifiers::ALT, Key::E), None);
+    assert_eq!(id(Modifiers::MAC_CMD, Key::I), Some("invert"));
+    // Control also counts on macOS, so Control+Tab still switches tabs.
+    assert_eq!(id(Modifiers::CTRL, Key::Tab), Some("next_tab"));
+    assert_eq!(Chord::from_event(CMD, Key::S), chord("Ctrl+S"));
+    assert!(chord("Ctrl+S").matches(CMD, Key::S));
+    assert!(!chord("Ctrl+S").matches(CMD | Modifiers::ALT, Key::S));
+    assert!(!chord("S").matches(CMD, Key::S));
+
+    // Pressed in the editor, ⌘E merges and ⌘5 leaves the opacity alone.
+    let (context, mut app) = app_with_document();
+    app.command_trace = Some(Vec::new());
+    keyboard_frame(&context, &mut app, vec![text_key(Key::E, CMD)], CMD);
+    assert_eq!(
+        app.command_trace.as_deref(),
+        Some(&["merge".to_owned()][..])
+    );
+    let opacity = |app: &EditorApp| {
+        let document = &app.session().unwrap().document;
+        document.active().unwrap().opacity
+    };
+    let before = opacity(&app);
+    keyboard_frame(&context, &mut app, vec![text_key(Key::Num5, CMD)], CMD);
+    assert_eq!(opacity(&app), before);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(Key::Num5, Modifiers::NONE)],
+        Modifiers::NONE,
+    );
+    assert_eq!(opacity(&app), 0.5);
+}
+
 #[test]
 fn dispatch_matches_modifiers_exactly() {
     let keymap = Keymap::default();

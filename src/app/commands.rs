@@ -19,11 +19,23 @@ use xuan::{
 
 use super::{EditorApp, Tool};
 
-/// A key with exactly these modifiers. Only Ctrl, Alt and Shift are used.
+/// A key with exactly these modifiers. Only Ctrl, Alt and Shift are used: `ctrl` is the
+/// platform's primary modifier, Ctrl on Linux and Windows and ⌘ Command on macOS (see
+/// [`ctrl_or_cmd`]). The configuration file and the docs always write it `Ctrl`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Chord {
     pub mods: Modifiers,
     pub key: Key,
+}
+
+/// Shortcuts look and behave the Mac way: ⌘ in labels, and no defaults that macOS keeps for
+/// itself. Tests see the Linux and Windows registry wherever they run.
+const MAC: bool = cfg!(all(target_os = "macos", not(test)));
+
+/// Whether the primary modifier is held: Ctrl, or on macOS ⌘ Command, where the Control key also
+/// counts (so Control+Tab still switches tabs). Shortcuts and Ctrl-click actions both use it.
+pub(super) fn ctrl_or_cmd(mods: Modifiers) -> bool {
+    mods.ctrl || mods.command || mods.mac_cmd
 }
 
 const NONE: Modifiers = Modifiers::NONE;
@@ -54,10 +66,10 @@ const fn ctrl_alt(key: Key) -> Chord {
 }
 
 impl Chord {
-    /// The chord for a key event, keeping only Ctrl, Alt and Shift.
+    /// The chord for a key event, keeping only Ctrl (or ⌘), Alt and Shift.
     pub fn from_event(mods: Modifiers, key: Key) -> Self {
         let mut chord = Modifiers::NONE;
-        chord.ctrl = mods.ctrl || (mods.command && !mods.mac_cmd);
+        chord.ctrl = ctrl_or_cmd(mods);
         chord.alt = mods.alt;
         chord.shift = mods.shift;
         Self { mods: chord, key }
@@ -71,6 +83,7 @@ impl Chord {
     /// Whether a key press with `pressed` modifiers is this chord. Modifiers must match
     /// exactly, so Ctrl+Shift+E is never Ctrl+E, except Shift for `+` and `'`.
     pub fn matches(self, pressed: Modifiers, key: Key) -> bool {
+        let pressed = Self::from_event(pressed, key).mods;
         key == self.key
             && if self.shift_insensitive() {
                 pressed.matches_logically(self.mods)
@@ -128,14 +141,41 @@ impl Chord {
         Some(Self { mods, key })
     }
 
-    /// The chord as shown in the interface: `Ctrl++`, `Ctrl+−`, `Ctrl+Alt+Shift+S`.
+    /// The chord as shown in the interface: `Ctrl++`, `Ctrl+−`, `Ctrl+Alt+Shift+S`, or on macOS
+    /// `⌘+`, `⌘−`, `⌥⇧⌘S`.
     pub fn label(self) -> String {
+        self.label_for(MAC)
+    }
+
+    pub fn label_for(self, mac: bool) -> String {
         let key = match self.key {
             Key::Plus => "+",
             Key::Minus => "−",
             key => key_text(key),
         };
-        format!("{}{key}", self.modifier_prefix())
+        if mac {
+            format!("{}{key}", self.mac_symbols())
+        } else {
+            format!("{}{key}", self.modifier_prefix())
+        }
+    }
+
+    /// Mac menus put ⌃⌥⇧⌘ before the key, in that order and without separators. With Tab the
+    /// primary modifier is shown as ⌃ Control, since ⌘Tab switches apps.
+    fn mac_symbols(self) -> String {
+        let control = self.mods.ctrl && self.key == Key::Tab;
+        let mut text = String::new();
+        for (on, symbol) in [
+            (control, "⌃"),
+            (self.mods.alt, "⌥"),
+            (self.mods.shift, "⇧"),
+            (self.mods.ctrl && !control, "⌘"),
+        ] {
+            if on {
+                text.push_str(symbol);
+            }
+        }
+        text
     }
 
     fn modifier_prefix(self) -> String {
@@ -1049,6 +1089,17 @@ pub(super) fn tool_command(tool: Tool) -> Option<&'static str> {
     })
 }
 
+/// Default bindings macOS keeps for itself, so the app never receives them: ⌘H hides the app.
+const MAC_SYSTEM: &[Chord] = &[ctrl(Key::H)];
+
+/// A command's default bindings on this platform: on macOS, without [`MAC_SYSTEM`].
+pub(super) fn platform_defaults(keys: &[Chord], mac: bool) -> Vec<Chord> {
+    keys.iter()
+        .copied()
+        .filter(|key| !mac || !MAC_SYSTEM.iter().any(|system| system.same(*key)))
+        .collect()
+}
+
 /// Whether a number key or reserved key: never available for commands.
 pub(super) fn reserved(chord: Chord) -> Option<&'static str> {
     if !chord.mods.ctrl && !chord.mods.alt && digit(chord.key) {
@@ -1163,11 +1214,14 @@ impl Keymap {
         let custom = |id: &str| overrides.get(id).and_then(override_keys);
         let mut entries: Vec<Entry> = COMMANDS
             .iter()
-            .map(|command| Entry {
-                id: command.id.to_owned(),
-                kind: Kind::Builtin(command),
-                defaults: command.keys.to_vec(),
-                keys: custom(command.id).unwrap_or_else(|| command.keys.to_vec()),
+            .map(|command| {
+                let defaults = platform_defaults(command.keys, MAC);
+                Entry {
+                    id: command.id.to_owned(),
+                    kind: Kind::Builtin(command),
+                    keys: custom(command.id).unwrap_or_else(|| defaults.clone()),
+                    defaults,
+                }
             })
             .collect();
         let builtins = entries.len();
@@ -1264,6 +1318,7 @@ impl Keymap {
 
     /// The command a key press runs. An exact match wins over one that ignores Shift.
     pub fn lookup(&self, pressed: Modifiers, key: Key, developing: bool) -> Option<&Entry> {
+        let pressed = Chord::from_event(pressed, key).mods;
         let active = self
             .entries
             .iter()
