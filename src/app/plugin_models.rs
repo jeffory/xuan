@@ -495,7 +495,7 @@ impl EditorApp {
             .id(("plugin_models", &request.plugin))
             .default_width(460.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let lead = match (request.then.as_ref())
                     .and_then(|(action, _)| manifest.action(action))
                 {
@@ -562,21 +562,17 @@ impl EditorApp {
                         .wrap(),
                     );
                 }
-                ui.add_space(4.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(!offline, widgets::Button::new(tr("Download")).primary())
-                            .clicked()
-                        {
-                            answer = Some(true);
-                        }
-                        if widgets::button(ui, tr("Cancel")).clicked() {
-                            answer = Some(false);
-                        }
-                    });
-                });
+            }, |ui, ()| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Download")).enabled(!offline),
+                    |_| {},
+                );
+                if response.commit {
+                    answer = Some(true);
+                } else if response.cancel {
+                    answer = Some(false);
+                }
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) || !open {
             answer = Some(false);

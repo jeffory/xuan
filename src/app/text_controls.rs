@@ -364,87 +364,90 @@ impl EditorApp {
         widgets::Window::new(tr("Text"))
             .default_width(440.0)
             .open(&mut open)
-            .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 10.0;
-                let response = egui::ScrollArea::vertical()
-                    .id_salt("text_content_scroll")
-                    .max_height(140.0)
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut edit.style.content)
-                                .id_salt("text_content")
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(4)
-                                .char_limit(text::MAX_TEXT_BYTES),
-                        )
-                    })
-                    .inner;
-                if edit.focus {
-                    response.request_focus();
-                    if let Some(mut state) = egui::TextEdit::load_state(ctx, response.id) {
-                        state
-                            .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::two(
-                                egui::text::CCursor::new(0),
-                                egui::text::CCursor::new(edit.style.content.chars().count()),
-                            )));
-                        state.store(ctx, response.id);
-                    }
-                    edit.focus = false;
-                }
-                ui.horizontal(|ui| {
-                    ui.label(tr("Font"));
-                    edit.fonts.show(ui, renderer, &mut edit.style.family);
-                });
-                if !renderer.has_family(&edit.style.family) {
-                    ui.label(
-                        RichText::new(tr(
-                            "This font is unavailable. Editing uses a fallback font.",
-                        ))
-                        .color(ui.palette().muted)
-                        .small(),
-                    );
-                }
-                ui.horizontal(|ui| {
-                    ui.label(tr("Size"));
-                    ui.add(
-                        widgets::Number::new(&mut edit.style.size)
-                            .range(1.0..=1024.0)
-                            .suffix(" px")
-                            .max_decimals(1),
-                    );
-                    ui.add_space(12.0);
-                    ui.label(tr("Color"));
-                    widgets::color_well(ui, &mut edit.style.color);
-                });
-                ui.horizontal(|ui| {
-                    widgets::checkbox(ui, &mut edit.style.bold, tr("Bold"));
-                    widgets::checkbox(ui, &mut edit.style.italic, tr("Italic"));
-                    widgets::checkbox(ui, &mut edit.style.underline, tr("Underline"));
-                    widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
-                });
-                ui.separator();
-                picked = path_options(ui, edit, &paths);
-                if let Some(error) = &edit.error {
-                    ui.colored_label(ui.palette().error, error);
-                }
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(tr("Live preview · Ctrl+Enter to apply"))
-                            .small()
-                            .color(ui.palette().muted),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        apply = ui
-                            .add_enabled(
-                                edit.error.is_none(),
-                                widgets::Button::new(tr("Apply")).primary(),
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.spacing_mut().item_spacing.y = 10.0;
+                    let response = egui::ScrollArea::vertical()
+                        .id_salt("text_content_scroll")
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut edit.style.content)
+                                    .id_salt("text_content")
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(4)
+                                    .char_limit(text::MAX_TEXT_BYTES),
                             )
-                            .clicked();
-                        cancel = widgets::button(ui, tr("Cancel")).clicked();
+                        })
+                        .inner;
+                    if edit.focus {
+                        response.request_focus();
+                        if let Some(mut state) = egui::TextEdit::load_state(ctx, response.id) {
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(0),
+                                    egui::text::CCursor::new(edit.style.content.chars().count()),
+                                )));
+                            state.store(ctx, response.id);
+                        }
+                        edit.focus = false;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Font"));
+                        edit.fonts.show(ui, renderer, &mut edit.style.family);
                     });
-                });
-            });
+                    if !renderer.has_family(&edit.style.family) {
+                        ui.label(
+                            RichText::new(tr(
+                                "This font is unavailable. Editing uses a fallback font.",
+                            ))
+                            .color(ui.palette().muted)
+                            .small(),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Size"));
+                        ui.add(
+                            widgets::Number::new(&mut edit.style.size)
+                                .range(1.0..=1024.0)
+                                .suffix(" px")
+                                .max_decimals(1),
+                        );
+                        ui.add_space(12.0);
+                        ui.label(tr("Color"));
+                        widgets::color_well(ui, &mut edit.style.color);
+                    });
+                    ui.horizontal(|ui| {
+                        widgets::checkbox(ui, &mut edit.style.bold, tr("Bold"));
+                        widgets::checkbox(ui, &mut edit.style.italic, tr("Italic"));
+                        widgets::checkbox(ui, &mut edit.style.underline, tr("Underline"));
+                        widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
+                    });
+                    ui.separator();
+                    picked = path_options(ui, edit, &paths);
+                    if let Some(error) = &edit.error {
+                        ui.colored_label(ui.palette().error, error);
+                    }
+                    edit.error.is_none()
+                },
+                |ui, valid| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Apply")).enabled(valid),
+                        |ui| {
+                            ui.label(
+                                RichText::new(tr("Live preview · Ctrl+Enter to apply"))
+                                    .small()
+                                    .color(ui.palette().muted),
+                            );
+                        },
+                    );
+                    apply = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         if cancel || !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.finish_text(false);
             return;

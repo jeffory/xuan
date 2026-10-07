@@ -218,9 +218,9 @@ impl EditorApp {
             .id(("plugin_action", &plugin, &action))
             .default_width(380.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let Some(edit) = &mut self.plugins.action else {
-                    return;
+                    return None;
                 };
                 if !spec.description.is_empty() {
                     ui.add(egui::Label::new(RichText::new(&spec.description).color(ui.palette().muted)).wrap());
@@ -325,17 +325,19 @@ impl EditorApp {
                     });
                     ui.add_space(4.0);
                 }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if let Some(estimate) = &edit.estimate {
-                        ui.label(RichText::new(estimate).color(ui.palette().muted));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        run = widgets::primary_button(ui, tr("Run")).clicked();
-                        cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    });
-                });
+                Some(edit.estimate.clone())
+            }, |ui, estimate| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Run")),
+                    |ui| {
+                        if let Some(estimate) = estimate.flatten() {
+                            ui.label(RichText::new(estimate).color(ui.palette().muted));
+                        }
+                    },
+                );
+                run = response.commit;
+                cancel = response.cancel;
             });
         if use_selection {
             self.add_selection_region();
@@ -379,7 +381,7 @@ impl EditorApp {
             .id(("plugin_permissions", &plugin))
             .default_width(420.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 ui.add(
                     egui::Label::new(format!(
                         "{source} {} {}",
@@ -427,18 +429,17 @@ impl EditorApp {
                         ui.label(format!("• {}", tr("Its permissions changed")));
                     }
                 }
-                ui.add_space(12.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Allow")).clicked() {
-                            decision = Some(true);
-                        }
-                        if widgets::button(ui, tr("Deny")).clicked() {
-                            decision = Some(false);
-                        }
-                    });
-                });
+            }, |ui, ()| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Allow")).cancel_label(tr("Deny")),
+                    |_| {},
+                );
+                if response.commit {
+                    decision = Some(true);
+                } else if response.cancel {
+                    decision = Some(false);
+                }
             });
         match decision {
             Some(true) => {
@@ -730,13 +731,8 @@ impl EditorApp {
                     );
                 }
             }, |ui, ()| {
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Done")).clicked() {
-                            done = true;
-                        }
-                    });
-                });
+                done = widgets::dialog_footer(ui, widgets::FooterButtons::single(tr("Done")), |_| {})
+                    .commit;
             });
         self.plugins.manager_selected = selected;
         if let Some((id, granted)) = grant {

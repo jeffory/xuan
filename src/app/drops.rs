@@ -75,26 +75,34 @@ impl EditorApp {
         let count = prompt.images.len();
         let mut choice = None;
         widgets::Window::new(tr("Add dropped files"))
-            .default_width(380.0)
-            .show(ctx, |ui| {
-                ui.label(if count == 1 {
-                    tr("Insert the dropped file as a layer, or open it as a new document?")
-                } else {
-                    tr("Insert the dropped files as layers, or open them as new documents?")
-                });
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if widgets::button(ui, tr("Cancel")).clicked() {
+            .default_width(420.0)
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.label(if count == 1 {
+                        tr("Insert the dropped file as a layer, or open it as a new document?")
+                    } else {
+                        tr("Insert the dropped files as layers, or open them as new documents?")
+                    });
+                },
+                |ui, ()| {
+                    let mut open = false;
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Insert as layer")),
+                        |ui| {
+                            open = widgets::button(ui, tr("Open as new document")).clicked();
+                        },
+                    );
+                    if response.cancel {
                         choice = Some(None);
-                    }
-                    if widgets::button(ui, tr("Open as new document")).clicked() {
+                    } else if open {
                         choice = Some(Some(false));
-                    }
-                    if widgets::primary_button(ui, tr("Insert as layer")).clicked() {
+                    } else if response.commit {
                         choice = Some(Some(true));
                     }
-                });
-            });
+                },
+            );
         if choice.is_none() {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 choice = Some(None);

@@ -468,7 +468,7 @@ impl EditorApp {
             .id(("plugin_consent", &request.plugin))
             .default_width(440.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let hosts = (manifest.permissions.network.iter())
                     .map(|host| one_line(host, 120))
                     .collect::<Vec<_>>()
@@ -498,18 +498,14 @@ impl EditorApp {
                 ui.add(egui::Label::new(RichText::new(note).small().color(ui.palette().muted)).wrap());
                 ui.add_space(8.0);
                 widgets::checkbox(ui, &mut dont_ask, tr("Don't ask again for this plugin"));
-                ui.add_space(4.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Send")).clicked() {
-                            answer = Some(true);
-                        }
-                        if widgets::button(ui, tr("Cancel")).clicked() {
-                            answer = Some(false);
-                        }
-                    });
-                });
+            }, |ui, ()| {
+                let response =
+                    widgets::dialog_footer(ui, widgets::FooterButtons::commit(tr("Send")), |_| {});
+                if response.commit {
+                    answer = Some(true);
+                } else if response.cancel {
+                    answer = Some(false);
+                }
             });
         if let Some(consent) = &mut self.plugins.consent {
             consent.dont_ask = dont_ask;

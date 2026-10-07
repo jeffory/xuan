@@ -255,8 +255,7 @@ impl EditorApp {
                     ui.horizontal(|ui| {
                         ui.label(tr("Name"));
                         ui.add(
-                            egui::TextEdit::singleline(&mut edit.name)
-                                .desired_width(f32::INFINITY),
+                            egui::TextEdit::singleline(&mut edit.name).desired_width(f32::INFINITY),
                         );
                     });
                     // The buttons get their own row, so they never widen the window.

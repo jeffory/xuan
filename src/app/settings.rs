@@ -162,13 +162,8 @@ impl EditorApp {
                     });
                 });
             }, |ui, ()| {
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Done")).clicked() {
-                            done = true;
-                        }
-                    });
-                });
+                done = widgets::dialog_footer(ui, widgets::FooterButtons::single(tr("Done")), |_| {})
+                    .commit;
             });
         ctx.data_mut(|d| d.insert_temp(page_id, page));
         if config != self.config {

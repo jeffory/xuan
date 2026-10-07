@@ -47,16 +47,14 @@ impl UiTest {
 
     /// An empty editor in a window of this size.
     pub(super) fn sized(size: Vec2) -> Self {
-        let mut harness = Harness::builder()
-            .with_size(size)
-            .build_state(
-                |ctx, app: &mut Option<EditorApp>| {
-                    if let Some(app) = app {
-                        app.show(ctx);
-                    }
-                },
-                None,
-            );
+        let mut harness = Harness::builder().with_size(size).build_state(
+            |ctx, app: &mut Option<EditorApp>| {
+                if let Some(app) = app {
+                    app.show(ctx);
+                }
+            },
+            None,
+        );
         // The app installs fonts and the theme on the context it is built with, so it must be built
         // from the harness's own context rather than a throwaway one.
         *harness.state_mut() = Some(EditorApp::with_context(
@@ -679,11 +677,11 @@ mod rulers_and_guides {
         ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 64;
         ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 10;
         ui.settle();
-        assert!(!ui.enabled("OK"));
+        assert!(!ui.enabled("Apply"));
         ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 8;
         ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 100;
         ui.settle();
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().dialog.is_none());
         let expected = GridSettings {
             spacing: 100,
@@ -801,7 +799,7 @@ mod layer_appearance {
         ui.click("Show Stroke");
         assert!(shows(&ui, "Outside") && shows(&ui, "Inside"));
         ui.click("Inside");
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().dialog.is_none());
         let effects = active(&ui).effects.clone().unwrap();
         assert!(effects.is_enabled(EffectKind::DropShadow));
@@ -1128,7 +1126,7 @@ mod color_range {
     }
 
     #[test]
-    fn picking_a_colour_previews_the_selection_and_ok_keeps_it() {
+    fn picking_a_colour_previews_the_selection_and_apply_keeps_it() {
         let mut ui = halves();
         let revision = ui.app().session().unwrap().history.revision;
         ui.open_menu("Select");
@@ -1146,7 +1144,7 @@ mod color_range {
         ui.click_role(Role::CheckBox, "Invert");
         let right: Vec<u8> = left.iter().map(|v| 255 - v).collect();
         assert_eq!(selected(&ui), Some(right.clone()));
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().color_range.is_none());
         assert_eq!(selected(&ui), Some(right));
         assert_eq!(ui.app().session().unwrap().history.revision, revision + 1);

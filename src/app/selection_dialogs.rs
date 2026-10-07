@@ -106,27 +106,32 @@ impl EditorApp {
             .id("selection_amount")
             .open(&mut open)
             .default_width(280.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(match edit.operation {
-                        AmountOperation::Expand => tr("Expand by"),
-                        AmountOperation::Contract => tr("Contract by"),
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(match edit.operation {
+                            AmountOperation::Expand => tr("Expand by"),
+                            AmountOperation::Contract => tr("Contract by"),
+                        });
+                        ui.add(
+                            widgets::Number::new(&mut edit.amount)
+                                .range(1..=selection_ops::MAX_AMOUNT)
+                                .speed(1.0)
+                                .suffix(" px"),
+                        );
                     });
-                    ui.add(
-                        widgets::Number::new(&mut edit.amount)
-                            .range(1..=selection_ops::MAX_AMOUNT)
-                            .speed(1.0)
-                            .suffix(" px"),
+                },
+                |ui, ()| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Apply")),
+                        |_| {},
                     );
-                });
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ok = ui.add(widgets::Button::new(tr("OK")).primary()).clicked();
-                    });
-                });
-            });
+                    ok = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !ctx.wants_keyboard_input();
         if ok || enter {
             self.selection_amount = None;

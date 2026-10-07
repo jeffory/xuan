@@ -1058,6 +1058,118 @@ impl<'a> Window<'a> {
     }
 }
 
+/// The buttons in a dialog footer; see [`dialog_footer`].
+pub struct FooterButtons<'a> {
+    commit: Option<&'a str>,
+    commit_enabled: bool,
+    cancel: Option<&'a str>,
+    destructive: Option<&'a str>,
+}
+
+impl<'a> FooterButtons<'a> {
+    /// [Cancel][`commit`], the usual pair.
+    pub fn commit(label: &'a str) -> Self {
+        Self {
+            commit: Some(label),
+            commit_enabled: true,
+            cancel: Some(tr("Cancel")),
+            destructive: None,
+        }
+    }
+    /// A single button with no Cancel: OK on an alert, Done on a settings window.
+    pub fn single(label: &'a str) -> Self {
+        Self {
+            cancel: None,
+            ..Self::commit(label)
+        }
+    }
+    /// Only Cancel, for work in progress.
+    pub fn cancel_only() -> Self {
+        Self {
+            commit: None,
+            ..Self::commit("")
+        }
+    }
+    /// Names the cancelling button for what it does, such as Deny.
+    pub fn cancel_label(mut self, label: &'a str) -> Self {
+        self.cancel = Some(label);
+        self
+    }
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.commit_enabled = enabled;
+        self
+    }
+    /// Adds a button that throws work away, such as Discard changes.
+    pub fn destructive(mut self, label: &'a str) -> Self {
+        self.destructive = Some(label);
+        self
+    }
+}
+
+/// What a dialog footer's buttons did this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FooterResponse {
+    pub commit: bool,
+    pub cancel: bool,
+    pub destructive: bool,
+}
+
+/// The width the commit and cancel buttons have at least, so short labels such as OK still
+/// make a comfortable target and the pair lines up from dialog to dialog.
+const FOOTER_BUTTON_WIDTH: f32 = 76.0;
+
+/// Draws a dialog's button row in the one layout every dialog uses:
+///
+/// `[Destructive] [left …]                    [Cancel] [Commit]`
+///
+/// - The commit button is the default (accent) button, rightmost, with Cancel on its left. This is
+///   the order KDE and GNOME use, and macOS too, so it is where Linux and Mac users look, and it
+///   is the order most of Xuan's dialogs already had.
+/// - A destructive button (Discard changes) goes at the far left, away from the commit button so
+///   neither is clicked for the other, and is drawn with its label in the error colour.
+/// - `left` adds anything else after it: a Preview checkbox, an estimate, a secondary choice such
+///   as Always Allow or Restore Defaults.
+///
+/// Draw it in [`Window::show_with_footer`]'s footer, which puts the same rule and gap above every
+/// dialog's buttons and keeps them out of the scrolled body.
+///
+/// Commit labels:
+/// - **Apply** for edits with a live preview, and for a form whose values take effect only when
+///   it is committed (adjustments, filters, Layer Effects, Text, Color Range, Grid).
+/// - **Done** for settings windows, where each change takes effect as it is made; they have no
+///   Cancel.
+/// - **A specific verb** when one says what happens: Create canvas, Resize, Export…, Save,
+///   Reassign, Run, Allow, Install, Download, Import, Insert as layer.
+/// - **OK** only on alerts that just report something.
+pub fn dialog_footer(
+    ui: &mut Ui,
+    buttons: FooterButtons,
+    left: impl FnOnce(&mut Ui),
+) -> FooterResponse {
+    let mut response = FooterResponse::default();
+    let size = vec2(FOOTER_BUTTON_WIDTH, 22.0);
+    ui.horizontal(|ui| {
+        if let Some(label) = buttons.destructive {
+            response.destructive = ui.add(Button::new(label).destructive()).clicked();
+        }
+        left(ui);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(label) = buttons.commit {
+                response.commit = ui
+                    .add_enabled(
+                        buttons.commit_enabled,
+                        Button::new(label).primary().min_size(size),
+                    )
+                    .clicked();
+            }
+            if let Some(label) = buttons.cancel {
+                response.cancel = ui.add(Button::new(label).min_size(size)).clicked();
+            }
+        });
+    });
+    response
+}
+
 const TITLE_HEIGHT: f32 = 32.0;
 /// The space round a dialog's body and footer.
 const DIALOG_INSET: i8 = 24;

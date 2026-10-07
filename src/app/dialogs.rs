@@ -83,18 +83,25 @@ impl EditorApp {
 
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.job {
-            widgets::Window::new(&job.name).show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(tr("Working…"));
-                });
-                if let Some(progress) = job.progress() {
-                    ui.add(egui::ProgressBar::new(progress).show_percentage());
-                }
-                if widgets::button(ui, tr("Cancel")).clicked() {
-                    job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-            });
+            widgets::Window::new(&job.name).show_with_footer(
+                ctx,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(tr("Working…"));
+                    });
+                    if let Some(progress) = job.progress() {
+                        ui.add(egui::ProgressBar::new(progress).show_percentage());
+                    }
+                },
+                |ui, ()| {
+                    if widgets::dialog_footer(ui, widgets::FooterButtons::cancel_only(), |_| {})
+                        .cancel
+                    {
+                        job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                },
+            );
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if let Some(dialog) = self.dialog {
@@ -153,11 +160,20 @@ impl EditorApp {
             widgets::Window::new(tr("Imported with changes"))
                 .id("import_notice")
                 .default_width(460.0)
-                .show(ctx, |ui| {
-                    ui.label(notice);
-                    ui.add_space(12.0);
-                    dismiss = widgets::primary_button(ui, tr("OK")).clicked();
-                });
+                .show_with_footer(
+                    ctx,
+                    |ui| {
+                        ui.label(notice);
+                    },
+                    |ui, ()| {
+                        dismiss = widgets::dialog_footer(
+                            ui,
+                            widgets::FooterButtons::single(tr("OK")),
+                            |_| {},
+                        )
+                        .commit;
+                    },
+                );
             if dismiss {
                 self.notice = None;
             }
@@ -166,11 +182,20 @@ impl EditorApp {
             let mut dismiss = false;
             widgets::Window::new(tr("Couldn't complete the operation"))
                 .default_width(420.0)
-                .show(ctx, |ui| {
-                    ui.label(error);
-                    ui.add_space(12.0);
-                    dismiss = widgets::primary_button(ui, tr("OK")).clicked();
-                });
+                .show_with_footer(
+                    ctx,
+                    |ui| {
+                        ui.label(error);
+                    },
+                    |ui, ()| {
+                        dismiss = widgets::dialog_footer(
+                            ui,
+                            widgets::FooterButtons::single(tr("OK")),
+                            |_| {},
+                        )
+                        .commit;
+                    },
+                );
             if dismiss {
                 self.error = None;
             }
@@ -189,99 +214,102 @@ impl EditorApp {
         widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(410.0)
-            .show(ctx, |ui| {
-                ui.add_space(7.0);
-                ui.label(
-                    RichText::new(if dialog == Dialog::New {
-                        tr("A blank space for your next composition.")
-                    } else if dialog == Dialog::CanvasSize {
-                        tr("Change the canvas bounds and anchor your composition.")
-                    } else {
-                        tr("Scale the composition while preserving source pixels.")
-                    })
-                    .color(ui.palette().muted),
-                );
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(tr("Width"));
-                        ui.add(
-                            widgets::Number::new(&mut self.dimensions[0])
-                                .range(1..=30_000)
-                                .suffix(" px")
-                                .speed(1.0),
-                        );
-                    });
-                    ui.add_space(15.0);
-                    ui.vertical(|ui| {
-                        ui.label(tr("Height"));
-                        ui.add(
-                            widgets::Number::new(&mut self.dimensions[1])
-                                .range(1..=30_000)
-                                .suffix(" px")
-                                .speed(1.0),
-                        );
-                    });
-                });
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.label(tr("Resolution"));
-                    ui.add(
-                        widgets::Number::new(&mut self.resolution)
-                            .range(1.0..=9600.0)
-                            .suffix(" ppi"),
-                    );
-                });
-                if dialog == Dialog::CanvasSize {
-                    ui.add_space(12.0);
-                    ui.label(tr("Anchor"));
-                    egui::Grid::new("anchor_grid")
-                        .spacing(vec2(3.0, 3.0))
-                        .show(ui, |ui| {
-                            for y in 0..3 {
-                                for x in 0..3 {
-                                    let anchor = [x as f32 * 0.5, y as f32 * 0.5];
-                                    if ui
-                                        .selectable_label(
-                                            self.anchor == anchor,
-                                            if self.anchor == anchor { "●" } else { "·" },
-                                        )
-                                        .clicked()
-                                    {
-                                        self.anchor = anchor;
-                                    }
-                                }
-                                ui.end_row();
-                            }
-                        });
-                }
-                let valid = xuan::document::validate_size(self.dimensions[0], self.dimensions[1]);
-                ui.add_space(12.0);
-                if let Err(error) = &valid {
-                    ui.colored_label(ui.palette().error, error.to_string());
-                } else {
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.add_space(7.0);
                     ui.label(
-                        RichText::new(tr("Transparent canvas · sRGB")).color(ui.palette().muted),
+                        RichText::new(if dialog == Dialog::New {
+                            tr("A blank space for your next composition.")
+                        } else if dialog == Dialog::CanvasSize {
+                            tr("Change the canvas bounds and anchor your composition.")
+                        } else {
+                            tr("Scale the composition while preserving source pixels.")
+                        })
+                        .color(ui.palette().muted),
                     );
-                }
-                ui.add_space(15.0);
-                ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        apply = ui
-                            .add_enabled(
-                                valid.is_ok(),
-                                widgets::Button::new(if dialog == Dialog::New {
-                                    tr("Create canvas")
-                                } else {
-                                    tr("Apply")
-                                })
-                                .primary(),
-                            )
-                            .clicked();
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(tr("Width"));
+                            ui.add(
+                                widgets::Number::new(&mut self.dimensions[0])
+                                    .range(1..=30_000)
+                                    .suffix(" px")
+                                    .speed(1.0),
+                            );
+                        });
+                        ui.add_space(15.0);
+                        ui.vertical(|ui| {
+                            ui.label(tr("Height"));
+                            ui.add(
+                                widgets::Number::new(&mut self.dimensions[1])
+                                    .range(1..=30_000)
+                                    .suffix(" px")
+                                    .speed(1.0),
+                            );
+                        });
                     });
-                });
-            });
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Resolution"));
+                        ui.add(
+                            widgets::Number::new(&mut self.resolution)
+                                .range(1.0..=9600.0)
+                                .suffix(" ppi"),
+                        );
+                    });
+                    if dialog == Dialog::CanvasSize {
+                        ui.add_space(12.0);
+                        ui.label(tr("Anchor"));
+                        egui::Grid::new("anchor_grid")
+                            .spacing(vec2(3.0, 3.0))
+                            .show(ui, |ui| {
+                                for y in 0..3 {
+                                    for x in 0..3 {
+                                        let anchor = [x as f32 * 0.5, y as f32 * 0.5];
+                                        if ui
+                                            .selectable_label(
+                                                self.anchor == anchor,
+                                                if self.anchor == anchor { "●" } else { "·" },
+                                            )
+                                            .clicked()
+                                        {
+                                            self.anchor = anchor;
+                                        }
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                    let valid =
+                        xuan::document::validate_size(self.dimensions[0], self.dimensions[1]);
+                    ui.add_space(12.0);
+                    if let Err(error) = &valid {
+                        ui.colored_label(ui.palette().error, error.to_string());
+                    } else {
+                        ui.label(
+                            RichText::new(tr("Transparent canvas · sRGB"))
+                                .color(ui.palette().muted),
+                        );
+                    }
+                    valid.is_ok()
+                },
+                |ui, valid| {
+                    let commit = if dialog == Dialog::New {
+                        tr("Create canvas")
+                    } else {
+                        tr("Resize")
+                    };
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(commit).enabled(valid),
+                        |_| {},
+                    );
+                    apply = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         if apply {
             if dialog == Dialog::New {
                 self.new_document();
@@ -327,418 +355,430 @@ impl EditorApp {
         widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(440.0)
-            .show_with_footer(ctx, |ui| {
-                ui.add_space(8.0);
-                if let Some(adjustment) = &mut edit.adjustment {
-                    match adjustment {
-                        Adjustment::HueRanges { settings } => {
-                            widgets::PopUp::from_id_salt("hue_range")
-                                .selected_text(xuan::color::HueSettings::RANGES[settings.range])
-                                .show_ui(ui, |ui| {
-                                    for (index, name) in
-                                        xuan::color::HueSettings::RANGES.iter().enumerate()
-                                    {
-                                        changed |= widgets::menu_choice(
-                                            ui,
-                                            &mut settings.range,
-                                            index,
-                                            *name,
-                                        )
-                                        .changed();
-                                    }
-                                });
-                            let values = &mut settings.adjustments[settings.range];
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(
-                                        &mut values[0],
-                                        if settings.colorize {
-                                            0.0..=360.0
-                                        } else {
-                                            -180.0..=180.0
-                                        },
-                                    )
-                                    .text(tr("Hue"))
-                                    .suffix("°"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(
-                                        &mut values[1],
-                                        if settings.colorize {
-                                            0.0..=100.0
-                                        } else {
-                                            -100.0..=100.0
-                                        },
-                                    )
-                                    .text(tr("Saturation"))
-                                    .suffix("%"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(&mut values[2], -100.0..=100.0)
-                                        .text(tr("Lightness"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                            changed |=
-                                widgets::checkbox(ui, &mut settings.colorize, tr("Colorize"))
-                                    .changed();
-                            if settings.range > 0 {
-                                changed |= widgets::checkbox(
-                                    ui,
-                                    &mut settings.invert_range,
-                                    tr("Invert selected color range"),
-                                )
-                                .changed();
-                                ui.collapsing(tr("Color range falloff"), |ui| {
-                                    for (index, label) in [
-                                        tr("Falloff start"),
-                                        tr("Range start"),
-                                        tr("Range end"),
-                                        tr("Falloff end"),
-                                    ]
-                                    .iter()
-                                    .enumerate()
-                                    {
-                                        changed |= ui
-                                            .add(
-                                                widgets::Slider::new(
-                                                    &mut settings.bands[settings.range][index],
-                                                    0.0..=360.0,
-                                                )
-                                                .text(*label)
-                                                .suffix("°"),
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.add_space(8.0);
+                    if let Some(adjustment) = &mut edit.adjustment {
+                        match adjustment {
+                            Adjustment::HueRanges { settings } => {
+                                widgets::PopUp::from_id_salt("hue_range")
+                                    .selected_text(xuan::color::HueSettings::RANGES[settings.range])
+                                    .show_ui(ui, |ui| {
+                                        for (index, name) in
+                                            xuan::color::HueSettings::RANGES.iter().enumerate()
+                                        {
+                                            changed |= widgets::menu_choice(
+                                                ui,
+                                                &mut settings.range,
+                                                index,
+                                                *name,
                                             )
                                             .changed();
-                                    }
-                                });
-                            }
-                        }
-                        Adjustment::LevelsChannels { ranges } => {
-                            channel_picker(ui, &mut edit.channel);
-                            let source = edit.levels_source.get_or_insert_with(|| {
-                                render::render_scaled(&edit.original, 256, 192)
-                            });
-                            changed |= super::levels_controls::controls(
-                                ui,
-                                &mut ranges[edit.channel],
-                                source,
-                                edit.channel,
-                            );
-                        }
-                        Adjustment::CurvesChannels { channels } => {
-                            channel_picker(ui, &mut edit.channel);
-                            changed |= curve_editor(ui, &mut channels[edit.channel]);
-                        }
-                        Adjustment::HueSaturation {
-                            hue,
-                            saturation,
-                            lightness,
-                            colorize,
-                        } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(hue, -180.0..=180.0)
+                                        }
+                                    });
+                                let values = &mut settings.adjustments[settings.range];
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(
+                                            &mut values[0],
+                                            if settings.colorize {
+                                                0.0..=360.0
+                                            } else {
+                                                -180.0..=180.0
+                                            },
+                                        )
                                         .text(tr("Hue"))
                                         .suffix("°"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(saturation, -100.0..=100.0)
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(
+                                            &mut values[1],
+                                            if settings.colorize {
+                                                0.0..=100.0
+                                            } else {
+                                                -100.0..=100.0
+                                            },
+                                        )
                                         .text(tr("Saturation"))
                                         .suffix("%"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(lightness, -100.0..=100.0)
-                                        .text(tr("Lightness"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                            changed |= widgets::checkbox(ui, colorize, tr("Colorize")).changed();
-                        }
-                        Adjustment::Levels {
-                            black,
-                            gamma,
-                            white,
-                            output_black,
-                            output_white,
-                        } => {
-                            let source = edit.levels_source.get_or_insert_with(|| {
-                                render::render_scaled(&edit.original, 256, 192)
-                            });
-                            let mut range = [*black, *gamma, *white, *output_black, *output_white];
-                            changed |= super::levels_controls::controls(ui, &mut range, source, 0);
-                            [*black, *gamma, *white, *output_black, *output_white] = range;
-                        }
-                        Adjustment::Curves { points } => {
-                            changed |= curve_editor(ui, points);
-                        }
-                        Adjustment::Exposure {
-                            exposure,
-                            offset,
-                            gamma,
-                        } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(exposure, -5.0..=5.0)
-                                        .text(tr("Exposure"))
-                                        .suffix(" EV"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(widgets::Slider::new(offset, -0.5..=0.5).text(tr("Offset")))
-                                .changed();
-                            changed |= ui
-                                .add(widgets::Slider::new(gamma, 0.1..=5.0).text(tr("Gamma")))
-                                .changed();
-                        }
-                        Adjustment::GradientMap {
-                            shadows,
-                            highlights,
-                        } => {
-                            ui.horizontal(|ui| {
-                                ui.label(tr("Shadows"));
-                                changed |= widgets::color_well(ui, shadows).changed();
-                                ui.label(tr("Highlights"));
-                                changed |= widgets::color_well(ui, highlights).changed();
-                            });
-                        }
-                        Adjustment::FilmGrain {
-                            amount,
-                            size,
-                            roughness,
-                            seed,
-                        } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(amount, 0.0..=100.0)
-                                        .text(tr("Amount"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(size, 0.1..=100.0)
-                                        .logarithmic(true)
-                                        .text(tr("Size"))
-                                        .suffix(" px"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(roughness, 0.0..=100.0)
-                                        .text(tr("Roughness"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                            if widgets::button(ui, tr("New pattern")).clicked() {
-                                *seed = seed.wrapping_add(1);
-                                changed = true;
-                            }
-                        }
-                        Adjustment::Grain {
-                            amount, monochrome, ..
-                        } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(amount, 0.0..=100.0)
-                                        .text(tr("Amount"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                            changed |=
-                                widgets::checkbox(ui, monochrome, tr("Monochromatic")).changed();
-                        }
-                        Adjustment::Invert => {}
-                        Adjustment::BlackWhite {
-                            weights,
-                            tint,
-                            tint_hue,
-                            tint_saturation,
-                        } => {
-                            for (weight, name) in weights
-                                .iter_mut()
-                                .zip(["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"])
-                            {
-                                changed |= ui
-                                    .add(
-                                        widgets::Slider::new(weight, -200.0..=300.0)
-                                            .text(tr(name))
-                                            .suffix("%")
-                                            .max_decimals(0),
-                                    )
-                                    .changed();
-                            }
-                            changed |= widgets::checkbox(ui, tint, tr("Tint")).changed();
-                            ui.add_enabled_ui(*tint, |ui| {
-                                changed |= ui
-                                    .add(
-                                        widgets::Slider::new(tint_hue, 0.0..=360.0)
-                                            .text(tr("Hue"))
-                                            .suffix("°")
-                                            .max_decimals(0),
                                     )
                                     .changed();
                                 changed |= ui
                                     .add(
-                                        widgets::Slider::new(tint_saturation, 0.0..=100.0)
-                                            .text(tr("Saturation"))
-                                            .suffix("%")
-                                            .max_decimals(0),
+                                        widgets::Slider::new(&mut values[2], -100.0..=100.0)
+                                            .text(tr("Lightness"))
+                                            .suffix("%"),
                                     )
                                     .changed();
-                            });
-                            if widgets::button(ui, tr("Default")).clicked() {
-                                if let Adjustment::BlackWhite {
-                                    weights: defaults, ..
-                                } = Adjustment::BLACK_WHITE
-                                {
-                                    *weights = defaults;
+                                changed |=
+                                    widgets::checkbox(ui, &mut settings.colorize, tr("Colorize"))
+                                        .changed();
+                                if settings.range > 0 {
+                                    changed |= widgets::checkbox(
+                                        ui,
+                                        &mut settings.invert_range,
+                                        tr("Invert selected color range"),
+                                    )
+                                    .changed();
+                                    ui.collapsing(tr("Color range falloff"), |ui| {
+                                        for (index, label) in [
+                                            tr("Falloff start"),
+                                            tr("Range start"),
+                                            tr("Range end"),
+                                            tr("Falloff end"),
+                                        ]
+                                        .iter()
+                                        .enumerate()
+                                        {
+                                            changed |= ui
+                                                .add(
+                                                    widgets::Slider::new(
+                                                        &mut settings.bands[settings.range][index],
+                                                        0.0..=360.0,
+                                                    )
+                                                    .text(*label)
+                                                    .suffix("°"),
+                                                )
+                                                .changed();
+                                        }
+                                    });
                                 }
-                                changed = true;
                             }
-                        }
-                        Adjustment::ColorBalance {
-                            shadows,
-                            midtones,
-                            highlights,
-                            preserve_luminosity,
-                        } => {
-                            let tone_id = ui.id().with("color_balance_tone");
-                            let mut tone = ui.data(|d| d.get_temp::<usize>(tone_id).unwrap_or(1));
-                            widgets::segmented(
-                                ui,
-                                &mut tone,
-                                &[
-                                    (0, tr("Shadows")),
-                                    (1, tr("Midtones")),
-                                    (2, tr("Highlights")),
-                                ],
-                            );
-                            ui.data_mut(|d| d.insert_temp(tone_id, tone));
-                            let values = match tone {
-                                0 => shadows,
-                                2 => highlights,
-                                _ => midtones,
-                            };
-                            for (value, (low, high)) in values.iter_mut().zip([
-                                ("Cyan", "Red"),
-                                ("Magenta", "Green"),
-                                ("Yellow", "Blue"),
-                            ]) {
+                            Adjustment::LevelsChannels { ranges } => {
+                                channel_picker(ui, &mut edit.channel);
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                changed |= super::levels_controls::controls(
+                                    ui,
+                                    &mut ranges[edit.channel],
+                                    source,
+                                    edit.channel,
+                                );
+                            }
+                            Adjustment::CurvesChannels { channels } => {
+                                channel_picker(ui, &mut edit.channel);
+                                changed |= curve_editor(ui, &mut channels[edit.channel]);
+                            }
+                            Adjustment::HueSaturation {
+                                hue,
+                                saturation,
+                                lightness,
+                                colorize,
+                            } => {
                                 changed |= ui
                                     .add(
-                                        widgets::Slider::new(value, -100.0..=100.0)
-                                            .text(format!("{} – {}", tr(low), tr(high)))
-                                            .max_decimals(0),
+                                        widgets::Slider::new(hue, -180.0..=180.0)
+                                            .text(tr("Hue"))
+                                            .suffix("°"),
                                     )
                                     .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(saturation, -100.0..=100.0)
+                                            .text(tr("Saturation"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(lightness, -100.0..=100.0)
+                                            .text(tr("Lightness"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                                changed |=
+                                    widgets::checkbox(ui, colorize, tr("Colorize")).changed();
                             }
-                            changed |= widgets::checkbox(
-                                ui,
+                            Adjustment::Levels {
+                                black,
+                                gamma,
+                                white,
+                                output_black,
+                                output_white,
+                            } => {
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                let mut range =
+                                    [*black, *gamma, *white, *output_black, *output_white];
+                                changed |=
+                                    super::levels_controls::controls(ui, &mut range, source, 0);
+                                [*black, *gamma, *white, *output_black, *output_white] = range;
+                            }
+                            Adjustment::Curves { points } => {
+                                changed |= curve_editor(ui, points);
+                            }
+                            Adjustment::Exposure {
+                                exposure,
+                                offset,
+                                gamma,
+                            } => {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(exposure, -5.0..=5.0)
+                                            .text(tr("Exposure"))
+                                            .suffix(" EV"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(offset, -0.5..=0.5).text(tr("Offset")),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(widgets::Slider::new(gamma, 0.1..=5.0).text(tr("Gamma")))
+                                    .changed();
+                            }
+                            Adjustment::GradientMap {
+                                shadows,
+                                highlights,
+                            } => {
+                                ui.horizontal(|ui| {
+                                    ui.label(tr("Shadows"));
+                                    changed |= widgets::color_well(ui, shadows).changed();
+                                    ui.label(tr("Highlights"));
+                                    changed |= widgets::color_well(ui, highlights).changed();
+                                });
+                            }
+                            Adjustment::FilmGrain {
+                                amount,
+                                size,
+                                roughness,
+                                seed,
+                            } => {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(amount, 0.0..=100.0)
+                                            .text(tr("Amount"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(size, 0.1..=100.0)
+                                            .logarithmic(true)
+                                            .text(tr("Size"))
+                                            .suffix(" px"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(roughness, 0.0..=100.0)
+                                            .text(tr("Roughness"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                                if widgets::button(ui, tr("New pattern")).clicked() {
+                                    *seed = seed.wrapping_add(1);
+                                    changed = true;
+                                }
+                            }
+                            Adjustment::Grain {
+                                amount, monochrome, ..
+                            } => {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(amount, 0.0..=100.0)
+                                            .text(tr("Amount"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                                changed |= widgets::checkbox(ui, monochrome, tr("Monochromatic"))
+                                    .changed();
+                            }
+                            Adjustment::Invert => {}
+                            Adjustment::BlackWhite {
+                                weights,
+                                tint,
+                                tint_hue,
+                                tint_saturation,
+                            } => {
+                                for (weight, name) in weights.iter_mut().zip([
+                                    "Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas",
+                                ]) {
+                                    changed |= ui
+                                        .add(
+                                            widgets::Slider::new(weight, -200.0..=300.0)
+                                                .text(tr(name))
+                                                .suffix("%")
+                                                .max_decimals(0),
+                                        )
+                                        .changed();
+                                }
+                                changed |= widgets::checkbox(ui, tint, tr("Tint")).changed();
+                                ui.add_enabled_ui(*tint, |ui| {
+                                    changed |= ui
+                                        .add(
+                                            widgets::Slider::new(tint_hue, 0.0..=360.0)
+                                                .text(tr("Hue"))
+                                                .suffix("°")
+                                                .max_decimals(0),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .add(
+                                            widgets::Slider::new(tint_saturation, 0.0..=100.0)
+                                                .text(tr("Saturation"))
+                                                .suffix("%")
+                                                .max_decimals(0),
+                                        )
+                                        .changed();
+                                });
+                                if widgets::button(ui, tr("Default")).clicked() {
+                                    if let Adjustment::BlackWhite {
+                                        weights: defaults, ..
+                                    } = Adjustment::BLACK_WHITE
+                                    {
+                                        *weights = defaults;
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            Adjustment::ColorBalance {
+                                shadows,
+                                midtones,
+                                highlights,
                                 preserve_luminosity,
-                                tr("Preserve Luminosity"),
-                            )
-                            .changed();
+                            } => {
+                                let tone_id = ui.id().with("color_balance_tone");
+                                let mut tone =
+                                    ui.data(|d| d.get_temp::<usize>(tone_id).unwrap_or(1));
+                                widgets::segmented(
+                                    ui,
+                                    &mut tone,
+                                    &[
+                                        (0, tr("Shadows")),
+                                        (1, tr("Midtones")),
+                                        (2, tr("Highlights")),
+                                    ],
+                                );
+                                ui.data_mut(|d| d.insert_temp(tone_id, tone));
+                                let values = match tone {
+                                    0 => shadows,
+                                    2 => highlights,
+                                    _ => midtones,
+                                };
+                                for (value, (low, high)) in values.iter_mut().zip([
+                                    ("Cyan", "Red"),
+                                    ("Magenta", "Green"),
+                                    ("Yellow", "Blue"),
+                                ]) {
+                                    changed |= ui
+                                        .add(
+                                            widgets::Slider::new(value, -100.0..=100.0)
+                                                .text(format!("{} – {}", tr(low), tr(high)))
+                                                .max_decimals(0),
+                                        )
+                                        .changed();
+                                }
+                                changed |= widgets::checkbox(
+                                    ui,
+                                    preserve_luminosity,
+                                    tr("Preserve Luminosity"),
+                                )
+                                .changed();
+                            }
                         }
                     }
-                }
-                if let Some(filter) = &mut edit.filter {
-                    ui.add_enabled_ui(!edit.filter_preview.applying, |ui| match filter {
-                        Filter::GaussianBlur { radius } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(radius, 0.1..=100.0)
-                                        .text(tr("Radius"))
-                                        .suffix(" px"),
-                                )
-                                .changed();
-                        }
-                        Filter::MotionBlur { distance, angle } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(distance, 1.0..=200.0)
-                                        .text(tr("Distance"))
-                                        .suffix(" px"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(angle, -180.0..=180.0)
-                                        .text(tr("Angle"))
-                                        .suffix("°"),
-                                )
-                                .changed();
-                        }
-                        Filter::Noise { amount, monochrome } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(amount, 0.0..=100.0)
-                                        .text(tr("Amount"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                            changed |=
-                                widgets::checkbox(ui, monochrome, tr("Monochromatic")).changed();
-                        }
-                        Filter::LensCorrection {
-                            distortion,
-                            vignette,
-                        } => {
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(distortion, -50.0..=50.0)
-                                        .text(tr("Distortion"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    widgets::Slider::new(vignette, -100.0..=100.0)
-                                        .text(tr("Vignette"))
-                                        .suffix("%"),
-                                )
-                                .changed();
-                        }
-                    });
-                }
-            }, |ui, ()| {
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(!edit.filter_preview.applying, |ui| {
-                        preview_changed =
-                            widgets::checkbox(ui, &mut edit.preview, tr("Preview")).changed();
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_enabled_ui(!edit.filter_preview.applying, |ui| {
-                            apply = widgets::primary_button(ui, tr("Apply")).clicked();
+                    if let Some(filter) = &mut edit.filter {
+                        ui.add_enabled_ui(!edit.filter_preview.applying, |ui| match filter {
+                            Filter::GaussianBlur { radius } => {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(radius, 0.1..=100.0)
+                                            .text(tr("Radius"))
+                                            .suffix(" px"),
+                                    )
+                                    .changed();
+                            }
+                            Filter::MotionBlur { distance, angle } => {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(distance, 1.0..=200.0)
+                                            .text(tr("Distance"))
+                                            .suffix(" px"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(angle, -180.0..=180.0)
+                                            .text(tr("Angle"))
+                                            .suffix("°"),
+                                    )
+                                    .changed();
+                            }
+                            Filter::Noise { amount, monochrome } => {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(amount, 0.0..=100.0)
+                                            .text(tr("Amount"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                                changed |= widgets::checkbox(ui, monochrome, tr("Monochromatic"))
+                                    .changed();
+                            }
+                            Filter::LensCorrection {
+                                distortion,
+                                vignette,
+                            } => {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(distortion, -50.0..=50.0)
+                                            .text(tr("Distortion"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(vignette, -100.0..=100.0)
+                                            .text(tr("Vignette"))
+                                            .suffix("%"),
+                                    )
+                                    .changed();
+                            }
                         });
-                        cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    });
-                });
-                if edit.filter_preview.busy() {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(if edit.filter_preview.applying {
-                            tr("Applying…")
-                        } else {
-                            tr("Updating preview…")
-                        });
-                    });
-                }
-                if edit.as_layer {
-                    ui.label(
-                        RichText::new(tr("Non-destructive effect layer"))
-                            .small()
-                            .color(ui.palette().muted),
+                    }
+                    if edit.as_layer {
+                        ui.label(
+                            RichText::new(tr("Non-destructive effect layer"))
+                                .small()
+                                .color(ui.palette().muted),
+                        );
+                    }
+                },
+                |ui, ()| {
+                    let applying = edit.filter_preview.applying;
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Apply")).enabled(!applying),
+                        |ui| {
+                            ui.add_enabled_ui(!applying, |ui| {
+                                preview_changed =
+                                    widgets::checkbox(ui, &mut edit.preview, tr("Preview"))
+                                        .changed();
+                            });
+                            if edit.filter_preview.busy() {
+                                ui.spinner();
+                                ui.label(
+                                    RichText::new(if applying {
+                                        tr("Applying…")
+                                    } else {
+                                        tr("Updating preview…")
+                                    })
+                                    .color(ui.palette().muted),
+                                );
+                            }
+                        },
                     );
-                }
-            });
+                    apply = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         changed |= preview_changed;
         if cancel || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if let Some(s) = self.session_mut() {
@@ -878,57 +918,64 @@ impl EditorApp {
         widgets::Window::new(tr("Export image"))
             .open(&mut open)
             .default_width(650.0)
-            .show_with_footer(ctx, |ui| {
-                if let Some(texture) = &self.export_texture {
-                    let size = texture.size_vec2();
-                    let factor = (600.0 / size.x).min(350.0 / size.y).min(1.0);
-                    ui.vertical_centered(|ui| {
-                        ui.image((texture.id(), size * factor));
-                    });
-                }
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.label(tr("Format"));
-                    widgets::PopUp::from_id_salt("export_format")
-                        .selected_text(self.export_format.to_uppercase())
-                        .show_ui(ui, |ui| {
-                            for (format, label) in &formats {
-                                self.export_changed |= widgets::menu_choice(
-                                    ui,
-                                    &mut self.export_format,
-                                    format.clone(),
-                                    label,
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    if let Some(texture) = &self.export_texture {
+                        let size = texture.size_vec2();
+                        let factor = (600.0 / size.x).min(350.0 / size.y).min(1.0);
+                        ui.vertical_centered(|ui| {
+                            ui.image((texture.id(), size * factor));
+                        });
+                    }
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Format"));
+                        widgets::PopUp::from_id_salt("export_format")
+                            .selected_text(self.export_format.to_uppercase())
+                            .show_ui(ui, |ui| {
+                                for (format, label) in &formats {
+                                    self.export_changed |= widgets::menu_choice(
+                                        ui,
+                                        &mut self.export_format,
+                                        format.clone(),
+                                        label,
+                                    )
+                                    .changed();
+                                }
+                            });
+                        if self.export_format == "jpg" {
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - widgets::SLIDER_FIELD_WIDTH).max(90.0);
+                            self.export_changed |= ui
+                                .add(
+                                    widgets::Slider::new(&mut self.jpeg_quality, 1..=100)
+                                        .text(tr("Quality"))
+                                        .suffix("%"),
                                 )
                                 .changed();
-                            }
-                        });
+                        }
+                    });
                     if self.export_format == "jpg" {
-                        ui.spacing_mut().slider_width =
-                            (ui.available_width() - widgets::SLIDER_FIELD_WIDTH).max(90.0);
-                        self.export_changed |= ui
-                            .add(
-                                widgets::Slider::new(&mut self.jpeg_quality, 1..=100)
-                                    .text(tr("Quality"))
-                                    .suffix("%"),
-                            )
-                            .changed();
-                    }
-                });
-                if self.export_format == "jpg" {
-                    ui.label(
-                        RichText::new(tr("JPEG preview · transparency is flattened onto white"))
+                        ui.label(
+                            RichText::new(tr(
+                                "JPEG preview · transparency is flattened onto white",
+                            ))
                             .small()
                             .color(ui.palette().muted),
+                        );
+                    }
+                },
+                |ui, ()| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Export…")),
+                        |_| {},
                     );
-                }
-            }, |ui, ()| {
-                ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        export = widgets::primary_button(ui, tr("Export…")).clicked();
-                    });
-                });
-            });
+                    export = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         if export {
             let title = self.session().unwrap().title.clone();
             if let Some(path) = rfd::FileDialog::new()
@@ -992,29 +1039,35 @@ impl EditorApp {
             return;
         }
         let mut choice = None;
-        widgets::Window::new(tr("Save your changes?")).show(ctx, |ui| {
-            ui.label(if self.close_app {
-                tr("Some projects have unsaved changes.").to_owned()
-            } else {
-                format!(
-                    "“{}” — {}",
-                    self.sessions[self.close_tab.unwrap()].title,
-                    tr("Unsaved changes")
-                )
-            });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if widgets::button(ui, tr("Cancel")).clicked() {
+        let message = if self.close_app {
+            tr("Some projects have unsaved changes.").to_owned()
+        } else {
+            format!(
+                "“{}” — {}",
+                self.sessions[self.close_tab.unwrap()].title,
+                tr("Unsaved changes")
+            )
+        };
+        widgets::Window::new(tr("Save your changes?")).show_with_footer(
+            ctx,
+            |ui| {
+                ui.label(message);
+            },
+            |ui, ()| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Save")).destructive(tr("Discard changes")),
+                    |_| {},
+                );
+                if response.cancel {
                     choice = Some(0);
-                }
-                if widgets::button(ui, tr("Discard changes")).clicked() {
+                } else if response.destructive {
                     choice = Some(1);
-                }
-                if widgets::primary_button(ui, tr("Save")).clicked() {
+                } else if response.commit {
                     choice = Some(2);
                 }
-            });
-        });
+            },
+        );
         match choice {
             Some(0) => {
                 self.close_tab = None;

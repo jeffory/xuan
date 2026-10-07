@@ -70,119 +70,131 @@ impl EditorApp {
         let mut open = true;
         let mut ok = false;
         let mut cancel = false;
+        let mut restore_defaults = false;
         let draft = &mut edit.draft;
         widgets::Window::new(tr("Grid"))
             .id("grid_settings")
             .open(&mut open)
             .default_width(360.0)
-            .show(ctx, |ui| {
-                egui::Grid::new("grid_settings_fields")
-                    .num_columns(2)
-                    .spacing(egui::vec2(12.0, 10.0))
-                    .show(ui, |ui| {
-                        ui.label(tr("Color"));
-                        ui.horizontal(|ui| {
-                            widgets::PopUp::from_id_salt("grid_color")
-                                .selected_text(tr(draft.color.name()))
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    egui::Grid::new("grid_settings_fields")
+                        .num_columns(2)
+                        .spacing(egui::vec2(12.0, 10.0))
+                        .show(ui, |ui| {
+                            ui.label(tr("Color"));
+                            ui.horizontal(|ui| {
+                                widgets::PopUp::from_id_salt("grid_color")
+                                    .selected_text(tr(draft.color.name()))
+                                    .width(150.0)
+                                    .show_ui(ui, |ui| {
+                                        for option in GridColor::ALL {
+                                            widgets::menu_choice(
+                                                ui,
+                                                &mut draft.color,
+                                                option,
+                                                tr(option.name()),
+                                            );
+                                        }
+                                    });
+                                // The swatch shows the color in use; picking one makes it Custom.
+                                let [r, g, b] = draft.rgb();
+                                let mut color = [r, g, b, 255];
+                                widgets::color_well(ui, &mut color)
+                                    .on_hover_text(tr("Choose a custom grid color"));
+                                if color[..3] != [r, g, b] {
+                                    draft.custom_color = [color[0], color[1], color[2]];
+                                    draft.color = GridColor::Custom;
+                                }
+                            });
+                            ui.end_row();
+
+                            ui.label(tr("Style"));
+                            widgets::PopUp::from_id_salt("grid_style")
+                                .selected_text(tr(draft.style.name()))
                                 .width(150.0)
                                 .show_ui(ui, |ui| {
-                                    for option in GridColor::ALL {
+                                    for option in GridStyle::ALL {
                                         widgets::menu_choice(
                                             ui,
-                                            &mut draft.color,
+                                            &mut draft.style,
                                             option,
                                             tr(option.name()),
                                         );
                                     }
                                 });
-                            // The swatch shows the color in use; picking one makes it Custom.
-                            let [r, g, b] = draft.rgb();
-                            let mut color = [r, g, b, 255];
-                            widgets::color_well(ui, &mut color)
-                                .on_hover_text(tr("Choose a custom grid color"));
-                            if color[..3] != [r, g, b] {
-                                draft.custom_color = [color[0], color[1], color[2]];
-                                draft.color = GridColor::Custom;
-                            }
-                        });
-                        ui.end_row();
+                            ui.end_row();
 
-                        ui.label(tr("Style"));
-                        widgets::PopUp::from_id_salt("grid_style")
-                            .selected_text(tr(draft.style.name()))
-                            .width(150.0)
-                            .show_ui(ui, |ui| {
-                                for option in GridStyle::ALL {
-                                    widgets::menu_choice(
-                                        ui,
-                                        &mut draft.style,
-                                        option,
-                                        tr(option.name()),
-                                    );
-                                }
-                            });
-                        ui.end_row();
-
-                        ui.label(tr("Opacity"));
-                        ui.add(
-                            widgets::Slider::new(&mut draft.opacity, GridSettings::OPACITY_RANGE)
-                                .suffix("%"),
-                        );
-                        ui.end_row();
-
-                        ui.label(tr("Gridline every"));
-                        ui.horizontal(|ui| {
+                            ui.label(tr("Opacity"));
                             ui.add(
-                                widgets::Number::new(&mut draft.spacing)
-                                    .range(GridSettings::SPACING_RANGE)
-                                    .speed(1.0),
+                                widgets::Slider::new(
+                                    &mut draft.opacity,
+                                    GridSettings::OPACITY_RANGE,
+                                )
+                                .suffix("%"),
                             );
-                            ui.label(egui::RichText::new(tr("pixels")).color(ui.palette().muted));
-                        });
-                        ui.end_row();
+                            ui.end_row();
 
-                        ui.label(tr("Subdivisions"));
-                        ui.add(
-                            widgets::Number::new(&mut draft.subdivisions)
-                                .range(GridSettings::SUBDIVISION_RANGE)
-                                .speed(0.2),
-                        );
-                        ui.end_row();
-                    });
-                ui.add_space(10.0);
-                let valid = draft.is_valid();
-                let note = if valid {
-                    format!(
-                        "{} {} {}",
-                        tr("A subdivision every"),
-                        format_step(draft.step()),
-                        tr("pixels.")
-                    )
-                } else {
-                    tr("Use no more subdivisions than the pixels between gridlines.").to_owned()
-                };
-                ui.add(
-                    egui::Label::new(egui::RichText::new(note).color(if valid {
-                        ui.palette().muted
+                            ui.label(tr("Gridline every"));
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    widgets::Number::new(&mut draft.spacing)
+                                        .range(GridSettings::SPACING_RANGE)
+                                        .speed(1.0),
+                                );
+                                ui.label(
+                                    egui::RichText::new(tr("pixels")).color(ui.palette().muted),
+                                );
+                            });
+                            ui.end_row();
+
+                            ui.label(tr("Subdivisions"));
+                            ui.add(
+                                widgets::Number::new(&mut draft.subdivisions)
+                                    .range(GridSettings::SUBDIVISION_RANGE)
+                                    .speed(0.2),
+                            );
+                            ui.end_row();
+                        });
+                    ui.add_space(10.0);
+                    let valid = draft.is_valid();
+                    let note = if valid {
+                        format!(
+                            "{} {} {}",
+                            tr("A subdivision every"),
+                            format_step(draft.step()),
+                            tr("pixels.")
+                        )
                     } else {
-                        ui.palette().warning
-                    }))
-                    .wrap(),
-                );
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    if widgets::button(ui, tr("Restore Defaults")).clicked() {
-                        // The custom color is kept, so it's still there if Custom is chosen again.
-                        draft.restore_defaults();
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ok = ui
-                            .add_enabled(valid, widgets::Button::new(tr("OK")).primary())
-                            .clicked();
-                    });
-                });
-            });
+                        tr("Use no more subdivisions than the pixels between gridlines.").to_owned()
+                    };
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(note).color(if valid {
+                            ui.palette().muted
+                        } else {
+                            ui.palette().warning
+                        }))
+                        .wrap(),
+                    );
+                    valid
+                },
+                |ui, valid| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Apply")).enabled(valid),
+                        |ui| {
+                            restore_defaults = widgets::button(ui, tr("Restore Defaults")).clicked()
+                        },
+                    );
+                    ok = response.commit;
+                    cancel = response.cancel;
+                },
+            );
+        if restore_defaults {
+            // The custom color is kept, so it's still there if Custom is chosen again.
+            edit.draft.restore_defaults();
+        }
         let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !ctx.wants_keyboard_input();
         if (ok || enter) && edit.draft.is_valid() {
             self.grid_edit = None;
