@@ -2559,6 +2559,34 @@ mod unix {
     }
 
     #[test]
+    fn the_region_tool_is_offered_only_to_actions_with_regions() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        let manifest = format!(
+            "{MANIFEST}\n[[actions]]\nid = \"generate\"\nlabel = \"Generate…\"\nkind = \"generate\"\n\n[[actions.inputs]]\nid = \"prompt\"\ntype = \"text\"\n"
+        );
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        assert!(!app.region_tool_available());
+        app.start_plugin_action("mock", "generate");
+        assert!(app.plugins.action.is_some(), "{:?}", app.error);
+        assert!(!app.region_tool_available());
+        assert_ne!(app.tool, Tool::Region);
+        app.close_plugin_action();
+        app.start_plugin_action("mock", "echo");
+        assert!(app.plugins.action.is_some(), "{:?}", app.error);
+        assert!(app.region_tool_available());
+        assert_eq!(app.tool, Tool::Region);
+        app.close_plugin_action();
+        assert!(!app.region_tool_available());
+    }
+
+    #[test]
     fn a_settings_pane_is_drawn_in_manage_plugins_not_the_sidebar() {
         let dir = tempfile::tempdir().unwrap();
         let (context, mut app) = app();

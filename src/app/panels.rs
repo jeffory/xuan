@@ -477,7 +477,7 @@ impl EditorApp {
                             .show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.y = 5.0;
                                 for t in Tool::ALL {
-                                    if t == Tool::Region && self.plugins.action.is_none() {
+                                    if t == Tool::Region && !self.region_tool_available() {
                                         continue;
                                     }
                                     let shortcut = super::commands::tool_command(t)
