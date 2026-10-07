@@ -9,6 +9,14 @@ use super::{
 /// A tool rail button. Its tooltip names the tool and its current `shortcut`, if any.
 pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, shortcut: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            selected,
+            tool.label(),
+        )
+    });
     let painter = ui.painter();
     let p = ui.palette();
     if selected || response.hovered() {

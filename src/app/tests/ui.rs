@@ -30,6 +30,9 @@ mod tabs;
 #[path = "ui_dialogs.rs"]
 mod dialogs;
 
+#[path = "ui_tool_rail.rs"]
+mod tool_rail;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;
