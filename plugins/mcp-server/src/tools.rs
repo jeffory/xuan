@@ -216,7 +216,7 @@ const BACKGROUND: [&str; 3] = [
 
 /// `host/run` commands the `run_command` tool offers. Xuan decides what is
 /// allowed: saving, opening, the clipboard and settings never are.
-const COMMANDS: [&str; 26] = [
+const COMMANDS: [&str; 30] = [
     "flatten",
     "duplicate",
     "new_layer",

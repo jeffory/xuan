@@ -92,10 +92,10 @@ impl EditorApp {
                     widgets::checkbox(ui, &mut settings.sides.bottom, tr("Bottom"));
                     widgets::checkbox(ui, &mut settings.sides.left, tr("Left"));
                     widgets::checkbox(ui, &mut settings.sides.right, tr("Right"));
-                },
-                |ui, ()| {
                     let sides = settings.sides;
-                    let any = sides.top || sides.bottom || sides.left || sides.right;
+                    sides.top || sides.bottom || sides.left || sides.right
+                },
+                |ui, any| {
                     let response = widgets::dialog_footer(
                         ui,
                         widgets::FooterButtons::commit(tr("Trim")).enabled(any),

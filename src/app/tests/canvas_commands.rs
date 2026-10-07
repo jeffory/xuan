@@ -11,15 +11,15 @@ fn enabled(app: &EditorApp, id: &str) -> bool {
 }
 
 fn revision(app: &EditorApp) -> u64 {
-    app.session().unwrap().history.revision as u64
+    app.session().unwrap().history.revision
 }
 
 #[test]
 fn rotate_commands_are_one_undo_step_each() {
-    let (_, mut app) = app();
-    app.dimensions = [6, 4];
-    app.new_document();
     for id in ["rotate_canvas_cw", "rotate_canvas_ccw", "rotate_canvas_180"] {
+        let (_, mut app) = app();
+        app.dimensions = [6, 4];
+        app.new_document();
         assert!(enabled(&app, id), "{id}");
         let before = revision(&app);
         let was = size(&app);

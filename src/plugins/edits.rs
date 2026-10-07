@@ -4753,4 +4753,39 @@ mod tests {
         assert!(cost(&document, &[edit(long)]).stroke <= MAX_STROKE_LENGTH);
         assert!(cost(&document, &[edit(copies)]).stroke > MAX_STROKE_LENGTH);
     }
+
+    #[test]
+    fn rotate_canvas_and_trim_edits_work_and_reject_bad_angles() {
+        let mut document = Document::new(6, 4).unwrap();
+        let mut pixels = image::RgbaImage::new(6, 4);
+        pixels.put_pixel(2, 1, image::Rgba([255, 0, 0, 255]));
+        document.layers[0].pixels = Some(Arc::new(pixels));
+        let rotate = edit(json!({"op": "rotate_canvas", "degrees": 90}));
+        let trim = edit(json!({"op": "trim", "top": false}));
+        assert!(rotate.direct_only() && trim.direct_only());
+        assert_eq!(rotate.op(), "rotate_canvas");
+        run(&mut document, &[rotate]).unwrap();
+        assert_eq!((document.width, document.height), (4, 6));
+        run(
+            &mut document,
+            &[edit(json!({"op": "rotate_canvas", "degrees": -90}))],
+        )
+        .unwrap();
+        assert_eq!((document.width, document.height), (6, 4));
+        run(&mut document, &[trim]).unwrap();
+        // Left, right and bottom trimmed; the top margin stays.
+        assert_eq!((document.width, document.height), (1, 2));
+        for bad in [45, 0, 360] {
+            let edit = edit(json!({"op": "rotate_canvas", "degrees": bad}));
+            assert!(run(&mut document.clone(), &[edit]).is_err(), "{bad}");
+        }
+        assert!(
+            serde_json::from_value::<Edit>(json!({"op": "trim", "based_on": "middle"})).is_err()
+        );
+        run(
+            &mut document,
+            &[edit(json!({"op": "trim", "based_on": "top_left"}))],
+        )
+        .unwrap();
+    }
 }

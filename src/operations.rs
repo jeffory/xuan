@@ -1303,14 +1303,18 @@ mod tests {
         let mut offset = Layer::image("Offset", RgbaImage::from_fn(2, 1, |x, _| px(x as u8 + 1)));
         offset.transform.x = 2.0;
         offset.transform.y = 1.0;
-        let mut turned = Layer::image("Turned", RgbaImage::from_fn(2, 1, |x, _| px(x as u8 + 7)));
+        let mut turned = Layer::image("Turned", RgbaImage::from_fn(3, 1, |x, _| px(x as u8 + 7)));
+        turned.transform.y = 1.0;
         turned.transform.rotation = 90.0;
         turned.transform.flip_x = true;
         document.insert(offset);
         document.insert(turned);
         let before = render::render(&document);
         for (rotation, expected) in [
-            (CanvasRotation::Clockwise, image::imageops::rotate90(&before)),
+            (
+                CanvasRotation::Clockwise,
+                image::imageops::rotate90(&before),
+            ),
             (
                 CanvasRotation::CounterClockwise,
                 image::imageops::rotate270(&before),
@@ -1348,12 +1352,7 @@ mod tests {
         document.selection = Some(Arc::new(mask));
         rotate_canvas(&mut document, CanvasRotation::Clockwise);
         // (x, y) -> (4 - y, x): the mask's centre (2, 1) lands on (3, 2).
-        let placement = document.layers[0]
-            .mask
-            .as_ref()
-            .unwrap()
-            .placement
-            .unwrap();
+        let placement = document.layers[0].mask.as_ref().unwrap().placement.unwrap();
         assert_eq!((placement.center().x, placement.center().y), (3.0, 2.0));
         assert_eq!(placement.rotation, 90.0);
         let bounds = document.paths[0].d.bounds().unwrap();
@@ -1458,7 +1457,14 @@ mod tests {
         assert!(trim(&mut by_top_left, TrimBasis::TopLeft, TrimSides::default()).unwrap());
         assert_eq!((by_top_left.width, by_top_left.height), (3, 2));
         let mut by_bottom_right = document.clone();
-        assert!(trim(&mut by_bottom_right, TrimBasis::BottomRight, TrimSides::default()).unwrap());
+        assert!(
+            trim(
+                &mut by_bottom_right,
+                TrimBasis::BottomRight,
+                TrimSides::default()
+            )
+            .unwrap()
+        );
         assert_eq!((by_bottom_right.width, by_bottom_right.height), (3, 2));
         // A fully opaque image has no transparent margin.
         assert!(!trim(&mut document, TrimBasis::Transparent, TrimSides::default()).unwrap());
