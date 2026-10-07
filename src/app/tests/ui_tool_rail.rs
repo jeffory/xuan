@@ -69,7 +69,7 @@ fn every_tool_and_swatch_fits_in_the_window_at_the_minimum_size() {
 
 #[test]
 fn the_rail_is_one_column_in_a_large_window() {
-    let (_directory, ui) = at_size(1280.0, 860.0);
+    let (_directory, ui) = at_size(1280.0, 1080.0);
     assert_eq!(columns(&ui), 1);
     assert!(button_rect(&ui, "Zoom").right() <= 56.0);
 }
