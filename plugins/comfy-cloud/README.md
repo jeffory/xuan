@@ -24,6 +24,8 @@ written in Python with the standard library only.
 | **Edit Image…** | Filter | Ideogram 4.5, Seedream 5.0 Pro | Repaints the active layer as a new layer, following a description of the change. |
 | **Precise Edit…** | Filter | Ideogram 4.5 | Draw boxes, or turn the selection into one, and describe each change. Only what you asked for changes, and the new layer is masked to the boxes. A box of kind **Text** writes the text you give it. |
 | **Split into Layers…** | Layer | Seedream 5.0 Pro, Seedream 5.0 Flash | Separates the flattened image into a background plate and layers you can move, all added as new layers. You can say what to separate, or leave it empty to find the main elements. |
+| **Generate Layer…** | Layer | GPT Image 2.5 Flare, GPT Image 2.5 Sunburst | Draws what you describe on a transparent background, as a new layer the size of the canvas. With **Match the picture** on (the default) the flattened image goes along, so the new layer fits its colours, lighting and layout; off, only the prompt is sent. |
+| **Remove Background (Bria)** | Filter | Bria RMBG 2.0 | Cuts the active layer's subject out, as a new layer. Choose **Comfy Cloud** under **Settings → Selection** to use it for Xuan's own **Filter → Remove Background**, which then gives the layer a mask you can paint, and **Select → Subject**. |
 
 Results arrive as a proposal above the canvas, with **Compare**, **Accept**
 and **Discard**. Each result layer records its provenance (Layers panel →
@@ -46,6 +48,9 @@ working when Comfy renumbers a template's nodes.
 | Edit, Seedream 5.0 Pro | `api_bytedance_seedream_5_0_pro_image_edit` |
 | Precise Edit | `api_ideogram_v4_5_precise_image_edit` |
 | Split into Layers | `api_bytedance_seedream_5_0_layer_separation` |
+| Generate Layer, GPT Image 2.5 Flare | `api_openai_gpt_image_25_flare_t2i` |
+| Generate Layer, GPT Image 2.5 Sunburst | `api_openai_gpt_image_25_sunburst_t2i` |
+| Remove Background | `utility_bria_remove_image_background` |
 
 Templates are public at `https://cloud.comfy.org/templates/<name>.json`, but
 they are saved in the editor's format, which the API does not run.
@@ -58,11 +63,13 @@ anything else, such as subgraphs or bypassed nodes, is refused.
 template again. When it changed, the plugin converts the new version, checks
 that every input it fills in still exists, and switches to it, keeping the
 old one. When the new version can't be used, the plugin keeps the one it has
-and says why in the **Comfy Cloud** pane and in the status bar after a job.
+and says why on its page in **Plugins → Manage Plugins…** and in the status
+bar after a job.
 When Comfy refuses a new version before running it, the job is retried once
 with the previous version, at no cost. The node definitions (about 10 MB)
-are only downloaded when a template has changed. **Check for updates** in the
-pane checks every workflow now.
+are only downloaded when a template has changed. **Check for updates** on the
+plugin's page in Manage Plugins checks every workflow now. (Xuan 0.4 and older
+show that page's contents as a **Comfy Cloud** pane in the sidebar instead.)
 
 The plugin's data folder (`plugin-data/comfy-cloud/recipes/` next to
 `config.toml`) holds the converted versions. `snapshots/` holds the versions
