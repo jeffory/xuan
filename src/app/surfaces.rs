@@ -26,7 +26,7 @@ pub(super) enum SurfacePopup {
         anchor: egui::Pos2,
     },
     /// An AI Region box's popover.
-    #[allow(dead_code)] // the AI Region tool opens it
+    #[allow(dead_code)] // the box's popover (next) reads index
     Region { document: uuid::Uuid, index: usize },
 }
 
@@ -205,6 +205,12 @@ impl EditorApp {
 
     /// Draw the open surface popover, if any.
     pub(super) fn surface_popups(&mut self, ctx: &egui::Context) {
+        // A box's popover belongs to its document.
+        if let Some(SurfacePopup::Region { document, .. }) = &self.surface_popup
+            && self.session().map(|s| s.document.id) != Some(*document)
+        {
+            self.surface_popup = None;
+        }
         match &self.surface_popup {
             Some(SurfacePopup::Layer { .. }) => self.layer_popup(ctx),
             Some(SurfacePopup::Region { .. }) => self.region_popup(ctx),

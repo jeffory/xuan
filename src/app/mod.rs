@@ -1,5 +1,6 @@
 use theme::PaletteExt as _;
 use xuan::i18n::tr;
+mod ai_regions;
 mod canvas;
 mod chrome;
 mod clipboard;
@@ -148,7 +149,7 @@ impl Tool {
             Self::Dropper => tr("Eyedropper"),
             Self::Hand => tr("Hand"),
             Self::Zoom => tr("Zoom"),
-            Self::Region => tr("Region"),
+            Self::Region => tr("AI Region"),
         }
     }
     fn is_brush(self) -> bool {
@@ -227,6 +228,9 @@ struct Session {
     sample_cache: Option<eyedropper::SampleCache>,
     /// Full renders made for eyedropper sampling; lets tests check the cache.
     sample_renders: usize,
+    /// Boxes drawn with the AI Region tool, and the selected one.
+    ai_boxes: Vec<ai_regions::AiBox>,
+    ai_selected: Option<usize>,
 }
 
 impl Session {
@@ -253,6 +257,8 @@ impl Session {
             collapsed: HashSet::new(),
             sample_cache: None,
             sample_renders: 0,
+            ai_boxes: Vec::new(),
+            ai_selected: None,
         }
     }
 

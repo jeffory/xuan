@@ -2399,14 +2399,16 @@ impl EditorApp {
 
     // --- Regions ---------------------------------------------------------
 
-    /// Whether the tool rail offers the Region tool: only while the open
-    /// plugin action has a `regions` input to draw into.
+    /// Whether the tool rail offers the Region tool: while the open plugin
+    /// action has a `regions` input to draw into, or, as the AI Region tool,
+    /// when a plugin offers a region action and a document is open.
     pub(super) fn region_tool_available(&self) -> bool {
-        self.plugins.action.as_ref().is_some_and(|edit| {
+        let dialog = self.plugins.action.as_ref().is_some_and(|edit| {
             (self.plugins.manifest(&edit.plugin))
                 .and_then(|manifest| manifest.action(&edit.action))
                 .is_some_and(|action| action.regions_input().is_some())
-        })
+        });
+        dialog || (self.session().is_some() && !self.surface_actions(Surface::Region).is_empty())
     }
 
     pub(super) fn add_region(&mut self, start: xuan::document::Point, end: xuan::document::Point) {

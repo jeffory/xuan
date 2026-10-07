@@ -358,6 +358,14 @@ impl EditorApp {
                                         );
                                         widgets::color_well(ui, &mut self.brush.color);
                                     }
+                                    Tool::Region if self.plugins.action.is_none() => {
+                                        if widgets::button(ui, tr("Use Selection")).clicked() {
+                                            self.add_ai_box_from_selection();
+                                        }
+                                        if widgets::button(ui, tr("Clear")).clicked() {
+                                            self.clear_ai_boxes();
+                                        }
+                                    }
                                     Tool::Hand | Tool::Zoom => {
                                         ui.label(
                                         RichText::new(
@@ -426,13 +434,14 @@ impl EditorApp {
                         } else if let Some(status) = self.recent_status(ui.ctx()) {
                             ui.add(egui::Label::new(RichText::new(status).size(11.0)).truncate());
                         } else {
+                            let hint = if self.tool == Tool::Region && self.plugins.action.is_none() {
+                                tr("Drag a box and say what to do there · Click a box to change it · Delete removes it")
+                            } else {
+                                self.tool.hint()
+                            };
                             ui.add(
-                                egui::Label::new(
-                                    RichText::new(self.tool.hint())
-                                        .size(11.0)
-                                        .color(ui.palette().muted),
-                                )
-                                .truncate(),
+                                egui::Label::new(RichText::new(hint).size(11.0).color(ui.palette().muted))
+                                    .truncate(),
                             );
                         }
                     });

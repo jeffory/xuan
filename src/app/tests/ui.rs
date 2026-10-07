@@ -1271,4 +1271,78 @@ advanced = true
         assert_eq!(run.target, (20, 16));
         assert_eq!(job.inputs["prompt"], serde_json::json!("a red kite"));
     }
+
+    /// Adds a region action ("Edit") to the plugin from `install`.
+    fn install_region(ui: &mut UiTest, dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[permissions]
+document = "edit"
+
+[[actions]]
+id = "edit"
+label = "Precise Edit…"
+surfaces = ["region"]
+verb = "Edit"
+source = { crop_to_regions = true }
+
+[[actions.inputs]]
+id = "regions"
+type = "regions"
+fields = [{ id = "desc", type = "text", label = "Instruction" }]
+"#,
+        )
+        .unwrap();
+        ui.app_mut()
+            .install_plugins(vec![xuan::plugins::Manifest::load(dir).unwrap()], vec![]);
+        ui.app_mut().grant_plugin("ai", true);
+    }
+
+    #[test]
+    fn ai_region_boxes_belong_to_their_document_and_are_not_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        assert!(ui.app().region_tool_available());
+        let history = ui.app().session().unwrap().history.names().count();
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(0.5, 0.5),
+            xuan::document::Point::new(1.0, 1.0),
+        ); // too small: ignored
+        let session = ui.app().session().unwrap();
+        assert_eq!(session.ai_boxes.len(), 1);
+        assert_eq!(session.ai_boxes[0].action, "edit");
+        assert_eq!(
+            session.ai_boxes[0].region.fields["desc"],
+            serde_json::json!("")
+        );
+        // Review focus 4: no undo steps, not modified.
+        assert_eq!(session.history.names().count(), history);
+        assert!(!session.history.dirty());
+        // Review focus 3: another document has its own (no) boxes, and the popover closes.
+        ui.app_mut().surface_popup = Some(crate::app::surfaces::SurfacePopup::Region {
+            document: ui.app().session().unwrap().document.id,
+            index: 0,
+        });
+        ui.app_mut().dimensions = [10, 10];
+        ui.app_mut().new_document();
+        ui.settle();
+        assert!(ui.app().session().unwrap().ai_boxes.is_empty());
+        assert!(ui.app().surface_popup.is_none());
+        ui.app_mut().current = 0;
+        assert_eq!(ui.app().session().unwrap().ai_boxes.len(), 1);
+        ui.app_mut().delete_ai_box(0);
+        assert!(ui.app().session().unwrap().ai_boxes.is_empty());
+    }
 }
