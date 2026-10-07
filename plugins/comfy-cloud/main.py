@@ -266,16 +266,21 @@ def check_all():
         plugin.update_pane(PANE, pane_tree())
 
 
+ACTION_LABELS = {"generate": "Generate Image", "edit": "Edit Image", "precise-edit": "Precise Edit", "split-layers": "Split into Layers"}
+
+
 def pane_tree():
     rows = [ui.heading("Workflows")]
     books = _catalog or Catalog(None, plugin.data_dir, SNAPSHOTS)
-    for recipe in RECIPES.values():
-        state = books.state(recipe)
-        version = state.get("current")
-        date = (version or {}).get("template_date")
-        rows.append(ui.label(f"{recipe.label}: Comfy template of {date}" if date else f"{recipe.label}: {describe(version)}", small=True))
-        if state.get("warning"):
-            rows.append(ui.label(state["warning"], muted=True, small=True))
+    for action, recipe_ids in ACTIONS.items():
+        rows.append(ui.label(ACTION_LABELS[action]))
+        for recipe in (RECIPES[recipe_id] for recipe_id in recipe_ids):
+            state = books.state(recipe)
+            version = state.get("current")
+            date = (version or {}).get("template_date")
+            rows.append(ui.label(f"{recipe.label} · Comfy template of {date}" if date else f"{recipe.label} · {describe(version)}", muted=True, small=True))
+            if state.get("warning"):
+                rows.append(ui.label(state["warning"], small=True))
     if _checking.is_set():
         rows.append(ui.progress(None, "Checking Comfy for updates…"))
     else:
