@@ -48,6 +48,10 @@ install -Dm644 plugins/mcp-server/plugin.toml "$xuan_plugin/plugin.toml"
 install -Dm755 "$xuan_plugin_target_dir/$xuan_plugin_target/release/xuan-mcp-server" \
     "$xuan_plugin/target/release/xuan-mcp-server"
 strip "$xuan_plugin/target/release/xuan-mcp-server"
+# The Python plugin SDK: <prefix>/lib/xuan/sdk/python, beside the bundled
+# plugins. Xuan puts it first on every plugin's PYTHONPATH and names it in
+# XUAN_PLUGIN_SDK, so installed Python plugins import the matching SDK.
+install -Dm644 sdk/python/xuan_plugin.py "$xuan_stage/lib/xuan/sdk/python/xuan_plugin.py"
 if [[ -n ${XUAN_MAX_GLIBC:-} ]]; then
     python3 scripts/check-glibc.py --max-version "$XUAN_MAX_GLIBC" "$xuan_stage/bin/xuan"
 fi

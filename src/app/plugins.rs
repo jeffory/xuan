@@ -63,6 +63,10 @@ pub(super) struct PluginState {
     /// The secrets file exists but could not be read; it is never overwritten.
     pub secrets_unreadable: bool,
     pub(super) config_dir: Option<PathBuf>,
+    /// The Python plugin SDK's folder, put first on every plugin's
+    /// `PYTHONPATH` and named in `XUAN_PLUGIN_SDK` (see
+    /// [`plugins::sdk_dir`]); set when the plugins are loaded.
+    pub sdk_dir: Option<PathBuf>,
     scratch: HashMap<String, tempfile::TempDir>,
     /// Private data folders for plugins when there is no configuration folder.
     data_fallback: HashMap<String, tempfile::TempDir>,
@@ -453,6 +457,7 @@ impl EditorApp {
                 }
             }
         }
+        self.plugins.sdk_dir = plugins::sdk_dir();
         let bundled = plugins::bundled_dir();
         let dirs = plugins::plugin_dirs(
             config_dir.as_deref(),
@@ -720,7 +725,7 @@ impl EditorApp {
             // Only files unchanged since they were verified, looked up
             // before the process starts.
             let models = self.model_paths(plugin);
-            let env = vec![
+            let mut env = vec![
                 ("XUAN_PLUGIN_ID".to_owned(), plugin.to_owned()),
                 ("XUAN_DATA_DIR".to_owned(), data_dir.display().to_string()),
                 (
@@ -729,6 +734,12 @@ impl EditorApp {
                 ),
                 ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
             ];
+            // Python plugins import the SDK that matches this Xuan, wherever
+            // they are installed.
+            env.extend(plugins::sdk_env(
+                self.plugins.sdk_dir.as_deref(),
+                std::env::var_os("PYTHONPATH").as_deref(),
+            ));
             let context = self.context.clone();
             let wake: plugins::host::Wake = Arc::new(move || context.request_repaint());
             let blocked = self.plugin_network_blocked(plugin);

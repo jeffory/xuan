@@ -9,7 +9,9 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "sdk", "python"))
+# The SDK installed with Xuan comes first on PYTHONPATH; in a source
+# checkout, fall back to the repository's.
+sys.path.append(os.path.join(HERE, "..", "..", "sdk", "python"))
 sys.path.insert(0, HERE)
 
 from xuan_plugin import INVALID_PARAMS, NeedsSetup, Plugin, RpcError, decode_png, encode_png  # noqa: E402
