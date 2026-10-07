@@ -63,10 +63,16 @@ surfaces = ["menu"]             # new: only where listed ("menu" = the full dial
 
 ### Results
 
-- `layer` and `region` results are placed as today, using `fit: "source"`, `crop_to_regions` and `mask_to_regions`.
+- New placement: an `image` output may set **`fit: "cover"`**.
+  - It scales the image evenly, without stretching, so that it covers the bounds of the source that was sent, and centres it there.
+  - Whatever hangs past those bounds stays in the layer.
+  - Like every plugin result, the image keeps its own pixels and is placed through the layer's transform.
+  - `fit: "source"` still sizes the image to exactly the source bounds, stretching it if its shape differs.
+- `layer` and `region` results use `fit: "cover"`. A model renders at least the target, the layer holds all of the model's pixels, and it is shown covering the canvas or the crop.
+- `mask_to_regions` still limits what shows to the box, but the rest of the image is in the layer if the user moves it or paints the mask.
 - `document` results open a new document at the image's own pixel size, with the dialog's ppi.
 - With **Exact size**, the new document is exactly W×H and the result becomes its only layer:
-  - The layer is scaled to **cover** the canvas, centred, with no empty edge. Any extra hangs past the edges on the longer side.
+  - The layer is placed with the same cover rule over the canvas, centred, with no empty edge. Any extra hangs past the edges on the longer side.
   - The image is not resampled. As with every plugin result, it keeps the model's pixels and is placed through the layer's transform.
   - Nothing is cropped. The parts past the canvas are kept, so the user can move the layer to reframe; the canvas only clips on export.
   - When the layer extends past the canvas, the status bar says "Move the layer to reframe".
@@ -167,7 +173,7 @@ From the menu (no target), Generate Image keeps its Shape and Size inputs. The m
 - Steps:
   1. GPT Image 2.5 draws the object into the crop, opaque, with the crop as the reference.
   2. Seedream 5.0 Flash lifts that object out. This is the Generate Layer pipeline.
-  3. The result is placed with `fit: "source"` and `mask_to_regions`, so it stays within the box.
+  3. The result is placed with `fit: "cover"` and `mask_to_regions`, so it shows within the box.
 - `inputs.target` is the box in document pixels. The plugin scales it by the crop-to-box ratio of the source it received (padding included), so GPT renders at least the crop's size in document pixels.
 
 **Fill region** (`fill-region`):
@@ -179,7 +185,8 @@ From the menu (no target), Generate Image keeps its Shape and Size inputs. The m
 - Recipe:
   - GPT Image 2.5 with the crop as `model.images.image_1` and the mask as `model.mask`, where white is replaced.
   - A new recipe role, `mask`, inserts `LoadImageMask` (red channel) and wires it in.
-- The result is placed with `fit: "source"` and `mask_to_regions`.
+- The result is placed with `fit: "cover"` and `mask_to_regions`.
+- Generate Layer, Edit Image and Precise Edit switch from `fit: "source"` to `fit: "cover"` too.
 - Both new recipes reuse the existing GPT and Seedream templates; there are no new templates.
 
 ## Out of scope
@@ -205,7 +212,7 @@ From the menu (no target), Generate Image keeps its Shape and Size inputs. The m
     - the job produces a document;
     - Exact size makes a W×H canvas with one layer that covers it, centred, keeping the image's own pixels;
     - the ppi carries over.
-  - The cover placement: the scale, the centring, and that nothing is cropped.
+  - The cover placement: `fit: "cover"` scales evenly to cover the source bounds, centres, never stretches and keeps the overflow. It works for layer, region and exact-size document results; `fit: "source"` is unchanged.
 - **Plugin:**
   - the size rule for each model (exact, rounded up, scaled up to the minimum, preset choice, too big);
   - the new recipes against fixtures and Comfy's own conversion;
