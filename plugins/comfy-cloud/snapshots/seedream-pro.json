@@ -1,0 +1,98 @@
+{
+ "template": "api_bytedance_seedream_5_0_pro_t2i",
+ "template_sha256": "8b46e0100415d441f9bac75dddb6a4598ccaef5e1b30d7eb50d3971cf45cda19",
+ "template_date": "2026-07-08",
+ "converted_at": "2026-10-07T00:30:04+00:00",
+ "output": "2",
+ "api": {
+  "2": {
+   "class_type": "SaveImageAdvanced",
+   "inputs": {
+    "images": [
+     "3",
+     0
+    ],
+    "filename_prefix": "Seedream5.0_Pro_T2I",
+    "format": "png",
+    "format.bit_depth": "8-bit",
+    "format.input_color_space": "sRGB"
+   },
+   "_meta": {
+    "title": "Save Image (Advanced)"
+   }
+  },
+  "3": {
+   "class_type": "ByteDanceSeedreamNodeV3",
+   "inputs": {
+    "prompt": "A sci-fi cyberpunk graphic design poster. In the center, a striking portrait of a female android with glossy, liquid chrome skin. A vivid swirling streak of neon orange, yellow, and pink liquid paint brush stroke horizontally covers her eyes, soft smudged color overlay with smooth flowing pigment texture, no cracks or broken facial surfaces. The background is a dark, textured charcoal gray. Behind the central figure, large bold white futuristic typography reads \"Seedream 5.0 Pro\" with a subtle digital glitch and halftone texture. The composition is decorated with technical HUD elements, thin white lines, geometric wireframe diagrams, barcodes, and small sci-fi text boxes. Semi-transparent glassy spheres with grid textures overlap the foreground, creating depth. The overall mood is high-tech, dystopian, and avant-garde.",
+    "model": "seedream 5.0 pro",
+    "model.size_preset": "(1K) 1024x1024 (1:1)",
+    "model.width": 2048,
+    "model.height": 2048,
+    "model.prompt_optimization": "standard",
+    "model.seed": 42,
+    "model.watermark": false,
+    "model.thinking": true
+   },
+   "_meta": {
+    "title": "ByteDance Seedream 4.5 & 5.0"
+   }
+  }
+ },
+ "specs": {
+  "ByteDanceSeedreamNodeV3.prompt": [
+   "STRING",
+   {
+    "tooltip": "Text prompt for creating or editing an image.",
+    "default": "",
+    "multiline": true
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.seed": [
+   "INT",
+   {
+    "tooltip": "Seed to use for generation.",
+    "default": 42,
+    "min": 0,
+    "max": 2147483647,
+    "step": 1,
+    "control_after_generate": true,
+    "display": "number"
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.watermark": [
+   "BOOLEAN",
+   {
+    "tooltip": "Whether to add an \"AI generated\" watermark to the image.",
+    "advanced": true,
+    "default": false
+   }
+  ],
+  "ByteDanceSeedreamNodeV3.model.size_preset": [
+   "COMBO",
+   {
+    "tooltip": "Pick a recommended size. Select Custom to use the width and height below.",
+    "multiselect": false,
+    "options": [
+     "(1K) 1024x1024 (1:1)",
+     "(1K) 864x1152 (3:4)",
+     "(1K) 1152x864 (4:3)",
+     "(1K) 1312x736 (16:9)",
+     "(1K) 736x1312 (9:16)",
+     "(1K) 832x1248 (2:3)",
+     "(1K) 1248x832 (3:2)",
+     "(1K) 1568x672 (21:9)",
+     "(2K) 2048x2048 (1:1)",
+     "(2K) 1728x2304 (3:4)",
+     "(2K) 2304x1728 (4:3)",
+     "(2K) 2848x1600 (16:9)",
+     "(2K) 1600x2848 (9:16)",
+     "(2K) 1664x2496 (2:3)",
+     "(2K) 2496x1664 (3:2)",
+     "(2K) 3136x1344 (21:9)",
+     "Custom"
+    ]
+   }
+  ]
+ }
+}

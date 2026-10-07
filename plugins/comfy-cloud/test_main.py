@@ -1,9 +1,11 @@
-"""Tests for the Comfy Cloud example's HTTP safety checks.
+"""Tests for the Comfy Cloud plugin's HTTP safety checks, its actions and the
+job flow.
 
 Run with the system Python, no packages needed:
 
     python3 -m unittest discover -s plugins/comfy-cloud
 """
+import copy
 import email.message
 import io
 import json
@@ -18,8 +20,15 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import main  # noqa: E402
+import comfy_api  # noqa: E402
+from catalog import Catalog  # noqa: E402
+from recipes import ACTIONS, RECIPES  # noqa: E402
+from test_recipes import entry_for  # noqa: E402
 
 BASE = "https://cloud.comfy.org"
+HERE = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(HERE, "plugin.toml"), "rb") as _handle:
+    MANIFEST = tomllib.load(_handle)
 
 
 class Response(io.BytesIO):
@@ -34,30 +43,23 @@ class Response(io.BytesIO):
         return False
 
 
-def client(key="sk-secret", base=BASE):
-    client = object.__new__(main.Client)
-    client.base = base
-    client.key = key
-    return client
-
-
 class DownloadTargets(unittest.TestCase):
     def test_the_key_goes_only_to_the_configured_server_over_https(self):
         self.assertEqual(
-            main.download_target("/api/v2/assets/1/content", BASE),
+            comfy_api.download_target("/api/v2/assets/1/content", BASE),
             (BASE + "/api/v2/assets/1/content", True),
         )
         self.assertEqual(
-            main.download_target(BASE + "/view?x=1", BASE), (BASE + "/view?x=1", True)
+            comfy_api.download_target(BASE + "/view?x=1", BASE), (BASE + "/view?x=1", True)
         )
         self.assertEqual(
-            main.download_target("https://cloud.comfy.org:443/a", BASE),
+            comfy_api.download_target("https://cloud.comfy.org:443/a", BASE),
             ("https://cloud.comfy.org:443/a", True),
         )
 
     def test_declared_hosts_are_downloaded_without_the_key(self):
-        url = "https://abc.run.comfy.app/out.png"
-        self.assertEqual(main.download_target(url, BASE), (url, False))
+        for url in ("https://abc.run.comfy.app/out.png", "https://storage.googleapis.com/comfy-cloud-assets/x.png?X-Goog-Signature=1"):
+            self.assertEqual(comfy_api.download_target(url, BASE), (url, False))
 
     def test_lookalike_userinfo_and_other_schemes_are_refused(self):
         for url in [
@@ -68,6 +70,7 @@ class DownloadTargets(unittest.TestCase):
             "//evil.com/x",
             "http://cloud.comfy.org/x",
             "http://abc.run.comfy.app/out.png",
+            "http://storage.googleapis.com/x",
             "https://run.comfy.app.evil.com/x",
             "https://evilrun.comfy.app/x",
             "file:///etc/passwd",
@@ -75,58 +78,30 @@ class DownloadTargets(unittest.TestCase):
             "data:text/plain,hi",
         ]:
             with self.subTest(url=url), self.assertRaises(main.RpcError):
-                main.download_target(url, BASE)
+                comfy_api.download_target(url, BASE)
 
     def test_the_host_list_matches_the_manifest(self):
-        with open(os.path.join(os.path.dirname(main.__file__), "plugin.toml"), "rb") as handle:
-            manifest = tomllib.load(handle)
-        self.assertEqual(tuple(manifest["permissions"]["network"]), main.NETWORK)
-
-
-class Inpaint(unittest.TestCase):
-    def test_the_manifest_asks_for_the_selection_mask(self):
-        with open(os.path.join(os.path.dirname(main.__file__), "plugin.toml"), "rb") as handle:
-            manifest = tomllib.load(handle)
-        action = next(a for a in manifest["actions"] if a["id"] == "inpaint")
-        self.assertEqual(action["source"]["mask"], "selection")
-        self.assertEqual(action["source"]["from"], "composite")
-
-    def test_the_mask_node_gets_the_uploaded_mask(self):
-        workflow = main.load_workflow("inpaint")
-        filled = main.fill(workflow, {"prompt": "a hat", "seed": 7}, "src-asset", "mask-asset")
-        by_title = {n["_meta"]["title"]: n for n in filled.values()}
-        self.assertEqual(by_title["Xuan Source"]["inputs"]["image"], "src-asset")
-        self.assertEqual(by_title["Xuan Mask"]["inputs"]["image"], "mask-asset")
-        self.assertEqual(by_title["Xuan Prompt"]["inputs"]["value"], "a hat")
-        # Without a mask the template is left alone.
-        plain = main.fill(workflow, {}, "src-asset")
-        self.assertEqual(
-            next(n for n in plain.values() if n["_meta"]["title"] == "Xuan Mask")["inputs"]["image"],
-            "selection.png",
-        )
-
-    def test_the_result_is_masked_by_the_selection(self):
-        self.assertEqual(main.image_output("a.png", "X", mask="m.png")["mask"], "m.png")
-        self.assertNotIn("mask", main.image_output("a.png", "X"))
+        self.assertEqual(tuple(MANIFEST["permissions"]["network"]), comfy_api.NETWORK)
 
 
 class Requests(unittest.TestCase):
     def setUp(self):
         self.sent = []
-        self.original = main._opener.open
+        self.original = comfy_api._opener.open
 
         def fake_open(request, timeout=None):
             self.sent.append(request)
             return Response()
 
-        main._opener.open = fake_open
+        comfy_api._opener.open = fake_open
+        self.client = comfy_api.Client(BASE, "sk-secret")
 
     def tearDown(self):
-        main._opener.open = self.original
+        comfy_api._opener.open = self.original
 
     def download(self, url):
         with tempfile.TemporaryDirectory() as folder:
-            client().download({"url": url}, os.path.join(folder, "out.png"))
+            self.client.download({"url": url}, os.path.join(folder, "out.png"))
         return self.sent[-1]
 
     def test_downloads_attach_the_key_only_for_the_server(self):
@@ -140,11 +115,33 @@ class Requests(unittest.TestCase):
             self.download("file:///etc/passwd")
         self.assertEqual(len(self.sent), 2)
 
+    def test_templates_are_fetched_without_the_key(self):
+        self.client.template("api_ideogram_v4_5_t2i")
+        request = self.sent[-1]
+        self.assertEqual(request.full_url, "https://cloud.comfy.org/templates/api_ideogram_v4_5_t2i.json")
+        self.assertIsNone(request.get_header("Authorization"))
+
+    def test_uploads_send_the_fields_the_api_requires_before_the_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "source.png")
+            with open(path, "wb") as handle:
+                handle.write(b"\x89PNG")
+            self.client.upload(path)
+        body = self.sent[-1].data.decode("latin-1")
+        positions = [body.index(f'name="{field}"') for field in ("content_type", "file_path", "tags", "file")]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn('["input"]', body)
+        self.assertIn("image/png", body)
+
+    def test_assets_are_referenced_by_id(self):
+        self.assertEqual(comfy_api.asset_ref({"id": "a1", "file_path": "input/x.png"}),
+                         {"__type": "core/ASSET", "info": {"id": "a1"}})
+
 
 class Redirects(unittest.TestCase):
     def redirect(self, source, target):
         request = urllib.request.Request(source, headers={"Authorization": "Bearer sk-secret"})
-        return main._Redirects().redirect_request(
+        return comfy_api._Redirects().redirect_request(
             request, io.BytesIO(), 302, "Found", email.message.Message(), target
         )
 
@@ -159,46 +156,178 @@ class Redirects(unittest.TestCase):
             self.redirect(BASE + "/a", "http://storage.example/x")
 
 
+class Manifest(unittest.TestCase):
+    def test_every_action_offers_exactly_its_recipes(self):
+        actions = {a["id"]: a for a in MANIFEST["actions"]}
+        self.assertEqual(set(actions), set(ACTIONS))
+        for action_id, recipe_ids in ACTIONS.items():
+            model = next((i for i in actions[action_id].get("inputs", []) if i["id"] == "model"), None)
+            if len(recipe_ids) == 1:
+                self.assertIsNone(model, action_id)
+                continue
+            self.assertEqual([v["id"] for v in model["values"]], list(recipe_ids), action_id)
+            self.assertEqual(model["default"], recipe_ids[0])
+
+    def test_generate_shapes_have_presets_in_every_model(self):
+        aspects = [v["id"] for v in next(i for i in MANIFEST["actions"][0]["inputs"] if i["id"] == "aspect")["values"]]
+        for recipe_id in ACTIONS["generate"]:
+            recipe = RECIPES[recipe_id]
+            options = entry_for(recipe)["specs"][recipe.size][1]["options"]
+            for aspect in aspects:
+                for tier in ("1K", "2K"):
+                    with self.subTest(recipe=recipe_id, aspect=aspect, tier=tier):
+                        self.assertTrue(any(o.startswith(f"({tier})") and o.endswith(f"({aspect})") for o in options))
+
+
 class Provenance(unittest.TestCase):
-    WORKFLOW = {
-        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl_base.safetensors"}},
-        "2": {
-            "class_type": "KSampler",
-            "inputs": {"seed": "42", "steps": 28, "cfg": 6.5, "sampler_name": "euler", "scheduler": "karras", "model": ["1", 0]},
-        },
-        "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "x"}},
-    }
-
-    def test_the_model_sampler_and_seed_the_workflow_used_are_reported(self):
-        record = main.provenance_of(self.WORKFLOW, {"seed": 7}, "job-1", BASE)
-        self.assertEqual(
-            record,
-            {
-                "model": "sdxl_base.safetensors",
-                "sampler": "euler",
-                "scheduler": "karras",
-                "steps": 28,
-                "cfg": 6.5,
-                "seed": 42,
-                "service": "cloud.comfy.org",
-                "request_id": "job-1",
-            },
-        )
-
-    def test_a_workflow_without_details_falls_back_to_the_seed_we_sent(self):
-        record = main.provenance_of({"1": {"inputs": {"prompt": ["0", 0], "seed": "{{seed}}"}}}, {"seed": 7}, "j", BASE)
-        self.assertEqual(record["seed"], 7)
-        self.assertNotIn("model", record)
-        self.assertNotIn("steps", record)
-
-    def test_no_key_ever_reaches_the_provenance(self):
-        workflow = {"1": {"inputs": {"ckpt_name": "m", "api_key_comfy_org": "sk-secret"}}}
-        record = main.provenance_of(workflow, {}, "j", BASE)
-        self.assertNotIn("sk-secret", json.dumps(record))
-        output = main.image_output("/tmp/a.png", "Generated", record)
-        self.assertEqual(output["kind"], "image")
-        self.assertEqual(output["provenance"]["model"], "m")
+    def test_the_model_template_and_seed_are_reported_never_the_key(self):
+        recipe = RECIPES["seedream-pro"]
+        record = main.provenance(recipe, {"template_date": "2026-07-08"}, {"seed": 7, "api_key": "sk-secret"}, "job-1", BASE)
+        self.assertEqual(record, {
+            "model": "Seedream 5.0 Pro",
+            "service": "cloud.comfy.org",
+            "request_id": "job-1",
+            "seed": 7,
+            "extra": {"template": "api_bytedance_seedream_5_0_pro_t2i", "template_date": "2026-07-08"},
+        })
+        output = main.Job.image("/tmp/a.png", "Generated", provenance=record)
         self.assertNotIn("sk-secret", json.dumps(output))
+
+
+def read(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+class FakeJob:
+    def __init__(self, folder, action="generate", inputs=None, source=None):
+        self.id = "job-12345678"
+        self.action = action
+        self.inputs = inputs or {}
+        self.source = source
+        self.cancelled = False
+        self.folder = folder
+        self.regions = [v for v in self.inputs.values() if isinstance(v, list)][:1]
+        self.regions = self.regions[0] if self.regions else []
+        self.messages = []
+
+    @property
+    def source_path(self):
+        return (self.source or {}).get("path")
+
+    def progress(self, fraction=None, message=None):
+        self.messages.append(message)
+
+    def check_cancelled(self):
+        pass
+
+    def path(self, name):
+        return os.path.join(self.folder, name)
+
+
+class FakeServer:
+    """Answers like Comfy Cloud; ``refuse`` makes the first job fail validation."""
+
+    def __init__(self, refuse=False):
+        self.refuse = refuse
+        self.base = BASE
+        self.submitted = []
+        self.uploads = []
+
+    def upload(self, path):
+        self.uploads.append(path)
+        return {"id": "asset-1"}
+
+    def submit(self, workflow):
+        self.submitted.append(workflow)
+        return {"id": f"job-{len(self.submitted)}"}
+
+    def job(self, job_id):
+        if self.refuse and job_id == "job-1":
+            return {"status": "failed", "started_at": None, "outputs": [],
+                    "error": {"code": "node_execution_error", "message": "Prompt outputs failed validation: model.size_preset"}}
+        output = next(k for k, n in self.submitted[-1].items() if n["class_type"] == "SaveImageAdvanced")
+        return {"status": "succeeded", "started_at": "now", "outputs": [
+            {"node_id": "99", "type": "image", "name": "preview.png", "url": "https://storage.googleapis.com/p"},
+            {"node_id": output, "type": "image", "name": "b.png", "url": "https://storage.googleapis.com/b"},
+            {"node_id": output, "type": "image", "name": "a.png", "url": "https://storage.googleapis.com/a"},
+        ]}
+
+    def cancel(self, job_id):
+        pass
+
+    def download(self, output, destination):
+        with open(destination, "w", encoding="utf-8") as handle:
+            handle.write(output["name"])
+
+
+class Running(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.server = FakeServer()
+        self.original = (main.make_client, main._catalog)
+        main.make_client = lambda: self.server
+        main._catalog = Catalog(self.server, self.tmp.name, os.path.join(self.tmp.name, "none"), clock=lambda: 0)
+
+    def tearDown(self):
+        main.make_client, main._catalog = self.original
+        self.tmp.cleanup()
+
+    def install(self, recipe, current, last_good=None):
+        state = {"current": current, "last_good": last_good, "checked_at": 0, "bad": {}, "warning": None, "retry": False}
+        os.makedirs(os.path.join(self.tmp.name, "recipes"), exist_ok=True)
+        with open(os.path.join(self.tmp.name, "recipes", recipe.id + ".json"), "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+
+    def test_generate_runs_the_recipe_and_keeps_only_the_outputs_images(self):
+        recipe = RECIPES["seedream-pro"]
+        self.install(recipe, entry_for(recipe))
+        job = FakeJob(self.tmp.name, inputs={"prompt": "a fox", "model": "seedream-pro", "aspect": "16:9", "resolution": "1K", "seed": 5})
+        outputs = main.generate(job)
+        self.assertEqual([read(o["path"]) for o in outputs], ["a.png", "b.png"])
+        self.assertEqual(outputs[0]["provenance"]["seed"], 5)
+        node = next(n for n in self.server.submitted[0].values() if n["class_type"] == "ByteDanceSeedreamNodeV3")
+        self.assertEqual(node["inputs"]["model.size_preset"], "(1K) 1312x736 (16:9)")
+
+    def test_a_refused_new_version_falls_back_once_to_the_last_good_one(self):
+        self.server.refuse = True
+        recipe = RECIPES["seedream-pro"]
+        good = entry_for(recipe)
+        new = copy.deepcopy(good)
+        new["template_sha256"], new["template_date"] = "new", "2026-11-01"
+        good["template_sha256"], good["template_date"] = "old", "2026-07-08"
+        self.install(recipe, new, good)
+        job = FakeJob(self.tmp.name, inputs={"prompt": "a fox", "seed": 1})
+        outputs = main.generate(job)
+        self.assertEqual(len(self.server.submitted), 2)
+        notes = [o["text"] for o in outputs if o["kind"] == "text"]
+        self.assertTrue(any("2026-07-08" in n and "failed validation" in n for n in notes), notes)
+        self.assertEqual(main._catalog.state(recipe)["current"]["template_sha256"], "old")
+
+    def test_edit_uploads_the_source_and_places_the_result_over_it(self):
+        recipe = RECIPES["ideogram-edit"]
+        self.install(recipe, entry_for(recipe))
+        source = {"path": os.path.join(self.tmp.name, "source.png"), "width": 800, "height": 600}
+        job = FakeJob(self.tmp.name, action="edit", inputs={"prompt": "night", "seed": 2}, source=source)
+        outputs = main.edit(job)
+        self.assertEqual(self.server.uploads, [source["path"]])
+        self.assertEqual(outputs[0]["fit"], "source")
+        load = next(n for n in self.server.submitted[0].values() if n["class_type"] == "LoadImage")
+        self.assertEqual(load["inputs"]["image"], {"__type": "core/ASSET", "info": {"id": "asset-1"}})
+
+    def test_actions_refuse_missing_input_before_anything_is_sent(self):
+        source = {"path": "/tmp/x.png", "width": 300, "height": 300}
+        cases = [
+            (main.generate, FakeJob(self.tmp.name, inputs={"prompt": "  "})),
+            (main.edit, FakeJob(self.tmp.name, "edit", {"prompt": "x"})),
+            (main.precise_edit, FakeJob(self.tmp.name, "precise-edit", {"regions": [{"index": 1, "x": 0, "y": 0, "width": 9, "height": 9, "fields": {}}]}, source)),
+            (main.split_layers, FakeJob(self.tmp.name, "split-layers", {}, source)),
+        ]
+        for action, job in cases:
+            with self.subTest(action=action.__name__), self.assertRaises(main.RpcError):
+                action(job)
+        self.assertEqual(self.server.submitted, [])
+        self.assertEqual(self.server.uploads, [])
 
 
 class SdkSecrets(unittest.TestCase):

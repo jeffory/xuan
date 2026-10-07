@@ -104,6 +104,27 @@ class RecipesTest(unittest.TestCase):
             apply(entry, recipe, {"prompt": "x"})
 
 
+class SnapshotsTest(unittest.TestCase):
+    """The converted workflows the plugin ships for its first run."""
+
+    def test_every_recipe_ships_a_snapshot_that_runs(self):
+        import hashlib
+
+        for recipe in RECIPES.values():
+            with self.subTest(recipe=recipe.id):
+                with open(os.path.join(os.path.dirname(DATA), "snapshots", recipe.id + ".json"), "r", encoding="utf-8") as handle:
+                    snapshot = json.load(handle)
+                self.assertEqual(snapshot["template"], recipe.template)
+                values = {"prompt": "x", "seed": 1, "image": ASSET, "aspect": "1:1", "tier": "1K", "source_size": (800, 600),
+                          "regions": [{"x": 1, "y": 1, "width": 10, "height": 10, "fields": {"desc": "x"}}], "quality": "low", "background": ""}
+                graph = apply(snapshot, recipe, values)
+                self.assertIn(snapshot["output"], graph)
+                with open(os.path.join(DATA, "templates", recipe.template + ".json"), "rb") as handle:
+                    raw = handle.read()
+                if hashlib.sha256(raw).hexdigest() == snapshot["template_sha256"]:
+                    self.assertEqual(snapshot["api"], entry_for(recipe)["api"])
+
+
 class SizesTest(unittest.TestCase):
     OPTIONS = ["(1K) 1024x1024 (1:1)", "(2K) 2048x2048 (1:1)", "(2K) 2848x1600 (16:9)", "(2K) 1600x2848 (9:16)", "Custom"]
 
