@@ -47,7 +47,10 @@ fn assert_focused_with_ring(ui: &UiTest, role: Role, label: &str) {
     let node = ui.harness.get_by_role_and_label(role, label);
     assert!(node.is_focused(), "{label} has the focus");
     let rect = node.rect();
-    assert!(ring_round(ui, rect), "a focus ring round {label} at {rect:?}");
+    assert!(
+        ring_round(ui, rect),
+        "a focus ring round {label} at {rect:?}"
+    );
 }
 
 #[test]
@@ -111,11 +114,17 @@ fn a_document_tab_shows_focus() {
     ui.harness.get_by_label("Alpha").focus();
     ui.settle();
     assert!(ui.harness.get_by_label("Alpha").is_focused());
-    assert!(ring_round(&ui, tab), "a focus ring inside the tab at {tab:?}");
+    assert!(
+        ring_round(&ui, tab),
+        "a focus ring inside the tab at {tab:?}"
+    );
     // The tab's close button follows it in the Tab order, and shows while focused.
     focus(&mut ui, Role::Button, "Close Alpha");
     assert_focused_with_ring(&ui, Role::Button, "Close Alpha");
-    assert!(ui.has_role(Role::Button, "New canvas"), "the + button is named");
+    assert!(
+        ui.has_role(Role::Button, "New canvas"),
+        "the + button is named"
+    );
 }
 
 #[test]
@@ -136,9 +145,13 @@ fn a_number_field_shows_focus() {
         .find(|node| node.rect().center() == rect.center())
         .map(|node| node.is_focused());
     // egui swaps a focused DragValue for its text editor, whose node may take the role.
-    let editing = ui.harness.get_all_by_role(Role::TextInput).any(|node| {
-        node.is_focused() && (node.rect().center() - rect.center()).length() < 2.0
-    });
+    let editing = ui
+        .harness
+        .get_all_by_role(Role::TextInput)
+        .any(|node| node.is_focused() && (node.rect().center() - rect.center()).length() < 2.0);
     assert!(focused == Some(true) || editing, "the field has the focus");
-    assert!(ring_round(&ui, rect), "a focus ring round the field at {rect:?}");
+    assert!(
+        ring_round(&ui, rect),
+        "a focus ring round the field at {rect:?}"
+    );
 }

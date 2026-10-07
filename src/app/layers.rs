@@ -339,12 +339,8 @@ impl EditorApp {
                                             }
                                         }
                                         if layer.group {
-                                            if icons::action_button(
-                                                ui,
-                                                "group",
-                                                tr("Select group"),
-                                            )
-                                            .clicked()
+                                            if icons::action_button(ui, "group", tr("Select group"))
+                                                .clicked()
                                             {
                                                 actions.select = Some((layer.id, false));
                                             }
@@ -740,8 +736,7 @@ impl EditorApp {
                                 "mask",
                             ),
                         ] {
-                            if icons::action_button(ui, command, tip).clicked()
-                            {
+                            if icons::action_button(ui, command, tip).clicked() {
                                 actions.command = Some(command);
                             }
                         }
@@ -750,8 +745,7 @@ impl EditorApp {
                         egui::Popup::menu(&adjustment).show(|ui| {
                             actions.adjustment = menus::adjustment_menu(ui);
                         });
-                        let filter =
-                            icons::action_button(ui, "filter", tr("New filter layer"));
+                        let filter = icons::action_button(ui, "filter", tr("New filter layer"));
                         egui::Popup::menu(&filter).show(|ui| {
                             actions.filter = menus::filter_menu(ui);
                         });

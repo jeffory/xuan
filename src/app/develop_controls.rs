@@ -19,7 +19,13 @@ fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive
 }
 
 /// A slider whose neutral value is 0 in the middle of its range: it fills from 0.
-fn bipolar(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
+fn bipolar(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: RangeInclusive<f32>,
+    unit: &str,
+) {
     slider_from(ui, label, value, range, unit, true);
 }
 

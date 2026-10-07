@@ -10,7 +10,11 @@ fn the_focus_ring_goes_round_or_inside_the_control() {
     let accent = Color32::from_rgb(10, 132, 255);
 
     let around = FocusRing::Around.shape(rect, 5.0, accent);
-    assert_eq!(around.rect, rect.expand(2.0), "2 points clear of the control");
+    assert_eq!(
+        around.rect,
+        rect.expand(2.0),
+        "2 points clear of the control"
+    );
     assert_eq!(around.corner_radius, egui::CornerRadius::same(7));
     assert_eq!(around.stroke_kind, StrokeKind::Outside);
 
@@ -60,16 +64,17 @@ fn a_disabled_button_has_flat_muted_unfaded_text() {
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 rects.0 = ui.add(super::Button::new("Add Path")).rect;
-                rects.1 = ui
-                    .add_enabled(false, super::Button::new("Rename"))
-                    .rect;
+                rects.1 = ui.add_enabled(false, super::Button::new("Rename")).rect;
             });
         });
         let name = if p.dark { "dark" } else { "light" };
         let (enabled, opacity) = text_shape(&output, "Add Path");
         assert_eq!((enabled, opacity), (p.text, 1.0), "{name}: enabled label");
         let (disabled, opacity) = text_shape(&output, "Rename");
-        assert_eq!(disabled, p.disabled_text, "{name}: the muted disabled colour");
+        assert_eq!(
+            disabled, p.disabled_text,
+            "{name}: the muted disabled colour"
+        );
         assert_eq!(opacity, 1.0, "{name}: not faded by egui's disabled opacity");
 
         // The disabled face is a flat fill in its own colour, at full opacity; the enabled
