@@ -146,9 +146,15 @@ impl EditorApp {
     /// Remembers changes to the Move tool's options, whichever control made them.
     pub(super) fn sync_move_options(&mut self) {
         let config = &self.config;
-        if (config.auto_select, config.ignore_transparent_pixels, config.show_controls)
-            != (self.auto_select, self.ignore_transparent_pixels, self.show_controls)
-        {
+        if (
+            config.auto_select,
+            config.ignore_transparent_pixels,
+            config.show_controls,
+        ) != (
+            self.auto_select,
+            self.ignore_transparent_pixels,
+            self.show_controls,
+        ) {
             self.config.auto_select = self.auto_select;
             self.config.ignore_transparent_pixels = self.ignore_transparent_pixels;
             self.config.show_controls = self.show_controls;

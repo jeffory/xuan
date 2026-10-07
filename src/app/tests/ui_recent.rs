@@ -73,7 +73,7 @@ fn saving_adds_the_project() {
     let project = directory.path().join("saved.xuan");
     ui.app_mut().session_mut().unwrap().path = Some(project.clone());
     assert!(ui.app_mut().save_current(false));
-    assert_eq!(recent(&ui), [project.clone()]);
+    assert_eq!(recent(&ui), std::slice::from_ref(&project));
     assert_eq!(saved_config(directory.path()).recent_files, [project]);
 }
 
@@ -109,7 +109,7 @@ fn clicking_an_entry_opens_it_and_clear_empties_the_list() {
         ui.app().session().unwrap().source.as_deref(),
         Some(file.as_path())
     );
-    assert_eq!(recent(&ui), [file.clone()]);
+    assert_eq!(recent(&ui), std::slice::from_ref(&file));
 
     // Choosing it again switches to the tab instead of opening a second one.
     ui.app_mut().dimensions = [8, 8];
