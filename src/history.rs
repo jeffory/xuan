@@ -124,6 +124,12 @@ impl History {
     pub fn dirty(&self) -> bool {
         self.revision != self.saved_revision || self.pending.is_some()
     }
+    /// Whether a committed edit separates the document from its saved state. Unlike
+    /// [`History::dirty`], an open live preview does not count, so titles and tabs get their
+    /// bullet when an edit is applied, not when its dialog opens.
+    pub fn edited(&self) -> bool {
+        self.revision != self.saved_revision
+    }
     pub fn undo_name(&self) -> Option<&str> {
         self.undo.last().map(|e| e.name.as_str())
     }

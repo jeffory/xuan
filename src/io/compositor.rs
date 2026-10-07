@@ -108,7 +108,7 @@ impl Dropped {
                 tr("Text alignment, spacing or paragraph box (kept until the text is edited)")
                     .into()
             }
-            Self::TextColors => tr("Per-letter text colors (kept until the text is edited)").into(),
+            Self::TextColors => tr("Per-letter text colours (kept until the text is edited)").into(),
             Self::TextFonts => tr("Per-letter fonts (kept until the text is edited)").into(),
             Self::TextAsPixels => tr("Text beyond Xuan's limits (imported as pixels)").into(),
             Self::LineShape => tr("Live line shapes (imported as pixels)").into(),
@@ -614,10 +614,10 @@ fn comp_text(value: &Value, version: u64, report: &mut ImportReport) -> Result<O
     let font_name = value["fontName"].as_str().unwrap_or("Helvetica");
     ensure!(font_name.len() <= 1024, "Invalid font name");
     if !value["colorRuns"].is_null() {
-        ensure!(version >= 10, "Per-letter colors need project version 10");
+        ensure!(version >= 10, "Per-letter colours need project version 10");
         validate_runs(&value["colorRuns"], units, |run| {
             for key in ["red", "green", "blue"] {
-                ensure!(run[key].is_number(), "Invalid text run color");
+                ensure!(run[key].is_number(), "Invalid text run colour");
                 unit_color(run, key)?;
             }
             Ok(())
@@ -685,7 +685,7 @@ fn comp_effects(value: &Value) -> Result<LayerEffects> {
             let value = number(r, key, default);
             ensure!(
                 value.is_finite() && (0.0..=1.0).contains(&value),
-                "Invalid layer effect color"
+                "Invalid layer effect colour"
             );
             *channel = (value * 255.0).round() as u8;
         }
@@ -813,7 +813,7 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
     );
     ensure!(
         manifest["colorSpace"].as_str().unwrap_or("sRGB") == "sRGB",
-        "Unsupported color space"
+        "Unsupported colour space"
     );
     let width = u32::try_from(manifest["width"].as_u64().context("Missing canvas width")?)?;
     let height = u32::try_from(

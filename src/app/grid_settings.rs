@@ -83,7 +83,7 @@ impl EditorApp {
                         .num_columns(2)
                         .spacing(egui::vec2(12.0, 10.0))
                         .show(ui, |ui| {
-                            ui.label(tr("Color"));
+                            ui.label(tr("Colour"));
                             ui.horizontal(|ui| {
                                 widgets::PopUp::from_id_salt("grid_color")
                                     .selected_text(tr(draft.color.name()))
@@ -102,7 +102,7 @@ impl EditorApp {
                                 let [r, g, b] = draft.rgb();
                                 let mut color = [r, g, b, 255];
                                 widgets::color_well(ui, &mut color)
-                                    .on_hover_text(tr("Choose a custom grid color"));
+                                    .on_hover_text(tr("Choose a custom grid colour"));
                                 if color[..3] != [r, g, b] {
                                     draft.custom_color = [color[0], color[1], color[2]];
                                     draft.color = GridColor::Custom;

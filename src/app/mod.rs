@@ -1,5 +1,6 @@
 use theme::PaletteExt as _;
 use xuan::i18n::tr;
+mod ai_regions;
 mod canvas;
 mod chrome;
 mod clipboard;
@@ -43,12 +44,14 @@ mod plugin_panes;
 mod plugin_sessions;
 mod plugins;
 mod providers;
+mod recent;
 mod rulers;
 mod selection_dialogs;
 mod settings;
 mod shortcuts;
 mod snap;
 mod stroke_smoothing;
+mod surfaces;
 mod system_theme;
 mod tablet;
 mod tabs;
@@ -56,6 +59,7 @@ mod tabs;
 mod tests;
 mod text_controls;
 mod theme;
+mod trim_dialog;
 mod widgets;
 #[cfg(target_os = "linux")]
 mod window_theme;
@@ -151,7 +155,7 @@ impl Tool {
             Self::Dropper => tr("Eyedropper"),
             Self::Hand => tr("Hand"),
             Self::Zoom => tr("Zoom"),
-            Self::Region => tr("Region"),
+            Self::Region => tr("AI Region"),
         }
     }
     fn is_brush(self) -> bool {
@@ -175,7 +179,7 @@ impl Tool {
                 "Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels",
             ),
             Self::Wand => {
-                tr("Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect")
+                tr("Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect")
             }
             Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
             Self::Pencil => tr(
@@ -230,6 +234,9 @@ struct Session {
     sample_cache: Option<eyedropper::SampleCache>,
     /// Full renders made for eyedropper sampling; lets tests check the cache.
     sample_renders: usize,
+    /// Boxes drawn with the AI Region tool, and the selected one.
+    ai_boxes: Vec<ai_regions::AiBox>,
+    ai_selected: Option<usize>,
 }
 
 impl Session {
@@ -256,6 +263,8 @@ impl Session {
             collapsed: HashSet::new(),
             sample_cache: None,
             sample_renders: 0,
+            ai_boxes: Vec::new(),
+            ai_selected: None,
         }
     }
 
@@ -368,6 +377,8 @@ enum Dialog {
     LayerEffects,
     /// Select → Expand… / Contract….
     SelectionAmount,
+    /// Image → Trim….
+    Trim,
     /// Select → Paths….
     Paths,
 }
@@ -448,6 +459,8 @@ pub struct EditorApp {
     config_path: Option<PathBuf>,
     /// Settings changed in memory (a field mid-drag) but not yet written.
     config_dirty: bool,
+    /// Which recent files exist, as of a moment ago.
+    recent_exists: recent::RecentExists,
     /// The command registry with the user's key bindings applied.
     keymap: commands::Keymap,
     /// The command palette (Ctrl+K), while it is open.
@@ -495,13 +508,15 @@ pub struct EditorApp {
     tolerance: u8,
     /// Select → Expand… / Contract…: the open dialog and the amounts it remembers.
     selection_amount: Option<selection_dialogs::AmountEdit>,
+    /// Image → Trim…: the choices it remembers.
+    trim_settings: trim_dialog::TrimSettings,
     /// Select → Paths…, while it is open.
     paths_edit: Option<paths_dialog::PathsEdit>,
     /// The Pen tool's path being drawn and the path shown for editing.
     pen: pen_tool::PenState,
     expand_amount: u32,
     contract_amount: u32,
-    /// Select → Color Range…, while open; and the Fuzziness it remembers.
+    /// Select → Colour Range…, while open; and the Fuzziness it remembers.
     color_range: Option<color_range::ColorRangeEdit>,
     color_range_fuzziness: u32,
     /// Why the last command used a built-in algorithm instead of the chosen provider.
@@ -540,6 +555,11 @@ pub struct EditorApp {
     dialog: Option<Dialog>,
     dimensions: [u32; 2],
     resolution: f32,
+    /// New Image: the Generate tab instead of a blank canvas, its Exact
+    /// size option and the document action it runs (plugin, action).
+    new_image_generate: bool,
+    new_image_exact: bool,
+    new_image_action: Option<(String, String)>,
     anchor: [f32; 2],
     effect: Option<EffectEdit>,
     /// Layer → Layer Effects… while it is open.
@@ -549,7 +569,10 @@ pub struct EditorApp {
     notice: Option<String>,
     /// Photoshop files read and waiting for their conversion report to be accepted.
     photoshop_imports: photoshop::PendingImports,
+    /// The latest status message, shown in the status bar for a few seconds.
     status: String,
+    /// The status text the status bar last saw and when it changed (UI time).
+    status_shown: (String, f64),
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
     /// The tab bar's scroll position, closed-tab history and pending closes.
@@ -584,6 +607,13 @@ pub struct EditorApp {
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
+    /// A popover a surface opened (New layer with AI, an AI Region box).
+    surface_popup: Option<surfaces::SurfacePopup>,
+    /// The popover opened this frame: the click that opened it is not a
+    /// click outside it.
+    surface_popup_fresh: bool,
+    /// A drop-down list was open when this frame's popovers were drawn.
+    surface_popup_picking: bool,
     /// Area the canvas occupied last frame, for the Navigator's viewport box.
     canvas_viewport: Option<egui::Rect>,
     /// Viewport, zoom and pan the Navigator last drew; a change schedules a repaint.
@@ -661,6 +691,7 @@ impl EditorApp {
             config: Default::default(),
             config_path: None,
             config_dirty: false,
+            recent_exists: Default::default(),
             keymap: Default::default(),
             palette: None,
             key_editor: Default::default(),
@@ -699,6 +730,7 @@ impl EditorApp {
             selection_mode: SelectionMode::Replace,
             tolerance: 32,
             selection_amount: None,
+            trim_settings: Default::default(),
             paths_edit: None,
             pen: Default::default(),
             expand_amount: 2,
@@ -736,6 +768,9 @@ impl EditorApp {
             dialog: None,
             dimensions: [1920, 1080],
             resolution: 72.0,
+            new_image_generate: false,
+            new_image_exact: false,
+            new_image_action: None,
             anchor: [0.5, 0.5],
             effect: None,
             layer_effects: None,
@@ -743,6 +778,7 @@ impl EditorApp {
             notice: None,
             photoshop_imports: Default::default(),
             status: String::new(),
+            status_shown: (String::new(), 0.0),
             rename: None,
             close_tab: None,
             tab_strip: Default::default(),
@@ -771,6 +807,9 @@ impl EditorApp {
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
+            surface_popup: None,
+            surface_popup_fresh: false,
+            surface_popup_picking: false,
             canvas_viewport: None,
             navigator_view: None,
         };
@@ -888,7 +927,22 @@ impl EditorApp {
         }
     }
 
-    fn open_path(&mut self, path: &Path, as_layer: bool) {
+    /// Opens `path` as a new tab (or, with `as_layer`, a layer of the current one). Whether it
+    /// opened; a file that did is added to File → Open Recent.
+    fn open_path(&mut self, path: &Path, as_layer: bool) -> bool {
+        let earlier = self.error.take();
+        self.open_path_unchecked(path, as_layer);
+        let opened = self.error.is_none();
+        if opened {
+            self.error = earlier;
+            if !as_layer {
+                self.remember_recent(path);
+            }
+        }
+        opened
+    }
+
+    fn open_path_unchecked(&mut self, path: &Path, as_layer: bool) {
         if xuan::raw::is_raw(path) {
             self.queue_raw(path, as_layer);
             return;
@@ -1122,9 +1176,10 @@ impl EditorApp {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into();
-                session.path = Some(path);
+                session.path = Some(path.clone());
                 session.history.mark_saved();
                 self.status = tr("Project saved").into();
+                self.remember_recent(&path);
                 true
             }
             Err(error) => {
@@ -1668,6 +1723,27 @@ impl EditorApp {
                 operations::flip_canvas(doc, command == "flip_canvas_h");
                 Ok(())
             }),
+            "rotate_canvas_cw" | "rotate_canvas_ccw" | "rotate_canvas_180" => {
+                let rotation = match command {
+                    "rotate_canvas_cw" => operations::CanvasRotation::Clockwise,
+                    "rotate_canvas_ccw" => operations::CanvasRotation::CounterClockwise,
+                    _ => operations::CanvasRotation::Half,
+                };
+                self.edit(tr("Rotate Canvas"), |doc| {
+                    operations::rotate_canvas(doc, rotation);
+                    Ok(())
+                });
+                if let Some(session) = self.session_mut() {
+                    session.fit = true;
+                }
+            }
+            "crop_to_selection" => {
+                self.edit(tr("Crop to Selection"), operations::crop_to_selection);
+                if let Some(session) = self.session_mut() {
+                    session.fit = true;
+                }
+            }
+            "trim" => self.open_trim(),
             "canvas_size" | "image_size" => {
                 if let Some(session) = self.session() {
                     let dimensions = [session.document.width, session.document.height];
@@ -1811,6 +1887,7 @@ impl EditorApp {
     }
 
     fn show_with_processor(&mut self, ctx: &egui::Context) {
+        self.sync_move_options();
         self.sync_palette(ctx);
 
         self.poll_job();
@@ -1866,8 +1943,8 @@ impl EditorApp {
             self.sidebar(ctx);
             self.canvas(ctx);
             self.plugin_action_dialog(ctx);
+            self.surface_popups(ctx);
             self.color_range_dialog(ctx);
-            self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
         self.command_palette(ctx);
@@ -1895,7 +1972,7 @@ impl EditorApp {
                 format!(
                     "{}{} —  Xuan",
                     s.title,
-                    if s.history.dirty() { " •" } else { "" }
+                    if s.history.edited() { " •" } else { "" }
                 )
             })
         };

@@ -81,6 +81,22 @@ pub struct Placed {
 #[serde(rename_all = "snake_case")]
 pub enum Fit {
     Source,
+    /// Scale evenly to cover the source bounds, centred; overflow stays.
+    Cover,
+}
+
+/// The rectangle an image of `pixels` covers `area` with: scaled evenly to
+/// the larger of the two ratios and centred, as `(x, y, width, height)`
+/// relative to the area. Nothing is cropped; what hangs over stays.
+pub fn cover(pixels: (f32, f32), area: (f32, f32)) -> (f32, f32, f32, f32) {
+    let scale = (area.0 / pixels.0.max(1.0)).max(area.1 / pixels.1.max(1.0));
+    let (width, height) = (pixels.0 * scale, pixels.1 * scale);
+    (
+        (area.0 - width) / 2.0,
+        (area.1 - height) / 2.0,
+        width,
+        height,
+    )
 }
 
 impl Placed {
@@ -187,8 +203,13 @@ impl Prepared {
     pub fn placed_size(&self, pixels: (u32, u32), placed: &Placed) -> Result<(f32, f32)> {
         placed.validate()?;
         let (w, h) = (pixels.0 as f32, pixels.1 as f32);
-        if placed.fit.is_some() {
-            return Ok((self.crop.2, self.crop.3));
+        match placed.fit {
+            Some(Fit::Source) => return Ok((self.crop.2, self.crop.3)),
+            Some(Fit::Cover) => {
+                let (_, _, width, height) = cover((w, h), (self.crop.2, self.crop.3));
+                return Ok((width, height));
+            }
+            None => {}
         }
         if placed.width.is_none() && placed.height.is_none() {
             return Ok((w / self.scale, h / self.scale));
@@ -200,6 +221,23 @@ impl Prepared {
         let width = placed.width.or(placed.height.map(|v| v * w / h));
         let height = placed.height.or(placed.width.map(|v| v * h / w));
         Ok((width.unwrap_or(w) / ux, height.unwrap_or(h) / uy))
+    }
+
+    /// Where an image of `pixels` lands: its top-left in export pixels and
+    /// its size in source pixels. `cover` centres it over the crop.
+    pub fn placed_at(
+        &self,
+        pixels: (u32, u32),
+        x: f32,
+        y: f32,
+        placed: &Placed,
+    ) -> Result<(f32, f32, (f32, f32))> {
+        let size = self.placed_size(pixels, placed)?;
+        if placed.fit == Some(Fit::Cover) {
+            let (dx, dy) = ((self.crop.2 - size.0) / 2.0, (self.crop.3 - size.1) / 2.0);
+            return Ok((x + dx * self.scale, y + dy * self.scale, size));
+        }
+        Ok((x, y, size))
     }
 
     /// The document transform of an output covering export pixels
@@ -565,7 +603,7 @@ pub fn place_layer(
     regions: Option<&[Region]>,
 ) -> Result<Layer> {
     ensure!(prepared.export.is_some(), "The action had no source image");
-    let size = prepared.placed_size(image.dimensions(), placed)?;
+    let (x, y, size) = prepared.placed_at(image.dimensions(), x, y, placed)?;
     let (width, height) = (image.width() as f32, image.height() as f32);
     let mut layer = Layer::image(name, image);
     layer.transform = prepared.placement_sized(x, y, size);
@@ -599,10 +637,7 @@ pub fn unsourced_placement(
     placed: &Placed,
 ) -> Result<Transform> {
     placed.validate()?;
-    ensure!(
-        placed.fit.is_none(),
-        "fit = \"source\" needs an action with a source"
-    );
+    ensure!(placed.fit.is_none(), "fit needs an action with a source");
     let (w, h) = (pixels.0 as f32, pixels.1 as f32);
     Ok(Transform {
         x,
@@ -629,7 +664,7 @@ pub fn place_mask(
     placed: &Placed,
 ) -> Result<GrayImage> {
     let transform = if prepared.export.is_some() {
-        let size = prepared.placed_size(mask.dimensions(), placed)?;
+        let (x, y, size) = prepared.placed_at(mask.dimensions(), x, y, placed)?;
         prepared.placement_sized(x, y, size)
     } else {
         unsourced_placement(mask.dimensions(), x, y, placed)?
@@ -768,6 +803,10 @@ pub fn replace_pixels(
     y: f32,
     placed: &Placed,
 ) -> Result<RgbaImage> {
+    ensure!(
+        placed.fit != Some(Fit::Cover),
+        "A result that replaces the source layer cannot use fit = \"cover\""
+    );
     let scale = f64::from(prepared.scale);
     ensure!(
         scale.is_finite() && scale > 0.0,
@@ -1521,5 +1560,54 @@ mod tests {
         let mut mask = GrayImage::from_pixel(8, 8, image::Luma([255]));
         grow_mask(&mut mask, -2);
         assert!(mask.as_raw().iter().all(|&v| v == 255));
+    }
+
+    #[test]
+    fn cover_scales_evenly_and_centres_without_cropping() {
+        // A wide image over a square area: height matches, width hangs over evenly.
+        assert_eq!(
+            cover((400.0, 100.0), (200.0, 200.0)),
+            (-300.0, 0.0, 800.0, 200.0)
+        );
+        // Same shape: exactly the area.
+        assert_eq!(
+            cover((100.0, 50.0), (200.0, 100.0)),
+            (0.0, 0.0, 200.0, 100.0)
+        );
+        // Extreme ratio from the review focus: 4096x1024 on 1000x1000.
+        let (x, y, w, h) = cover((4096.0, 1024.0), (1000.0, 1000.0));
+        assert_eq!((y, h), (0.0, 1000.0));
+        assert!((w - 4000.0).abs() < 1e-3 && (x + 1500.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn cover_results_are_placed_over_the_source_and_keep_their_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = document();
+        let source = Source {
+            from: SourceKind::Composite,
+            max_side: Some(200),
+            ..Source::default()
+        };
+        let prepared = prepare(&document, &source, &[], dir.path()).unwrap();
+        // Twice as wide as the source's shape: covers the height, overflows the sides.
+        let image = RgbaImage::new(800, 150);
+        let placed = Placed {
+            fit: Some(Fit::Cover),
+            ..Placed::default()
+        };
+        let layer = place_layer(&prepared, "Wide", image, 0.0, 0.0, &placed, None).unwrap();
+        assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (800, 150));
+        let t = layer.transform;
+        assert!((t.height - 300.0).abs() < 1e-3, "{t:?}");
+        assert!((t.width - 1600.0).abs() < 1e-3, "{t:?}");
+        assert!((t.x - (0.0 + (400.0 - 1600.0) / 2.0)).abs() < 1e-3, "{t:?}");
+        // Replacing the source layer cannot hang over: refused.
+        let pixels = RgbaImage::new(4, 4);
+        assert!(
+            replace_pixels(&prepared, &pixels, &RgbaImage::new(2, 2), 0.0, 0.0, &placed).is_err()
+        );
+        // Without a source there is nothing to cover.
+        assert!(unsourced_placement((8, 8), 0.0, 0.0, &placed).is_err());
     }
 }

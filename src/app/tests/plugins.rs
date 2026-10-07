@@ -427,6 +427,8 @@ fn mock_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
         cancelled: false,
         consented: false,
         provider: None,
+        surface: None,
+        ai_boxes: Vec::new(),
     }
 }
 
@@ -491,6 +493,7 @@ fn image_outputs_may_declare_their_placed_size() {
         (json!({"width": 1e9}), false),
         (json!({"fit": "bogus"}), false),
         (json!({"fit": "source"}), false),
+        (json!({"fit": "cover"}), false),
         (json!({"fit": "source", "width": 4}), false),
         (json!({"width": 12.0, "height": 6.0}), true),
     ] {
@@ -501,6 +504,81 @@ fn image_outputs_may_declare_their_placed_size() {
             .extend(extra.as_object().unwrap().clone());
         let result = app.apply_job_result(&job, json!({"outputs": [output]}));
         assert_eq!(result.is_ok(), ok, "{extra}: {result:?}");
+    }
+}
+
+#[test]
+fn an_exact_size_document_result_covers_a_canvas_of_that_size() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    // 40x10 from the model for a 20x20 canvas: covers the height, hangs over the sides.
+    let wide = dir.path().join("wide.png");
+    RgbaImage::from_pixel(40, 10, image::Rgba([9, 9, 9, 255]))
+        .save(&wide)
+        .unwrap();
+    let mut job = mock_job_without_document();
+    job.into = xuan::plugins::manifest::ResultInto::Document;
+    job.surface = Some(crate::app::surfaces::SurfaceRun {
+        surface: xuan::plugins::manifest::Surface::Document,
+        target: (20, 20),
+        exact: true,
+        resolution: 300.0,
+        boxes: Vec::new(),
+    });
+    app.apply_job_result(
+        &job,
+        json!({"outputs": [{"kind": "image", "path": wide, "name": "A fox"}]}),
+    )
+    .unwrap();
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (20, 20));
+    assert_eq!(document.resolution, 300.0);
+    let layer = &document.layers[0];
+    assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (40, 10));
+    assert_eq!(
+        (
+            layer.transform.x,
+            layer.transform.y,
+            layer.transform.width,
+            layer.transform.height
+        ),
+        (-30.0, 0.0, 80.0, 20.0)
+    );
+    assert!(
+        app.status
+            .contains(xuan::i18n::tr("Move the layer to reframe"))
+    );
+    // Without exact the document takes the image's own size.
+    job.surface.as_mut().unwrap().exact = false;
+    app.apply_job_result(&job, json!({"outputs": [{"kind": "image", "path": wide}]}))
+        .unwrap();
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (40, 10));
+}
+
+/// A finished job of the mock plugin that started with no document open.
+fn mock_job_without_document() -> crate::app::plugins::PluginJob {
+    crate::app::plugins::PluginJob {
+        id: uuid::Uuid::new_v4(),
+        plugin: "mock".into(),
+        action: "echo".into(),
+        label: "Echo".into(),
+        document: uuid::Uuid::nil(),
+        _work_dir: xuan::plugins::private_dir("xuan-job-").unwrap(),
+        prepared: xuan::plugins::jobs::Prepared::none(),
+        regions: Vec::new(),
+        inputs: serde_json::json!({}),
+        into: xuan::plugins::manifest::ResultInto::Layer,
+        mask_to_regions: false,
+        progress: None,
+        message: String::new(),
+        cancelled: false,
+        consented: false,
+        provider: None,
+        surface: None,
+        ai_boxes: Vec::new(),
     }
 }
 
@@ -858,6 +936,7 @@ fn the_send_prompt_names_the_extension() {
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
         provider: None,
+        surface: None,
     };
     app.plugins.action = Some(edit(6));
     assert_eq!(
@@ -1352,9 +1431,9 @@ fn the_permission_review_says_what_a_read_only_plugin_can_do() {
     ui.drop_files(&[&folder]);
     assert!(ui.has("Id: inst"));
     assert!(ui.has(
-        "• Can read the document and propose selections or new documents, but can't change your image"
+        "Can read the document and propose selections or new documents, but can't change your image"
     ));
-    assert!(!ui.has("• Edits documents directly (as undoable steps)"));
+    assert!(!ui.has("Edits documents directly (as undoable steps)"));
 }
 
 #[test]
@@ -1783,6 +1862,7 @@ fn a_selection_mask_is_listed_for_consent_and_needs_a_selection() {
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
         provider: None,
+        surface: None,
     });
     // Nothing selected: the action refuses to start, and no mask is listed.
     app.start_plugin_action("mock", "inpaint");
@@ -1962,11 +2042,11 @@ fn the_install_review_shows_the_plugin_before_anything_is_copied() {
     assert!(ui.has(&format!("From: {}", folder.display())));
     assert!(ui.has(&format!("Installs to: {}", target.display())));
     assert!(ui.has("Runs: sh plugin.sh"));
-    assert!(ui.has("• Says it connects to: example.com"));
-    assert!(ui.has("• Edits documents directly (as undoable steps)"));
-    assert!(ui.has(
-        "• Installing does not allow it to run: Xuan asks for that the first time it starts."
-    ));
+    assert!(ui.has("Says it connects to: example.com"));
+    assert!(ui.has("Edits documents directly (as undoable steps)"));
+    assert!(
+        ui.has("Installing does not allow it to run: Xuan asks for that the first time it starts.")
+    );
     assert!(!target.exists());
     ui.click("Cancel");
     assert_eq!(ui.app().dialog, None);
@@ -1993,7 +2073,7 @@ fn the_install_review_shows_the_plugin_before_anything_is_copied() {
     ui.drop_files(&[&folder]);
     assert!(ui.has("• Replaces the installed version 1.2.3"));
     assert!(ui.has(
-        "• It stays allowed: you allowed it before with the same folder, command and permissions."
+        "It stays allowed: you allowed it before with the same folder, command and permissions."
     ));
     ui.click("Update");
     assert!(ui.app().plugin_granted("inst"));
@@ -2606,6 +2686,563 @@ mod unix {
             lines[1],
             std::env::var("PYTHONPATH").unwrap_or_else(|_| "unset".into())
         );
+    }
+
+    #[test]
+    fn the_region_tool_is_offered_only_to_actions_with_regions() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        let manifest = format!(
+            "{MANIFEST}\n[[actions]]\nid = \"generate\"\nlabel = \"Generate…\"\nkind = \"generate\"\n\n[[actions.inputs]]\nid = \"prompt\"\ntype = \"text\"\n"
+        );
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        assert!(!app.region_tool_available());
+        app.start_plugin_action("mock", "generate");
+        assert!(app.plugins.action.is_some(), "{:?}", app.error);
+        assert!(!app.region_tool_available());
+        assert_ne!(app.tool, Tool::Region);
+        app.close_plugin_action();
+        app.start_plugin_action("mock", "echo");
+        assert!(app.plugins.action.is_some(), "{:?}", app.error);
+        assert!(app.region_tool_available());
+        assert_eq!(app.tool, Tool::Region);
+        app.close_plugin_action();
+        assert!(!app.region_tool_available());
+    }
+
+    #[test]
+    fn surface_runs_tell_the_plugin_where_they_came_from_and_the_target_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        let run = crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Region,
+            target: (20, 10),
+            exact: false,
+            resolution: 72.0,
+            boxes: Vec::new(),
+        };
+        let regions = vec![xuan::plugins::jobs::Region::rect(4.0, 4.0, 20.0, 10.0)];
+        let given = serde_json::Map::from_iter([("prompt".to_owned(), serde_json::json!("a hat"))]);
+        app.tool = Tool::Region;
+        assert_eq!(
+            app.run_from_surface("mock", "echo", &given, regions, run),
+            crate::app::surfaces::SurfaceStart::Started
+        );
+        assert_eq!(app.plugins.jobs.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let line = received
+            .lines()
+            .find(|l| l.contains("\"action/run\""))
+            .unwrap();
+        assert!(line.contains("\"surface\":\"region\""), "{line}");
+        assert!(
+            line.contains("\"target\":{\"height\":10,\"width\":20}")
+                || line.contains("\"target\":{\"width\":20,\"height\":10}"),
+            "{line}"
+        );
+        assert!(line.contains("\"prompt\":\"a hat\""), "{line}");
+        // The Region tool stays selected after a surface run.
+        assert_eq!(app.tool, Tool::Region);
+    }
+
+    #[test]
+    fn a_surface_run_waits_for_permission_and_never_runs_silently() {
+        // Review focus 1: not yet allowed → the permission prompt; disabled or offline → a status.
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        std::fs::write(dir.path().join("plugin.toml"), MANIFEST).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let run = crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Layer,
+            target: (16, 16),
+            exact: false,
+            resolution: 72.0,
+            boxes: Vec::new(),
+        };
+        assert_eq!(
+            app.run_from_surface(
+                "mock",
+                "echo",
+                &serde_json::Map::new(),
+                Vec::new(),
+                run.clone()
+            ),
+            crate::app::surfaces::SurfaceStart::Waiting
+        );
+        assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+        assert!(app.plugins.jobs.is_empty());
+        app.dialog = None;
+        app.config.plugins.entry("mock".into()).or_default().enabled = false;
+        assert_eq!(
+            app.run_from_surface("mock", "echo", &serde_json::Map::new(), Vec::new(), run),
+            crate::app::surfaces::SurfaceStart::NotStarted
+        );
+        assert!(app.plugins.jobs.is_empty());
+    }
+
+    #[test]
+    fn ai_region_boxes_run_grouped_or_one_by_one_and_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        // "echo" is a multi-box Edit; "one" takes one box (Add).
+        let manifest = MANIFEST.replace("[[actions]]\nid = \"echo\"", "[permissions]\ndocument = \"edit\"\n\n[[actions]]\nid = \"echo\"\nsurfaces = [\"region\"]\nverb = \"Edit\"")
+            + "\n[[actions]]\nid = \"one\"\nlabel = \"One…\"\nsurfaces = [\"region\"]\nverb = \"Add\"\nsource = { crop_to_regions = true }\n\n[[actions.inputs]]\nid = \"regions\"\ntype = \"regions\"\nmax = 1\nfields = [{ id = \"desc\", type = \"text\" }]\n";
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for (x, desc) in [(2.0, "hat"), (20.0, "scarf"), (40.0, "")] {
+            app.add_ai_box(Point::new(x, 2.0), Point::new(x + 10.0, 12.0));
+            let session = app.session_mut().unwrap();
+            session
+                .ai_boxes
+                .last_mut()
+                .unwrap()
+                .region
+                .fields
+                .insert("desc".into(), desc.into());
+        }
+        // The empty third box is not sent; the two Edit boxes go in one job.
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        // Switch the remaining box to Add and give it text: one job for it.
+        app.set_ai_box_action(0, "mock", "one");
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "a cat".into());
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        run_until(&context, &mut app, |app| {
+            app.plugins.jobs.is_empty() && app.dialog == Some(Dialog::PluginProposal)
+        });
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let runs: Vec<_> = received
+            .lines()
+            .filter(|l| l.contains("\"action/run\""))
+            .collect();
+        assert_eq!(runs.len(), 2);
+        assert!(
+            runs[0].contains("\"action\":\"echo\"")
+                && runs[0].contains("hat")
+                && runs[0].contains("scarf")
+        );
+        assert!(
+            runs[1].contains("\"action\":\"one\"") && runs[1].contains("\"surface\":\"region\"")
+        );
+    }
+
+    /// The mock plugin with surface actions: "echo" (Edit, several boxes,
+    /// with an enum field that has a default), "one" (Add, one box with a
+    /// text field), "plain" (a region action without any text) and "lay" (a
+    /// layer action with a prompt).
+    fn install_surface_mock(app: &mut EditorApp, dir: &Path, network: bool) {
+        let fixture = dir.join("fixture.png");
+        RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
+            .save(&fixture)
+            .unwrap();
+        std::fs::write(dir.join("plugin.sh"), script(&fixture)).unwrap();
+        let permissions = if network {
+            "[permissions]\ndocument = \"edit\"\nnetwork = [\"example.com\"]\n\n"
+        } else {
+            "[permissions]\ndocument = \"edit\"\n\n"
+        };
+        let manifest = MANIFEST
+            .replace(
+                "[[actions]]\nid = \"echo\"",
+                &format!("{permissions}[[actions]]\nid = \"echo\"\nsurfaces = [\"region\"]\nverb = \"Edit\""),
+            )
+            .replace(
+                "fields = [{ id = \"desc\", type = \"text\" }]",
+                "fields = [{ id = \"desc\", type = \"text\" }, { id = \"kind\", type = \"enum\", values = [\"obj\"], default = \"obj\" }]",
+            )
+            + "\n[[actions]]\nid = \"one\"\nlabel = \"One…\"\nsurfaces = [\"region\"]\nverb = \"Add\"\nsource = { crop_to_regions = true }\n\n[[actions.inputs]]\nid = \"regions\"\ntype = \"regions\"\nmax = 1\nfields = [{ id = \"desc\", type = \"text\" }]\n"
+            + "\n[[actions]]\nid = \"plain\"\nlabel = \"Plain…\"\nsurfaces = [\"region\"]\nverb = \"Plain\"\nsource = { crop_to_regions = true }\n\n[[actions.inputs]]\nid = \"regions\"\ntype = \"regions\"\nmax = 1\nfields = [{ id = \"kind\", type = \"enum\", values = [\"a\"] }]\n"
+            + "\n[[actions]]\nid = \"lay\"\nlabel = \"Lay…\"\nkind = \"generate\"\nsurfaces = [\"layer\"]\n\n[[actions.inputs]]\nid = \"prompt\"\ntype = \"text\"\n";
+        std::fs::write(dir.join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir).unwrap()], vec![]);
+    }
+
+    fn layer_run() -> crate::app::surfaces::SurfaceRun {
+        crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Layer,
+            target: (16, 16),
+            exact: false,
+            resolution: 72.0,
+            boxes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ai_region_boxes_stay_until_their_job_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.add_ai_box(Point::new(2.0, 2.0), Point::new(20.0, 20.0));
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "hat".into());
+        // Not allowed yet: the prompt shows and the box and its text stay.
+        assert_eq!(app.generate_ai_boxes(0), 0);
+        assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        app.dialog = None;
+        app.grant_plugin("mock", true);
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        assert_eq!(app.plugins.jobs.len(), 1);
+        // Plugins learn what this Xuan supports.
+        run_until(&context, &mut app, |app| app.plugins.jobs.is_empty());
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let init = received
+            .lines()
+            .find(|l| l.contains("\"initialize\""))
+            .unwrap();
+        assert!(
+            init.contains("\"fit_cover\"") && init.contains("\"surfaces\""),
+            "{init}"
+        );
+    }
+
+    #[test]
+    fn ai_region_boxes_come_back_when_their_job_does_not_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        // A box dragged past the canvas is kept on it.
+        app.add_ai_box(Point::new(50.0, 40.0), Point::new(90.0, 70.0));
+        let region = app.session().unwrap().ai_boxes[0].region.clone();
+        assert_eq!(
+            (region.x, region.y, region.width, region.height),
+            (50.0, 40.0, 14.0, 8.0)
+        );
+        (app.session_mut().unwrap().ai_boxes[0].region.fields).insert("desc".into(), "hat".into());
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        // The plugin stops before answering: the box is back, prompt and all.
+        app.stop_plugin("mock");
+        let boxes = &app.session().unwrap().ai_boxes;
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].region.fields["desc"], serde_json::json!("hat"));
+    }
+
+    #[test]
+    fn grouped_ai_boxes_each_run_with_their_own_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for x in [2.0, 20.0, 40.0] {
+            app.add_ai_box(Point::new(x, 2.0), Point::new(x + 10.0, 12.0));
+        }
+        let session = app.session_mut().unwrap();
+        for ai_box in &mut session.ai_boxes {
+            ai_box.region.fields.insert("desc".into(), "hat".into());
+        }
+        // The second box asks for something else than the other two.
+        (session.ai_boxes[1].values).insert("prompt".into(), "other".into());
+        assert_eq!(app.generate_ai_boxes(0), 2);
+        let jobs = &app.plugins.jobs;
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].regions.len(), 2);
+        assert_eq!(jobs[1].regions.len(), 1);
+        assert_eq!(jobs[1].inputs["prompt"], serde_json::json!("other"));
+        assert_ne!(jobs[0].inputs["prompt"], serde_json::json!("other"));
+    }
+
+    #[test]
+    fn a_second_job_does_not_replace_a_layer_another_is_replacing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        let manifest = MANIFEST.replace(
+            "[[actions]]\nid = \"echo\"",
+            "[permissions]\ndocument = \"edit\"\n\n[[actions]]\nid = \"swap\"\nlabel = \"Swap…\"\nresult = { into = \"replace\" }\n\n[[actions]]\nid = \"echo\"",
+        );
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [8, 8];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 1);
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert!(app.error.take().unwrap().contains("already replacing"));
+        // Another layer may be replaced meanwhile.
+        app.command("new_layer");
+        app.command("fill_fg");
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 2);
+    }
+
+    #[test]
+    fn a_surface_run_waits_for_consent_without_the_full_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), true);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let given =
+            serde_json::Map::from_iter([("prompt".to_owned(), serde_json::json!("a kite"))]);
+        let started = app.run_from_surface("mock", "lay", &given, Vec::new(), layer_run());
+        assert_eq!(started, crate::app::surfaces::SurfaceStart::Waiting);
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        assert!(!app.plugin_action_dialog_shown());
+        frame(&context, &mut app);
+        let window = egui::Id::new(("plugin_action", "mock", "lay"));
+        assert!(
+            !context.memory(|m| m.areas().visible_layer_ids().iter().any(|l| l.id == window)),
+            "the action's full dialog was drawn behind the consent prompt"
+        );
+        // Cancel: nothing is sent and no dialog is left behind.
+        app.answer_consent(false);
+        assert!(app.plugins.action.is_none());
+        assert!(app.plugins.jobs.is_empty());
+    }
+
+    #[test]
+    fn a_surface_run_checks_like_the_menu_and_leaves_an_open_dialog_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        // A plugin that asks before sending: a run that cannot start says
+        // why at once, without asking first.
+        install_surface_mock(&mut app, dir.path(), true);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        // The blank layer has no pixels: Edit needs an image layer.
+        app.add_ai_box(Point::new(2.0, 2.0), Point::new(12.0, 12.0));
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "hat".into());
+        assert_eq!(app.generate_ai_boxes(0), 0);
+        assert!(
+            app.error
+                .as_deref()
+                .is_some_and(|e| e.contains("image layer")),
+            "{:?}",
+            app.error
+        );
+        assert!(app.plugins.action.is_none());
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        app.error = None;
+        app.command("fill_fg");
+        app.start_plugin_action("mock", "echo");
+        assert!(app.plugins.action.is_some());
+        let started = app.run_from_surface(
+            "mock",
+            "lay",
+            &serde_json::Map::new(),
+            Vec::new(),
+            layer_run(),
+        );
+        assert_eq!(started, crate::app::surfaces::SurfaceStart::NotStarted);
+        assert_eq!(
+            app.plugins.action.as_ref().map(|e| e.action.as_str()),
+            Some("echo")
+        );
+    }
+
+    #[test]
+    fn only_boxes_with_a_prompt_are_sent_and_a_verb_change_keeps_only_the_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.add_ai_box(Point::new(2.0, 2.0), Point::new(12.0, 12.0));
+        app.add_ai_box(Point::new(30.0, 2.0), Point::new(40.0, 12.0));
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "hat".into());
+        // The second box has only its enum's default: it is not sent.
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert_eq!(app.plugins.jobs[0].regions.len(), 1);
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        // Switching it to Add does not make "obj" its prompt.
+        app.set_ai_box_action(0, "mock", "one");
+        assert_eq!(
+            app.session().unwrap().ai_boxes[0].region.fields["desc"],
+            serde_json::json!("")
+        );
+        assert_eq!(app.generate_ai_boxes(0), 0);
+        // An action without any text runs as it is.
+        app.set_ai_box_action(0, "mock", "plain");
+        assert_eq!(app.generate_ai_boxes(0), 1);
+    }
+
+    #[test]
+    fn surface_popovers_show_the_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.open_surface_popup(crate::app::surfaces::SurfacePopup::Layer {
+            plugin: "mock".into(),
+            action: "lay".into(),
+            anchor: egui::Pos2::ZERO,
+        });
+        run_until(&context, &mut app, |app| {
+            app.plugins
+                .surface_estimates
+                .get(&("mock".to_owned(), "lay".to_owned()))
+                .is_some_and(|e| e == "free")
+        });
+    }
+
+    #[test]
+    fn a_surface_estimate_withholds_typed_text_until_the_user_agrees_to_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), true);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        let key = ("mock".to_owned(), "lay".to_owned());
+        (app.surface_values("mock", "lay")).insert("prompt".into(), "a secret castle".into());
+        app.open_surface_popup(crate::app::surfaces::SurfacePopup::Layer {
+            plugin: "mock".into(),
+            action: "lay".into(),
+            anchor: egui::Pos2::ZERO,
+        });
+        run_until(&context, &mut app, |app| {
+            app.plugins.surface_estimates.contains_key(&key)
+        });
+        let log = received(dir.path());
+        let estimate = log.lines().find(|l| l.contains("action/estimate")).unwrap();
+        assert!(estimate.contains("\"action\":\"lay\""), "{estimate}");
+        assert!(!estimate.contains("secret castle"), "{estimate}");
+
+        // Once the user chose to send without asking, the estimate gets it.
+        let grant = app.config.plugins.get_mut("mock").unwrap().grant.as_mut();
+        grant.unwrap().send_without_asking = true;
+        app.plugins.surface_estimates.clear();
+        app.request_surface_estimate("mock", "lay");
+        run_until(&context, &mut app, |app| {
+            app.plugins.surface_estimates.contains_key(&key)
+        });
+        assert!(received(dir.path()).contains("secret castle"));
+    }
+
+    #[test]
+    fn a_settings_pane_is_drawn_in_manage_plugins_not_the_sidebar() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        let manifest = MANIFEST.replace("refresh = \"document\"", "placement = \"settings\"");
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        let key = "plugin:mock/info";
+        assert!(app.config.panes.get(key).is_none());
+        assert!(app.pane_title(key).is_none());
+        assert!(!app.pane_entries().iter().any(|(id, _, _)| id == key));
+        app.command("reset_panels");
+        assert!(app.config.panes.get(key).is_none());
+        // Its plugin's page in Manage Plugins opens it.
+        app.plugins.manager_selected = Some("mock".into());
+        app.dialog = Some(Dialog::Plugins);
+        run_until(&context, &mut app, |app| {
+            app.plugins
+                .panes
+                .get(key)
+                .is_some_and(|state| state.tree.is_some())
+        });
+    }
+
+    #[test]
+    fn several_jobs_run_on_one_document_and_their_results_wait_their_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for _ in 0..2 {
+            app.start_plugin_action("mock", "echo");
+            app.add_region(Point::new(2.0, 2.0), Point::new(10.0, 10.0));
+            app.run_plugin_action();
+            assert!(app.error.is_none(), "{:?}", app.error);
+        }
+        assert_eq!(app.plugins.jobs.len(), 2);
+        assert_eq!(app.running_jobs().len(), 2);
+        let echoed = |app: &EditorApp| {
+            (app.session().unwrap().document.layers.iter())
+                .filter(|l| l.name == "Echoed")
+                .count()
+        };
+        // Both finish; the second result waits while the first is proposed.
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal) && app.plugins.jobs.is_empty()
+        });
+        assert_eq!(echoed(&app), 1);
+        assert_eq!(app.plugins.completed.len(), 1);
+        app.resolve_proposal(true);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        app.resolve_proposal(true);
+        assert_eq!(echoed(&app), 2);
+        assert!(app.plugins.completed.is_empty());
     }
 
     #[test]

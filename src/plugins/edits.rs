@@ -1068,6 +1068,26 @@ pub enum Edit {
         width: u32,
         height: u32,
     },
+    /// Image → Rotate Canvas: turn the whole document `degrees` clockwise (90, 180 or 270; -90
+    /// is 270). Layers, masks, guides, paths and the selection turn with it.
+    RotateCanvas {
+        degrees: i32,
+    },
+    /// Image → Trim: crop the canvas to the visible composite's content, as Trim does.
+    /// `based_on` is `transparent` (the default), `top_left` or `bottom_right`; the sides
+    /// default to all four. Nothing is trimmed when there is nothing to trim.
+    Trim {
+        #[serde(default)]
+        based_on: crate::operations::TrimBasis,
+        #[serde(default = "yes")]
+        top: bool,
+        #[serde(default = "yes")]
+        bottom: bool,
+        #[serde(default = "yes")]
+        left: bool,
+        #[serde(default = "yes")]
+        right: bool,
+    },
 }
 
 /// One colour of a gradient, at `position` 0 (the start) to 1 (the end).
@@ -1469,6 +1489,13 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 height = u64::from(*h);
                 (0, 0)
             }
+            Edit::RotateCanvas { degrees } => {
+                if degrees.rem_euclid(180) == 90 {
+                    std::mem::swap(&mut width, &mut height);
+                }
+                (0, 0)
+            }
+            Edit::Trim { .. } => (canvas, canvas.saturating_mul(4)),
             Edit::ExtendCanvas {
                 left,
                 top,
@@ -1521,7 +1548,11 @@ impl Edit {
     pub fn direct_only(&self) -> bool {
         matches!(
             self,
-            Self::Crop { .. } | Self::ResizeCanvas { .. } | Self::ResizeImage { .. }
+            Self::Crop { .. }
+                | Self::ResizeCanvas { .. }
+                | Self::ResizeImage { .. }
+                | Self::RotateCanvas { .. }
+                | Self::Trim { .. }
         )
     }
 
@@ -1662,7 +1693,9 @@ macro_rules! layer_ids {
             | Edit::FeatherSelection { .. }
             | Edit::Crop { .. }
             | Edit::ResizeCanvas { .. }
-            | Edit::ResizeImage { .. } => Vec::new(),
+            | Edit::ResizeImage { .. }
+            | Edit::RotateCanvas { .. }
+            | Edit::Trim { .. } => Vec::new(),
         }
     };
 }
@@ -2589,6 +2622,29 @@ fn apply_each(
             }
             Edit::ResizeImage { width, height } => {
                 crate::operations::image_size(document, *width, *height)?;
+            }
+            Edit::RotateCanvas { degrees } => {
+                let rotation = crate::operations::CanvasRotation::from_degrees(*degrees)
+                    .context("The rotation must be 90, 180 or 270 degrees")?;
+                crate::operations::rotate_canvas(document, rotation);
+            }
+            Edit::Trim {
+                based_on,
+                top,
+                bottom,
+                left,
+                right,
+            } => {
+                crate::operations::trim(
+                    document,
+                    *based_on,
+                    crate::operations::TrimSides {
+                        top: *top,
+                        bottom: *bottom,
+                        left: *left,
+                        right: *right,
+                    },
+                )?;
             }
         }
     }
@@ -4696,5 +4752,40 @@ mod tests {
         copies["symmetry"] = json!({"mode": "radial", "segments": 32});
         assert!(cost(&document, &[edit(long)]).stroke <= MAX_STROKE_LENGTH);
         assert!(cost(&document, &[edit(copies)]).stroke > MAX_STROKE_LENGTH);
+    }
+
+    #[test]
+    fn rotate_canvas_and_trim_edits_work_and_reject_bad_angles() {
+        let mut document = Document::new(6, 4).unwrap();
+        let mut pixels = image::RgbaImage::new(6, 4);
+        pixels.put_pixel(2, 1, image::Rgba([255, 0, 0, 255]));
+        document.layers[0].pixels = Some(Arc::new(pixels));
+        let rotate = edit(json!({"op": "rotate_canvas", "degrees": 90}));
+        let trim = edit(json!({"op": "trim", "top": false}));
+        assert!(rotate.direct_only() && trim.direct_only());
+        assert_eq!(rotate.op(), "rotate_canvas");
+        run(&mut document, &[rotate]).unwrap();
+        assert_eq!((document.width, document.height), (4, 6));
+        run(
+            &mut document,
+            &[edit(json!({"op": "rotate_canvas", "degrees": -90}))],
+        )
+        .unwrap();
+        assert_eq!((document.width, document.height), (6, 4));
+        run(&mut document, &[trim]).unwrap();
+        // Left, right and bottom trimmed; the top margin stays.
+        assert_eq!((document.width, document.height), (1, 2));
+        for bad in [45, 0, 360] {
+            let edit = edit(json!({"op": "rotate_canvas", "degrees": bad}));
+            assert!(run(&mut document.clone(), &[edit]).is_err(), "{bad}");
+        }
+        assert!(
+            serde_json::from_value::<Edit>(json!({"op": "trim", "based_on": "middle"})).is_err()
+        );
+        run(
+            &mut document,
+            &[edit(json!({"op": "trim", "based_on": "top_left"}))],
+        )
+        .unwrap();
     }
 }

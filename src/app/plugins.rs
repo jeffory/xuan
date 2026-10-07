@@ -19,7 +19,9 @@ use xuan::{
         self, LoadError, Manifest, edits,
         host::{Incoming, Process},
         jobs::{self, Prepared, Region},
-        manifest::{Action, ActionKind, Capability, DocumentAccess, InputKind, Menu, ResultInto},
+        manifest::{
+            Action, ActionKind, Capability, DocumentAccess, InputKind, Menu, ResultInto, Surface,
+        },
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
         ui::Node,
     },
@@ -52,6 +54,10 @@ fn split_pane_key(key: &str) -> Option<(&str, &str)> {
 /// Everything the editor keeps about plugins.
 #[derive(Default)]
 pub(super) struct PluginState {
+    /// The values each action's surface popover last used, this session.
+    pub surface_values: HashMap<(String, String), Map<String, Value>>,
+    /// The latest estimate of each action shown on a surface.
+    pub surface_estimates: HashMap<(String, String), String>,
     pub manifests: Vec<Manifest>,
     pub errors: Vec<LoadError>,
     processes: HashMap<String, Process>,
@@ -146,6 +152,8 @@ enum Pending {
     Format(Uuid),
     Render(String),
     Estimate(String, String),
+    /// An estimate for a surface popover: plugin and action.
+    SurfaceEstimate(String, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -175,6 +183,11 @@ pub(super) struct PluginJob {
     pub consented: bool,
     /// Set when the job stands in for a built-in command.
     pub provider: Option<super::providers::ProviderRun>,
+    /// Set when a surface (Layers panel, AI Region, New Image) started it.
+    pub surface: Option<super::surfaces::SurfaceRun>,
+    /// The AI Region boxes it sends, hidden while it runs and put back on
+    /// their document if it fails, is cancelled or its result is refused.
+    pub ai_boxes: Vec<super::ai_regions::AiBox>,
 }
 
 /// A plugin action in a menu.
@@ -240,6 +253,9 @@ pub(super) struct ActionEdit {
     /// Set when the action stands in for a built-in command: it runs without its
     /// dialog and its mask is applied as that command's result.
     pub provider: Option<super::providers::ProviderRun>,
+    /// Set when a surface (Layers panel, AI Region, New Image) started it
+    /// instead of the dialog.
+    pub surface: Option<super::surfaces::SurfaceRun>,
 }
 
 #[derive(Default)]
@@ -501,11 +517,13 @@ impl EditorApp {
         }
     }
 
-    /// Add the panes of installed plugins that the layout does not know yet.
+    /// Add the sidebar panes of installed plugins that the layout does not know yet.
     pub(super) fn add_plugin_panes(&mut self) -> bool {
         let mut changed = false;
         for manifest in &self.plugins.manifests {
-            for pane in &manifest.panes {
+            for pane in (manifest.panes.iter())
+                .filter(|pane| pane.placement == plugins::manifest::PanePlacement::Sidebar)
+            {
                 let key = pane_key(&manifest.plugin.id, &pane.id);
                 if self.config.panes.get(&key).is_none() {
                     self.config.panes.ensure(&key);
@@ -529,7 +547,11 @@ impl EditorApp {
         if !self.config.plugins.get(plugin).is_none_or(|c| c.enabled) {
             return None;
         }
-        manifest.pane(pane).map(|pane| pane.title.clone())
+        // A pane on the plugin's settings page is not a sidebar pane.
+        manifest
+            .pane(pane)
+            .filter(|pane| pane.placement == plugins::manifest::PanePlacement::Sidebar)
+            .map(|pane| pane.title.clone())
     }
 
     pub(super) fn plugin_enabled(&self, plugin: &str) -> bool {
@@ -597,7 +619,13 @@ impl EditorApp {
             process.stop();
         }
         self.plugins.pending.retain(|(id, _), _| id != plugin);
-        self.plugins.jobs.retain(|job| job.plugin != plugin);
+        let (stopped, running) = std::mem::take(&mut self.plugins.jobs)
+            .into_iter()
+            .partition(|job| job.plugin == plugin);
+        self.plugins.jobs = running;
+        for job in stopped {
+            self.restore_ai_boxes(job);
+        }
         self.fail_format_jobs(plugin, None);
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
@@ -759,7 +787,12 @@ impl EditorApp {
             // messages, and what is sent meanwhile waits in the process.
             let id = process.initialize(json!({
                 "protocol": plugins::manifest::PROTOCOL,
-                "host": {"name": "Xuan", "version": env!("CARGO_PKG_VERSION")},
+                "host": {
+                    "name": "Xuan",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    // What this Xuan understands beyond its protocol version.
+                    "features": ["surfaces", "fit_cover"],
+                },
                 "plugin_dir": manifest.dir,
                 "data_dir": data_dir,
                 "models_dir": models_dir,
@@ -1309,7 +1342,7 @@ impl EditorApp {
                         job.progress = Some(fraction.clamp(0.0, 1.0) as f32);
                     }
                     if let Some(message) = params.get("message").and_then(Value::as_str) {
-                        job.message = message.chars().take(200).collect();
+                        job.message = one_line(message, 200);
                     }
                 }
             }
@@ -1435,16 +1468,16 @@ impl EditorApp {
                     && edit.action == action
                     && let Ok(value) = result
                 {
-                    let cost = value.get("cost").and_then(Value::as_str).unwrap_or("");
-                    let seconds = value.get("seconds").and_then(Value::as_f64);
-                    let mut text = cost.to_owned();
-                    if let Some(seconds) = seconds {
-                        if !text.is_empty() {
-                            text.push_str(" · ");
-                        }
-                        text.push_str(&format!("≈{seconds:.0} s"));
-                    }
-                    edit.estimate = (!text.is_empty()).then_some(text);
+                    edit.estimate = estimate_text(&value);
+                }
+            }
+            Pending::SurfaceEstimate(plugin_id, action) => {
+                if let Ok(value) = result
+                    && let Some(text) = estimate_text(&value)
+                {
+                    self.plugins
+                        .surface_estimates
+                        .insert((plugin_id, action), text);
                 }
             }
         }
@@ -1556,37 +1589,8 @@ impl EditorApp {
         if !self.action_models_ready(plugin, action, inputs) {
             return;
         }
-        if self
-            .plugins
-            .jobs
-            .iter()
-            .any(|job| Some(job.document) == self.session().map(|s| s.document.id))
-        {
-            self.error = Some(tr("A plugin action is already running on this document").into());
-            return;
-        }
-        if spec.needs_image()
-            && self
-                .session()
-                .and_then(|s| s.document.active())
-                .is_none_or(|layer| layer.pixels.is_none() || layer.group)
-            && spec.source.from == plugins::manifest::SourceKind::Layer
-        {
-            self.error = Some(tr("Select an image layer first").into());
-            return;
-        }
-        if spec.kind != ActionKind::Generate && self.session().is_none() {
-            self.error = Some(tr("Open a document first").into());
-            return;
-        }
-        if spec.needs_image()
-            && spec.source.mask == plugins::manifest::SourceMask::Selection
-            && spec.source.mask_empty == plugins::manifest::MaskEmpty::Error
-            && self
-                .session()
-                .is_some_and(|s| s.document.selection.is_none())
-        {
-            self.error = Some(tr("Select an area first").into());
+        if let Some(problem) = self.action_start_problem(&spec) {
+            self.error = Some(problem.into());
             return;
         }
         let mut values = Map::new();
@@ -1618,6 +1622,7 @@ impl EditorApp {
                 into: ResultInto::Layer,
                 consented: false,
                 provider,
+                surface: None,
             });
             self.run_plugin_action();
             return;
@@ -1638,6 +1643,7 @@ impl EditorApp {
             },
             consented: false,
             provider: None,
+            surface: None,
         });
         if spec.regions_input().is_some() {
             self.set_tool(Tool::Region);
@@ -1645,8 +1651,85 @@ impl EditorApp {
         self.request_estimate();
     }
 
+    /// Why `spec` cannot start on the current document, if it cannot: the
+    /// checks the menu and the surfaces share.
+    pub(super) fn action_start_problem(&self, spec: &Action) -> Option<&'static str> {
+        if spec.needs_image()
+            && self
+                .session()
+                .and_then(|s| s.document.active())
+                .is_none_or(|layer| layer.pixels.is_none() || layer.group)
+            && spec.source.from == plugins::manifest::SourceKind::Layer
+        {
+            return Some(tr("Select an image layer first"));
+        }
+        if spec.kind != ActionKind::Generate && self.session().is_none() {
+            return Some(tr("Open a document first"));
+        }
+        if spec.needs_image()
+            && spec.source.mask == plugins::manifest::SourceMask::Selection
+            && spec.source.mask_empty == plugins::manifest::MaskEmpty::Error
+            && self
+                .session()
+                .is_some_and(|s| s.document.selection.is_none())
+        {
+            return Some(tr("Select an area first"));
+        }
+        None
+    }
+
+    /// Send `action/estimate` for a surface: the action's values, no source
+    /// or regions (nothing from the document goes before a run), and before
+    /// send consent none of the texts either.
+    pub(super) fn send_surface_estimate(
+        &mut self,
+        plugin: &str,
+        action: &str,
+        mut values: Map<String, Value>,
+    ) {
+        let Some(spec) = (self.plugins.manifest(plugin))
+            .and_then(|m| m.action(action))
+            .cloned()
+        else {
+            return;
+        };
+        if self.sends_need_consent(plugin) {
+            withhold_private(&spec, &mut values);
+        }
+        let Ok(work_dir) = self.plugins.scratch_dir(plugin) else {
+            return;
+        };
+        let params = json!({
+            "job": Uuid::new_v4(),
+            "action": action,
+            "work_dir": work_dir,
+            "inputs": values,
+            "source": Value::Null,
+            "document": Value::Null,
+        });
+        let Ok(process) = self.plugin_process(plugin) else {
+            return;
+        };
+        if let Ok(id) = process.request("action/estimate", params) {
+            self.plugins.pending.insert(
+                (plugin.to_owned(), id),
+                Pending::SurfaceEstimate(plugin.to_owned(), action.to_owned()),
+            );
+        }
+    }
+
+    /// Whether the open action shows its dialog: surface runs never do.
+    pub(super) fn plugin_action_dialog_shown(&self) -> bool {
+        self.plugins
+            .action
+            .as_ref()
+            .is_some_and(|edit| edit.surface.is_none())
+    }
+
     pub(super) fn close_plugin_action(&mut self) {
+        // A surface run keeps the tool it was started from (AI Region).
         if let Some(edit) = self.plugins.action.take()
+            && edit.surface.is_none()
             && self.tool == Tool::Region
         {
             self.set_tool(if edit.previous_tool == Tool::Region {
@@ -1687,14 +1770,7 @@ impl EditorApp {
             _ => Prepared::none(),
         };
         if withheld {
-            for input in &spec.inputs {
-                if matches!(
-                    input.kind,
-                    InputKind::Text | InputKind::Multiline | InputKind::Path | InputKind::Secret
-                ) {
-                    inputs.remove(&input.id);
-                }
-            }
+            withhold_private(&spec, &mut inputs);
         }
         if let Some(input) = spec.regions_input() {
             inputs.insert(input.id.clone(), Value::Array(prepared.regions.clone()));
@@ -1725,6 +1801,15 @@ impl EditorApp {
                     json!({"x": min_x, "y": min_y, "width": max_x - min_x, "height": max_y - min_y}),
                 );
             }
+        }
+        // A surface run says where it came from and how many document pixels
+        // the result will cover, so the plugin can render at least that.
+        if let Some(run) = &edit.surface {
+            inputs.insert("surface".into(), json!(run.surface));
+            inputs.insert(
+                "target".into(),
+                json!({"width": run.target.0, "height": run.target.1}),
+            );
         }
         // Inputs as stored on the layer: regions in document coordinates.
         let mut stored = edit.values.clone();
@@ -1797,6 +1882,35 @@ impl EditorApp {
             return;
         }
         let chosen = edit.into;
+        // Two jobs replacing the same layer would each overwrite the other's
+        // result: the second waits until the first is done.
+        let into = if spec.result.into == ResultInto::Ask {
+            chosen
+        } else {
+            spec.result.into
+        };
+        let session = self.session();
+        let active = session.and_then(|s| s.document.active).filter(|_| {
+            spec.kind == ActionKind::Edit
+                && spec.source.from == plugins::manifest::SourceKind::Layer
+        });
+        if into == ResultInto::Replace
+            && let Some(layer) = active
+            && self.plugins.jobs.iter().any(|job| {
+                job.into == ResultInto::Replace
+                    && Some(job.document) == session.map(|s| s.document.id)
+                    && job.prepared.layer == Some(layer)
+            })
+        {
+            self.error = Some(
+                tr("A plugin is already replacing this layer; wait for it to finish or cancel it")
+                    .into(),
+            );
+            if (self.plugins.action.as_ref()).is_some_and(|e| e.surface.is_some()) {
+                self.plugins.action = None;
+            }
+            return;
+        }
         // A run that sends document data to a plugin that declares network
         // hosts waits for the user to confirm it.
         let consented =
@@ -1816,6 +1930,7 @@ impl EditorApp {
         }
         let document = self.session().map(|s| s.document.id);
         let provider = (self.plugins.action.as_ref()).and_then(|edit| edit.provider.clone());
+        let surface = (self.plugins.action.as_ref()).and_then(|edit| edit.surface.clone());
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
             let work_dir = plugins::private_dir("xuan-job-")?;
@@ -1836,26 +1951,49 @@ impl EditorApp {
                 prepared,
                 regions,
                 inputs,
-                into: if spec.result.into == ResultInto::Ask {
-                    chosen
-                } else {
-                    spec.result.into
-                },
+                into,
                 mask_to_regions: spec.result.mask_to_regions,
                 progress: None,
                 message: String::new(),
                 cancelled: false,
                 consented,
                 provider,
+                surface: surface.clone(),
+                ai_boxes: Vec::new(),
             });
             Ok(())
         })();
         match result {
+            // The status bar shows the running job, so no "started" message.
             Ok(()) => {
                 self.close_plugin_action();
-                self.status = format!("{} {}", spec.label.trim_end_matches('…'), tr("started"));
+                // AI Region boxes go with their job, and come back if it fails.
+                if let Some(run) = surface.filter(|run| !run.boxes.is_empty())
+                    && let Some(session) =
+                        (self.sessions.iter_mut()).find(|s| Some(s.document.id) == document)
+                {
+                    let (sent, kept) = std::mem::take(&mut session.ai_boxes)
+                        .into_iter()
+                        .partition(|b| run.boxes.contains(&b.id));
+                    session.ai_boxes = kept;
+                    session.ai_selected = None;
+                    if let Some(started) = self.plugins.jobs.iter_mut().find(|j| j.id == job) {
+                        started.ai_boxes = sent;
+                    }
+                }
             }
-            Err(error) => self.error = Some(format!("{error:#}")),
+            Err(error) => {
+                self.error = Some(format!("{error:#}"));
+                // A surface run has no dialog to go back to.
+                if self
+                    .plugins
+                    .action
+                    .as_ref()
+                    .is_some_and(|e| e.surface.is_some())
+                {
+                    self.plugins.action = None;
+                }
+            }
         }
     }
 
@@ -1886,6 +2024,7 @@ impl EditorApp {
             Ok(value) if !job.cancelled => value,
             Ok(_) => {
                 self.status = tr("Cancelled").into();
+                self.restore_ai_boxes(job);
                 return;
             }
             Err(error) => {
@@ -1894,6 +2033,7 @@ impl EditorApp {
                 } else {
                     self.error = Some(error);
                 }
+                self.restore_ai_boxes(job);
                 return;
             }
         };
@@ -1908,10 +2048,26 @@ impl EditorApp {
         self.apply_completed_results();
     }
 
+    /// Put a job's AI Region boxes back on their document, after it failed,
+    /// was cancelled or its result was refused, so the user can try again.
+    fn restore_ai_boxes(&mut self, job: PluginJob) {
+        if job.ai_boxes.is_empty() {
+            return;
+        }
+        if let Some(session) = (self.sessions.iter_mut()).find(|s| s.document.id == job.document) {
+            for ai_box in job.ai_boxes {
+                if !session.ai_boxes.iter().any(|b| b.id == ai_box.id) {
+                    session.ai_boxes.push(ai_box);
+                }
+            }
+        }
+    }
+
     /// Whether a job result can be shown now: nothing else is open or under way
-    /// that a proposal would interrupt.
+    /// that a proposal would interrupt, an AI popover included.
     fn ready_for_plugin_result(&self) -> bool {
-        self.dialog.is_none()
+        self.surface_popup.is_none()
+            && self.dialog.is_none()
             && self.error.is_none()
             && self.plugins.proposal.is_none()
             && self.job.is_none()
@@ -1929,6 +2085,7 @@ impl EditorApp {
         {
             if let Err(error) = self.apply_job_result(&job, value) {
                 self.error = Some(format!("{}: {error:#}", job.label));
+                self.restore_ai_boxes(job);
             }
         }
     }
@@ -2168,9 +2325,39 @@ impl EditorApp {
                 Output::None => {}
             }
         }
+        // New Image's Generate tab: its resolution, and with Exact size a
+        // canvas of the size asked for that the image covers, centred.
+        let made = job
+            .surface
+            .as_ref()
+            .filter(|run| run.surface == Surface::Document);
         for (name, image, provenance) in new_documents {
-            let mut document = Document::new(image.width(), image.height())?;
+            let (pixels_w, pixels_h) = image.dimensions();
+            let (width, height) = match made {
+                Some(run) if run.exact => run.target,
+                _ => (pixels_w, pixels_h),
+            };
+            let mut document = Document::new(width, height)?;
+            if let Some(run) = made {
+                document.resolution = run.resolution;
+            }
             let mut layer = Layer::image(&name, image);
+            if made.is_some_and(|run| run.exact) {
+                let (x, y, w, h) = jobs::cover(
+                    (pixels_w as f32, pixels_h as f32),
+                    (width as f32, height as f32),
+                );
+                layer.transform = xuan::document::Transform {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    ..xuan::document::Transform::new(pixels_w, pixels_h)
+                };
+                if w > width as f32 + 0.5 || h > height as f32 + 0.5 {
+                    self.status = tr("Move the layer to reframe").into();
+                }
+            }
             layer.generated = Some(generated(None, None));
             layer.provenance = provenance;
             document.layers = vec![layer];
@@ -2368,6 +2555,18 @@ impl EditorApp {
     }
 
     // --- Regions ---------------------------------------------------------
+
+    /// Whether the tool rail offers the Region tool: while the open plugin
+    /// action has a `regions` input to draw into, or, as the AI Region tool,
+    /// when a plugin offers a region action and a document is open.
+    pub(super) fn region_tool_available(&self) -> bool {
+        let dialog = self.plugins.action.as_ref().is_some_and(|edit| {
+            (self.plugins.manifest(&edit.plugin))
+                .and_then(|manifest| manifest.action(&edit.action))
+                .is_some_and(|action| action.regions_input().is_some())
+        });
+        dialog || (self.session().is_some() && !self.surface_actions(Surface::Region).is_empty())
+    }
 
     pub(super) fn add_region(&mut self, start: xuan::document::Point, end: xuan::document::Point) {
         let Some(edit) = &mut self.plugins.action else {
@@ -2840,9 +3039,20 @@ impl EditorApp {
     }
 }
 
-/// `text` on one line, without control characters, cut to `max` characters.
+/// Remove the values a plugin that needs send consent may not see before
+/// the user agreed (see [`InputKind::private`]): an estimate goes out first.
+fn withhold_private(spec: &Action, inputs: &mut Map<String, Value>) {
+    for input in spec.inputs.iter().filter(|i| i.kind.private()) {
+        inputs.remove(&input.id);
+    }
+}
+
+/// `text` on one line, without control characters or characters that are
+/// invisible or reorder text (see [`super::plugin_files::invisible`]), cut to
+/// `max` characters. For any plugin text Xuan shows.
 pub(super) fn one_line(text: &str, max: usize) -> String {
     text.chars()
+        .filter(|&c| !super::plugin_files::invisible(c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(max)
         .collect()
@@ -2862,8 +3072,25 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
     }
 }
 
+/// An `action/estimate` answer as one line: "cost · ≈N s". The cost is the
+/// plugin's words: one line, without invisible characters, at most 120.
+fn estimate_text(value: &Value) -> Option<String> {
+    let cost = one_line(value.get("cost").and_then(Value::as_str).unwrap_or(""), 120);
+    let cost = cost.trim();
+    let seconds = (value.get("seconds").and_then(Value::as_f64))
+        .filter(|s| s.is_finite() && (0.0..1e9).contains(s));
+    let mut text = cost.to_owned();
+    if let Some(seconds) = seconds {
+        if !text.is_empty() {
+            text.push_str(" · ");
+        }
+        text.push_str(&format!("≈{seconds:.0} s"));
+    }
+    (!text.is_empty()).then_some(text)
+}
+
 /// The most regions an action's regions input takes.
-fn region_limit(input: &plugins::manifest::Input) -> usize {
+pub(super) fn region_limit(input: &plugins::manifest::Input) -> usize {
     input.max.map_or(plugins::manifest::MAX_REGIONS, |max| {
         (max.max(0.0) as usize).min(plugins::manifest::MAX_REGIONS)
     })

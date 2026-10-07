@@ -60,7 +60,7 @@ fn every_tool_and_swatch_fits_in_the_window_at_the_minimum_size() {
         let rect = button_rect(&ui, label);
         assert!(window.contains_rect(rect), "{label} at {rect:?}");
     }
-    for label in ["Foreground color", "Background color"] {
+    for label in ["Foreground colour", "Background colour"] {
         let rect = swatch_rect(&ui, label);
         assert!(window.contains_rect(rect), "{label} at {rect:?}");
     }
@@ -84,4 +84,52 @@ fn clicking_a_tool_in_a_later_column_selects_it() {
         .expect("a tool outside the first column");
     ui.click(label);
     assert_eq!(ui.app().tool, tool);
+}
+
+fn panel_rect(ui: &UiTest, id: &str) -> egui::Rect {
+    egui::containers::panel::PanelState::load(&ui.harness.ctx, egui::Id::new(id))
+        .unwrap_or_else(|| panic!("panel {id}"))
+        .rect
+}
+
+/// Both swatches, swap and reset lie inside the rail, its pinned footer and the window.
+fn assert_footer_visible(width: f32, height: f32) {
+    let (_directory, ui) = at_size(width, height);
+    let window = ui.harness.ctx.content_rect();
+    let rail = panel_rect(&ui, "tools");
+    let footer = panel_rect(&ui, "tool_swatches");
+    let mut rects = vec![
+        ("Foreground colour", swatch_rect(&ui, "Foreground colour")),
+        ("Background colour", swatch_rect(&ui, "Background colour")),
+    ];
+    for label in ["Swap colours (X)", "Default colours (D)"] {
+        rects.push((label, button_rect(&ui, label)));
+    }
+    for (label, rect) in rects {
+        let size = format!("{label} at {rect:?} at {width}x{height}");
+        assert!(window.contains_rect(rect), "outside the window: {size}");
+        assert!(
+            rail.contains_rect(rect),
+            "outside the rail {rail:?}: {size}"
+        );
+        assert!(
+            footer.contains_rect(rect),
+            "outside the footer {footer:?}: {size}"
+        );
+    }
+}
+
+#[test]
+fn the_swatch_footer_is_fully_visible_at_the_minimum_size() {
+    assert_footer_visible(850.0, 560.0);
+}
+
+#[test]
+fn the_swatch_footer_is_fully_visible_at_1280_by_860() {
+    assert_footer_visible(1280.0, 860.0);
+}
+
+#[test]
+fn the_swatch_footer_is_fully_visible_in_a_tall_window() {
+    assert_footer_visible(1280.0, 1400.0);
 }

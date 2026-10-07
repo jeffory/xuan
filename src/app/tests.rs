@@ -51,6 +51,9 @@ mod pen;
 #[path = "tests/providers.rs"]
 mod providers;
 
+#[path = "tests/canvas_commands.rs"]
+mod canvas_commands;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

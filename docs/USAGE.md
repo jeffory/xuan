@@ -128,7 +128,8 @@ Press **Ctrl+K** (or choose **Help → Command Palette…**) to search every com
 - **Transforms:** move, scale, rotate, flip, free perspective distortion, numeric controls, shared transforms for several layers or folders, and snapping to guides, the grid, layers and the canvas (see [Rulers, guides and grid](#rulers-guides-and-grid)). Original source pixels remain available during transforms. Move / Transform has **Ignore Transparent Pixels** checked by default to select only at visible pixels; uncheck it to select and drag anywhere inside a layer's bounds.
 - **Selections:** rectangle, ellipse, freehand/polygonal lasso, contiguous/global magic wand, add/subtract/intersect, inverse, feather, outline movement, and moving or duplicating selected pixels.
 - **Select menu:** **Layer's Pixels** selects the active layer's opacity (ignoring its mask), **Mask's Black Areas** selects what the active layer's mask hides (grey is partly selected), and **Expand…** / **Contract…** grow or shrink the selection by 1–500 pixels with rounded corners. Contract also shrinks away from the canvas edges, as in Compositor. Soft (feathered) selections keep their soft edge; each is one undo step and runs in the background, so a large amount can be cancelled.
-- **Select → Paths…** keeps vector paths with the document, as Photoshop's Paths panel does (saved in `.xuan` format 10; they follow Crop, Canvas Size, Image Size and Flip Canvas). Paste SVG path data (`M 0 70 C 12 64 38 64 51 70 Z`: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative) and **Add Path**; select a path to rename or delete it, or to run an action on it, each one undo step: **Fill Path** fills its inside with the foreground colour on the active layer (within the selection, if there is one), **Stroke Path** paints each subpath with the current brush, its size, hardness, opacity and dynamics included (taper the ends with the brush's taper settings), or with the Pencil's hard pixels when **Stroke with** is set to **Pencil**, **Make Selection** selects its inside with antialiased edges, softened by **Feather** and combined by **New**, **Add**, **Subtract** or **Intersect**, and **Shape Layer** makes an editable vector shape layer in the foreground colour that is redrawn from its outline when resized. **Even-odd fill** makes inner subpaths holes. A malformed path says what was expected and at which character. **Make Path from Selection** adds the outline of the selection (where it is at least half selected) as a new path of straight segments, within a pixel of the selection's pixel edges; holes stay holes. Paths come from plugins and the MCP server too (`save_path`), and are drawn with the [Pen tool](#pen-tool). The selected path is shown on the canvas; **Edit with Pen** closes the dialog and picks the Pen to edit it.
+- **Image menu canvas commands:** **Rotate Canvas** turns the whole document 90° clockwise, 90° counter-clockwise or 180°. Layers, masks, guides, paths and the selection turn with it and pixels are not resampled, so text and shapes stay editable (a layer effect's light angle stays as it was, as with Photoshop's global light). **Crop to Selection** crops the canvas to the selection's bounds and is greyed out without a selection. **Trim…** crops away margins that are transparent or the colour of the top-left or bottom-right pixel of the visible image, on the sides you tick. Each is one undo step, and none discards the pixels outside the new canvas. Plugins and the MCP server have `rotate_canvas`, `trim` and (as the `crop_to_selection` command) the same.
+- **Select → Paths…** keeps vector paths with the document, as Photoshop's Paths panel does (saved in `.xuan` format 10; they follow Crop, Trim, Canvas Size, Image Size, Flip Canvas and Rotate Canvas). Paste SVG path data (`M 0 70 C 12 64 38 64 51 70 Z`: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative) and **Add Path**; select a path to rename or delete it, or to run an action on it, each one undo step: **Fill Path** fills its inside with the foreground colour on the active layer (within the selection, if there is one), **Stroke Path** paints each subpath with the current brush, its size, hardness, opacity and dynamics included (taper the ends with the brush's taper settings), or with the Pencil's hard pixels when **Stroke with** is set to **Pencil**, **Make Selection** selects its inside with antialiased edges, softened by **Feather** and combined by **New**, **Add**, **Subtract** or **Intersect**, and **Shape Layer** makes an editable vector shape layer in the foreground colour that is redrawn from its outline when resized. **Even-odd fill** makes inner subpaths holes. A malformed path says what was expected and at which character. **Make Path from Selection** adds the outline of the selection (where it is at least half selected) as a new path of straight segments, within a pixel of the selection's pixel edges; holes stay holes. Paths come from plugins and the MCP server too (`save_path`), and are drawn with the [Pen tool](#pen-tool). The selected path is shown on the canvas; **Edit with Pen** closes the dialog and picks the Pen to edit it.
 - **Select → Color Range…** selects every pixel near colours you click on the canvas, anywhere in the image, as Compositor's does. The panel opens beside the canvas; click the image to pick a colour (the eyedropper's bubble shows it), **Shift**-click to add another and **Alt**-click to take one away, or choose **Pick**, **Add** or **Remove** for plain clicks. **Fuzziness** (0–200) is how far a colour may be from a picked one per channel: within half of it a pixel is fully selected, and the selection fades out linearly up to the full amount, so the edge stays soft. **Invert** selects everything else, such as all but a green screen. The selection and a black-and-white preview update as you go; **OK** keeps it as one undo step and **Cancel** puts back the selection you had. Colours are matched against the image as shown when the panel opened.
 - **Select → Subject** (**Ctrl+Alt+A**) selects the main subject of the image as shown, and **Filter → Remove Background** hides the background of the active layer with a layer mask (kept together with any mask it already has; paint the mask to fix it up). Both use the same classical segmentation, with no machine learning: GrabCut, a graph cut that learns colour models of the subject and the background from a border-seeded start and refines them five times, run on a copy at most 512 pixels on its longer side, then scaled back up with a guided filter that follows the image's own edges and gives a soft, anti-aliased edge. It works best when the subject stands out in colour from its surroundings and lies away from the image's edges; a subject that runs off the image (such as a portrait's shoulders) still reaches the edge. Both run in the background with a progress bar and can be cancelled. A plugin can replace the built-in algorithm with a machine-learning model; see [Selection providers](#selection-providers).
 - **Magic tool, Object mode:** choose **Object** next to **Wand** in the Magic Wand's options (as Compositor's Magic tool offers Wand and Object). Click an object to select it, or drag a box around it; **Shift** adds to the selection and **Alt** subtracts. It runs the same graph cut as Select Subject on the image as shown: a click marks that spot as certainly the object and keeps only the part connected to it, and a box marks everything outside it as background.
@@ -167,8 +168,8 @@ Escape cancels the drag. Guides are cyan lines across the whole view, including 
 area around the canvas. **View → Show → Guides** (Ctrl+;) hides and shows them,
 **View → Lock Guides** (Ctrl+Alt+;) stops them from being created or moved, and
 **View → Clear Guides** removes them all. Creating, moving, deleting and clearing
-guides are undo steps, and guides follow the canvas through Crop, Canvas Size,
-Image Size and Flip Canvas. Guides are saved in `.xuan` projects.
+guides are undo steps, and guides follow the canvas through Crop, Trim, Canvas Size,
+Image Size, Flip Canvas and Rotate Canvas. Guides are saved in `.xuan` projects.
 
 **View → Show → Grid** (Ctrl+') draws a non-printing layout grid over the
 document: a major line every 64 pixels split into eight subdivisions by default.
@@ -413,10 +414,25 @@ exporting for it opens the usual save dialog, titled with the plugin's name,
 where you choose the place, and opening a file it names asks first, showing
 the file's path.
 
+Plugin actions run in the background while you keep working, and you can
+start another one, even on the same document. Running jobs are shown at the
+right of the status bar with their progress and **Cancel**; with several, a
+count such as **1 of 2** lists them all. Their results arrive one at a time as
+proposals to **Accept** or **Discard**. Messages from plugins and from Xuan
+appear in the same place for a few seconds.
+
+Plugins that generate images can also offer them where you work, not only in
+their menus: the sparkles button next to New Layer (**New layer with AI**), the
+**AI Region** tool in the toolbox (draw a box, say what to do there: edit,
+add or replace), and a **Generate** tab in **File → New…**, where **Exact
+size** makes the canvas exactly the size typed, with the image as a layer you
+can move to reframe it. Each shows just a prompt and **Generate**; the model,
+quality and other options are under **Advanced**.
+
 The repository ships examples under `plugins/`: a histogram pane (Python), a
-region inverter (Rust) and a Comfy Cloud client that edits or generates images
-with ComfyUI workflows. See [plugins](PLUGINS.md) for the manifest, the
-protocol and the SDKs.
+region inverter (Rust) and a Comfy Cloud client that generates and edits images
+and layers with Comfy's own workflow templates. See [plugins](PLUGINS.md) for
+the manifest, the protocol and the SDKs.
 
 ## Current limits
 

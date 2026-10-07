@@ -30,6 +30,16 @@ class Provenance(unittest.TestCase):
         self.assertNotIn("provenance", Job.mask("/tmp/m.png"))
 
 
+class Placement(unittest.TestCase):
+    def test_image_and_mask_outputs_can_cover_the_source(self):
+        self.assertEqual(Job.image("a.png", fit="cover")["fit"], "cover")
+        self.assertEqual(Job.image("a.png", fit_source=True)["fit"], "source")
+        self.assertNotIn("fit", Job.image("a.png"))
+        self.assertEqual(Job.mask("m.png", fit="cover")["fit"], "cover")
+        with self.assertRaises(ValueError):
+            Job.image("a.png", fit="stretch")
+
+
 class Models(unittest.TestCase):
     def test_paths_come_from_initialize_and_models_changed(self):
         plugin = Plugin()

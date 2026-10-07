@@ -887,7 +887,7 @@ impl PopUp {
 pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, 20.0), Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tr("Color"))
+        egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tr("Colour"))
     });
     paint_well(ui, rect, 4.0, color, response.hovered());
     focus_ring(ui, &response, 4.0);
@@ -1342,7 +1342,7 @@ const FOOTER_BUTTON_WIDTH: f32 = 76.0;
 ///
 /// Commit labels:
 /// - **Apply** for edits with a live preview, and for a form whose values take effect only when
-///   it is committed (adjustments, filters, Layer Effects, Text, Color Range, Grid).
+///   it is committed (adjustments, filters, Layer Effects, Text, Colour Range, Grid).
 /// - **Done** for settings windows, where each change takes effect as it is made; they have no
 ///   Cancel.
 /// - **A specific verb** when one says what happens: Create canvas, Resize, Export…, Save,
@@ -1454,20 +1454,23 @@ fn small_icon_button(ui: &Ui, rect: Rect, id: &str, label: &str) -> Response {
     response.on_hover_text(label)
 }
 
+/// The height [`palette`] takes.
+pub const PALETTE_HEIGHT: f32 = 40.0;
+
 pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) {
-    let (rect, _) = ui.allocate_exact_size(vec2(36.0, 40.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(36.0, PALETTE_HEIGHT), Sense::hover());
     // The swatches overlap, so their focus rings go on top once both are drawn.
     let mut rings = Vec::new();
     for (offset, color, label) in [
         (
             vec2(12.0, 12.0),
             background as &mut [u8; 4],
-            tr("Background color"),
+            tr("Background colour"),
         ),
         (
             vec2(0.0, 0.0),
             foreground as &mut [u8; 4],
-            tr("Foreground color"),
+            tr("Foreground colour"),
         ),
     ] {
         let swatch = Rect::from_min_size(rect.min + offset, vec2(24.0, 24.0));
@@ -1486,8 +1489,8 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
                 color_picker(ui, color);
             });
     }
-    let swap_rect = Rect::from_min_size(rect.min + vec2(26.0, -4.0), vec2(13.0, 13.0));
-    let swap = small_icon_button(ui, swap_rect, "swap_colors", tr("Swap colors (X)"));
+    let swap_rect = Rect::from_min_size(rect.min + vec2(24.0, -4.0), vec2(12.0, 12.0));
+    let swap = small_icon_button(ui, swap_rect, "swap_colors", tr("Swap colours (X)"));
     let c = swap_rect.center();
     let stroke = Stroke::new(
         1.0_f32,
@@ -1512,8 +1515,8 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
     if swap.clicked() {
         std::mem::swap(foreground, background);
     }
-    let reset_rect = Rect::from_min_size(rect.min + vec2(-1.0, 27.0), vec2(12.0, 12.0));
-    let reset = small_icon_button(ui, reset_rect, "reset_colors", tr("Default colors (D)"));
+    let reset_rect = Rect::from_min_size(rect.min + vec2(0.0, 27.0), vec2(12.0, 12.0));
+    let reset = small_icon_button(ui, reset_rect, "reset_colors", tr("Default colours (D)"));
     let stroke = Stroke::new(
         1.0_f32,
         if reset.hovered() {

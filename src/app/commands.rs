@@ -525,6 +525,17 @@ fn brush_softer(app: &mut EditorApp) {
 fn brush_harder(app: &mut EditorApp) {
     app.brush.hardness = (app.brush.hardness + 0.1).min(1.0);
 }
+fn has_recent_files(app: &EditorApp) -> bool {
+    !app.config.recent_files.is_empty()
+}
+fn open_latest_recent(app: &mut EditorApp) {
+    if let Some(path) = app.config.recent_files.first().cloned() {
+        app.open_recent(&path);
+    }
+}
+fn clear_recent(app: &mut EditorApp) {
+    app.clear_recent_files();
+}
 fn toggle_controls(app: &mut EditorApp) {
     app.show_controls = !app.show_controls;
 }
@@ -602,6 +613,14 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_shift(Key::O)])
         .when(not_developing)
         .aliases(&["place"]),
+    cmd("open_latest_recent", "Open Most Recent File", C::File)
+        .run(Run::App(open_latest_recent))
+        .aliases(&["recent", "reopen"])
+        .when(has_recent_files),
+    cmd("clear_recent", "Clear Recently Opened", C::File)
+        .run(Run::App(clear_recent))
+        .aliases(&["recent"])
+        .when(has_recent_files),
     cmd("save", "Save", C::File).keys(&[ctrl(Key::S)]),
     cmd("save_as", "Save As…", C::File).keys(&[ctrl_shift(Key::S)]),
     cmd("export", "Export Image…", C::File)
@@ -674,6 +693,24 @@ pub(super) const COMMANDS: &[Command] = &[
         .host(Edit)
         .aliases(&["mirror"]),
     cmd("flip_canvas_v", "Flip Canvas Vertical", C::Image).host(Edit),
+    cmd("rotate_canvas_cw", "Rotate Canvas 90° Clockwise", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd(
+        "rotate_canvas_ccw",
+        "Rotate Canvas 90° Counter-Clockwise",
+        C::Image,
+    )
+    .host(Edit)
+    .aliases(&["rotate image", "turn"]),
+    cmd("rotate_canvas_180", "Rotate Canvas 180°", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd("crop_to_selection", "Crop to Selection", C::Image)
+        .when(has_selection)
+        .host(Edit)
+        .aliases(&["crop"]),
+    cmd("trim", "Trim…", C::Image).aliases(&["crop", "remove margins", "borders"]),
     // Layer
     cmd("new_layer", "New Layer", C::Layer)
         .keys(&[ctrl_shift(Key::N)])
@@ -731,7 +768,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_alt(Key::A)])
         .host(Edit)
         .aliases(&["foreground", "cutout", "grabcut"]),
-    cmd("color_range", "Color Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
+    cmd("color_range", "Colour Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
     cmd("expand_selection", "Expand Selection…", C::Select)
         .when(has_selection)
         .aliases(&["grow", "dilate"]),
@@ -749,7 +786,7 @@ pub(super) const COMMANDS: &[Command] = &[
         .aliases(&["cutout", "transparent", "subject", "grabcut"]),
     cmd(
         "remove_flat_background",
-        "Remove Flat Background (edge colors)",
+        "Remove Flat Background (edge colours)",
         C::Filter,
     )
     .when(image_layer)
@@ -953,13 +990,13 @@ pub(super) const COMMANDS: &[Command] = &[
     tool("tool_zoom", "Zoom", &[bare(Key::Z)], Run::Tool(Tool::Zoom)),
     tool(
         "swap_colors",
-        "Swap Colors",
+        "Swap Colours",
         &[bare(Key::X)],
         Run::App(swap_colors),
     ),
     tool(
         "reset_colors",
-        "Reset Colors",
+        "Reset Colours",
         &[bare(Key::D)],
         Run::App(reset_colors),
     ),

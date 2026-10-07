@@ -720,55 +720,15 @@ impl EditorApp {
                         );
                     }
                 }
+                let (accent, ink) = (ui.palette().accent, ui.palette().on_accent_text);
                 if let Some(edit) = &self.plugins.action {
-                    for (index, region) in edit.regions.iter().enumerate() {
-                        let rect = Rect::from_two_pos(
-                            map(Point::new(region.x, region.y)),
-                            map(Point::new(
-                                region.x + region.width,
-                                region.y + region.height,
-                            )),
-                        );
-                        let selected = edit.selected == Some(index);
-                        painter.rect_filled(
-                            rect,
-                            0.0,
-                            ui.palette()
-                                .accent
-                                .gamma_multiply(if selected { 0.2 } else { 0.08 }),
-                        );
-                        painter.rect_stroke(
-                            rect,
-                            0.0,
-                            Stroke::new(
-                                if selected { 2.0_f32 } else { 1.0_f32 },
-                                ui.palette().accent,
-                            ),
-                            StrokeKind::Inside,
-                        );
-                        let badge = Rect::from_min_size(rect.min, vec2(22.0, 16.0));
-                        painter.rect_filled(badge, 0.0, ui.palette().accent);
-                        painter.text(
-                            badge.center(),
-                            egui::Align2::CENTER_CENTER,
-                            format!("{:02}", index + 1),
-                            egui::FontId::monospace(10.0),
-                            Color32::WHITE,
-                        );
-                        if let Some(text) = region
-                            .fields
-                            .values()
-                            .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
-                        {
-                            painter.text(
-                                rect.min + vec2(4.0, 20.0),
-                                egui::Align2::LEFT_TOP,
-                                text.chars().take(28).collect::<String>(),
-                                egui::FontId::proportional(11.0),
-                                Color32::WHITE,
-                            );
-                        }
-                    }
+                    let regions = edit.regions.iter();
+                    draw_region_boxes(&painter, &map, regions, edit.selected, accent, ink);
+                } else if self.tool == Tool::Region
+                    && let Some(session) = self.session()
+                {
+                    let boxes = session.ai_boxes.iter().map(|b| &b.region);
+                    draw_region_boxes(&painter, &map, boxes, session.ai_selected, accent, ink);
                 }
                 if !self.polygon.is_empty() {
                     let mut points: Vec<_> = self.polygon.iter().copied().map(map).collect();
@@ -1238,7 +1198,10 @@ impl EditorApp {
     fn canvas_click(&mut self, point: Point, modifiers: egui::Modifiers) {
         match self.tool {
             Tool::Text => self.text_click(point),
-            Tool::Region => self.select_region_at(point),
+            Tool::Region if self.plugins.action.is_some() => self.select_region_at(point),
+            Tool::Region => {
+                self.select_ai_box_at(point);
+            }
             Tool::Move => {
                 if self.auto_select || ctrl_or_cmd(modifiers) {
                     self.select_canvas_layer(point, modifiers.shift, false);
@@ -1407,8 +1370,9 @@ impl EditorApp {
             return;
         }
         if tool == Tool::Region {
-            // Regions belong to the open plugin action, not to the document.
-            if self.plugins.action.is_none() {
+            // Regions belong to the open plugin action, or (AI Region tool)
+            // are boxes kept beside the document, never edits of it.
+            if self.plugins.action.is_none() && !self.region_tool_available() {
                 return;
             }
             let session = &self.sessions[self.current];
@@ -1912,7 +1876,11 @@ impl EditorApp {
             return;
         }
         if tool == Tool::Region {
-            self.add_region(gesture.start, gesture.last);
+            if self.plugins.action.is_some() {
+                self.add_region(gesture.start, gesture.last);
+            } else {
+                self.add_ai_box(gesture.start, gesture.last);
+            }
             return;
         }
         if tool == Tool::Wand
@@ -2053,6 +2021,60 @@ impl EditorApp {
         self.snap_lines.clear();
         if tool.is_brush() {
             self.last_brush = Some(end);
+        }
+    }
+}
+
+/// Numbered region boxes, with the start of each box's first text.
+fn draw_region_boxes<'a>(
+    painter: &egui::Painter,
+    map: &impl Fn(Point) -> Pos2,
+    regions: impl Iterator<Item = &'a xuan::plugins::jobs::Region>,
+    selected: Option<usize>,
+    accent: Color32,
+    ink: Color32,
+) {
+    for (index, region) in regions.enumerate() {
+        let rect = Rect::from_two_pos(
+            map(Point::new(region.x, region.y)),
+            map(Point::new(
+                region.x + region.width,
+                region.y + region.height,
+            )),
+        );
+        let selected = selected == Some(index);
+        painter.rect_filled(
+            rect,
+            0.0,
+            accent.gamma_multiply(if selected { 0.2 } else { 0.08 }),
+        );
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, accent),
+            StrokeKind::Inside,
+        );
+        let badge = Rect::from_min_size(rect.min, vec2(22.0, 16.0));
+        painter.rect_filled(badge, 0.0, accent);
+        painter.text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("{:02}", index + 1),
+            egui::FontId::monospace(10.0),
+            ink,
+        );
+        if let Some(text) = region
+            .fields
+            .values()
+            .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
+        {
+            painter.text(
+                rect.min + vec2(4.0, 20.0),
+                egui::Align2::LEFT_TOP,
+                text.chars().take(28).collect::<String>(),
+                egui::FontId::proportional(11.0),
+                ink,
+            );
         }
     }
 }

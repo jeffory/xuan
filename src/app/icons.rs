@@ -189,6 +189,7 @@ pub fn action_button(ui: &mut Ui, kind: &str, label: &str) -> egui::Response {
         "filter" => egui::include_image!("../../assets/svg/fx.svg"),
         "mask" => egui::include_image!("../../assets/svg/mask.svg"),
         "delete_layer" => egui::include_image!("../../assets/svg/trash.svg"),
+        "ai_layer" => egui::include_image!("../../assets/svg/sparkles.svg"),
         _ => return response.on_hover_text(label),
     };
     svg(ui, source, rect.shrink(6.0), ui.palette().muted);

@@ -68,6 +68,8 @@ struct Actions {
     edit_filter: Option<Uuid>,
     edit_text: Option<Uuid>,
     edit_raw: Option<Uuid>,
+    /// New layer with AI: the plugin, action and where to anchor its popover.
+    ai_layer: Option<(String, String, egui::Pos2)>,
 }
 
 #[derive(Clone, Copy)]
@@ -749,6 +751,7 @@ impl EditorApp {
                         egui::Popup::menu(&filter).show(|ui| {
                             actions.filter = menus::filter_menu(ui);
                         });
+                        self.ai_layer_button(ui, actions);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if icons::action_button(ui, "delete_layer", tr("Delete layer"))
                                 .clicked()
@@ -761,7 +764,44 @@ impl EditorApp {
             });
     }
 
+    /// New layer with AI: one action opens its popover; several, a menu.
+    fn ai_layer_button(&self, ui: &mut egui::Ui, actions: &mut Actions) {
+        let layer_actions = self.surface_actions(xuan::plugins::manifest::Surface::Layer);
+        if layer_actions.is_empty() {
+            return;
+        }
+        // Disabled with the rest of the footer while no document is open.
+        let button = icons::action_button(ui, "ai_layer", tr("New layer with AI"));
+        let anchor = button.rect.left_top() - vec2(0.0, 6.0);
+        if let [offered] = layer_actions.as_slice() {
+            // The one action's plugin, on hover after the button's own name.
+            let button = button.on_hover_text(offered.attributed());
+            if button.clicked() {
+                actions.ai_layer = Some((offered.plugin.clone(), offered.action.clone(), anchor));
+            }
+            return;
+        }
+        egui::Popup::menu(&button).show(|ui| {
+            for offered in &layer_actions {
+                let item = super::menus::item_button(ui, true, &offered.attributed(), "")
+                    .on_hover_text(&offered.source);
+                if item.clicked() {
+                    actions.ai_layer =
+                        Some((offered.plugin.clone(), offered.action.clone(), anchor));
+                    ui.close();
+                }
+            }
+        });
+    }
+
     fn apply_layer_actions(&mut self, ctx: &egui::Context, actions: Actions) {
+        if let Some((plugin, action, anchor)) = actions.ai_layer.clone() {
+            self.open_surface_popup(super::surfaces::SurfacePopup::Layer {
+                plugin,
+                action,
+                anchor,
+            });
+        }
         if let Some(apply) = actions.finish_rename {
             self.finish_layer_rename(ctx, apply);
         }

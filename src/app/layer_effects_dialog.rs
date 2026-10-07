@@ -31,7 +31,7 @@ pub(super) fn can_take_effects(layer: &xuan::document::Layer) -> bool {
 fn color_row(ui: &mut egui::Ui, color: &mut [u8; 3], opacity: &mut f32) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.label(tr("Color"));
+        ui.label(tr("Colour"));
         let mut rgba = [color[0], color[1], color[2], 255];
         if widgets::color_well(ui, &mut rgba).changed() {
             *color = [rgba[0], rgba[1], rgba[2]];

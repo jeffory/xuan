@@ -150,11 +150,37 @@ tree (`src/plugins/ui.rs`, `src/app/plugin_dialogs.rs`, `plugin_panes.rs`).
 **Recommendation.** No new UI system. Add the `selection` input only if the
 region route proves awkward in the first inpainting plugin.
 
+**Surfaces (done).** Generative actions also appear in Xuan's own UI, so they
+feel built in rather than reachable only through a menu and a dialog: the
+**AI Region** tool, **New layer with AI** in the Layers panel and the
+**Generate** tab of New Image (see [Surfaces](PLUGINS.md#surfaces)). The rule
+is *keep the simple edits simple; the advanced options are there when needed*:
+each surface first shows only a prompt and Generate, the rest sits under a
+collapsed **Advanced**, and the full dialog stays in the menus. Plugins
+declare where their actions appear and Xuan draws them with its own widgets.
+Two alternatives were turned down: plugin-drawn popovers (inconsistent, and a
+plugin's UI would sit inside Xuan's chrome) and Comfy-specific UI in core
+(ties core to one backend, against keeping ML in plugins).
+
+Results use the best quality for the area they cover without going under it:
+a surface run tells the plugin the document pixels it will cover
+(`inputs.target`), the plugin renders at least that, exactly when its model
+allows, and places the result with `fit = "cover"`, which scales evenly and
+keeps what hangs over in the layer, so nothing is stretched or cropped. New
+Image keeps the model's size, at least the size typed; **Exact size** makes
+the canvas exactly that size with the result as a movable layer covering it,
+for reframing.
+
+Not done yet: per-size cost estimates (Comfy's price formulas could drive
+them), keeping popover values after Xuan restarts, and plugin-drawn UI inside
+surfaces.
+
 ## 4. Backends
 
-**Have.** The Comfy Cloud example (`plugins/comfy-cloud`) does text-to-image and
-region-driven editing over a hosted API with secrets, progress, cancel and the
-documented error codes. The prototype `plugins/local-upscale` shows a fully
+**Have.** The Comfy Cloud example (`plugins/comfy-cloud`) does text-to-image,
+prompt and region-driven editing and layer separation over a hosted API with
+secrets, progress, cancel and the documented error codes. It runs Comfy's own
+workflow templates, converted to API workflows and kept up to date. The prototype `plugins/local-upscale` shows a fully
 local job with no network.
 
 **Recommended shapes** (all are ordinary plugins):
@@ -352,7 +378,7 @@ a cosmetic change and not worth breaking existing installs.
 | Goal | Already works | Missing | Recommendation |
 | --- | --- | --- | --- |
 | **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin. Model downloads are done (#38). | Ship a local-ComfyUI variant of the Comfy example, declaring its checkpoints in `[[models]]`. |
-| **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42), used by the Comfy Cloud **Inpaint Selection** action; `source.extend` with a new-area mask and an `extend_canvas` edit (#36), shown by `extend-edges`. | A generative outpainting backend. | Host work done; wire an outpainting workflow into a backend of `extend-edges` or the Comfy example. |
+| **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42); `source.extend` with a new-area mask and an `extend_canvas` edit (#36), shown by `extend-edges`. | A generative outpainting backend. | Host work done; wire an outpainting workflow into a backend of `extend-edges` or the Comfy example. |
 | **Background removal / segmentation** | Classical Select Subject, Remove Background and Object mode in core (#5); `selection/export`, `set_selection` and `set_mask` edits, `replace` results, a `mask` output that becomes a selection (#37), providers that replace the built-in algorithm (#5) and the `select-bright` template. | An ONNX segmentation plugin. | Build it on `select-bright`: a backend with the model declared in `[[models]]`, and `[[provides]]` for the capabilities it serves. |
 | **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Large-image speed. Placed size (#35) and model downloads (#38) are done. | An ONNX Real-ESRGAN backend whose model is declared in `[[models]]` (see the `local-upscale` README). |
 | **Others** (style transfer, colorize, denoise, captions) | Same job/result machinery; `text` output for captions; panes for assist UIs. | Nothing specific. | Plugins only; no host work. |

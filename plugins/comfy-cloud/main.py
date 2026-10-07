@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
-"""Comfy Cloud plugin for Xuan: runs API-format ComfyUI workflows through
+"""Comfy Cloud plugin for Xuan: generates and edits images with Seedream and
+Ideogram through Comfy's own workflow templates, run on Comfy Cloud with
 Comfy API v2 (https://docs.comfy.org/api-reference/v2/overview).
 
-Workflows live in the ``workflows`` folder next to this file, or in the
-plugin's data directory, as exported by ComfyUI's *Export (API)*. The plugin
-fills them in by node title; see README.md.
+recipes.py lists the workflows, catalog.py keeps them up to date with
+Comfy's templates, convert.py turns a template into a workflow the API runs
+and comfy_api.py talks to the server. See README.md.
 """
-import copy
-import io
-import json
-import mimetypes
+import math
 import os
+import re
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
-import uuid
+from dataclasses import dataclass, field
 
 # The SDK installed with Xuan comes first on PYTHONPATH; in a source
 # checkout, fall back to the repository's.
@@ -25,422 +22,507 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from xuan_plugin import (  # noqa: E402
-    INSUFFICIENT_CREDITS,
     INTERNAL_ERROR,
     INVALID_PARAMS,
-    RATE_LIMITED,
     Cancelled,
     Job,
     NeedsSetup,
     Plugin,
     RpcError,
+    encode_gray_png,
     ui,
 )
 
+from catalog import Catalog, describe  # noqa: E402
+from comfy_api import SUCCEEDED, TERMINAL, Client, asset_ref, rejected_before_running  # noqa: E402
+from recipes import ACTIONS, BRIA, GPT, RECIPES, add_alpha_mask, apply, choose_size, recipe_for  # noqa: E402
+
 plugin = Plugin()
 HERE = os.path.dirname(os.path.abspath(__file__))
-TERMINAL = {"completed", "success", "succeeded", "failed", "error", "cancelled", "canceled", "lost", "non_retryable_error"}
-history = []  # recent jobs for the pane
-history_lock = threading.Lock()
+SNAPSHOTS = os.path.join(HERE, "snapshots")
+PANE = "comfy"
+_catalog = None
+_catalog_lock = threading.Lock()
+_checking = threading.Event()
 
 
-# --- HTTP -----------------------------------------------------------------
-
-# Hosts the manifest declares under permissions.network; outputs are only
-# downloaded from these (or from the configured server).
-NETWORK = ("cloud.comfy.org", "*.run.comfy.app")
-
-
-def host_allowed(host, patterns=NETWORK):
-    """Whether ``host`` is one of ``patterns``; ``*.x`` matches subdomains of x."""
-    host = (host or "").lower().rstrip(".")
-    if not host:
-        return False
-    for pattern in patterns:
-        pattern = pattern.lower()
-        if pattern.startswith("*."):
-            if host.endswith(pattern[1:]) and len(host) > len(pattern) - 1:
-                return True
-        elif host == pattern:
-            return True
-    return False
+def make_client():
+    base = plugin.settings.get("base_url") or "https://cloud.comfy.org"
+    key = plugin.secrets.get("api_key") or ""
+    if not key and "cloud.comfy.org" in base:
+        raise NeedsSetup("Enter your Comfy API key in the plugin settings.")
+    return Client(base, key)
 
 
-def _origin(parsed):
-    port = parsed.port or {"https": 443, "http": 80}.get(parsed.scheme)
-    return (parsed.scheme, (parsed.hostname or "").lower(), port)
-
-
-def same_server(url, base):
-    """Whether ``url`` is on exactly the configured server: same scheme, host
-    and port, and no user info (``https://server@evil.example`` is evil.example)."""
-    target = urllib.parse.urlsplit(url)
-    if target.username is not None or target.password is not None:
-        return False
-    return bool(target.hostname) and _origin(target) == _origin(urllib.parse.urlsplit(base))
-
-
-def download_target(url, base, patterns=NETWORK):
-    """Resolve an output URL. Returns ``(url, send_key)``: the API key goes only
-    to the configured server over https; other https hosts the manifest declares
-    get no key; anything else (other hosts, http, file:, …) is refused."""
-    if url.startswith("/") and not url.startswith("//"):
-        url = base + url
-    target = urllib.parse.urlsplit(url)
-    if same_server(url, base) and target.scheme in ("https", "http"):
-        return url, target.scheme == "https"
-    if (
-        target.scheme == "https"
-        and target.username is None
-        and target.password is None
-        and host_allowed(target.hostname, patterns)
-    ):
-        return url, False
-    raise RpcError(INTERNAL_ERROR, f"refusing to download from {url[:200]}")
-
-
-class _Redirects(urllib.request.HTTPRedirectHandler):
-    """Follow redirects only to https (or the same server), and never carry the
-    API key to another host."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is None:
-            return None
-        source = urllib.parse.urlsplit(req.full_url)
-        target = urllib.parse.urlsplit(newurl)
-        if target.scheme != "https" and _origin(target) != _origin(source):
-            raise urllib.error.HTTPError(newurl, code, "refusing a non-https redirect", headers, fp)
-        if _origin(target) != _origin(source):
-            new.remove_header("Authorization")
-        return new
-
-
-_opener = urllib.request.build_opener(_Redirects)
-
-
-class Client:
-    def __init__(self):
-        self.base = (plugin.settings.get("base_url") or "https://cloud.comfy.org").rstrip("/")
-        self.key = plugin.secrets.get("api_key") or ""
-        if not self.key and "cloud.comfy.org" in self.base:
-            raise NeedsSetup("Enter your Comfy API key in the plugin settings.")
-
-    def _request(self, method, path, body=None, headers=None, raw=False, url=None, send_key=True):
-        url = url or self.base + path
-        data = None
-        hdrs = {"Accept": "application/json"}
-        if self.key and send_key and same_server(url, self.base):
-            hdrs["Authorization"] = "Bearer " + self.key
-        if body is not None and not raw:
-            data = json.dumps(body).encode("utf-8")
-            hdrs["Content-Type"] = "application/json"
-        elif raw:
-            data = body
-        hdrs.update(headers or {})
-        request = urllib.request.Request(url, data=data, method=method, headers=hdrs)
-        try:
-            with _opener.open(request, timeout=120) as response:
-                payload = response.read()
-                if response.headers.get("Content-Type", "").startswith("application/json"):
-                    return json.loads(payload or b"null")
-                return payload
-        except urllib.error.HTTPError as error:
-            payload = error.read()
-            try:
-                detail = json.loads(payload)
-            except ValueError:
-                detail = {"message": payload.decode("utf-8", "replace")[:300]}
-            message = detail.get("error", detail).get("message") if isinstance(detail.get("error", detail), dict) else str(detail)
-            code = {402: INSUFFICIENT_CREDITS, 429: RATE_LIMITED}.get(error.code, INTERNAL_ERROR)
-            data = None
-            if error.code == 429 and error.headers.get("Retry-After"):
-                try:
-                    data = {"retry_after": float(error.headers["Retry-After"])}
-                except ValueError:
-                    data = None
-            if error.code == 422 and isinstance(detail, dict):
-                message = f"{message or 'invalid workflow'}: {json.dumps(detail)[:800]}"
-            raise RpcError(code, f"HTTP {error.code}: {message or error.reason}", data)
-        except urllib.error.URLError as error:
-            raise RpcError(INTERNAL_ERROR, f"cannot reach {self.base}: {error.reason}")
-
-    def upload(self, path):
-        """POST /api/v2/assets (multipart); returns the asset record."""
-        boundary = "----xuan" + uuid.uuid4().hex
-        name = os.path.basename(path)
-        content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
-        with open(path, "rb") as handle:
-            file_bytes = handle.read()
-        body = io.BytesIO()
-        for field, value in (("name", name), ("tags", "input")):
-            body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n".encode())
-        body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: {content_type}\r\n\r\n".encode())
-        body.write(file_bytes)
-        body.write(f"\r\n--{boundary}--\r\n".encode())
-        return self._request("POST", "/api/v2/assets", body.getvalue(), {"Content-Type": f"multipart/form-data; boundary={boundary}"}, raw=True)
-
-    def submit(self, workflow):
-        extra = {"api_key_comfy_org": self.key} if self.key else {}
-        return self._request("POST", "/api/v2/jobs", {"workflow": workflow, "extra_data": extra}, {"Idempotency-Key": uuid.uuid4().hex})
-
-    def job(self, job_id):
-        return self._request("GET", f"/api/v2/jobs/{job_id}")
-
-    def cancel(self, job_id):
-        try:
-            self._request("POST", f"/api/v2/jobs/{job_id}/cancel", {})
-        except RpcError:
-            pass
-
-    def download(self, output, destination):
-        url = output.get("url") or output.get("download_url")
-        asset = output.get("asset_id") or output.get("id")
-        if not url and asset:
-            url = self.base + f"/api/v2/assets/{asset}/content"
-        if not url:
-            raise RpcError(INTERNAL_ERROR, f"output without a url: {json.dumps(output)[:200]}")
-        url, send_key = download_target(url, self.base)
-        payload = self._request("GET", None, raw=True, url=url, send_key=send_key)
-        with open(destination, "wb") as handle:
-            handle.write(payload)
-
-
-# --- Workflows ------------------------------------------------------------
-
-
-def load_workflow(name):
-    for folder in (plugin.data_dir, os.path.join(HERE, "workflows")):
-        path = os.path.join(folder, name if name.endswith(".json") else name + ".json")
-        if os.path.isfile(path):
-            with open(path, "r", encoding="utf-8") as handle:
-                workflow = json.load(handle)
-            if "nodes" in workflow and "links" in workflow:
-                raise RpcError(INVALID_PARAMS, f"{path} is a UI export; use Export (API) in ComfyUI")
-            return workflow
-    raise NeedsSetup(f"Workflow {name} not found in {os.path.join(HERE, 'workflows')} or {plugin.data_dir}")
-
-
-def fill(workflow, values, source_ref=None, mask_ref=None):
-    """Set node inputs by title ("Xuan Prompt", "Xuan Source", …) and expand
-    {{placeholders}} in every string input."""
-    workflow = copy.deepcopy(workflow)
-    for node in workflow.values():
-        if not isinstance(node, dict):
-            continue
-        title = (node.get("_meta") or {}).get("title", "")
-        inputs = node.setdefault("inputs", {})
-        lowered = title.lower()
-        if source_ref is not None and lowered in ("xuan source", "load image") and "image" in inputs:
-            inputs["image"] = source_ref
-        if mask_ref is not None and lowered == "xuan mask" and "image" in inputs:
-            inputs["image"] = mask_ref
-        if lowered == "xuan prompt":
-            for key in ("text", "prompt", "string", "value"):
-                if key in inputs and isinstance(inputs[key], str):
-                    inputs[key] = values.get("prompt", "")
-        if lowered == "xuan seed":
-            for key in ("seed", "noise_seed", "value"):
-                if key in inputs:
-                    inputs[key] = int(values.get("seed", 0))
-        if lowered == "xuan size":
-            for key, name in (("width", "width"), ("height", "height")):
-                if key in inputs:
-                    inputs[key] = int(values.get(name, inputs[key]))
-        for key, value in list(inputs.items()):
-            if isinstance(value, str) and "{{" in value:
-                for name, replacement in values.items():
-                    value = value.replace("{{" + name + "}}", str(replacement))
-                inputs[key] = value
-    return workflow
-
-
-def _number(value, integer=False):
-    """``value`` as a finite number (numeric strings count), else None."""
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if number != number or number in (float("inf"), float("-inf")):
-        return None
-    if integer:
-        return int(number) if number == int(number) and number >= 0 else None
-    return number
-
-
-def provenance_of(workflow, values, request_id, base):
-    """What the submitted workflow says about how the image was made, for the
-    layer's provenance: model, sampler, steps, cfg and seed from its nodes
-    (the first of each), the server and the job id. Nothing from ``extra_data``
-    or the API key is looked at. Missing details are left out."""
-    found = {}
-    for node in workflow.values():
-        inputs = node.get("inputs") if isinstance(node, dict) else None
-        if not isinstance(inputs, dict):
-            continue
-        for key, field in (("ckpt_name", "model"), ("unet_name", "model"), ("model_name", "model"), ("sampler_name", "sampler"), ("scheduler", "scheduler")):
-            if isinstance(inputs.get(key), str) and inputs[key] and field not in found:
-                found[field] = inputs[key][:256]
-        for key, field, integer in (("steps", "steps", True), ("cfg", "cfg", False), ("seed", "seed", True), ("noise_seed", "seed", True)):
-            number = _number(inputs.get(key), integer)
-            if number is not None and field not in found:
-                found[field] = number
-    if "seed" not in found:
-        seed = _number(values.get("seed"), True)
-        if seed is not None:
-            found["seed"] = seed
-    found["service"] = urllib.parse.urlsplit(base).hostname or "Comfy Cloud"
-    found["request_id"] = str(request_id)[:256]
-    return found
-
-
-def precise_edit_prompt(job):
-    source = job.source or {}
-    width = float(source.get("width") or 1)
-    height = float(source.get("height") or 1)
-    elements = []
-    for region in job.regions:
-        fields = region.get("fields") or {}
-        x0 = region["x"] / width * 1000
-        y0 = region["y"] / height * 1000
-        x1 = (region["x"] + region["width"]) / width * 1000
-        y1 = (region["y"] + region["height"]) / height * 1000
-        element = {
-            "type": fields.get("type") or "obj",
-            "bbox": [int(round(v)) for v in (x0, y0, x1, y1)],
-            "desc": fields.get("desc") or "",
-        }
-        if element["type"] == "text":
-            element["text"] = element.pop("desc")
-        elements.append(element)
-    return json.dumps({"compositional_deconstruction": {"background": job.inputs.get("background") or "", "elements": elements}})
+def catalog(client):
+    """The one catalog of this process, talking through ``client``."""
+    global _catalog
+    with _catalog_lock:
+        if _catalog is None:
+            _catalog = Catalog(client, plugin.data_dir, SNAPSHOTS)
+        _catalog.client = client
+        return _catalog
 
 
 # --- Running --------------------------------------------------------------
 
 
-def run_workflow(job, workflow_name, values, with_source, with_mask=False):
-    client = Client()
-    entry = {"id": job.id[:8], "action": job.action, "state": "uploading", "started": time.time()}
-    with history_lock:
-        history.insert(0, entry)
-        del history[10:]
-    source_ref = None
-    if with_source:
-        if not job.source_path:
-            raise RpcError(INVALID_PARAMS, "this action needs an image layer")
-        job.progress(0.05, "Uploading source")
-        asset = client.upload(job.source_path)
-        source_ref = asset.get("name") or asset.get("id") or asset
-    mask_ref = None
-    if with_mask:
-        if not job.selection_mask_path:
-            raise RpcError(INVALID_PARAMS, "this action needs the selection as a mask")
-        job.progress(0.08, "Uploading mask")
-        asset = client.upload(job.selection_mask_path)
-        mask_ref = asset.get("name") or asset.get("id") or asset
-    workflow = fill(load_workflow(workflow_name), values, source_ref, mask_ref)
-    job.check_cancelled()
-    job.progress(0.1, "Submitting")
-    submitted = client.submit(workflow)
-    job_id = submitted.get("id") or submitted.get("job_id") or submitted.get("prompt_id")
-    if not job_id:
-        raise RpcError(INTERNAL_ERROR, f"unexpected submit response: {json.dumps(submitted)[:300]}")
-    entry.update(state="queued", remote=job_id)
+def provenance(recipe, version, values, request_id, base):
+    """How the image was made, for the layer's Generation info. Never the key."""
+    record = {
+        "model": recipe.label,
+        "service": urllib.parse.urlsplit(base).hostname or "Comfy Cloud",
+        "request_id": str(request_id)[:256],
+        "extra": {"template": recipe.template, "template_date": (version or {}).get("template_date") or "unknown"},
+    }
+    seed = values.get("seed")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        record["seed"] = seed % 2147483648
+    return record
+
+
+def wait_for(job, client, job_id, stage=""):
+    """Poll the job until it ends; cancels it on the user's cancel or the timeout.
+    Progress is only a fraction once Comfy reports one: partner models such as
+    Seedream report none, so Xuan shows a spinner with the state instead."""
     deadline = time.time() + float(plugin.settings.get("timeout") or 600)
     delay = 1.0
     while True:
         if job.cancelled:
             client.cancel(job_id)
-            entry["state"] = "cancelled"
             raise Cancelled()
         if time.time() > deadline:
             client.cancel(job_id)
-            entry["state"] = "timed out"
             raise RpcError(INTERNAL_ERROR, "the job did not finish in time")
         status = client.job(job_id)
-        state = str(status.get("status") or status.get("state") or "").lower()
-        entry["state"] = state or "running"
+        state = str(status.get("status") or "").lower()
         progress = status.get("progress") or {}
-        if isinstance(progress, dict):
-            fraction = progress.get("fraction") or progress.get("value")
-            if fraction is not None:
-                job.progress(0.1 + 0.8 * float(fraction), progress.get("message") or state)
-            else:
-                job.progress(None, state)
+        if isinstance(progress, dict) and progress.get("value"):
+            job.progress(float(progress["value"]), stage + (progress.get("message") or state.capitalize()))
+        else:
+            job.progress(None, stage + STATES.get(state, state.capitalize() or "Running"))
         if state in TERMINAL:
-            break
+            return status
         time.sleep(delay)
         delay = min(delay * 1.5, 5.0)
-    if state not in ("completed", "success", "succeeded"):
-        error = status.get("error") or {}
-        message = error.get("message") if isinstance(error, dict) else str(error)
-        raise RpcError(INTERNAL_ERROR, f"job {state}: {message or 'no details'}")
-    outputs = status.get("outputs") or []
-    if isinstance(outputs, dict):
-        outputs = [o for node in outputs.values() for o in (node.get("images") or [])] if outputs else []
-    images = [o for o in outputs if isinstance(o, dict) and ("image" in str(o.get("type", "image")).lower() or str(o.get("name", o.get("filename", ""))).lower().endswith((".png", ".jpg", ".jpeg", ".webp")))]
-    if not images:
-        raise RpcError(INTERNAL_ERROR, f"the workflow produced no images: {json.dumps(outputs)[:300]}")
-    job.progress(0.95, "Downloading")
-    results = []
-    for index, output in enumerate(images):
-        destination = job.path(f"result-{index + 1}.png")
-        client.download(output, destination)
-        results.append(destination)
-    entry["state"] = "done"
-    return results, provenance_of(workflow, values, job_id, client.base)
 
 
-@plugin.action("precise-edit")
-def precise_edit(job):
-    values = {"prompt": precise_edit_prompt(job), "seed": job.inputs.get("seed", 0), "quality": job.inputs.get("quality", "medium")}
-    results, provenance = run_workflow(job, "precise-edit", values, with_source=True)
-    return [image_output(path, "Precise Edit", provenance) for path in results] + [job.text("Comfy Cloud credits were used")]
+STATES = {"queued": "Queued on Comfy Cloud", "running": "Running on Comfy Cloud", "succeeded": "Finishing"}
 
 
-@plugin.action("inpaint")
-def inpaint(job):
-    values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0)}
-    results, provenance = run_workflow(job, "inpaint", values, with_source=True, with_mask=True)
-    # The selection mask (feathered by the host) also masks the result layer,
-    # so only the selected area changes.
-    return [image_output(path, "Inpaint", provenance, mask=job.selection_mask_path) for path in results]
+def error_text(status):
+    error = status.get("error") or {}
+    if not isinstance(error, dict):
+        return str(error)[:600]
+    return str(error.get("message") or error.get("code") or "no details")[:600]
+
+
+def size_refused(version, recipe, values, status):
+    """Whether Comfy refused the size this run asked for rather than the
+    template: the error names a size input set for the target. The template
+    is still good, so it is not marked bad."""
+    if not values.get("target"):
+        return False
+    text = error_text(status)
+    return any(name.split(".", 1)[-1] in text for name in choose_size(version, recipe, values["target"])[0])
+
+
+def fit():
+    """How results are placed: covering their area where Xuan says it can
+    (``fit_cover``), else over the source, which older Xuan understands."""
+    return "cover" if "fit_cover" in (plugin.host_info.get("features") or []) else "source"
+
+
+@dataclass
+class Result:
+    images: list  # downloaded images of the recipe's output node, in order
+    assets: list  # those images' records on the server
+    provenance: dict
+    notes: list
+    extra: dict = field(default_factory=dict)  # name -> downloaded images of nodes `post` added
+
+
+def run(job, recipe, values, image_path=None, reference_path=None, post=None, download=True, stage="", mask_path=None):
+    """Run ``recipe`` with ``values``, uploading the source image and the
+    reference image first when given. ``post(workflow)`` may add nodes to the
+    workflow and returns ``{name: node id}``; their images land in
+    ``Result.extra``. Progress messages start with ``stage``.
+
+    When Comfy refuses a newly converted workflow before running it, the
+    previous version is tried once instead."""
+    client = make_client()
+
+    def say(message):
+        job.progress(None, stage + message)
+
+    say("Checking the workflow")
+    books = catalog(client)
+    state = books.ensure(recipe)
+    notes = [state["warning"]] if state.get("warning") else []
+    for role, path in (("image", image_path), ("reference", reference_path), ("mask", mask_path)):
+        if path:
+            job.check_cancelled()
+            say("Uploading the image")
+            values = dict(values, **{role: asset_ref(client.upload(path))})
+    for attempt in (1, 2):
+        version = state["current"]
+        workflow = apply(version, recipe, values)
+        added = post(workflow) if post else {}
+        if attempt == 1 and values.get("target"):
+            note = choose_size(version, recipe, values["target"])[1]
+            if note:
+                notes.append(note)
+        job.check_cancelled()
+        say("Submitting")
+        job_id = client.submit(workflow).get("id")
+        if not job_id:
+            raise RpcError(INTERNAL_ERROR, "the server did not return a job id")
+        status = wait_for(job, client, job_id, stage)
+        if str(status.get("status")).lower() in SUCCEEDED:
+            break
+        if attempt == 1 and rejected_before_running(status) and not size_refused(version, recipe, values, status):
+            fallback = books.mark_bad(recipe, error_text(status))
+            if fallback:
+                state = fallback
+                notes.append(fallback["warning"])
+                continue
+        raise RpcError(INTERNAL_ERROR, f"Comfy job {status.get('status')}: {error_text(status)}")
+    outputs = [o for o in status.get("outputs") or [] if isinstance(o, dict) and o.get("type", "image") == "image"]
+
+    def of(node_id):
+        return sorted((o for o in outputs if str(o.get("node_id")) == str(node_id)), key=lambda o: str(o.get("name", "")))
+
+    assets = of(version["output"]) or ([] if added else sorted(outputs, key=lambda o: str(o.get("name", ""))))
+    if not assets:
+        raise RpcError(INTERNAL_ERROR, "the workflow produced no images")
+    say("Downloading")
+    count = [0]
+
+    def fetch(records):
+        paths = []
+        for output in records:
+            count[0] += 1
+            destination = job.path(f"{recipe.id}-{count[0]}.png")
+            client.download(output, destination)
+            paths.append(destination)
+        return paths
+
+    images = fetch(assets) if download else []
+    extra = {name: fetch(of(node_id)) for name, node_id in added.items()}
+    return Result(images, assets, provenance(recipe, version, values, job_id, client.base), notes, extra)
+
+
+def texts(notes):
+    return [Job.text(note) for note in notes if note]
+
+
+def source_size(job):
+    source = job.source or {}
+    if not job.source_path or not source.get("width") or not source.get("height"):
+        raise RpcError(INVALID_PARAMS, "this action needs an image layer")
+    return int(source["width"]), int(source["height"])
+
+
+def target_of(job):
+    """``inputs.target`` (document pixels a surface run covers), or None."""
+    target = job.inputs.get("target") or {}
+    try:
+        width, height = int(target["width"]), int(target["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def source_doc_size(job):
+    """The source sent, in document pixels (the export is scaled down)."""
+    width, height = source_size(job)
+    scale = float((job.source or {}).get("scale") or 1.0) or 1.0
+    return max(1, round(width / scale)), max(1, round(height / scale))
+
+
+def scaled_target(job):
+    """The crop the plugin got for a box, in document pixels: the box target
+    scaled by the crop's size over the box's (padding included)."""
+    target = target_of(job)
+    width, height = source_size(job)
+    region = job.regions[0] if job.regions else {}
+    if target and region.get("width") and region.get("height"):
+        return max(1, round(target[0] * width / region["width"])), max(1, round(target[1] * height / region["height"]))
+    return source_doc_size(job)
+
+
+def layer_name(prompt):
+    return prompt if len(prompt) <= 40 else prompt[:39].rstrip() + "…"
+
+
+def region_prompt(job):
+    region = job.regions[0] if job.regions else {}
+    return str((region.get("fields") or {}).get("desc") or "").strip()
+
+
+def rect_mask(path, size, region):
+    """A grey PNG of ``size``, white inside the region's rectangle."""
+    width, height = size
+    x0 = min(width, max(0, int(region["x"])))
+    x1 = min(width, max(x0, math.ceil(region["x"] + region["width"])))
+    y0 = min(height, max(0, int(region["y"])))
+    y1 = min(height, max(y0, math.ceil(region["y"] + region["height"])))
+    black = bytes(width)
+    inside = bytes(x0) + b"\xff" * (x1 - x0) + bytes(width - x1)
+    gray = b"".join(inside if y0 <= y < y1 else black for y in range(height))
+    with open(path, "wb") as handle:
+        handle.write(encode_gray_png(width, height, gray))
+    return path
+
+
+def seed_of(job):
+    try:
+        return int(job.inputs.get("seed") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+# --- Actions --------------------------------------------------------------
 
 
 @plugin.action("generate")
 def generate(job):
-    values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0), "width": job.inputs.get("width", 1024), "height": job.inputs.get("height", 1024)}
-    results, provenance = run_workflow(job, "text-to-image", values, with_source=False)
-    return [image_output(path, "Generated", provenance) for path in results]
+    recipe = recipe_for("generate", job.inputs.get("model"))
+    values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job),
+              "aspect": job.inputs.get("aspect") or "1:1", "tier": job.inputs.get("resolution") or "2K"}
+    if target_of(job):
+        values["target"] = target_of(job)
+    if not values["prompt"].strip():
+        raise RpcError(INVALID_PARAMS, "Describe the image to generate")
+    result = run(job, recipe, values)
+    name = layer_name(values["prompt"].strip()) if job.inputs.get("surface") == "document" else recipe.label
+    return [Job.image(path, name=name, provenance=result.provenance) for path in result.images] + texts(result.notes)
 
 
-@plugin.action("run-workflow")
-def run_custom(job):
-    values = {"prompt": job.inputs.get("prompt", ""), "seed": job.inputs.get("seed", 0)}
-    results, provenance = run_workflow(job, job.inputs.get("workflow") or "my-workflow.json", values, with_source=True)
-    return [image_output(path, "Comfy result", provenance) for path in results]
+@plugin.action("edit")
+def edit(job):
+    recipe = recipe_for("edit", job.inputs.get("model"))
+    values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job), "source_size": source_size(job),
+              "target": target_of(job) or source_doc_size(job)}
+    if not values["prompt"].strip():
+        raise RpcError(INVALID_PARAMS, "Describe the change")
+    result = run(job, recipe, values, image_path=job.source_path)
+    images = [Job.image(path, name=recipe.label, fit=fit(), provenance=result.provenance) for path in result.images]
+    return images + texts(result.notes)
 
 
-def image_output(path, name, provenance=None, mask=None):
-    return Job.image(path, name=name, mask=mask, provenance=provenance)
+@plugin.action("precise-edit")
+def precise_edit(job):
+    recipe = recipe_for("precise-edit")
+    regions = [r for r in job.regions if (r.get("fields") or {}).get("desc") or (r.get("fields") or {}).get("text")]
+    if not regions:
+        raise RpcError(INVALID_PARAMS, "Draw a box and describe what to change in it")
+    values = {"seed": seed_of(job), "source_size": source_size(job), "regions": regions,
+              "quality": job.inputs.get("quality") or "medium", "background": job.inputs.get("background") or ""}
+    result = run(job, recipe, values, image_path=job.source_path)
+    images = [Job.image(path, name="Precise Edit", fit=fit(), provenance=result.provenance) for path in result.images]
+    return images + texts(result.notes)
 
 
-@plugin.estimate("precise-edit")
+@plugin.action("split-layers")
+def split_layers(job):
+    recipe = recipe_for("split-layers", job.inputs.get("model"))
+    width, height = source_size(job)
+    if min(width, height) < 512:
+        raise RpcError(INVALID_PARAMS, "Seedream needs an image of at least 512 × 512 pixels")
+    values = {"prompt": job.inputs.get("prompt") or "", "seed": seed_of(job), "source_size": (width, height)}
+    result = run(job, recipe, values, image_path=job.source_path)
+    # The workflow saves the background plate first, then the layers.
+    names = ["Background"] + [f"Layer {n}" for n in range(1, len(result.images))]
+    outputs = [Job.image(path, name=name, fit_source=True, provenance=result.provenance)
+               for path, name in zip(result.images, names)]
+    return outputs + texts(result.notes)
+
+
+# With Match the picture, GPT first draws the object into the flattened image
+# (asked for a transparent background alongside a reference image, it redraws
+# the whole scene instead), then Seedream lifts just that object out.
+SCENE = ("Add what is described below to this picture, where it belongs, matching the picture's colours, "
+         "lighting, perspective and style. Change nothing else.\n\n")
+LIFT = "Separate only this into its own layer: {}. Everything else stays in the background."
+LAYER_ALONE = "\n\nOn a transparent background, with nothing else in the picture."
+LIFT_RECIPE = "split-flash"
+
+
+def draw_and_lift(job, recipe, prompt, values):
+    """GPT draws ``prompt`` into the source picture (opaque), then Seedream
+    lifts just that object out. Returns ``(layers, provenance, notes)``."""
+    scene = run(job, recipe, dict(values, prompt=SCENE + prompt, overrides={f"{GPT}.model.background": "opaque"}),
+                reference_path=job.source_path, stage="Drawing it into the picture: ")
+    lift_recipe = RECIPES[LIFT_RECIPE]
+    lift = run(job, lift_recipe, {"prompt": LIFT.format(prompt), "seed": values["seed"]},
+               image_path=scene.images[0], stage="Lifting it out: ")
+    layers = lift.images[1:]  # the first is the background plate
+    if not layers:
+        raise RpcError(INTERNAL_ERROR, "Seedream found nothing to lift out of the picture; try describing it differently")
+    record = dict(scene.provenance, model=f"{recipe.label} + {lift_recipe.label}")
+    record["extra"] = dict(scene.provenance["extra"], lifted_with=lift_recipe.template)
+    return layers, record, scene.notes + lift.notes
+
+
+def as_layers(paths, prompt, record):
+    name = layer_name(prompt)
+    names = [name] if len(paths) == 1 else [f"{name} {n}" for n in range(1, len(paths) + 1)]
+    return [Job.image(path, name=layer, fit=fit(), provenance=record) for path, layer in zip(paths, names)]
+
+
+@plugin.action("generate-layer")
+def generate_layer(job):
+    recipe = recipe_for("generate-layer", job.inputs.get("model"))
+    prompt = (job.inputs.get("prompt") or "").strip()
+    if not prompt:
+        raise RpcError(INVALID_PARAMS, "Describe what to put on the new layer")
+    values = {"seed": seed_of(job), "source_size": source_size(job), "quality": job.inputs.get("quality") or "medium",
+              "target": target_of(job) or source_doc_size(job)}
+    if job.inputs.get("reference", True) is False:
+        result = run(job, recipe, dict(values, prompt=prompt + LAYER_ALONE))
+        layers, record, notes = result.images, result.provenance, result.notes
+    else:
+        layers, record, notes = draw_and_lift(job, recipe, prompt, values)
+    return as_layers(layers, prompt, record) + texts(notes)
+
+
+@plugin.action("generate-in-region")
+def generate_in_region(job):
+    """Draw a box and say what to add: GPT draws it into the crop around the
+    box, Seedream lifts it out, and the layer shows within the box."""
+    recipe = recipe_for("generate-in-region", job.inputs.get("model"))
+    prompt = region_prompt(job)
+    if not prompt:
+        raise RpcError(INVALID_PARAMS, "Describe what to add in the box")
+    values = {"seed": seed_of(job), "quality": job.inputs.get("quality") or "medium", "target": scaled_target(job)}
+    layers, record, notes = draw_and_lift(job, recipe, prompt, values)
+    return as_layers(layers, prompt, record) + texts(notes)
+
+
+# Fill region: GPT repaints only the box (white in the mask).
+FILL = ("Repaint only the white area of the mask with what is described below, matching the picture's colours, "
+        "lighting, perspective and style.\n\n")
+
+
+@plugin.action("fill-region")
+def fill_region(job):
+    """Draw a box (or use the selection) and say what belongs there: GPT
+    Image repaints only that area of the picture."""
+    recipe = recipe_for("fill-region", job.inputs.get("model"))
+    prompt = region_prompt(job)
+    if not prompt:
+        raise RpcError(INVALID_PARAMS, "Describe what to paint in the box")
+    size = source_size(job)
+    region = job.regions[0]
+    mask = region.get("mask") or rect_mask(job.path("mask.png"), size, region)
+    values = {"prompt": FILL + prompt, "seed": seed_of(job), "quality": job.inputs.get("quality") or "medium",
+              "target": scaled_target(job)}
+    result = run(job, recipe, values, reference_path=job.source_path, mask_path=mask)
+    return as_layers(result.images, prompt, result.provenance) + texts(result.notes)
+
+
+@plugin.action("remove-background")
+def remove_background(job):
+    """From the menu: a cut-out copy as a new layer. As Xuan's Remove
+    Background or Select Subject (``inputs.capability``): the cut-out's alpha
+    as a mask, which Xuan turns into a layer mask or the selection. Comfy
+    saves that mask as its own image, so the plugin never decodes a PNG."""
+    recipe = recipe_for("remove-background")
+    source_size(job)
+    if job.inputs.get("capability"):
+        result = run(job, recipe, {}, image_path=job.source_path, download=False,
+                     post=lambda workflow: {"mask": add_alpha_mask(workflow, BRIA)})
+        if not result.extra.get("mask"):
+            raise RpcError(INTERNAL_ERROR, "Comfy returned no mask")
+        return [Job.mask(result.extra["mask"][0], fit_source=True)] + texts(result.notes)
+    result = run(job, recipe, {}, image_path=job.source_path)
+    return [Job.image(result.images[0], name="Cut-out", fit_source=True, provenance=result.provenance)] + texts(result.notes)
+
+
 def estimate(job):
-    return {"cost": "Comfy Cloud credits apply", "seconds": 30}
+    return {"cost": "Comfy Cloud credits apply", "seconds": 60 if job.action == "split-layers" else 30}
 
 
-@plugin.pane("jobs")
-def jobs_pane(pane):
-    with history_lock:
-        entries = list(history)
-    if not entries:
-        return ui.column(ui.label("No Comfy jobs yet.", muted=True), ui.link("Comfy Cloud", "https://cloud.comfy.org"))
-    items = [ui.item(e["id"], f"{e['action']} · {e['state']}", time.strftime("%H:%M:%S", time.localtime(e["started"]))) for e in entries]
-    return ui.column(ui.listing("history", items), ui.button("refresh", "Refresh"))
+for _action in ACTIONS:
+    plugin.estimate(_action)(estimate)
+
+
+# --- Pane -----------------------------------------------------------------
+
+
+def check_all():
+    """Check every recipe for a newer template now, then redraw the pane."""
+    try:
+        books = catalog(make_client())
+        for recipe in RECIPES.values():
+            try:
+                books.ensure(recipe, force=True)
+            except RpcError:
+                pass  # the state records why
+    except (NeedsSetup, RpcError):
+        pass
+    finally:
+        _checking.clear()
+        plugin.update_pane(PANE, pane_tree())
+
+
+def action_labels(path=os.path.join(HERE, "plugin.toml")):
+    """Each action's label from plugin.toml without the dialog's ellipsis, so
+    the pane names actions as the menus do and cannot fall behind them.
+
+    Reads the ``[[actions]]`` tables line by line, because tomllib is not in
+    Python 3.10; test_main checks the result against tomllib."""
+    labels, current, in_action = {}, None, False
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return labels
+    for line in lines:
+        line = line.strip()
+        if line.startswith("["):
+            in_action, current = line == "[[actions]]", None
+            continue
+        match = re.match(r'(id|label)\s*=\s*"([^"\\]*)"', line)
+        if not in_action or not match:
+            continue
+        if match.group(1) == "id":
+            current = match.group(2)
+        elif current is not None:
+            labels.setdefault(current, match.group(2).rstrip("…"))
+    return labels
+
+
+ACTION_LABELS = action_labels()
+
+
+def pane_tree():
+    rows = [ui.heading("Workflows")]
+    books = _catalog or Catalog(None, plugin.data_dir, SNAPSHOTS)
+    for action, recipe_ids in ACTIONS.items():
+        rows.append(ui.label(ACTION_LABELS.get(action, action)))
+        for recipe in (RECIPES[recipe_id] for recipe_id in recipe_ids):
+            state = books.state(recipe)
+            version = state.get("current")
+            date = (version or {}).get("template_date")
+            rows.append(ui.label(f"{recipe.label} · Comfy template of {date}" if date else f"{recipe.label} · {describe(version)}", muted=True, small=True))
+            if state.get("warning"):
+                rows.append(ui.label(state["warning"], small=True))
+    if _checking.is_set():
+        rows.append(ui.progress(None, "Checking Comfy for updates…"))
+    else:
+        rows.append(ui.button("check", "Check for updates"))
+    rows.append(ui.link("Comfy Cloud", "https://cloud.comfy.org"))
+    return ui.column(*rows)
+
+
+@plugin.pane(PANE)
+def comfy_pane(pane):
+    if pane.widget == "check" and not _checking.is_set():
+        _checking.set()
+        threading.Thread(target=check_all, daemon=True).start()
+    return pane_tree()
 
 
 if __name__ == "__main__":

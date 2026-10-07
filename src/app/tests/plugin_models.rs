@@ -337,9 +337,8 @@ fn a_download_shows_progress_and_cancelling_leaves_nothing() {
             .is_some_and(|job| job.fraction() >= 0.5)
     });
     assert_eq!(status(ui.app(), "net").0, "Downloading 50%");
-    // The job window shows it with the other background jobs.
-    assert!(ui.has_role(egui::accesskit::Role::Label, "Downloading net"));
-    assert!(ui.has("750 B / 1.5 KB"));
+    // The status bar shows it with the other background jobs.
+    assert!(ui.has("Downloading net · 750 B / 1.5 KB"));
     let id = ui.app().plugins.model_jobs[0].id;
     ui.app_mut().cancel_model_job(id);
     fake.gate.store(true, Ordering::Relaxed);
@@ -410,7 +409,7 @@ fn the_models_section_downloads_shows_and_deletes_models() {
     ui.click("Manage Plugins…");
     // The only plugin is selected; its permissions mention the models.
     assert!(
-        ui.has("• Uses models that Xuan downloads, after asking you: net (1.5 KB, models.example)")
+        ui.has("Uses models that Xuan downloads, after asking you: net (1.5 KB, models.example)")
     );
     assert!(ui.has("Models"));
     assert!(ui.has("net"));

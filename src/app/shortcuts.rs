@@ -71,6 +71,18 @@ impl EditorApp {
             return;
         }
 
+        // With the AI Region tool, Delete and Backspace remove the selected box.
+        if self.tool == Tool::Region
+            && self.plugins.action.is_none()
+            && let Some(index) = self.session().and_then(|s| s.ai_selected)
+            && ctx.input_mut(|i| {
+                consume_exact(i, Modifiers::NONE, Key::Delete)
+                    || consume_exact(i, Modifiers::NONE, Key::Backspace)
+            })
+        {
+            self.delete_ai_box(index);
+        }
+
         // With the Pen, Delete and Backspace remove an anchor rather than clear pixels.
         if self.tool == Tool::Pen
             && !developing

@@ -9,7 +9,12 @@ use xuan::{
     io, operations, render,
 };
 
-use super::{Dialog, EditorApp, theme::PaletteExt};
+use super::{
+    Dialog, EditorApp,
+    surfaces::{SurfaceRun, SurfaceStart},
+    theme::PaletteExt,
+};
+use xuan::plugins::manifest::Surface;
 
 impl EditorApp {
     /// Help → Keyboard Shortcuts: the bindings in effect, from the command registry, and the
@@ -108,6 +113,7 @@ impl EditorApp {
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),
                 Dialog::SelectionAmount => self.selection_amount_dialog(ctx),
+                Dialog::Trim => self.trim_dialog(ctx),
                 Dialog::Paths => self.paths_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {
@@ -194,10 +200,36 @@ impl EditorApp {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        // Focus Width, with its value selected, once when the dialog opens.
+        // New Image can generate the image with a plugin's document action.
+        let document_actions = if dialog == Dialog::New {
+            self.surface_actions(Surface::Document)
+        } else {
+            Vec::new()
+        };
+        if document_actions.is_empty() {
+            self.new_image_generate = false;
+        }
+        let chosen = (self.new_image_action.clone())
+            .filter(|(p, a)| {
+                document_actions
+                    .iter()
+                    .any(|a2| a2.plugin == *p && a2.action == *a)
+            })
+            .or_else(|| {
+                document_actions
+                    .first()
+                    .map(|a| (a.plugin.clone(), a.action.clone()))
+            });
+        let generating = self.new_image_generate && chosen.is_some();
+        // Focus Width, with its value selected, once when the dialog opens; in Generate, the
+        // prompt instead, once each time Generate is chosen.
         let focused = egui::Id::new("size_dialog_focused");
-        let focus_width =
-            ctx.data(|d| d.get_temp::<Option<Dialog>>(focused).flatten()) != Some(dialog);
+        let focus_now = ctx.data(|d| d.get_temp::<Option<(Dialog, bool)>>(focused).flatten())
+            != Some((dialog, generating));
+        let focus_width = focus_now && !generating;
+        if focus_now && generating {
+            ctx.data_mut(|d| d.insert_temp(focused, Some((dialog, generating))));
+        }
         widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(410.0)
@@ -205,8 +237,20 @@ impl EditorApp {
                 ctx,
                 |ui| {
                     ui.add_space(7.0);
+                    if !document_actions.is_empty() {
+                        let mut generate = self.new_image_generate;
+                        widgets::segmented(
+                            ui,
+                            &mut generate,
+                            &[(false, tr("Blank")), (true, tr("Generate"))],
+                        );
+                        self.new_image_generate = generate;
+                        ui.add_space(10.0);
+                    }
                     ui.label(
-                        RichText::new(if dialog == Dialog::New {
+                        RichText::new(if generating {
+                            tr("Describe the image; it is made at least this size.")
+                        } else if dialog == Dialog::New {
                             tr("A blank space for your next composition.")
                         } else if dialog == Dialog::CanvasSize {
                             tr("Change the canvas bounds and anchor your composition.")
@@ -239,7 +283,9 @@ impl EditorApp {
                                         ),
                                     ));
                                     state.store(ui.ctx(), width.id);
-                                    ui.ctx().data_mut(|d| d.insert_temp(focused, Some(dialog)));
+                                    ui.ctx().data_mut(|d| {
+                                        d.insert_temp(focused, Some((dialog, false)))
+                                    });
                                 } else {
                                     width.request_focus();
                                 }
@@ -288,21 +334,69 @@ impl EditorApp {
                                 }
                             });
                     }
+                    let mut ready = true;
+                    if let Some((plugin, action)) = chosen.clone().filter(|_| generating) {
+                        ui.add_space(12.0);
+                        let offered = (document_actions.iter())
+                            .find(|a| a.plugin == plugin && a.action == action);
+                        let (label, source) = offered
+                            .map(|a| (a.attributed(), a.source.clone()))
+                            .unwrap_or_default();
+                        if document_actions.len() > 1 {
+                            let mut choice = (plugin.clone(), action.clone());
+                            widgets::PopUp::from_id_salt("new_image_action")
+                                .selected_text(label)
+                                .width(280.0)
+                                .show_ui(ui, |ui| {
+                                    for a in &document_actions {
+                                        widgets::menu_choice(
+                                            ui,
+                                            &mut choice,
+                                            (a.plugin.clone(), a.action.clone()),
+                                            a.attributed(),
+                                        )
+                                        .on_hover_text(&a.source);
+                                    }
+                                });
+                            if choice != (plugin.clone(), action.clone()) {
+                                self.new_image_action = Some(choice);
+                            }
+                        } else {
+                            // The plugin's words below say whose they are.
+                            ui.label(RichText::new(label).small().color(ui.palette().muted))
+                                .on_hover_text(source);
+                        }
+                        ui.add_space(8.0);
+                        ready = self.surface_form(
+                            ui,
+                            &plugin,
+                            &action,
+                            Surface::Document,
+                            "new_image",
+                            focus_now,
+                        );
+                        widgets::checkbox(ui, &mut self.new_image_exact, tr("Exact size"))
+                            .on_hover_text(tr(
+                                "Make the canvas exactly W × H; the image covers it and can be moved",
+                            ));
+                    }
                     let valid =
                         xuan::document::validate_size(self.dimensions[0], self.dimensions[1]);
                     ui.add_space(12.0);
                     if let Err(error) = &valid {
                         ui.colored_label(ui.palette().error, error.to_string());
-                    } else {
+                    } else if !generating {
                         ui.label(
                             RichText::new(tr("Transparent canvas · sRGB"))
                                 .color(ui.palette().muted),
                         );
                     }
-                    valid.is_ok()
+                    valid.is_ok() && ready
                 },
                 |ui, valid| {
-                    let commit = if dialog == Dialog::New {
+                    let commit = if generating {
+                        tr("Generate image")
+                    } else if dialog == Dialog::New {
                         tr("Create canvas")
                     } else {
                         tr("Resize")
@@ -316,7 +410,24 @@ impl EditorApp {
                     cancel = response.cancel;
                 },
             );
-        if apply {
+        if apply
+            && generating
+            && let Some((plugin, action)) = chosen
+        {
+            let values = self.surface_values(&plugin, &action).clone();
+            let run = SurfaceRun {
+                surface: Surface::Document,
+                target: (self.dimensions[0], self.dimensions[1]),
+                exact: self.new_image_exact,
+                resolution: self.resolution,
+                boxes: Vec::new(),
+            };
+            // A permission or consent prompt takes the dialog's place.
+            let started = self.run_from_surface(&plugin, &action, &values, Vec::new(), run);
+            if started != SurfaceStart::NotStarted && self.dialog == Some(Dialog::New) {
+                self.dialog = None;
+            }
+        } else if apply {
             if dialog == Dialog::New {
                 self.new_document();
             } else {
@@ -341,7 +452,7 @@ impl EditorApp {
             self.dialog = None;
         }
         if self.dialog != Some(dialog) {
-            ctx.data_mut(|d| d.remove_temp::<Option<Dialog>>(focused));
+            ctx.data_mut(|d| d.remove_temp::<Option<(Dialog, bool)>>(focused));
         }
     }
 
@@ -426,16 +537,16 @@ impl EditorApp {
                                     )
                                     .changed();
                                 changed |=
-                                    widgets::checkbox(ui, &mut settings.colorize, tr("Colorize"))
+                                    widgets::checkbox(ui, &mut settings.colorize, tr("Colourise"))
                                         .changed();
                                 if settings.range > 0 {
                                     changed |= widgets::checkbox(
                                         ui,
                                         &mut settings.invert_range,
-                                        tr("Invert selected color range"),
+                                        tr("Invert selected colour range"),
                                     )
                                     .changed();
-                                    ui.collapsing(tr("Color range falloff"), |ui| {
+                                    ui.collapsing(tr("Colour range falloff"), |ui| {
                                         for (index, label) in [
                                             tr("Falloff start"),
                                             tr("Range start"),
@@ -506,7 +617,7 @@ impl EditorApp {
                                     )
                                     .changed();
                                 changed |=
-                                    widgets::checkbox(ui, colorize, tr("Colorize")).changed();
+                                    widgets::checkbox(ui, colorize, tr("Colourise")).changed();
                             }
                             Adjustment::Levels {
                                 black,

@@ -1,0 +1,146 @@
+{
+ "template": "api_bytedance_seedream_5_0_layer_separation",
+ "template_sha256": "a0758965e3e502cc961bc9cde90bc970e37a54666e13848051c215eb80697183",
+ "template_date": "2026-08-07",
+ "converted_at": "2026-10-07T03:37:47+00:00",
+ "output": "23",
+ "api": {
+  "23": {
+   "class_type": "SaveImageAdvanced",
+   "inputs": {
+    "images": [
+     "31",
+     0
+    ],
+    "filename_prefix": "layers/image_layer",
+    "format": "png",
+    "format.bit_depth": "8-bit",
+    "format.input_color_space": "sRGB"
+   },
+   "_meta": {
+    "title": "Save Image (Advanced)"
+   }
+  },
+  "31": {
+   "class_type": "JoinImageWithAlpha",
+   "inputs": {
+    "image": [
+     "20",
+     0
+    ],
+    "alpha": [
+     "22",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Join Image with Alpha"
+   }
+  },
+  "22": {
+   "class_type": "BatchMasksNode",
+   "inputs": {
+    "masks.mask0": [
+     "32",
+     1
+    ],
+    "masks.mask1": [
+     "32",
+     3
+    ]
+   },
+   "_meta": {
+    "title": "Batch Masks"
+   }
+  },
+  "32": {
+   "class_type": "ByteDanceSeedreamLayerSeparationNodeV2",
+   "inputs": {
+    "model": "seedream 5.0 flash",
+    "model.image": [
+     "15",
+     0
+    ],
+    "model.prompt": "Separate the image into three layers: the main character and the ship; the background; text, icons, and graphic elements.",
+    "model.size": "auto",
+    "model.seed": 498392743,
+    "model.watermark": false,
+    "model.crop_layers": false
+   },
+   "_meta": {
+    "title": "ByteDance Seedream 5.0 Layer Separation"
+   }
+  },
+  "15": {
+   "class_type": "LoadImage",
+   "inputs": {
+    "image": "victory_cover.png"
+   },
+   "_meta": {
+    "title": "Load Image"
+   }
+  },
+  "20": {
+   "class_type": "BatchImagesNode",
+   "inputs": {
+    "images.image0": [
+     "32",
+     0
+    ],
+    "images.image1": [
+     "32",
+     2
+    ]
+   },
+   "_meta": {
+    "title": "Batch Images"
+   }
+  }
+ },
+ "specs": {
+  "ByteDanceSeedreamLayerSeparationNodeV2.model.prompt": [
+   "STRING",
+   {
+    "tooltip": "How to separate the image. Leave empty to auto-detect and separate all major elements. Describe elements in natural language to control the separation, or target exact regions with <bbox>left top right bottom</bbox> tags (0-1000 per-mille coordinates).",
+    "default": "",
+    "multiline": true
+   }
+  ],
+  "ByteDanceSeedreamLayerSeparationNodeV2.model.seed": [
+   "INT",
+   {
+    "tooltip": "Seed to use for generation.",
+    "default": 42,
+    "min": 0,
+    "max": 2147483647,
+    "step": 1,
+    "control_after_generate": true,
+    "display": "number"
+   }
+  ],
+  "ByteDanceSeedreamLayerSeparationNodeV2.model.image": [
+   "IMAGE",
+   {
+    "tooltip": "The image to separate. Exactly one image, at least 512x512 pixels, aspect ratio between 1:16 and 16:1. Inputs larger than about 4MP are downscaled before upload."
+   }
+  ],
+  "ByteDanceSeedreamLayerSeparationNodeV2.model.watermark": [
+   "BOOLEAN",
+   {
+    "tooltip": "Whether to add an \"AI generated\" watermark to the images.",
+    "advanced": true,
+    "default": false
+   }
+  ],
+  "ByteDanceSeedreamLayerSeparationNodeV2.model.crop_layers": [
+   "BOOLEAN",
+   {
+    "tooltip": "Geometry of the layers/masks batch outputs (layer_stack is unaffected and always tight). Full canvas: each layer on a base-sized canvas at its bounding-box position - recompose directly with ImageCompositeMasked. Minimal size: each layer cropped to its bounding box (padded to the largest layer for batching) - much smaller tensors; rebuild placement with Layers From Bounding Boxes using the bboxes output.",
+    "default": false,
+    "label_on": "minimal size",
+    "label_off": "full canvas"
+   }
+  ]
+ },
+ "recipe_key": "44740f8dff3f75ef"
+}

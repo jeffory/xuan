@@ -332,7 +332,7 @@ impl EditorApp {
         match key {
             TabKey::Document(id) => self
                 .document_index(id)
-                .is_some_and(|i| self.sessions[i].history.dirty()),
+                .is_some_and(|i| self.sessions[i].history.edited()),
             TabKey::Raw(id) => self
                 .develop
                 .iter()
@@ -522,11 +522,13 @@ impl EditorApp {
 
     fn zoom_buttons(&self, ui: &mut Ui, actions: &mut Actions) {
         ui.add_enabled_ui(self.develop.as_ref().is_none_or(|d| d.ready()), |ui| {
-            if widgets::button(ui, "−")
-                .on_hover_text(tr("Zoom out"))
-                .clicked()
-            {
-                actions.command = Some("zoom_out");
+            // The strip lays out right to left, so the buttons are added in reverse to read
+            // "− + 100% Fit", the Navigator's order for − and +.
+            if widgets::button(ui, tr("Fit")).clicked() {
+                actions.command = Some("fit");
+            }
+            if widgets::button(ui, "100%").clicked() {
+                actions.command = Some("actual");
             }
             if widgets::button(ui, "+")
                 .on_hover_text(tr("Zoom in"))
@@ -534,11 +536,11 @@ impl EditorApp {
             {
                 actions.command = Some("zoom_in");
             }
-            if widgets::button(ui, "100%").clicked() {
-                actions.command = Some("actual");
-            }
-            if widgets::button(ui, tr("Fit")).clicked() {
-                actions.command = Some("fit");
+            if widgets::button(ui, "−")
+                .on_hover_text(tr("Zoom out"))
+                .clicked()
+            {
+                actions.command = Some("zoom_out");
             }
         });
     }
