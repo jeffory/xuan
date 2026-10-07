@@ -112,6 +112,29 @@ fn a_drop_shadow_falls_away_from_the_light() {
 }
 
 #[test]
+fn color_overlay_keeps_the_alpha_of_semi_transparent_pixels() {
+    for alpha in [1u8, 64, 128, 200, 254] {
+        let source = RgbaImage::from_pixel(4, 4, Rgba([0, 0, 0, alpha]));
+        let mut effects = LayerEffects::default();
+        effects.add(EffectKind::ColorOverlay, [255, 255, 255]);
+        let result = render_cpu(&source, &effects);
+        assert_eq!(
+            result.get_pixel(1, 1).0,
+            [255, 255, 255, alpha],
+            "alpha {alpha}"
+        );
+        for opacity in [0.5f32, 0.25] {
+            effects.color_overlay.as_mut().unwrap().opacity = opacity;
+            let result = render_cpu(&source, &effects);
+            let p = result.get_pixel(1, 1).0;
+            let expected = (opacity * 255.0).round() as i32;
+            assert!((p[0] as i32 - expected).abs() <= 1, "{p:?} at {opacity}");
+            assert_eq!(p[3], alpha);
+        }
+    }
+}
+
+#[test]
 fn overlay_and_inner_effects_stay_inside_the_shape() {
     let source = square(40, 20, [0, 0, 255]);
     let overlay = render_cpu(&source, &only(EffectKind::ColorOverlay));

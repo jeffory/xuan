@@ -153,8 +153,10 @@ fn fx_compose(@builtin(global_invocation_id) id: vec3<u32>) {
     if flags.z > 0.0 { current = over(current, config[2], second_plane(count + index)); }
     if more.y > 0.0 { current = over(current, config[5], second_plane(3u * count + index) * (1.0 - shape)); }
     if flags.x > 0.0 && flags.y == 0.0 { current = over(current, config[1], second_plane(index)); }
-    current = vec4(pixel.rgb * pixel.a + current.rgb * (1.0 - pixel.a), pixel.a + current.a * (1.0 - pixel.a));
-    if more.x > 0.0 { current = over(current, config[3], shape); }
+    // A color overlay recolors the layer's own pixels and keeps their alpha.
+    var face = pixel.rgb;
+    if more.x > 0.0 { face = mix(face, config[3].rgb, clamp(config[3].a, 0.0, 1.0)); }
+    current = vec4(face * pixel.a + current.rgb * (1.0 - pixel.a), pixel.a + current.a * (1.0 - pixel.a));
     if more.z > 0.0 { current = over(current, config[6], second_plane(4u * count + index)); }
     if flags.w > 0.0 { current = over(current, config[4], second_plane(2u * count + index)); }
     if flags.x > 0.0 && flags.y > 0.0 { current = over(current, config[1], second_plane(index)); }

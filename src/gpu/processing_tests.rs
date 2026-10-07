@@ -339,6 +339,29 @@ fn processing_layer_effects_match_cpu() {
     }
 }
 
+/// A color overlay on semi-transparent pixels (alpha ramps from 0 to 255 across a scene of
+/// more than 65 536 pixels): the GPU keeps each pixel's alpha, as the CPU does.
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_color_overlay_keeps_alpha_like_cpu() {
+    use crate::layer_effects::{EffectKind, LayerEffects, render_cpu};
+    let gpu = processor();
+    let source = RgbaImage::from_fn(300, 240, |x, y| {
+        Rgba([(y % 256) as u8, 40, 200, (x * 255 / 299) as u8])
+    });
+    for opacity in [1.0, 0.6, 0.25] {
+        let mut effects = LayerEffects::default();
+        effects.add(EffectKind::ColorOverlay, [255, 255, 255]);
+        effects.color_overlay.as_mut().unwrap().opacity = opacity;
+        let expected = render_cpu(&source, &effects);
+        for (a, b) in source.pixels().zip(expected.pixels()) {
+            assert_eq!(a[3], b[3], "the CPU render changed the alpha");
+        }
+        let actual = gpu.layer_effects(&source, &effects).unwrap();
+        compare(&actual, &expected, 2);
+    }
+}
+
 #[test]
 #[ignore = "requires native compute adapter"]
 fn processing_raw_matches_cpu_at_both_depths() {
