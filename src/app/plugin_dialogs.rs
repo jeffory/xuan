@@ -591,7 +591,7 @@ impl EditorApp {
                         ui.label(RichText::new(status).small().color(ui.palette().muted));
                         ui.add_space(8.0);
                         {
-                            ui.label(RichText::new(tr("Permissions")).strong());
+                            widgets::subheading(ui, tr("Permissions"));
                             permissions_list(ui, manifest, self.plugin_network_blocked(&id));
                             ui.horizontal(|ui| {
                                 if self.plugin_granted(&id) {
@@ -642,7 +642,7 @@ impl EditorApp {
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
-                            ui.label(RichText::new(tr("Settings")).strong());
+                            widgets::subheading(ui, tr("Settings"));
                             for setting in &manifest.settings {
                                 let mut value = if setting.kind == InputKind::Secret {
                                     Value::String(
@@ -700,7 +700,7 @@ impl EditorApp {
                 }
                 if !errors.is_empty() {
                     ui.separator();
-                    ui.label(RichText::new(tr("Could not load")).strong());
+                    widgets::subheading(ui, tr("Could not load"));
                     for error in &errors {
                         ui.add(
                             egui::Label::new(

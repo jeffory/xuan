@@ -170,7 +170,7 @@ impl EditorApp {
                     .open(&mut open)
                     .show_with_footer(ctx, |ui| {
                         if let Some(error) = &error {
-                            ui.label(RichText::new(tr("Cannot install this plugin")).strong());
+                            widgets::subheading(ui, tr("Cannot install this plugin"));
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(error).color(ui.palette().error),
@@ -262,7 +262,7 @@ impl EditorApp {
                             );
                         }
                         ui.add_space(8.0);
-                        ui.label(RichText::new(tr("Permissions")).strong());
+                        widgets::subheading(ui, tr("Permissions"));
                         super::plugin_dialogs::permissions_list(ui, manifest, blocked);
                         ui.add_space(8.0);
                         if staged.update {

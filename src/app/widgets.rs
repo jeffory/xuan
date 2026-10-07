@@ -1324,6 +1324,26 @@ pub fn menu_choice<T: PartialEq>(
     response
 }
 
+/// A section heading inside a dialog or pane: the subheading text style in the palette text colour.
+pub fn subheading(ui: &mut Ui, text: impl Into<String>) -> Response {
+    let color = ui.palette().text;
+    ui.label(
+        egui::RichText::new(text)
+            .text_style(theme::subheading_style())
+            .color(color),
+    )
+}
+
+/// A list row that is highlighted while it is the one being edited, like the Settings pages and the
+/// Plugins list: the selection fill, no check mark. Fills the width left in the row.
+pub fn selected_row(ui: &mut Ui, selected: bool, label: impl Into<String>) -> Response {
+    let width = ui.available_width();
+    ui.add(
+        egui::Button::selectable(selected, label.into())
+            .min_size(vec2(width, ui.spacing().interact_size.y)),
+    )
+}
+
 pub fn selectable_value<T: PartialEq>(
     ui: &mut Ui,
     value: &mut T,

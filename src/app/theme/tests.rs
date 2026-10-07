@@ -209,6 +209,19 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
             "egui warn_fg_color/window",
             ratio(v.warn_fg_color, p.window),
         ),
+        // The row being edited in a list (Layer Effects, Settings, Plugins): selection fill under
+        // the selected row's text, on the dialog window and on a panel (#87).
+        (
+            "selected row text/window",
+            ratio(
+                v.selection.stroke.color,
+                p.window.blend(v.selection.bg_fill),
+            ),
+        ),
+        (
+            "selected row text/panel",
+            ratio(v.selection.stroke.color, p.panel.blend(v.selection.bg_fill)),
+        ),
         // Hints and weak text (#78).
         ("egui weak text/field", ratio(v.weak_text_color(), p.field)),
     ]
@@ -407,4 +420,32 @@ fn a_system_accent_replaces_the_blue_and_stays_readable() {
         palette_for(xuan::config::Theme::Dark, None, Some(windows_blue)),
         Palette::DARK.with_accent(windows_blue)
     );
+}
+
+#[test]
+fn the_subheading_style_sits_between_body_and_heading() {
+    let ctx = egui::Context::default();
+    apply(&ctx, &Palette::DARK);
+    let style = ctx.style();
+    let size = |text: &TextStyle| style.text_styles[text].size;
+    let sub = size(&subheading_style());
+    assert!(
+        size(&TextStyle::Body) < sub && sub < size(&TextStyle::Heading),
+        "{sub}"
+    );
+}
+
+#[test]
+fn the_monospace_style_resolves_to_a_monospace_family() {
+    let ctx = egui::Context::default();
+    apply(&ctx, &Palette::LIGHT);
+    let font = ctx.style().text_styles[&TextStyle::Monospace].clone();
+    assert_eq!(font.family, egui::FontFamily::Monospace);
+    // Narrow and wide letters take the same width: the font is Hack, not Inter.
+    let mut widths = (0.0, 0.0);
+    let _ = ctx.run(Default::default(), |ctx| {
+        widths = ctx.fonts_mut(|f| (f.glyph_width(&font, 'i'), f.glyph_width(&font, 'W')));
+    });
+    assert!(widths.0 > 0.0);
+    assert_eq!(widths.0, widths.1);
 }

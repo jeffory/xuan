@@ -180,7 +180,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
             });
         }
         Node::Heading { text } => {
-            ui.label(RichText::new(text).strong());
+            widgets::subheading(ui, text);
         }
         Node::Label {
             text,

@@ -506,6 +506,12 @@ pub fn window_corner_radius(ctx: &egui::Context) -> u8 {
     if fills_screen { 0 } else { 12 }
 }
 
+/// The section-heading text style: between body (12) and the dialog title (21). Inter Variable has
+/// no separate bold face loaded, so the step up is size and the full text colour.
+pub fn subheading_style() -> TextStyle {
+    TextStyle::Name("Subheading".into())
+}
+
 /// Installs Xuan's fonts once, then [`set_palette`].
 pub fn apply(ctx: &egui::Context, palette: &Palette) {
     // Inter is an OFL-licensed, portable substitute for the macOS system font.
@@ -557,10 +563,14 @@ pub fn set_palette(ctx: &egui::Context, palette: &Palette) {
         (TextStyle::Button, 12.0),
         (TextStyle::Small, 11.0),
         (TextStyle::Heading, 21.0),
-        (TextStyle::Monospace, 12.0),
+        (subheading_style(), 15.0),
     ] {
         style.text_styles.insert(text, FontId::proportional(size));
     }
+    // Hack, which egui bundles, so code, paths and log lines are really monospaced.
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, FontId::monospace(12.0));
     ctx.set_style(style);
 }
 
