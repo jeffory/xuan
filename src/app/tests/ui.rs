@@ -1345,4 +1345,19 @@ fields = [{ id = "desc", type = "text", label = "Instruction" }]
         ui.app_mut().delete_ai_box(0);
         assert!(ui.app().session().unwrap().ai_boxes.is_empty());
     }
+
+    #[test]
+    fn drawing_an_ai_box_opens_its_popover() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        ui.app_mut().set_tool(Tool::Region);
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        ui.settle();
+        assert!(ui.has("Instruction"));
+        assert!(!ui.enabled("Generate"));
+    }
 }

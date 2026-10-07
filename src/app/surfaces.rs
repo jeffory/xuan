@@ -26,7 +26,6 @@ pub(super) enum SurfacePopup {
         anchor: egui::Pos2,
     },
     /// An AI Region box's popover.
-    #[allow(dead_code)] // the box's popover (next) reads index
     Region { document: uuid::Uuid, index: usize },
 }
 
@@ -217,9 +216,6 @@ impl EditorApp {
             None => {}
         }
     }
-
-    /// The AI Region box popover; the AI Region tool fills it in.
-    fn region_popup(&mut self, _ctx: &egui::Context) {}
 
     /// New layer with AI: the action's label, its form and Generate, above
     /// the button that opened it.

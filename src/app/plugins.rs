@@ -2904,7 +2904,7 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
 }
 
 /// The most regions an action's regions input takes.
-fn region_limit(input: &plugins::manifest::Input) -> usize {
+pub(super) fn region_limit(input: &plugins::manifest::Input) -> usize {
     input.max.map_or(plugins::manifest::MAX_REGIONS, |max| {
         (max.max(0.0) as usize).min(plugins::manifest::MAX_REGIONS)
     })

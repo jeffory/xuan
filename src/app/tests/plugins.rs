@@ -2737,6 +2737,65 @@ mod unix {
     }
 
     #[test]
+    fn ai_region_boxes_run_grouped_or_one_by_one_and_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        // "echo" is a multi-box Edit; "one" takes one box (Add).
+        let manifest = MANIFEST.replace("[[actions]]\nid = \"echo\"", "[permissions]\ndocument = \"edit\"\n\n[[actions]]\nid = \"echo\"\nsurfaces = [\"region\"]\nverb = \"Edit\"")
+            + "\n[[actions]]\nid = \"one\"\nlabel = \"One…\"\nsurfaces = [\"region\"]\nverb = \"Add\"\nsource = { crop_to_regions = true }\n\n[[actions.inputs]]\nid = \"regions\"\ntype = \"regions\"\nmax = 1\nfields = [{ id = \"desc\", type = \"text\" }]\n";
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for (x, desc) in [(2.0, "hat"), (20.0, "scarf"), (40.0, "")] {
+            app.add_ai_box(Point::new(x, 2.0), Point::new(x + 10.0, 12.0));
+            let session = app.session_mut().unwrap();
+            session
+                .ai_boxes
+                .last_mut()
+                .unwrap()
+                .region
+                .fields
+                .insert("desc".into(), desc.into());
+        }
+        // The empty third box is not sent; the two Edit boxes go in one job.
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        // Switch the remaining box to Add and give it text: one job for it.
+        app.set_ai_box_action(0, "mock", "one");
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "a cat".into());
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        run_until(&context, &mut app, |app| {
+            app.plugins.jobs.is_empty() && app.dialog == Some(Dialog::PluginProposal)
+        });
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let runs: Vec<_> = received
+            .lines()
+            .filter(|l| l.contains("\"action/run\""))
+            .collect();
+        assert_eq!(runs.len(), 2);
+        assert!(
+            runs[0].contains("\"action\":\"echo\"")
+                && runs[0].contains("hat")
+                && runs[0].contains("scarf")
+        );
+        assert!(
+            runs[1].contains("\"action\":\"one\"") && runs[1].contains("\"surface\":\"region\"")
+        );
+    }
+
+    #[test]
     fn a_settings_pane_is_drawn_in_manage_plugins_not_the_sidebar() {
         let dir = tempfile::tempdir().unwrap();
         let (context, mut app) = app();
