@@ -31,6 +31,10 @@ class Recipe:
     # inputs), "presets" (the size combo), "source" (it keeps image 1's size)
     # or "none".
     size_rule: str = "none"
+    # Limits the model's node checks beyond each side's min and max (see
+    # comfy_api_nodes in ComfyUI): total pixels, and long side over short.
+    pixels: Optional[Tuple[int, int]] = None
+    max_aspect: Optional[float] = None
     quality: Optional[str] = None
     background: Optional[str] = None
     regions: Optional[str] = None  # a CreateBoundingBoxes node
@@ -54,6 +58,7 @@ IDEOGRAM_EDIT = "IdeogramEditApi"
 IDEOGRAM_PRECISE = "IdeogramPreciseEditApi"
 SEPARATION = "ByteDanceSeedreamLayerSeparationNodeV2"
 GPT = "OpenAIGPTImageNodeV2"
+SEEDREAM_PIXELS = (921_600, 4_624_220)  # Seedream 5.0 Pro and Flash
 BRIA = "BriaRemoveImageBackground"
 
 _SEEDREAM_T2I = dict(
@@ -63,6 +68,7 @@ _SEEDREAM_T2I = dict(
     size=f"{SEEDREAM}.model.size_preset",
     match_size=(f"{SEEDREAM}.model.size_preset", f"{SEEDREAM}.model.width", f"{SEEDREAM}.model.height"),
     size_rule="custom",
+    pixels=SEEDREAM_PIXELS,
     fixed={f"{SEEDREAM}.model.watermark": False},
 )
 _GPT_LAYER = dict(
@@ -75,6 +81,8 @@ _GPT_LAYER = dict(
     match_step=16,
     quality=f"{GPT}.model.quality",
     size_rule="custom",
+    pixels=(655_360, 8_294_400),
+    max_aspect=3.0,
     fixed={f"{GPT}.model.background": "transparent", f"{GPT}.n": 1},
 )
 # Fill region: GPT repaints the white part of a mask over the picture.
@@ -109,6 +117,7 @@ RECIPES = {
             prompt=(f"{SEEDREAM}.prompt",), seed=(f"{SEEDREAM}.model.seed",), image=(f"{SEEDREAM}.model.images.image_1",),
             match_size=(f"{SEEDREAM}.model.size_preset", f"{SEEDREAM}.model.width", f"{SEEDREAM}.model.height"),
             size_rule="custom",
+            pixels=SEEDREAM_PIXELS,
             fixed={f"{SEEDREAM}.model.watermark": False},
         ),
         Recipe(
@@ -147,30 +156,55 @@ def recipe_for(action, model=None):
 
 # --- Filling in a converted workflow -------------------------------------
 
-def cover_size(target, spec_w, spec_h, step=0):
+def cover_size(target, spec_w, spec_h, step=0, pixels=None, max_aspect=None):
     """The smallest size of the target's shape the model accepts that is at
     least ``target``, as ``(width, height, under)``: rounded up to the step,
-    scaled up evenly to the minimum, and only scaled down when the model's
-    maximum is smaller. A shape the limits cannot hold (a long banner) keeps
-    each side within them; Xuan's cover placement absorbs the change of
-    shape. ``under`` says the size is smaller than the target."""
+    scaled up evenly to the minimum (each side's, and ``pixels[0]`` in all),
+    and only scaled down when the model's maximum is smaller. A shape the
+    limits cannot hold (a long banner, or longer than ``max_aspect``) is
+    made less long; Xuan's cover placement absorbs the change of shape.
+    ``under`` says the size is smaller than the target."""
     ow, oh = (spec_w[1] if len(spec_w) > 1 else {}), (spec_h[1] if len(spec_h) > 1 else {})
     step = step or max(int(ow.get("step") or 1), int(oh.get("step") or 1), 1)
     lo_w, hi_w = ow.get("min", 1), ow.get("max", 1 << 16)
     lo_h, hi_h = oh.get("min", 1), oh.get("max", 1 << 16)
+    low, high = pixels or (1, 1 << 40)
     w, h = float(max(target[0], 1)), float(max(target[1], 1))
-    grow = max(lo_w / w, lo_h / h, 1.0)
+    if max_aspect:
+        w, h = max(w, h / max_aspect), max(h, w / max_aspect)
+    grow = max(lo_w / w, lo_h / h, math.sqrt(low / (w * h)), 1.0)
     w, h = w * grow, h * grow
-    shrink = min(hi_w / w, hi_h / h, 1.0)
+    shrink = min(hi_w / w, hi_h / h, math.sqrt(high / (w * h)), 1.0)
     w, h = w * shrink, h * shrink
+    lo_w, lo_h = math.ceil(lo_w / step) * step, math.ceil(lo_h / step) * step
+    hi_w, hi_h = math.floor(hi_w / step) * step, math.floor(hi_h / step) * step
 
     def snap(value, lo, hi):
         # Rounded first so float noise (2048.0000001) does not add a step.
         steps = round(value / step, 6)
         value = int((math.floor(steps) if shrink < 1.0 else math.ceil(steps)) * step)
-        return min(max(value, math.ceil(lo / step) * step), math.floor(hi / step) * step)
+        return min(max(value, lo), hi)
 
     w, h = snap(w, lo_w, hi_w), snap(h, lo_h, hi_h)
+    # Snapping or a side's limit can cross the others by a step or so.
+    for _ in range(4096):
+        if w * h > high and (w > lo_w or h > lo_h):
+            if (w >= h and w > lo_w) or h <= lo_h:
+                w -= step
+            else:
+                h -= step
+        elif w * h < low and (w < hi_w or h < hi_h):
+            if (w <= h and w < hi_w) or h >= hi_h:
+                w += step
+            else:
+                h += step
+        elif max_aspect and max(w, h) > max_aspect * min(w, h):
+            if w > h:
+                w, h = (w - step, h) if h >= hi_h else (w, h + step)
+            else:
+                w, h = (w, h - step) if w >= hi_w else (w + step, h)
+        else:
+            break
     return w, h, w < target[0] or h < target[1]
 
 
@@ -200,7 +234,8 @@ def choose_size(entry, recipe, target):
     specs = entry.get("specs") or {}
     if recipe.size_rule == "custom" and recipe.match_size:
         combo, width, height = recipe.match_size
-        w, h, under = cover_size(target, specs.get(width) or ["INT", {}], specs.get(height) or ["INT", {}], recipe.match_step)
+        w, h, under = cover_size(target, specs.get(width) or ["INT", {}], specs.get(height) or ["INT", {}], recipe.match_step,
+                                 pixels=recipe.pixels, max_aspect=recipe.max_aspect)
         options = (specs.get(combo) or [None, {}])[1].get("options") or []
         note = f"{recipe.label} renders at most {w}×{h}; Xuan scales it up to {target[0]}×{target[1]}" if under else None
         return {combo: "Custom" if "Custom" in options else "custom", width: w, height: h}, note
@@ -257,9 +292,10 @@ def pick_preset(options, aspect, tier):
     return min(same_tier, key=lambda om: abs(math.log(int(om[1]["w"]) / int(om[1]["h"])) - want))[0]
 
 
-def fit_size(width, height, spec_w, spec_h, area=2048 * 2048, step=0):
+def fit_size(width, height, spec_w, spec_h, area=2048 * 2048, step=0, pixels=None, max_aspect=None):
     """A size with the source's shape and about ``area`` pixels inside the
-    width/height limits, or None when the shape cannot fit them."""
+    width/height, total ``pixels`` and ``max_aspect`` limits, or None when
+    the shape cannot fit them."""
     opts_w, opts_h = (spec_w[1] if len(spec_w) > 1 else {}), (spec_h[1] if len(spec_h) > 1 else {})
     if width <= 0 or height <= 0:
         return None
@@ -277,6 +313,10 @@ def fit_size(width, height, spec_w, spec_h, area=2048 * 2048, step=0):
     if not (lo_w <= w <= hi_w and lo_h <= h <= hi_h):
         return None
     if abs(math.log((w / h) / (width / height))) > 0.02:
+        return None
+    if pixels and not pixels[0] <= w * h <= pixels[1]:
+        return None
+    if max_aspect and max(w, h) > max_aspect * min(w, h):
         return None
     return w, h
 
@@ -360,7 +400,8 @@ def apply(entry, recipe, values):
     if not target and recipe.match_size and values.get("source_size"):
         combo, width, height = recipe.match_size
         size = fit_size(*values["source_size"], specs.get(width) or ["INT", {}], specs.get(height) or ["INT", {}],
-                        area=recipe.match_area, step=recipe.match_step)
+                        area=recipe.match_area, step=recipe.match_step, pixels=recipe.pixels,
+                        max_aspect=recipe.max_aspect)
         options = (specs.get(combo) or [None, {}])[1].get("options") or []
         if size and "Custom" in options:
             put(combo, "Custom")

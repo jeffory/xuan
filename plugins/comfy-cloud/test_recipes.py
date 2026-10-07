@@ -183,6 +183,45 @@ class SizeRuleTest(unittest.TestCase):
                     self.assertEqual(under, w < target[0] or h < target[1])
         self.assertEqual(cover_size((4000, 100), self.S, self.S, 2), (4514, 1024, False))
 
+    # The limits ComfyUI's nodes check before calling the model
+    # (comfy_api_nodes/nodes_openai.py, nodes_bytedance.py).
+    GPT_LIMITS = dict(pixels=(655_360, 8_294_400), max_aspect=3.0)
+    SEEDREAM_LIMITS = dict(pixels=(921_600, 4_624_220))
+
+    def test_sizes_keep_to_the_models_pixel_and_shape_limits(self):
+        targets = [(485, 302), (330, 160), (4000, 4000), (3000, 3000), (4000, 100), (100, 4000),
+                   (1600, 900), (20000, 300), (2048, 2048), (3840, 2160)]
+        for spec, step, limits in [(self.W, 16, self.GPT_LIMITS), (self.S, 2, self.SEEDREAM_LIMITS)]:
+            for target in targets:
+                with self.subTest(spec=spec, target=target):
+                    w, h, under = cover_size(target, spec, spec, step, **limits)
+                    lo, hi = spec[1]["min"], spec[1]["max"]
+                    low, high = limits["pixels"]
+                    self.assertTrue(lo <= w <= hi and lo <= h <= hi, (w, h))
+                    self.assertEqual((w % step, h % step), (0, 0))
+                    self.assertTrue(low <= w * h <= high, (w, h, w * h))
+                    self.assertLessEqual(max(w, h) / min(w, h), limits.get("max_aspect") or 99)
+                    self.assertEqual(under, w < target[0] or h < target[1])
+        # Live, a 330x160 box's crop (485x302) asked GPT for 784x480.
+        self.assertEqual(cover_size((485, 302), self.W, self.W, 16, **self.GPT_LIMITS), (1040, 640, False))
+        self.assertEqual(cover_size((1600, 900), self.S, self.S, 2, **self.SEEDREAM_LIMITS), (1822, 1024, False))
+
+    def test_recipes_carry_their_models_limits(self):
+        for recipe_id, target in [("gpt-flare-fill", (485, 302)), ("gpt-sunburst-layer", (4000, 4000)),
+                                  ("gpt-flare-layer", (4000, 1000)), ("seedream-pro", (3000, 3000)),
+                                  ("seedream-flash", (4000, 4000)), ("seedream-pro-edit", (3000, 3000))]:
+            with self.subTest(recipe=recipe_id):
+                recipe = RECIPES[recipe_id]
+                sets, _ = choose_size(entry_for(recipe), recipe, target)
+                _, width, height = recipe.match_size
+                w, h = sets[width], sets[height]
+                self.assertTrue(recipe.pixels[0] <= w * h <= recipe.pixels[1], (w, h))
+                self.assertLessEqual(max(w, h) / min(w, h), recipe.max_aspect or 99)
+        # Without a target the source's shape is followed, inside the same limits.
+        gpt = RECIPES["gpt-flare-layer"]
+        self.assertIsNone(fit_size(4000, 1000, self.W, self.W, area=gpt.match_area, step=16, pixels=gpt.pixels,
+                                   max_aspect=gpt.max_aspect))
+
     def test_presets_take_the_smallest_big_enough(self):
         options = ["auto", "(1K) 1024x1024 (1:1)", "(2K) 2048x2048 (1:1)", "(1K) 1280x720 (16:9)", "(2K) 2560x1440 (16:9)"]
         self.assertEqual(preset_at_least(options, (1000, 1000)), ("(1K) 1024x1024 (1:1)", False))

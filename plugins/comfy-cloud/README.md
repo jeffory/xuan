@@ -51,10 +51,15 @@ model, quality and seed under **Advanced**:
 
 **Resolution.** Xuan says how many document pixels each result will cover,
 and the plugin renders at least that: exactly when the model takes custom
-sizes (GPT Image 2.5 from 480 to 3840 pixels in steps of 16, Seedream 5.0
-from 1024 to 4514), otherwise the smallest preset that is big enough
-(Ideogram 4.5's 1K and 2K). A target smaller than the model's minimum is
-rendered at the minimum; only a target beyond the model's maximum is
+sizes, otherwise the smallest preset that is big enough (Ideogram 4.5's 1K
+and 2K). The custom sizes keep to what each model takes:
+
+- **GPT Image 2.5:** sides from 480 to 3840 pixels in steps of 16, 0.66 to
+  8.3 megapixels, and no longer than 3:1.
+- **Seedream 5.0:** sides from 1024 to 4514, and 0.92 to 4.6 megapixels.
+
+A target smaller than the model's minimum is rendered at the minimum, and a
+longer shape is made less long. Only a target beyond the model's maximum is
 rendered smaller, and the status bar says so. Results cover their area
 without being stretched, keeping every pixel the model made.
 
