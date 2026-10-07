@@ -19,7 +19,7 @@ plugins under `plugins/`:
 | --- | --- | --- |
 | `plugins/histogram` | Python | A pane that follows the document, settings, data-URL images |
 | `plugins/invert-regions` | Rust | A region action with per-region fields, a pane that reads the composite |
-| `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; three actions |
+| `plugins/comfy-cloud` | Python | Network jobs with progress, cancel and errors; secrets; `ask` results; several layers from one result; a pane with a button that works in the background |
 | `plugins/local-upscale` | Python | A local, offline job with no permissions beyond reading; a swappable model backend |
 | `plugins/select-bright` | Python | A `mask` result that becomes the selection; a placeholder for a segmentation model |
 | `plugins/extend-edges` | Python | Outpainting: an extended source, `extend_canvas` in a result, an image fitted to the new canvas; a placeholder for a generative model |
@@ -447,8 +447,8 @@ id = "seed"
 type = "seed"                     # integer with a "random" button
 
 [[panes]]
-id = "jobs"
-title = "Comfy jobs"
+id = "comfy"
+title = "Comfy Cloud"
 refresh = "manual"                # or "document" to re-render after edits
 
 [[formats]]
@@ -556,7 +556,7 @@ as a mask", and the file lives only in the job's work directory, which the
 host deletes with the job. The Rust SDK reads it with
 `job.selection_mask_path()` and the Python SDK with `job.selection_mask_path`.
 A plugin can return the same file as the `mask` of its image output so the
-result layer is masked by the selection (see `plugins/comfy-cloud`). `regions`
+result layer is masked by the selection. `regions`
 stay the right tool for several separate edits with their own text; the
 selection mask is for one area.
 

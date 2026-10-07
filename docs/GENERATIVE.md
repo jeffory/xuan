@@ -152,9 +152,10 @@ region route proves awkward in the first inpainting plugin.
 
 ## 4. Backends
 
-**Have.** The Comfy Cloud example (`plugins/comfy-cloud`) does text-to-image and
-region-driven editing over a hosted API with secrets, progress, cancel and the
-documented error codes. The prototype `plugins/local-upscale` shows a fully
+**Have.** The Comfy Cloud example (`plugins/comfy-cloud`) does text-to-image,
+prompt and region-driven editing and layer separation over a hosted API with
+secrets, progress, cancel and the documented error codes. It runs Comfy's own
+workflow templates, converted to API workflows and kept up to date. The prototype `plugins/local-upscale` shows a fully
 local job with no network.
 
 **Recommended shapes** (all are ordinary plugins):
@@ -352,7 +353,7 @@ a cosmetic change and not worth breaking existing installs.
 | Goal | Already works | Missing | Recommendation |
 | --- | --- | --- | --- |
 | **Text-to-image** into a new layer | `generate` actions with prompt, seed, size; Comfy Cloud example; `result.into = layer / document / ask`; a send prompt before a network plugin gets the prompt or pixels (#39). | Local ComfyUI/diffusers plugin. Model downloads are done (#38). | Ship a local-ComfyUI variant of the Comfy example, declaring its checkpoints in `[[models]]`. |
-| **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42), used by the Comfy Cloud **Inpaint Selection** action; `source.extend` with a new-area mask and an `extend_canvas` edit (#36), shown by `extend-edges`. | A generative outpainting backend. | Host work done; wire an outpainting workflow into a backend of `extend-edges` or the Comfy example. |
+| **Inpaint / outpaint** | `regions` with masks and per-region text, `crop_to_regions` with padding, masked result layers, proposal compare; `source.mask = "selection"` with host-side grow and feather (#42); `source.extend` with a new-area mask and an `extend_canvas` edit (#36), shown by `extend-edges`. | A generative outpainting backend. | Host work done; wire an outpainting workflow into a backend of `extend-edges` or the Comfy example. |
 | **Background removal / segmentation** | Classical Select Subject, Remove Background and Object mode in core (#5); `selection/export`, `set_selection` and `set_mask` edits, `replace` results, a `mask` output that becomes a selection (#37), providers that replace the built-in algorithm (#5) and the `select-bright` template. | An ONNX segmentation plugin. | Build it on `select-bright`: a backend with the model declared in `[[models]]`, and `[[provides]]` for the capabilities it serves. |
 | **Upscaling** | Local plugin pattern, `local-upscale` prototype, tiling-friendly `selection` source. | Large-image speed. Placed size (#35) and model downloads (#38) are done. | An ONNX Real-ESRGAN backend whose model is declared in `[[models]]` (see the `local-upscale` README). |
 | **Others** (style transfer, colorize, denoise, captions) | Same job/result machinery; `text` output for captions; panes for assist UIs. | Nothing specific. | Plugins only; no host work. |

@@ -1,9 +1,10 @@
 # Comfy Cloud plugin
 
-Runs ComfyUI workflows on [Comfy Cloud](https://cloud.comfy.org), a Comfy API
-deployment, or a local ComfyUI behind the API proxy, through
-[Comfy API v2](https://docs.comfy.org/api-reference/v2/overview). Written in
-Python with the standard library only.
+Generates and edits images with Seedream and Ideogram on
+[Comfy Cloud](https://cloud.comfy.org), using Comfy's own workflow templates
+and keeping them up to date. It talks to
+[Comfy API v2](https://docs.comfy.org/api-reference/v2/overview) and is
+written in Python with the standard library only.
 
 ## Setup
 
@@ -12,64 +13,75 @@ Python with the standard library only.
 2. In Xuan open **Plugins → Manage Plugins… → Comfy Cloud**, allow the
    permissions and paste an API key from
    [platform.comfy.org](https://platform.comfy.org). Running workflows through
-   the API needs an active Comfy Cloud subscription; partner nodes such as
-   Ideogram also use credits.
-3. Put your workflows in the `workflows` folder next to this file, or in the
-   plugin data folder (`plugin-data/comfy-cloud` next to `config.toml`).
+   the API needs an active Comfy Cloud subscription, and Seedream and
+   Ideogram use credits.
 
-## Workflows
+## Actions
 
-Export a workflow from ComfyUI with **Export (API)** (the plain export with
-`nodes` and `links` is rejected by the API). The plugin fills nodes in by
-their *title* (right-click a node → Title):
+| Action | Menu | Models | What it does |
+| --- | --- | --- | --- |
+| **Generate Image…** | Plugins | Seedream 5.0 Pro, Seedream 5.0 Flash, Ideogram 4.5 | A new image from a prompt, in one of seven shapes at about 1 or 4 megapixels. You choose between a new layer and a new document. |
+| **Edit Image…** | Filter | Ideogram 4.5, Seedream 5.0 Pro | Repaints the active layer as a new layer, following a description of the change. |
+| **Precise Edit…** | Filter | Ideogram 4.5 | Draw boxes, or turn the selection into one, and describe each change. Only what you asked for changes, and the new layer is masked to the boxes. A box of kind **Text** writes the text you give it. |
+| **Split into Layers…** | Layer | Seedream 5.0 Pro, Seedream 5.0 Flash | Separates the flattened image into a background plate and layers you can move, all added as new layers. You can say what to separate, or leave it empty to find the main elements. |
 
-| Title | What is set |
+Results arrive as a proposal above the canvas, with **Compare**, **Accept**
+and **Discard**. Each result layer records its provenance (Layers panel →
+Generation): the model, the seed, the Comfy template and its date, the
+server and the Comfy job id. The API key is never included.
+
+## Where the workflows come from
+
+Each action runs one of Comfy's published templates, listed in `recipes.py`
+with the node inputs Xuan fills in. Inputs are addressed by node class and
+input name, such as `ByteDanceSeedreamNodeV3.model.seed`, so they keep
+working when Comfy renumbers a template's nodes.
+
+| Recipe | Template |
 | --- | --- |
-| `Xuan Source` (or a `Load Image` node) | `image` ← the uploaded source |
-| `Xuan Mask` (a `Load Image (as Mask)` node) | `image` ← the uploaded selection mask |
-| `Xuan Prompt` | `text` / `prompt` / `string` ← the prompt |
-| `Xuan Seed` | `seed` / `noise_seed` ← the seed |
-| `Xuan Size` | `width`, `height` |
+| Generate, Seedream 5.0 Pro | `api_bytedance_seedream_5_0_pro_t2i` |
+| Generate, Seedream 5.0 Flash | `api_bytedance_seedream_5_0_flash_t2i` |
+| Generate, Ideogram 4.5 | `api_ideogram_v4_5_t2i` |
+| Edit, Ideogram 4.5 | `api_ideogram_v4_5_image_edit` |
+| Edit, Seedream 5.0 Pro | `api_bytedance_seedream_5_0_pro_image_edit` |
+| Precise Edit | `api_ideogram_v4_5_precise_image_edit` |
+| Split into Layers | `api_bytedance_seedream_5_0_layer_separation` |
 
-Any string input may also use `{{prompt}}`, `{{seed}}`, `{{width}}`,
-`{{height}}` and `{{quality}}` placeholders.
+Templates are public at `https://cloud.comfy.org/templates/<name>.json`, but
+they are saved in the editor's format, which the API does not run.
+`convert.py` turns them into API workflows using the server's node
+definitions (`/api/object_info`). It handles dynamic combos, seed control
+values, Reroute and Primitive nodes, and list values. A template that uses
+anything else, such as subgraphs or bypassed nodes, is refused.
 
-Each result layer records its provenance (see Layer panel → Generation): the
-first checkpoint (`ckpt_name`, `unet_name` or `model_name`), `sampler_name`,
-`scheduler`, `steps`, `cfg` and seed found in the workflow that was submitted,
-the server's host name as `service` and the Comfy job id as `request_id`.
-Details a workflow does not have are left out; the API key is never included.
+**Updates.** At most once a day per workflow, the plugin downloads the
+template again. When it changed, the plugin converts the new version, checks
+that every input it fills in still exists, and switches to it, keeping the
+old one. When the new version can't be used, the plugin keeps the one it has
+and says why in the **Comfy Cloud** pane and in the status bar after a job.
+When Comfy refuses a new version before running it, the job is retried once
+with the previous version, at no cost. The node definitions (about 10 MB)
+are only downloaded when a template has changed. **Check for updates** in the
+pane checks every workflow now.
 
-The three actions use these files:
+The plugin's data folder (`plugin-data/comfy-cloud/recipes/` next to
+`config.toml`) holds the converted versions. `snapshots/` holds the versions
+shipped with the plugin, used until the first check. Regenerate them, and the
+test fixtures, with:
 
-- **Precise Edit…** → `workflows/precise-edit.json`. The boxes you draw become
-  an Ideogram-style JSON prompt (`compositional_deconstruction.elements[]` with
-  `bbox` in 0–1000 and `desc`), which is written into the `Xuan Prompt` node,
-  so you do not need the *Create Bounding Boxes* node in the graph: Load Image →
-  Ideogram edit node → Save Image is enough.
-- **Inpaint Selection…** → `workflows/inpaint.json`. The selection is sent as
-  a mask PNG (white is the area to repaint) the same size and crop as the
-  source image, grown by 4 px and feathered by 6 px (`mask_grow` and
-  `mask_feather` in `plugin.toml`). With nothing selected the action refuses to
-  run. The result layer is masked by the same mask. **Precise Edit** keeps using
-  boxes (`regions`) because it describes several edits, not one mask.
-- **Generate Image…** → `workflows/text-to-image.json`.
-- **Run Comfy Workflow…** → any file name you type.
+```sh
+python3 plugins/comfy-cloud/tools/refresh_snapshots.py --testdata
+```
 
-The shipped JSON files are templates with the titles in place. Replace their
-node classes and inputs with an export of your own graph; the API rejects
-workflows whose node classes it does not know and names the node in the error.
-
-## Output
-
-Results come back as a proposal above the canvas: **Compare**, **Accept** or
-**Discard**. Precise Edit adds a new layer masked to the boxes; Generate asks
-whether to add a layer or open a new document.
+This needs the API key in `COMFY_API_KEY` or saved in Xuan. It downloads
+the templates and node definitions only, so no credits are spent.
 
 ## Tests
 
-The download and redirect checks that keep the API key on the configured
-server have unit tests that need only the system Python:
+The converter is checked against what Comfy's own converter builds for each
+template (`testdata/oracle.json`). The update rules, the recipes and the
+checks that keep the API key on the configured server also have tests. All
+of them run offline with the system Python:
 
 ```sh
 python3 -m unittest discover -s plugins/comfy-cloud
