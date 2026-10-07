@@ -20,7 +20,7 @@ pub(super) enum SettingsPage {
 const PAGE_ID: &str = "settings_page";
 
 /// The height of the page area, the same on every page.
-const PAGE_HEIGHT: f32 = 420.0;
+const PAGE_HEIGHT: f32 = 480.0;
 const NAV_WIDTH: f32 = 150.0;
 const CONTENT_WIDTH: f32 = 450.0;
 /// Where the controls start, on every page.
@@ -33,7 +33,7 @@ const CONTROL_WIDTH: f32 = CONTENT_WIDTH - LABEL_WIDTH - COLUMN_GAP - 14.0;
 fn settings_grid(ui: &mut egui::Ui, id: &str, rows: impl FnOnce(&mut egui::Ui)) {
     egui::Grid::new(id)
         .num_columns(2)
-        .spacing(egui::vec2(COLUMN_GAP, 16.0))
+        .spacing(egui::vec2(COLUMN_GAP, 12.0))
         .show(ui, rows);
 }
 
@@ -302,6 +302,11 @@ impl EditorApp {
                     "Highlights take your desktop's accent colour instead of Xuan's blue, when it has one.",
                 )),
             );
+            let apply_note = if config.title_bar.client_side() && !self.transparent_window {
+                tr("Rounded window corners appear after restarting Xuan.")
+            } else {
+                tr("Title bar changes apply immediately.")
+            };
             let title_note = match config.title_bar {
                 TitleBar::System => tr("Use the title bar and window buttons of your desktop."),
                 TitleBar::Compact => {
@@ -329,7 +334,7 @@ impl EditorApp {
                             }
                         });
                 },
-                Some(title_note),
+                Some(&format!("{title_note} {apply_note}")),
             );
             #[cfg(target_os = "linux")]
             if config.title_bar == TitleBar::Compact {
@@ -394,16 +399,6 @@ impl EditorApp {
                     );
                 }
             }
-            settings_row(
-                ui,
-                "",
-                |_| {},
-                Some(if config.title_bar.client_side() && !self.transparent_window {
-                    tr("Rounded window corners appear after restarting Xuan.")
-                } else {
-                    tr("Title bar changes apply immediately.")
-                }),
-            );
             settings_row(
                 ui,
                 "",

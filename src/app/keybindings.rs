@@ -421,7 +421,7 @@ fn chip(ui: &mut Ui, text: &str) {
     let p = ui.palette();
     egui::Frame::new()
         .fill(p.control[0])
-        .stroke(egui::Stroke::new(1.0, p.control_edge))
+        .stroke(egui::Stroke::new(1.0_f32, p.control_edge))
         .corner_radius(theme::BUTTON_RADIUS)
         .inner_margin(egui::Margin::symmetric(11, 2))
         .show(ui, |ui| {

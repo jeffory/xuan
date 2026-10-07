@@ -74,7 +74,10 @@ fn general_and_appearance_controls_start_at_the_same_x() {
     show_settings_page(&ui.ctx(), SettingsPage::Appearance);
     ui.settle();
     let appearance = control_lefts(&ui);
-    assert!(appearance.len() >= 4, "Appearance has few controls: {appearance:?}");
+    assert!(
+        appearance.len() >= 4,
+        "Appearance has few controls: {appearance:?}"
+    );
     all.extend(appearance);
     for x in &all {
         assert!(

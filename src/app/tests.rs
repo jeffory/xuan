@@ -4919,7 +4919,10 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
 fn settings_threshold_field(context: &egui::Context, app: &mut EditorApp) -> Pos2 {
     app.dialog = Some(Dialog::Settings);
     settings::show_settings_page(context, settings::SettingsPage::Appearance);
-    frame(context, app);
+    // The page is a grid, which lays itself out invisibly on its first frame.
+    for _ in 0..3 {
+        frame(context, app);
+    }
     layer_label(context, app, "500%") + Vec2::new(8.0, 6.0)
 }
 

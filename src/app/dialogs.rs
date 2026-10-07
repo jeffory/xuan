@@ -9,7 +9,7 @@ use xuan::{
     io, operations, render,
 };
 
-use super::{Dialog, EditorApp, commands::Category, theme::PaletteExt};
+use super::{Dialog, EditorApp, theme::PaletteExt};
 
 impl EditorApp {
     /// Help → Keyboard Shortcuts: the bindings in effect, from the command registry, and the
