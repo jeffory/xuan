@@ -993,7 +993,7 @@ mod window_menu {
         short_plugin_panes(&mut ui, plugin.path());
         let header = |ui: &UiTest, title: &str| {
             ui.harness
-                .get_by_role_and_label(Role::CollapsingHeader, title)
+                .get_by_role_and_label(Role::Button, title)
                 .rect()
         };
         let layers = header(&ui, "Layers");
@@ -1030,11 +1030,11 @@ mod window_menu {
         let gap = |ui: &UiTest| {
             let a = ui
                 .harness
-                .get_by_role_and_label(Role::CollapsingHeader, "Short A")
+                .get_by_role_and_label(Role::Button, "Short A")
                 .rect();
             let b = ui
                 .harness
-                .get_by_role_and_label(Role::CollapsingHeader, "Short B")
+                .get_by_role_and_label(Role::Button, "Short B")
                 .rect();
             b.top() - a.bottom()
         };

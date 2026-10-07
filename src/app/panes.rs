@@ -166,6 +166,8 @@ impl EditorApp {
                             ui.spacing_mut().item_spacing.y = 0.0;
                             self.pane_body(ui, &entry.id, enabled);
                         });
+                        // A scope leaves the cursor under what it drew; keep the full height.
+                        ui.advance_cursor_after_rect(rect);
                         if !entry.fill {
                             // Remember how much the content used, so a short pane gives
                             // the rest of its height to the fill pane next frame.
