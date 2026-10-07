@@ -222,6 +222,7 @@ Unlock layer	解锁图层
 Toggle visibility	切换可见性
 New layer (Ctrl+Shift+N)	新建图层 (Ctrl+Shift+N)
 Group layers (Ctrl+G)	编组图层 (Ctrl+G)
+Select group	选择编组
 Add layer mask	添加图层蒙版
 Add mask layer affecting layers below	添加影响下方图层的蒙版
 New adjustment layer	新建调整图层

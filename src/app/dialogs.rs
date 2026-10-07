@@ -372,7 +372,8 @@ impl EditorApp {
                                             },
                                         )
                                         .text(tr("Hue"))
-                                        .suffix("°"),
+                                        .suffix("°")
+                                        .centered(),
                                     )
                                     .changed();
                                 changed |= ui
@@ -386,14 +387,16 @@ impl EditorApp {
                                             },
                                         )
                                         .text(tr("Saturation"))
-                                        .suffix("%"),
+                                        .suffix("%")
+                                        .centered(),
                                     )
                                     .changed();
                                 changed |= ui
                                     .add(
                                         widgets::Slider::new(&mut values[2], -100.0..=100.0)
                                             .text(tr("Lightness"))
-                                            .suffix("%"),
+                                            .suffix("%")
+                                            .centered(),
                                     )
                                     .changed();
                                 changed |=
@@ -456,21 +459,24 @@ impl EditorApp {
                                     .add(
                                         widgets::Slider::new(hue, -180.0..=180.0)
                                             .text(tr("Hue"))
-                                            .suffix("°"),
+                                            .suffix("°")
+                                            .centered(),
                                     )
                                     .changed();
                                 changed |= ui
                                     .add(
                                         widgets::Slider::new(saturation, -100.0..=100.0)
                                             .text(tr("Saturation"))
-                                            .suffix("%"),
+                                            .suffix("%")
+                                            .centered(),
                                     )
                                     .changed();
                                 changed |= ui
                                     .add(
                                         widgets::Slider::new(lightness, -100.0..=100.0)
                                             .text(tr("Lightness"))
-                                            .suffix("%"),
+                                            .suffix("%")
+                                            .centered(),
                                     )
                                     .changed();
                                 changed |=
@@ -504,12 +510,15 @@ impl EditorApp {
                                     .add(
                                         widgets::Slider::new(exposure, -5.0..=5.0)
                                             .text(tr("Exposure"))
-                                            .suffix(" EV"),
+                                            .suffix(" EV")
+                                            .centered(),
                                     )
                                     .changed();
                                 changed |= ui
                                     .add(
-                                        widgets::Slider::new(offset, -0.5..=0.5).text(tr("Offset")),
+                                        widgets::Slider::new(offset, -0.5..=0.5)
+                                            .text(tr("Offset"))
+                                            .centered(),
                                     )
                                     .changed();
                                 changed |= ui
@@ -654,7 +663,8 @@ impl EditorApp {
                                         .add(
                                             widgets::Slider::new(value, -100.0..=100.0)
                                                 .text(format!("{} – {}", tr(low), tr(high)))
-                                                .max_decimals(0),
+                                                .max_decimals(0)
+                                                .centered(),
                                         )
                                         .changed();
                                 }
@@ -690,7 +700,8 @@ impl EditorApp {
                                     .add(
                                         widgets::Slider::new(angle, -180.0..=180.0)
                                             .text(tr("Angle"))
-                                            .suffix("°"),
+                                            .suffix("°")
+                                            .centered(),
                                     )
                                     .changed();
                             }
@@ -713,14 +724,16 @@ impl EditorApp {
                                     .add(
                                         widgets::Slider::new(distortion, -50.0..=50.0)
                                             .text(tr("Distortion"))
-                                            .suffix("%"),
+                                            .suffix("%")
+                                            .centered(),
                                     )
                                     .changed();
                                 changed |= ui
                                     .add(
                                         widgets::Slider::new(vignette, -100.0..=100.0)
                                             .text(tr("Vignette"))
-                                            .suffix("%"),
+                                            .suffix("%")
+                                            .centered(),
                                     )
                                     .changed();
                             }

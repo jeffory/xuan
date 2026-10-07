@@ -78,7 +78,8 @@ pub struct Palette {
 
     // Accent
     /// Accent lines and marks drawn on the surfaces: focus rings, drop indicators, the filled
-    /// part of a slider. At least 3:1 against the panel and the window.
+    /// part of a slider. At least 3:1 against the panel and the window, and against the tab
+    /// strip, segment tracks and selected layer row that focus rings also sit on.
     pub accent: Color32,
     /// Accent fills that carry text: menu rows under the pointer. `on_accent_text` and
     /// `on_accent_muted` reach 4.5:1 on it.
@@ -136,6 +137,14 @@ pub struct Palette {
     pub segment_track: [Color32; 2],
     pub segment_edge: Color32,
     pub segment_separator: Color32,
+    /// Disabled buttons, segments, pop-ups and number fields: a flat fill, without the bezel's
+    /// gradient, highlight or shadow.
+    pub control_disabled: Color32,
+    /// The outline round a disabled control.
+    pub control_disabled_edge: Color32,
+    /// Text on a disabled control: dimmer than `muted`, but 3:1 on `control_disabled`, the
+    /// panel and the window, and painted at full opacity rather than egui's fade.
+    pub disabled_text: Color32,
 
     // Shadows
     pub window_shadow: Color32,
@@ -274,6 +283,9 @@ impl Palette {
         segment_track: [gray(47), gray(43)],
         segment_edge: gray(66),
         segment_separator: gray(68),
+        control_disabled: gray(46),
+        control_disabled_edge: gray(58),
+        disabled_text: gray(126),
 
         window_shadow: black(125),
         popup_shadow: black(110),
@@ -391,6 +403,9 @@ impl Palette {
         segment_track: [rgb(230, 230, 234), rgb(224, 224, 229)],
         segment_edge: rgb(196, 196, 203),
         segment_separator: rgb(196, 196, 203),
+        control_disabled: rgb(238, 238, 241),
+        control_disabled_edge: rgb(214, 214, 219),
+        disabled_text: rgb(124, 124, 131),
 
         window_shadow: black(56),
         popup_shadow: black(48),
@@ -506,6 +521,12 @@ pub fn window_corner_radius(ctx: &egui::Context) -> u8 {
     if fills_screen { 0 } else { 12 }
 }
 
+/// The section-heading text style: between body (12) and the dialog title (21). Inter Variable has
+/// no separate bold face loaded, so the step up is size and the full text colour.
+pub fn subheading_style() -> TextStyle {
+    TextStyle::Name("Subheading".into())
+}
+
 /// Installs Xuan's fonts once, then [`set_palette`].
 pub fn apply(ctx: &egui::Context, palette: &Palette) {
     // Inter is an OFL-licensed, portable substitute for the macOS system font.
@@ -557,10 +578,14 @@ pub fn set_palette(ctx: &egui::Context, palette: &Palette) {
         (TextStyle::Button, 12.0),
         (TextStyle::Small, 11.0),
         (TextStyle::Heading, 21.0),
-        (TextStyle::Monospace, 12.0),
+        (subheading_style(), 15.0),
     ] {
         style.text_styles.insert(text, FontId::proportional(size));
     }
+    // Hack, which egui bundles, so code, paths and log lines are really monospaced.
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, FontId::monospace(12.0));
     ctx.set_style(style);
 }
 
@@ -702,6 +727,16 @@ impl Palette {
         let stands_out = |c: Color32| {
             contrast_ratio(c, self.panel) >= ACCENT_SURFACE_RATIO
                 && contrast_ratio(c, self.window) >= ACCENT_SURFACE_RATIO
+                // Focus rings also sit on the tab strip, segmented controls' tracks and the
+                // selected layer row.
+                && [
+                    self.titlebar,
+                    self.segment_track[0],
+                    self.segment_track[1],
+                    self.row_selected,
+                ]
+                .iter()
+                .all(|surface| contrast_ratio(c, *surface) >= ACCENT_SURFACE_RATIO)
         };
         let away = if self.dark {
             Color32::WHITE
