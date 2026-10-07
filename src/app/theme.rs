@@ -137,6 +137,14 @@ pub struct Palette {
     pub segment_track: [Color32; 2],
     pub segment_edge: Color32,
     pub segment_separator: Color32,
+    /// Disabled buttons, segments, pop-ups and number fields: a flat fill, without the bezel's
+    /// gradient, highlight or shadow.
+    pub control_disabled: Color32,
+    /// The outline round a disabled control.
+    pub control_disabled_edge: Color32,
+    /// Text on a disabled control: dimmer than `muted`, but 3:1 on `control_disabled`, the
+    /// panel and the window, and painted at full opacity rather than egui's fade.
+    pub disabled_text: Color32,
 
     // Shadows
     pub window_shadow: Color32,
@@ -275,6 +283,9 @@ impl Palette {
         segment_track: [gray(47), gray(43)],
         segment_edge: gray(66),
         segment_separator: gray(68),
+        control_disabled: gray(46),
+        control_disabled_edge: gray(58),
+        disabled_text: gray(126),
 
         window_shadow: black(125),
         popup_shadow: black(110),
@@ -392,6 +403,9 @@ impl Palette {
         segment_track: [rgb(230, 230, 234), rgb(224, 224, 229)],
         segment_edge: rgb(196, 196, 203),
         segment_separator: rgb(196, 196, 203),
+        control_disabled: rgb(238, 238, 241),
+        control_disabled_edge: rgb(214, 214, 219),
+        disabled_text: rgb(124, 124, 131),
 
         window_shadow: black(56),
         popup_shadow: black(48),

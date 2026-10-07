@@ -208,11 +208,15 @@ pub fn rotate_button(ui: &mut Ui, clockwise: bool) -> egui::Response {
     } else {
         egui::include_image!("../../assets/svg/rotate-left.svg")
     };
+    // Drawn like the button's label: in the disabled text colour, unfaded, when disabled.
+    let color = super::widgets::label_color(ui, response.enabled(), ui.palette().text);
+    let mut icon = ui.new_child(egui::UiBuilder::new().max_rect(response.rect));
+    icon.set_opacity(super::widgets::control_opacity(ui));
     svg(
-        ui,
+        &icon,
         source,
         Rect::from_center_size(response.rect.center(), Vec2::splat(16.0)),
-        ui.palette().text,
+        color,
     );
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)

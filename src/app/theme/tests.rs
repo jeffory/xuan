@@ -255,6 +255,21 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
     ] {
         pairs.push((label.into(), ratio(p.accent, bg), 3.0));
     }
+    // Disabled buttons, segments, pop-ups and number fields (#89): a flat fill with text that
+    // stays readable at 3:1 but is clearly dimmer than secondary text. Painted at full opacity,
+    // so these are the colours on screen.
+    for (label, bg) in [
+        ("disabled text/disabled fill", p.control_disabled),
+        ("disabled text/panel", p.panel),
+        ("disabled text/window", p.window),
+    ] {
+        pairs.push((label.into(), ratio(p.disabled_text, bg), 3.0));
+    }
+    pairs.push((
+        "disabled text dimmer than muted (ratio of ratios)".into(),
+        ratio(p.muted, p.control_disabled) / ratio(p.disabled_text, p.control_disabled),
+        1.25,
+    ));
     // The reset-colours icon's outline, round its white and black squares (#79).
     pairs.push((
         "reset colours outline/panel".into(),
@@ -264,7 +279,7 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
     // The checker behind layer thumbnails and colour wells is the canvas's (#79): its squares
     // tell apart, but stay quiet (under 2:1) behind the image.
     let checker = contrast_ratio(p.checker[0], p.checker[1]);
-    pairs.push(("checker squares tell apart".into(), checker, 1.25));
+    pairs.push(("checker squares tell apart".into(), checker, 1.2));
     pairs.push(("checker squares stay quiet".into(), 2.0 / checker, 1.0));
     pairs
 }

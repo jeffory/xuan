@@ -1,4 +1,4 @@
-//! Widget states: focus rings (#81) and centred slider fills (#83).
+//! Widget states: focus rings (#81), centred slider fills (#83) and disabled controls (#89).
 
 use egui::{Color32, Rangef, Rect, StrokeKind, pos2, vec2};
 
@@ -23,6 +23,69 @@ fn the_focus_ring_goes_round_or_inside_the_control() {
         assert_eq!(ring.stroke.width, FOCUS_RING_WIDTH);
         assert_eq!(ring.stroke.color, accent);
         assert_eq!(ring.fill, Color32::TRANSPARENT, "a ring, not a fill");
+    }
+}
+
+/// The text shape painting `needle`, with the colour it resolves to and its opacity.
+fn text_shape(output: &egui::FullOutput, needle: &str) -> (Color32, f32) {
+    fn find(shape: &egui::Shape, needle: &str) -> Option<(Color32, f32)> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == needle => {
+                let section = t.galley.job.sections.first()?.format.color;
+                let color = if section == Color32::PLACEHOLDER {
+                    t.fallback_color
+                } else {
+                    section
+                };
+                Some((t.override_text_color.unwrap_or(color), t.opacity_factor))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, needle)),
+            _ => None,
+        }
+    }
+    output
+        .shapes
+        .iter()
+        .find_map(|clipped| find(&clipped.shape, needle))
+        .unwrap_or_else(|| panic!("no text shape for {needle:?}"))
+}
+
+#[test]
+fn a_disabled_button_has_flat_muted_unfaded_text() {
+    use super::super::theme::{Palette, set_palette};
+    for p in [Palette::DARK, Palette::LIGHT] {
+        let ctx = egui::Context::default();
+        set_palette(&ctx, &p);
+        let mut rects = (Rect::NOTHING, Rect::NOTHING);
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                rects.0 = ui.add(super::Button::new("Add Path")).rect;
+                rects.1 = ui
+                    .add_enabled(false, super::Button::new("Rename"))
+                    .rect;
+            });
+        });
+        let name = if p.dark { "dark" } else { "light" };
+        let (enabled, opacity) = text_shape(&output, "Add Path");
+        assert_eq!((enabled, opacity), (p.text, 1.0), "{name}: enabled label");
+        let (disabled, opacity) = text_shape(&output, "Rename");
+        assert_eq!(disabled, p.disabled_text, "{name}: the muted disabled colour");
+        assert_eq!(opacity, 1.0, "{name}: not faded by egui's disabled opacity");
+
+        // The disabled face is a flat fill in its own colour, at full opacity; the enabled
+        // button keeps its gradient bezel, which paints no flat fill of that colour.
+        let flat = |rect: Rect| {
+            output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Rect(shape) => {
+                    shape.rect == rect
+                        && shape.fill == p.control_disabled
+                        && shape.stroke.color == p.control_disabled_edge
+                }
+                _ => false,
+            })
+        };
+        assert!(flat(rects.1), "{name}: the disabled button is flat");
+        assert!(!flat(rects.0), "{name}: the enabled button is not");
     }
 }
 
