@@ -1051,3 +1051,6 @@ Copies of the stroke around the centre.	笔画绕中心的副本数。
 Centre X	中心 X
 Centre Y	中心 Y
 Centre on canvas	居中于画布
+Drop an image here	将图像拖放到此处
+{} opens a file	{} 打开文件
+{} starts a new canvas	{} 新建画布

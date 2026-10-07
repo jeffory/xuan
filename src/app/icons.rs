@@ -223,3 +223,17 @@ pub fn lock(ui: &mut Ui, locked: bool) -> egui::Response {
         tr("Lock layer")
     })
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rotate_icons_are_a_framed_arrow_not_the_undo_redo_glyphs() {
+        for svg in [
+            include_str!("../../assets/svg/rotate-left.svg"),
+            include_str!("../../assets/svg/rotate-right.svg"),
+        ] {
+            assert!(svg.contains("<rect"), "the frame");
+            assert!(svg.contains("<path"), "the arrow");
+        }
+    }
+}

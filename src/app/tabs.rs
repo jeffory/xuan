@@ -508,7 +508,11 @@ impl EditorApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             ui.add_space(8.0);
-                            self.zoom_buttons(ui, &mut actions);
+                            // Nothing to zoom until a document is open. The strip still
+                            // reserves this width, so the tabs do not shift when one opens.
+                            if self.session().is_some() || self.develop.is_some() {
+                                self.zoom_buttons(ui, &mut actions);
+                            }
                         });
                     });
                 });
