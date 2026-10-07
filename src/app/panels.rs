@@ -52,6 +52,11 @@ impl EditorApp {
             .min_height(42.0)
             .frame(theme::frame(&ctx.palette()))
             .show(ctx, |ui| {
+                // The bar keeps its height with no document, so the tabs and canvas do not move
+                // when the first one opens; there is just nothing in it to use yet.
+                if self.session().is_none() {
+                    return;
+                }
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none() && self.color_range.is_none(), |ui| {
                     egui::ScrollArea::horizontal()
                         .id_salt("options_scroll")
@@ -380,7 +385,23 @@ impl EditorApp {
         }
     }
 
+    /// What the status bar suggests with nothing open, using the current key bindings.
+    fn empty_hint(&self) -> String {
+        let mut parts = vec![tr("Drop an image here").to_owned()];
+        for (id, text) in [
+            ("open", tr("{} opens a file")),
+            ("new", tr("{} starts a new canvas")),
+        ] {
+            let shortcut = self.keymap.shortcut(id);
+            if !shortcut.is_empty() {
+                parts.push(text.replace("{}", &shortcut));
+            }
+        }
+        parts.join(" · ")
+    }
+
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
+        let has_document = self.session().is_some();
         super::chrome::status_bar(&ctx.palette(), self.window_corner_radius(ctx), "status_bar")
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -417,12 +438,15 @@ impl EditorApp {
                                 .color(ui.palette().muted),
                         );
                     }
+                    let hint = if has_document {
+                        self.tool.hint().to_owned()
+                    } else {
+                        self.empty_hint()
+                    };
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(self.tool.hint())
-                                    .size(11.0)
-                                    .color(ui.palette().muted),
+                                RichText::new(hint).size(11.0).color(ui.palette().muted),
                             )
                             .truncate(),
                         );
