@@ -27,6 +27,9 @@ mod appearance;
 #[path = "ui_tabs.rs"]
 mod tabs;
 
+#[path = "ui_tool_rail.rs"]
+mod tool_rail;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

@@ -227,8 +227,9 @@ def check_sdk(sdk):
         "real = os.path.realpath\n"
         "assert real(os.path.dirname(xuan_plugin.__file__)) == real(sys.argv[1])"
     )
+    # -B: no __pycache__ in the package, which later checks compare file by file.
     subprocess.run(
-        [sys.executable, "-s", "-c", found, sdk],
+        [sys.executable, "-B", "-s", "-c", found, sdk],
         cwd=sdk.parent,
         env={**os.environ, "PYTHONPATH": str(sdk)},
         check=True,
