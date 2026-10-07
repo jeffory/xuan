@@ -711,19 +711,7 @@ pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), tr("Color"))
     });
-    ui.painter().rect_filled(rect, 4.0, Color32::BLACK);
-    checkerboard(ui, rect.shrink(2.0), 4.0);
-    ui.painter().rect_filled(
-        rect.shrink(2.0),
-        2.0,
-        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
-    );
-    ui.painter().rect_stroke(
-        rect.shrink(1.5),
-        3.0,
-        Stroke::new(1.0_f32, Color32::from_gray(225)),
-        StrokeKind::Inside,
-    );
+    paint_well(ui, rect, 4.0, color);
     focus_ring(ui, &response, 4.0);
     egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -733,6 +721,27 @@ pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
             }
         });
     response
+}
+
+/// A colour framed for the panel it sits on: an outline that stands out from the surface, a
+/// thin ring of the panel colour, then the colour over the transparency checker, so black,
+/// white and translucent colours all read in either theme.
+fn paint_well(ui: &Ui, rect: Rect, radius: f32, color: &[u8; 4]) {
+    let p = ui.palette();
+    ui.painter().rect(
+        rect,
+        radius,
+        p.panel,
+        Stroke::new(1.0_f32, p.widget_stroke),
+        StrokeKind::Inside,
+    );
+    let inner = rect.shrink(2.5);
+    checkerboard(ui, inner, 4.0);
+    ui.painter().rect_filled(
+        inner,
+        (radius - 2.0).max(1.0),
+        Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
+    );
 }
 
 fn color_picker(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
@@ -790,8 +799,11 @@ fn color_picker(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
 #[path = "tests/color_picker.rs"]
 mod color_picker_tests;
 
+/// The transparency checkerboard behind layer thumbnails and colour wells, in the canvas's
+/// `checker` colours so it matches the document's in both themes.
 pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
-    ui.painter().rect_filled(rect, 2.0, Color32::from_gray(115));
+    let [even, odd] = ui.palette().checker;
+    ui.painter().rect_filled(rect, 2.0, odd);
     for row in 0..(rect.height() / cell).ceil() as usize {
         for col in 0..(rect.width() / cell).ceil() as usize {
             if (row + col) % 2 == 0 {
@@ -802,7 +814,7 @@ pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
                     )
                     .intersect(rect),
                     0.0,
-                    Color32::from_gray(160),
+                    even,
                 );
             }
         }
@@ -1253,14 +1265,7 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::ColorButton, ui.is_enabled(), label)
         });
-        ui.painter().rect_filled(swatch, 6.0, Color32::BLACK);
-        ui.painter()
-            .rect_filled(swatch.shrink(1.0), 5.0, Color32::WHITE);
-        ui.painter().rect_filled(
-            swatch.shrink(2.5),
-            3.5,
-            Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
-        );
+        paint_well(ui, swatch, 6.0, color);
         egui::Popup::menu(&response)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
@@ -1293,10 +1298,14 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
     let reset = ui
         .interact(reset_rect, ui.id().with("reset_colors"), Sense::click())
         .on_hover_text(tr("Default colors (D)"));
-    ui.painter().rect_filled(
+    // White behind black, the default colours, each outlined so the white square shows on a
+    // light panel and the black one on a dark panel.
+    ui.painter().rect(
         reset_rect.shrink(3.0).translate(vec2(1.5, 1.5)),
         1.0,
         Color32::WHITE,
+        stroke,
+        StrokeKind::Inside,
     );
     ui.painter().rect(
         reset_rect.shrink(3.0).translate(vec2(-1.5, -1.5)),

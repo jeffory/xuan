@@ -232,10 +232,23 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
             ("number field border", ratio(p.widget_stroke, bg)),
             ("slider rail", ratio(p.slider_rail, bg)),
             ("keyboard focus ring", ratio(p.accent, bg)),
+            // Colour wells and the tool rail's swatches (#79).
+            ("colour well and swatch outline", ratio(p.widget_stroke, bg)),
         ] {
             pairs.push((format!("{label}/{surface}"), r, 3.0));
         }
     }
+    // The reset-colours icon's outline, round its white and black squares (#79).
+    pairs.push((
+        "reset colours outline/panel".into(),
+        ratio(p.muted, p.panel),
+        3.0,
+    ));
+    // The checker behind layer thumbnails and colour wells is the canvas's (#79): its squares
+    // tell apart, but stay quiet (under 2:1) behind the image.
+    let checker = contrast_ratio(p.checker[0], p.checker[1]);
+    pairs.push(("checker squares tell apart".into(), checker, 1.25));
+    pairs.push(("checker squares stay quiet".into(), 2.0 / checker, 1.0));
     pairs
 }
 
