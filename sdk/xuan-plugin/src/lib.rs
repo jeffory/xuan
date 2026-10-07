@@ -823,6 +823,23 @@ impl Output {
         self
     }
 
+    /// Scale an image or mask evenly to cover the source that was sent,
+    /// centred (`fit = "cover"`); what hangs over stays in the layer.
+    pub fn fit_cover(mut self) -> Self {
+        if let Self::Image {
+            width, height, fit, ..
+        }
+        | Self::Mask {
+            width, height, fit, ..
+        } = &mut self
+        {
+            *width = None;
+            *height = None;
+            *fit = Some("cover".into());
+        }
+        self
+    }
+
     /// A grey PNG (white selected, black not, grey partly) that becomes the
     /// document's selection once the user accepts the result, combined with
     /// the current selection by `mode`. Placed like an image at `x`, `y` in
@@ -1509,6 +1526,17 @@ mod tests {
         assert!(value.get("fit").is_none() && value.get("width").is_none());
         // Only images and masks have a placement.
         assert_eq!(Output::text("hi").fit_source(), Output::text("hi"));
+        let covered = Output::image("/tmp/out.png", None, 0.0, 0.0)
+            .with_size(Some(40.0), None)
+            .fit_cover();
+        let value = serde_json::to_value(&covered).unwrap();
+        assert_eq!(value["fit"], "cover");
+        assert!(value.get("width").is_none());
+        assert_eq!(
+            serde_json::to_value(Output::mask("/tmp/m.png", MaskMode::default()).fit_cover())
+                .unwrap()["fit"],
+            "cover"
+        );
         assert_eq!(ui::png_data_url(b"hi"), "data:image/png;base64,aGk=");
         assert_eq!(ui::png_data_url(b"hello"), "data:image/png;base64,aGVsbG8=");
     }

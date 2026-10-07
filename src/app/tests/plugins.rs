@@ -491,6 +491,7 @@ fn image_outputs_may_declare_their_placed_size() {
         (json!({"width": 1e9}), false),
         (json!({"fit": "bogus"}), false),
         (json!({"fit": "source"}), false),
+        (json!({"fit": "cover"}), false),
         (json!({"fit": "source", "width": 4}), false),
         (json!({"width": 12.0, "height": 6.0}), true),
     ] {
