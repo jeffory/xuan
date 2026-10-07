@@ -243,7 +243,7 @@ impl Palette {
         accent_fill: rgb(0, 84, 198),
         accent_gradient: [rgb(16, 106, 232), rgb(0, 84, 198)],
         accent_pressed: [rgb(0, 72, 176), rgb(0, 62, 158)],
-        check: [rgb(62, 151, 255), rgb(24, 113, 228)],
+        check: [rgb(50, 140, 252), rgb(24, 113, 228)],
         on_accent: Color32::WHITE,
         on_accent_text: Color32::WHITE,
         on_accent_muted: gray(214),
