@@ -280,6 +280,22 @@ fn dialogs_use_the_standard_footer_order() {
             _ => ui.app_mut().command(command),
         }
         ui.settle();
+        // A filter's preview runs on a worker; its "Updating preview…" note
+        // changes the footer's height, so wait for it before measuring or
+        // clicking, or a loaded test machine clicks where Cancel just was.
+        for _ in 0..500 {
+            if !ui
+                .app()
+                .effect
+                .as_ref()
+                .is_some_and(|edit| edit.filter_preview.busy())
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            ui.settle();
+        }
+        ui.settle();
         assert_footer_order(&ui, window, buttons);
         ui.click(close);
         assert!(
