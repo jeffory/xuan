@@ -354,3 +354,33 @@ fn keyboard_reassign_prompt_puts_cancel_before_reassign() {
     assert!(cancel.right() < reassign.left(), "{cancel:?} {reassign:?}");
     assert!((cancel.center().y - reassign.center().y).abs() < 1.0);
 }
+
+#[test]
+fn new_canvas_opens_with_width_focused_and_selected() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::new();
+    ui.isolate_config(directory.path());
+    ui.app_mut().dimensions = [1920, 1080];
+    ui.app_mut().command("new");
+    ui.settle();
+    // Something has keyboard focus without a click: the Width field.
+    assert!(
+        ui.ctx().memory(|m| m.focused()).is_some(),
+        "nothing has focus"
+    );
+    // Typing replaces the selected value, with no click first.
+    ui.type_keys("800");
+    // Focus stays where the user puts it: Tab goes on to Height, which takes typing too.
+    ui.press(egui::Modifiers::NONE, egui::Key::Tab);
+    ui.type_keys("600");
+    let create = ui
+        .harness
+        .query_all_by_role_and_label(Role::Button, "Create canvas")
+        .last()
+        .unwrap();
+    create.click();
+    ui.settle();
+    assert!(ui.app().dialog.is_none());
+    let document = &ui.app().session().expect("a new document").document;
+    assert_eq!((document.width, document.height), (800, 600));
+}

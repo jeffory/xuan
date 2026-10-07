@@ -585,13 +585,18 @@ pub fn render_cpu(padded: &RgbaImage, effects: &LayerEffects) -> RgbaImage {
             if let (Some(plane), Some((_, false, paint))) = (&ring, plan.stroke) {
                 over(&mut color, &mut alpha, paint, plane[i]);
             }
+            // A color overlay recolors the layer's own pixels and keeps their alpha, as Photoshop
+            // does, so a semi-transparent pixel stays as transparent as it was.
+            let mut face = [p[0], p[1], p[2]];
+            if let Some(paint) = plan.overlay {
+                for c in 0..3 {
+                    face[c] = face[c] + (paint[c] - face[c]) * paint[3].clamp(0.0, 1.0);
+                }
+            }
             for c in 0..3 {
-                color[c] = p[c] * p[3] + color[c] * (1.0 - p[3]);
+                color[c] = face[c] * p[3] + color[c] * (1.0 - p[3]);
             }
             alpha = p[3] + alpha * (1.0 - p[3]);
-            if let Some(paint) = plan.overlay {
-                over(&mut color, &mut alpha, paint, shape[i]);
-            }
             if let (Some(plane), Some((_, paint))) = (&inner_glow, plan.inner_glow) {
                 over(&mut color, &mut alpha, paint, plane[i]);
             }
