@@ -1651,13 +1651,23 @@ impl EditorApp {
     }
 
     /// Send `action/estimate` for a surface: the action's values, no source
-    /// or regions (nothing from the document goes before a run).
+    /// or regions (nothing from the document goes before a run), and before
+    /// send consent none of the texts either.
     pub(super) fn send_surface_estimate(
         &mut self,
         plugin: &str,
         action: &str,
-        values: Map<String, Value>,
+        mut values: Map<String, Value>,
     ) {
+        let Some(spec) = (self.plugins.manifest(plugin))
+            .and_then(|m| m.action(action))
+            .cloned()
+        else {
+            return;
+        };
+        if self.sends_need_consent(plugin) {
+            withhold_private(&spec, &mut values);
+        }
         let Ok(work_dir) = self.plugins.scratch_dir(plugin) else {
             return;
         };
@@ -1732,14 +1742,7 @@ impl EditorApp {
             _ => Prepared::none(),
         };
         if withheld {
-            for input in &spec.inputs {
-                if matches!(
-                    input.kind,
-                    InputKind::Text | InputKind::Multiline | InputKind::Path | InputKind::Secret
-                ) {
-                    inputs.remove(&input.id);
-                }
-            }
+            withhold_private(&spec, &mut inputs);
         }
         if let Some(input) = spec.regions_input() {
             inputs.insert(input.id.clone(), Value::Array(prepared.regions.clone()));
@@ -2954,6 +2957,14 @@ impl EditorApp {
             }
         }
         Ok(document)
+    }
+}
+
+/// Remove the values a plugin that needs send consent may not see before
+/// the user agreed (see [`InputKind::private`]): an estimate goes out first.
+fn withhold_private(spec: &Action, inputs: &mut Map<String, Value>) {
+    for input in spec.inputs.iter().filter(|i| i.kind.private()) {
+        inputs.remove(&input.id);
     }
 }
 

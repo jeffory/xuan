@@ -3010,6 +3010,40 @@ mod unix {
     }
 
     #[test]
+    fn a_surface_estimate_withholds_typed_text_until_the_user_agrees_to_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), true);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        let key = ("mock".to_owned(), "lay".to_owned());
+        (app.surface_values("mock", "lay")).insert("prompt".into(), "a secret castle".into());
+        app.open_surface_popup(crate::app::surfaces::SurfacePopup::Layer {
+            plugin: "mock".into(),
+            action: "lay".into(),
+            anchor: egui::Pos2::ZERO,
+        });
+        run_until(&context, &mut app, |app| {
+            app.plugins.surface_estimates.contains_key(&key)
+        });
+        let log = received(dir.path());
+        let estimate = log.lines().find(|l| l.contains("action/estimate")).unwrap();
+        assert!(estimate.contains("\"action\":\"lay\""), "{estimate}");
+        assert!(!estimate.contains("secret castle"), "{estimate}");
+
+        // Once the user chose to send without asking, the estimate gets it.
+        let grant = app.config.plugins.get_mut("mock").unwrap().grant.as_mut();
+        grant.unwrap().send_without_asking = true;
+        app.plugins.surface_estimates.clear();
+        app.request_surface_estimate("mock", "lay");
+        run_until(&context, &mut app, |app| {
+            app.plugins.surface_estimates.contains_key(&key)
+        });
+        assert!(received(dir.path()).contains("secret castle"));
+    }
+
+    #[test]
     fn a_settings_pane_is_drawn_in_manage_plugins_not_the_sidebar() {
         let dir = tempfile::tempdir().unwrap();
         let (context, mut app) = app();

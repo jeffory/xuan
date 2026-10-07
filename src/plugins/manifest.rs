@@ -369,6 +369,15 @@ pub enum InputKind {
     Regions,
 }
 
+impl InputKind {
+    /// What the user wrote or chose from their files: texts, paths and
+    /// secrets. A plugin that needs send consent gets none of it before the
+    /// user agreed, not even for an estimate.
+    pub fn private(self) -> bool {
+        matches!(self, Self::Text | Self::Multiline | Self::Path | Self::Secret)
+    }
+}
+
 /// An enum value: `"obj"` or `{ id = "obj", label = "Object" }`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Choice {
