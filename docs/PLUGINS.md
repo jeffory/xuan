@@ -424,6 +424,8 @@ kind = "edit"                     # "edit" needs an image, "generate" does not, 
 source = { from = "layer", max_side = 2048, crop_to_regions = true, padding = 0.25 }
 result = { into = "layer", mask_to_regions = true }
 description = "Draw boxes over the parts to change and describe each one."
+surfaces = ["region"]             # also in the AI Region tool; "layer" and "document" too, see "Surfaces"
+verb = "Edit"                     # its label in the AI Region popover
 
 [[actions.inputs]]
 id = "regions"
@@ -432,7 +434,7 @@ label = "Edits"
 min = 1
 fields = [
   { id = "desc", type = "text", label = "Instruction" },
-  { id = "type", type = "enum", label = "Kind", values = ["obj", "text"], default = "obj" },
+  { id = "type", type = "enum", label = "Kind", values = ["obj", "text"], default = "obj", advanced = true },
 ]
 
 [[actions.inputs]]
@@ -441,6 +443,7 @@ type = "enum"
 label = "Model"
 values = [{ id = "ideogram-4.5", label = "Ideogram 4.5" }]
 default = "ideogram-4.5"
+advanced = true                   # behind "Advanced" in popovers; surfaces = ["menu"] shows it only in the dialog
 
 [[actions.inputs]]
 id = "seed"
@@ -763,6 +766,75 @@ is chosen, the command runs its action instead:
 and [GENERATIVE.md](GENERATIVE.md) describe how an ONNX segmentation plugin
 fits this slot.
 
+### Surfaces
+
+Every action is in its menu and runs from its dialog. An action can also
+appear in Xuan's own UI, as a small popover that shows a prompt first and
+the rest under **Advanced**, by listing **surfaces**:
+
+```toml
+[[actions]]
+id = "generate-layer"
+label = "Generate Layer…"
+surfaces = ["layer"]          # "layer", "region" and/or "document"
+source = { from = "composite" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"            # the first text input is the prompt Generate needs
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+advanced = true               # inside the collapsed "Advanced" section
+
+[[actions.inputs]]
+id = "aspect"
+type = "enum"
+values = ["1:1", "16:9"]
+surfaces = ["menu"]           # only in the full dialog
+```
+
+| Surface | Where | The action must be |
+| --- | --- | --- |
+| `layer` | **New layer with AI**, the sparkles button in the Layers panel (a menu first when several actions offer it) | `generate`, or `edit` with a `composite` source; `result.into = "layer"`; `document = "edit"` |
+| `region` | The **AI Region** tool: the user draws a box (or turns the selection into one), and its popover offers every region action by its `verb` | `edit` with a `regions` input, a `verb` of at most 24 characters, `document = "edit"` |
+| `document` | The **Generate** tab of **File → New…** | `generate` with `result.into` of `document` or `ask` |
+
+The manifest is refused when an action does not fit a surface it lists, when
+it lists one twice or lists `menu` (every action has its menu), or when it has
+a `verb` without the `region` surface.
+
+**Inputs.** `advanced = true` (on an action input or a region field) puts it in
+the collapsed **Advanced** section of popovers and the New Image tab; the full
+dialog shows everything. `surfaces = [...]` on an input shows it only where
+listed, `menu` being the dialog. Generate needs the first text input of the
+basic ones to have text. A popover remembers its values per action for the
+session.
+
+**What the plugin gets.** A surface run has two more inputs:
+
+- `inputs.surface`: `"layer"`, `"region"` or `"document"` (absent from the menu);
+- `inputs.target`: `{width, height}`, the document pixels the result will cover:
+  the canvas for `layer`, the box (or the bounds of the boxes sent together)
+  for `region`, the width and height typed for `document`.
+
+A plugin should render at least `target`, and exactly when its model allows,
+then place the result with `"fit": "cover"`: the layer keeps every pixel the
+model made, covering its area without stretching.
+
+**Regions.** Each AI Region box keeps its own verb and values. An action whose
+`regions` input takes several boxes (no `max`, or `max` above 1) gets every box
+with that verb in one job; an action with `max = 1` runs once per box. Sent
+boxes are removed; several jobs may run on a document at once. Boxes are kept
+for the session beside their document and are never edits of it.
+
+**Documents.** The result opens as a new document at the image's own size and
+the dialog's resolution. With **Exact size** the canvas is exactly the width
+and height typed and the image becomes a layer that covers it, centred and not
+cropped, so it can be moved to reframe it; the status bar says so when it
+hangs over the canvas.
+
 ## Protocol
 
 Messages are JSON-RPC 2.0 objects, one per line, UTF-8, over the plugin's stdin
@@ -849,7 +921,11 @@ it a size instead and the pixels are fitted to that size: `width` and/or
 `height` in document units (one side alone keeps the aspect ratio), or
 `"fit": "source"` to cover the bounds of the source that was sent, at `x`,`y`
 from its top-left. A higher-resolution result then sits exactly over the
-source with a higher pixel density. For an extended source those bounds
+source with a higher pixel density. `"fit": "source"` stretches a result
+whose shape differs from the source; `"fit": "cover"` instead scales it
+evenly so that it covers those bounds, centred, and keeps what hangs over
+in the layer (nothing is cropped), which suits models that only render
+certain sizes. `cover` cannot be used with `result.into = "replace"`. For an extended source those bounds
 include the new canvas (see [Extending the
 canvas](#extending-the-canvas-outpainting)). `fit` cannot be combined with `width` or
 `height`, and an action without a source cannot use `fit`. Sizes must be
@@ -857,8 +933,9 @@ finite, above 0 and at most 30,000 document units; the image's own pixels
 still count against the size and 100-megapixel limits. With `result.into =
 "replace"` the result is resampled to the size it is placed at, in the source
 layer's pixels. The SDKs have helpers: `job.image(path, fit_source=True)` or
-`width=`/`height=` in Python, and `Output::image(..).fit_source()` or
-`.with_size(width, height)` in Rust.
+`width=`/`height=` in Python (`fit="cover"` for cover), and
+`Output::image(..).fit_source()`, `.fit_cover()` or `.with_size(width,
+height)` in Rust.
 
 **Masks.** A `mask` output turns a grey PNG into the document's selection:
 

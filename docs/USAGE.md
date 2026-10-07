@@ -419,6 +419,14 @@ count such as **1 of 2** lists them all. Their results arrive one at a time as
 proposals to **Accept** or **Discard**. Messages from plugins and from Xuan
 appear in the same place for a few seconds.
 
+Plugins that generate images can also offer them where you work, not only in
+their menus: the sparkles button next to New Layer (**New layer with AI**), the
+**AI Region** tool in the toolbox (draw a box, say what to do there: edit,
+add or replace), and a **Generate** tab in **File → New…**, where **Exact
+size** makes the canvas exactly the size typed, with the image as a layer you
+can move to reframe it. Each shows just a prompt and **Generate**; the model,
+quality and other options are under **Advanced**.
+
 The repository ships examples under `plugins/`: a histogram pane (Python), a
 region inverter (Rust) and a Comfy Cloud client that generates and edits images
 and layers with Comfy's own workflow templates. See [plugins](PLUGINS.md) for
