@@ -543,6 +543,11 @@ pub struct EditorApp {
     dialog: Option<Dialog>,
     dimensions: [u32; 2],
     resolution: f32,
+    /// New Image: the Generate tab instead of a blank canvas, its Exact
+    /// size option and the document action it runs (plugin, action).
+    new_image_generate: bool,
+    new_image_exact: bool,
+    new_image_action: Option<(String, String)>,
     anchor: [f32; 2],
     effect: Option<EffectEdit>,
     /// Layer → Layer Effects… while it is open.
@@ -741,6 +746,9 @@ impl EditorApp {
             dialog: None,
             dimensions: [1920, 1080],
             resolution: 72.0,
+            new_image_generate: false,
+            new_image_exact: false,
+            new_image_action: None,
             anchor: [0.5, 0.5],
             effect: None,
             layer_effects: None,

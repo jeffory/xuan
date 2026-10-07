@@ -1360,4 +1360,66 @@ fields = [{ id = "desc", type = "text", label = "Instruction" }]
         assert!(ui.has("Instruction"));
         assert!(!ui.enabled("Generate"));
     }
+
+    #[test]
+    fn new_image_offers_a_generate_tab_only_with_a_document_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::new();
+        ui.app_mut().command("new");
+        ui.settle();
+        assert!(!ui.has("Generate"));
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[[actions]]
+id = "new"
+label = "Generate Image…"
+kind = "generate"
+surfaces = ["document"]
+result = { into = "document" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Prompt"
+"#,
+        )
+        .unwrap();
+        ui.app_mut().install_plugins(
+            vec![xuan::plugins::Manifest::load(dir.path()).unwrap()],
+            vec![],
+        );
+        ui.settle();
+        ui.click("Generate");
+        assert!(ui.has("Prompt"));
+        assert!(ui.has("Exact size"));
+        assert!(ui.harness.query_all_by_label("Width").next().is_some());
+        assert!(!ui.enabled("Generate image"));
+        ui.harness.get_by_role(Role::MultilineTextInput).click();
+        ui.harness.step();
+        ui.harness
+            .get_by_role(Role::MultilineTextInput)
+            .type_text("a fox");
+        ui.settle();
+        ui.app_mut().dimensions = [1600, 900];
+        ui.click("Exact size");
+        // Not allowed yet: the permission prompt shows, nothing runs.
+        ui.click("Generate image");
+        assert_eq!(ui.app().dialog, Some(Dialog::PluginPermissions));
+        assert!(ui.app().plugins.jobs.is_empty());
+        ui.app_mut().grant_plugin("ai", true);
+        ui.app_mut().dialog = Some(Dialog::New);
+        ui.settle();
+        ui.click("Generate image");
+        assert_eq!(ui.app().dialog, None);
+        let run = ui.app().plugins.jobs[0].surface.clone().unwrap();
+        assert_eq!(run.surface, xuan::plugins::manifest::Surface::Document);
+        assert_eq!((run.target, run.exact), ((1600, 900), true));
+    }
 }

@@ -9,7 +9,8 @@ use xuan::{
     io, operations, render,
 };
 
-use super::{Dialog, EditorApp, commands::Category, theme::PaletteExt};
+use super::{Dialog, EditorApp, commands::Category, surfaces::SurfaceRun, theme::PaletteExt};
+use xuan::plugins::manifest::Surface;
 
 impl EditorApp {
     /// Help → Keyboard Shortcuts: the bindings in effect, from the command registry, and the
@@ -186,13 +187,50 @@ impl EditorApp {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
+        // New Image can generate the image with a plugin's document action.
+        let document_actions = if dialog == Dialog::New {
+            self.surface_actions(Surface::Document)
+        } else {
+            Vec::new()
+        };
+        if document_actions.is_empty() {
+            self.new_image_generate = false;
+        }
+        let chosen = (self.new_image_action.clone())
+            .filter(|(p, a)| document_actions.iter().any(|(q, b, _)| q == p && b == a))
+            .or_else(|| {
+                document_actions
+                    .first()
+                    .map(|(p, a, _)| (p.clone(), a.clone()))
+            });
+        let generating = self.new_image_generate && chosen.is_some();
+        let mut ready = false;
         widgets::Window::new(tr(title))
             .open(&mut open)
             .default_width(410.0)
             .show(ctx, |ui| {
                 ui.add_space(7.0);
+                if !document_actions.is_empty() {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(!self.new_image_generate, tr("Blank"))
+                            .clicked()
+                        {
+                            self.new_image_generate = false;
+                        }
+                        if ui
+                            .selectable_label(self.new_image_generate, tr("Generate"))
+                            .clicked()
+                        {
+                            self.new_image_generate = true;
+                        }
+                    });
+                    ui.add_space(7.0);
+                }
                 ui.label(
-                    RichText::new(if dialog == Dialog::New {
+                    RichText::new(if generating {
+                        tr("Describe the image; it is made at least this size.")
+                    } else if dialog == Dialog::New {
                         tr("A blank space for your next composition.")
                     } else if dialog == Dialog::CanvasSize {
                         tr("Change the canvas bounds and anchor your composition.")
@@ -255,11 +293,37 @@ impl EditorApp {
                             }
                         });
                 }
+                if let Some((plugin, action)) = chosen.clone().filter(|_| generating) {
+                    ui.add_space(12.0);
+                    if document_actions.len() > 1 {
+                        let label = (document_actions.iter())
+                            .find(|(p, a, _)| *p == plugin && *a == action)
+                            .map(|(_, _, label)| label.clone())
+                            .unwrap_or_default();
+                        egui::ComboBox::from_id_salt("new_image_action")
+                            .selected_text(label)
+                            .show_ui(ui, |ui| {
+                                for (p, a, label) in &document_actions {
+                                    if ui
+                                        .selectable_label(*p == plugin && *a == action, label)
+                                        .clicked()
+                                    {
+                                        self.new_image_action = Some((p.clone(), a.clone()));
+                                    }
+                                }
+                            });
+                    }
+                    ready = self.surface_form(ui, &plugin, &action, Surface::Document, "new_image");
+                    widgets::checkbox(ui, &mut self.new_image_exact, tr("Exact size"))
+                        .on_hover_text(tr(
+                            "Make the canvas exactly W × H; the image covers it and can be moved",
+                        ));
+                }
                 let valid = xuan::document::validate_size(self.dimensions[0], self.dimensions[1]);
                 ui.add_space(12.0);
                 if let Err(error) = &valid {
                     ui.colored_label(ui.palette().error, error.to_string());
-                } else {
+                } else if !generating {
                     ui.label(
                         RichText::new(tr("Transparent canvas · sRGB")).color(ui.palette().muted),
                     );
@@ -270,8 +334,10 @@ impl EditorApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         apply = ui
                             .add_enabled(
-                                valid.is_ok(),
-                                widgets::Button::new(if dialog == Dialog::New {
+                                valid.is_ok() && (ready || !generating),
+                                widgets::Button::new(if generating {
+                                    tr("Generate image")
+                                } else if dialog == Dialog::New {
                                     tr("Create canvas")
                                 } else {
                                     tr("Apply")
@@ -282,7 +348,24 @@ impl EditorApp {
                     });
                 });
             });
-        if apply {
+        if apply
+            && generating
+            && let Some((plugin, action)) = chosen
+        {
+            let values = self.surface_values(&plugin, &action).clone();
+            let run = SurfaceRun {
+                surface: Surface::Document,
+                target: (self.dimensions[0], self.dimensions[1]),
+                exact: self.new_image_exact,
+                resolution: self.resolution,
+            };
+            // A permission or consent prompt takes the dialog's place.
+            if self.run_from_surface(&plugin, &action, &values, Vec::new(), run)
+                && self.dialog == Some(Dialog::New)
+            {
+                self.dialog = None;
+            }
+        } else if apply {
             if dialog == Dialog::New {
                 self.new_document();
             } else {

@@ -1036,3 +1036,8 @@ Clear	清除
 Make a selection first	请先建立选区
 Drag a box and say what to do there · Click a box to change it · Delete removes it	拖出一个框并描述要做什么 · 点击框可修改 · Delete 删除
 boxes	个框
+Blank	空白
+Generate image	生成图像
+Exact size	精确尺寸
+Make the canvas exactly W × H; the image covers it and can be moved	画布精确为 宽 × 高；图像铺满画布，可移动调整
+Describe the image; it is made at least this size.	描述图像；生成的图像至少为此尺寸。
