@@ -462,11 +462,22 @@ fn reset_colors(app: &mut EditorApp) {
     app.brush.color = [0, 0, 0, 255];
     app.background = [255; 4];
 }
+/// The next brush size down: 15% smaller, but never by less than one pixel,
+/// so small sizes step 3, 2, 1 instead of sticking at 3. Stops at 1 px.
+pub(super) fn smaller_diameter(diameter: f32) -> f32 {
+    let current = diameter.round().max(1.0);
+    (diameter / 1.15).round().min(current - 1.0).max(1.0)
+}
+/// The next brush size up: 15% larger, but never by less than one pixel.
+pub(super) fn larger_diameter(diameter: f32) -> f32 {
+    let current = diameter.round().max(1.0);
+    (diameter * 1.15).round().max(current + 1.0).min(2000.0)
+}
 fn brush_smaller(app: &mut EditorApp) {
-    app.brush.diameter = (app.brush.diameter / 1.15).round().max(1.0);
+    app.brush.diameter = smaller_diameter(app.brush.diameter);
 }
 fn brush_larger(app: &mut EditorApp) {
-    app.brush.diameter = (app.brush.diameter * 1.15).round().min(2000.0);
+    app.brush.diameter = larger_diameter(app.brush.diameter);
 }
 fn brush_softer(app: &mut EditorApp) {
     app.brush.hardness = (app.brush.hardness - 0.1).max(0.0);
