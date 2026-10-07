@@ -8,7 +8,9 @@ import math
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sdk", "python"))
+# The SDK installed with Xuan comes first on PYTHONPATH; in a source
+# checkout, fall back to the repository's.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sdk", "python"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from xuan_plugin import Plugin, decode_png, encode_png, png_data_url, ui  # noqa: E402

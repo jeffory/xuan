@@ -2558,6 +2558,56 @@ mod unix {
         }
     }
 
+    /// Start the mock plugin, which first writes the Python SDK variables it
+    /// was started with to `env.log`, and return that file's lines.
+    fn sdk_environment(sdk: Option<&Path>) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        let script = std::fs::read_to_string(dir.path().join("plugin.sh")).unwrap();
+        std::fs::write(
+            dir.path().join("plugin.sh"),
+            format!(
+                "printf '%s\\n' \"${{XUAN_PLUGIN_SDK-unset}}\" \"${{PYTHONPATH-unset}}\" > env.log\n{script}"
+            ),
+        )
+        .unwrap();
+        app.plugins.sdk_dir = sdk.map(Path::to_path_buf);
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        app.stop_plugin("mock");
+        let log = std::fs::read_to_string(dir.path().join("env.log")).unwrap();
+        log.lines().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn plugins_start_with_the_python_sdk_first_on_their_import_path() {
+        let sdk = tempfile::tempdir().unwrap();
+        let sdk_text = sdk.path().to_str().unwrap().to_owned();
+        let lines = sdk_environment(Some(sdk.path()));
+        assert_eq!(lines[0], sdk_text);
+        // The SDK comes first, then whatever Xuan itself was started with.
+        let expected = match std::env::var("PYTHONPATH") {
+            Ok(rest) if !rest.is_empty() => format!("{sdk_text}:{rest}"),
+            _ => sdk_text.clone(),
+        };
+        assert_eq!(lines[1], expected);
+
+        // Without an SDK folder the plugin still starts, with neither set
+        // by Xuan: it sees only what Xuan itself was started with.
+        let lines = sdk_environment(None);
+        assert_eq!(
+            lines[0],
+            std::env::var("XUAN_PLUGIN_SDK").unwrap_or_else(|_| "unset".into())
+        );
+        assert_eq!(
+            lines[1],
+            std::env::var("PYTHONPATH").unwrap_or_else(|_| "unset".into())
+        );
+    }
+
     #[test]
     fn plugin_action_proposes_a_masked_layer_that_records_its_origin() {
         let dir = tempfile::tempdir().unwrap();

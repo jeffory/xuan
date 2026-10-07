@@ -86,6 +86,11 @@ def main():
             plugin_target_directory / TARGET / "release/xuan-mcp-server.exe",
             plugin / "target/release/xuan-mcp-server.exe",
         )
+        # The Python plugin SDK sits in sdk\python next to xuan.exe, beside
+        # the bundled plugins; Xuan puts it on every plugin's PYTHONPATH.
+        sdk = stage / "sdk/python"
+        sdk.mkdir(parents=True)
+        shutil.copy2(ROOT / "sdk/python/xuan_plugin.py", sdk / "xuan_plugin.py")
         licenses = stage / "share/licenses/xuan"
         licenses.mkdir(parents=True)
         for filename in (
