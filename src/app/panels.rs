@@ -432,43 +432,88 @@ impl EditorApp {
     }
 
     pub(super) fn tool_rail(&mut self, ctx: &egui::Context) {
+        const MARGIN_X: i8 = 10;
+        const MARGIN_Y: i8 = 16;
+        const GAP: f32 = 5.0;
+        /// The pinned colour swatches with their separator.
+        const FOOTER_HEIGHT: f32 = 8.0 + 1.0 + 5.0 + 40.0 + 4.0;
+        let tools: Vec<Tool> = Tool::ALL
+            .into_iter()
+            .filter(|t| *t != Tool::Region || self.plugins.action.is_some())
+            .collect();
+        // One column unless the tools would run into the swatches; then as few as fit, up to three.
+        let room = ctx.available_rect().height() - 2.0 * f32::from(MARGIN_Y) - FOOTER_HEIGHT;
+        let columns = (1..=MAX_TOOL_COLUMNS)
+            .find(|&columns| tool_column_height(tools.len().div_ceil(columns)) <= room)
+            .unwrap_or(MAX_TOOL_COLUMNS);
+        let width = 2.0 * f32::from(MARGIN_X) + tool_columns_width(columns);
         let mut tool = None;
         egui::SidePanel::left("tools")
-            .exact_width(56.0)
+            .exact_width(width)
             .resizable(false)
             .frame(
                 egui::Frame::new()
                     .fill(ctx.palette().panel)
-                    .inner_margin(egui::Margin::symmetric(10, 16)),
+                    .inner_margin(egui::Margin::symmetric(MARGIN_X, MARGIN_Y)),
             )
             .show(ctx, |ui| {
                 ui.add_enabled_ui(
                     self.dialog.is_none() && self.job.is_none() && self.color_range.is_none(),
                     |ui| {
-                        egui::ScrollArea::vertical()
-                            .scroll_bar_visibility(
-                                egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                            )
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing.y = 5.0;
-                                for t in Tool::ALL {
-                                    if t == Tool::Region && self.plugins.action.is_none() {
-                                        continue;
-                                    }
-                                    let shortcut = super::commands::tool_command(t)
-                                        .map(|id| self.keymap.shortcut(id))
-                                        .unwrap_or_default();
-                                    if icons::tool_button(ui, t, self.tool == t, &shortcut)
-                                        .clicked()
-                                    {
-                                        tool = Some(t);
-                                    }
-                                }
+                        // The swatches stay put; only the tools scroll, and only if even
+                        // three columns do not fit.
+                        egui::TopBottomPanel::bottom("tool_swatches")
+                            .frame(egui::Frame::NONE)
+                            .show_separator_line(false)
+                            .exact_height(FOOTER_HEIGHT)
+                            .show_inside(ui, |ui| {
                                 ui.add_space(8.0);
                                 ui.separator();
                                 ui.add_space(5.0);
                                 widgets::palette(ui, &mut self.brush.color, &mut self.background);
                             });
+                        let output = egui::ScrollArea::vertical()
+                            .scroll_bar_visibility(
+                                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                            )
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+                                egui::Grid::new("tool_grid")
+                                    .spacing([GAP, GAP])
+                                    .show(ui, |ui| {
+                                        for (index, &t) in tools.iter().enumerate() {
+                                            let shortcut = super::commands::tool_command(t)
+                                                .map(|id| self.keymap.shortcut(id))
+                                                .unwrap_or_default();
+                                            if icons::tool_button(ui, t, self.tool == t, &shortcut)
+                                                .clicked()
+                                            {
+                                                tool = Some(t);
+                                            }
+                                            if (index + 1) % columns == 0 {
+                                                ui.end_row();
+                                            }
+                                        }
+                                    });
+                            });
+                        // A scroll cue for windows too short even for three columns.
+                        if output.content_size.y > output.inner_rect.height() + 0.5 {
+                            let rect = output.inner_rect;
+                            let fade = egui::Rect::from_min_max(
+                                egui::pos2(rect.left(), rect.bottom() - 18.0),
+                                rect.right_bottom(),
+                            );
+                            let panel = ui.ctx().palette().panel;
+                            let clear = panel.gamma_multiply(0.0);
+                            let mut mesh = egui::Mesh::default();
+                            mesh.colored_vertex(fade.left_top(), clear);
+                            mesh.colored_vertex(fade.right_top(), clear);
+                            mesh.colored_vertex(fade.right_bottom(), panel);
+                            mesh.colored_vertex(fade.left_bottom(), panel);
+                            mesh.add_triangle(0, 1, 2);
+                            mesh.add_triangle(0, 2, 3);
+                            ui.painter().add(egui::Shape::mesh(mesh));
+                        }
                     },
                 );
             });
@@ -636,4 +681,17 @@ impl EditorApp {
             symmetry.center = None;
         }
     }
+}
+
+/// The most columns the tool rail uses before it scrolls.
+const MAX_TOOL_COLUMNS: usize = 3;
+
+/// The height of `rows` tool buttons with their gaps.
+fn tool_column_height(rows: usize) -> f32 {
+    rows as f32 * 36.0 + rows.saturating_sub(1) as f32 * 5.0
+}
+
+/// The width of `columns` tool buttons with their gaps.
+fn tool_columns_width(columns: usize) -> f32 {
+    columns as f32 * 36.0 + columns.saturating_sub(1) as f32 * 5.0
 }
