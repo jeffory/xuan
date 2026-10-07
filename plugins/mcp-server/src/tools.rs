@@ -232,6 +232,10 @@ const COMMANDS: [&str; 26] = [
     "flip_v",
     "flip_canvas_h",
     "flip_canvas_v",
+    "rotate_canvas_cw",
+    "rotate_canvas_ccw",
+    "rotate_canvas_180",
+    "crop_to_selection",
     "invert",
     "clear",
     "fill_fg",
@@ -1074,6 +1078,46 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             }),
         },
         Spec {
+            name: "trim_canvas",
+            title: "Trim",
+            description: "Trim the canvas to the visible image's content, as Image → Trim does: `based_on` is \"transparent\" (transparent margins, the default), \"top_left\" or \"bottom_right\" (margins of the colour of that pixel); `top`, `bottom`, `left` and `right` (all true by default) say which sides may be trimmed. Nothing changes when there is nothing to trim. To crop to the selection, run_command crop_to_selection.",
+            properties: json!({
+                "based_on": {"type": "string", "enum": ["transparent", "top_left", "bottom_right"]},
+                "top": {"type": "boolean"},
+                "bottom": {"type": "boolean"},
+                "left": {"type": "boolean"},
+                "right": {"type": "boolean"}
+            }),
+            required: &[],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["based_on", "top", "bottom", "left", "right"];
+                let args = pick(args, &keys)?;
+                Ok(Plan::new(
+                    "Trim",
+                    vec![Value::Object(op("trim", &args, &keys))],
+                    Reply::Size,
+                ))
+            }),
+        },
+        Spec {
+            name: "rotate_canvas",
+            title: "Rotate canvas",
+            description: "Rotate the whole document `degrees` clockwise: 90, 180 or 270 (-90 also turns counter-clockwise). Layers, masks, guides, paths and the selection turn with it, and a quarter turn swaps the width and height.",
+            properties: json!({"degrees": {"type": "integer", "enum": [90, 180, 270, -90]}}),
+            required: &["degrees"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["degrees"];
+                let args = pick(args, &keys)?;
+                Ok(Plan::new(
+                    "Rotate Canvas",
+                    vec![Value::Object(op("rotate_canvas", &args, &keys))],
+                    Reply::Size,
+                ))
+            }),
+        },
+        Spec {
             name: "resize_canvas",
             title: "Canvas size",
             description: "Change the canvas size without scaling the content; `anchor` [ax, ay] (0–1) says where the content stays: [0, 0] top-left, [0.5, 0.5] centre (default).",
@@ -1129,7 +1173,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "run_command",
             title: "Run an editor command",
-            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (attach a mask layer made from the selection to the image), new_mask_layer, delete_mask, disable_mask, link_mask (these three on a mask layer), clip (clipping mask), flip_h, flip_v (the layer), flip_canvas_h, flip_canvas_v, invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out. Commands act on the selected layers, the last one active: give `layers` to select them first, as select_layers does. Returns the ids of the layers the command added. content_fill, remove_background and remove_flat_background run in the background: other edits fail with \"The editor is busy\" until they finish.",
+            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (attach a mask layer made from the selection to the image), new_mask_layer, delete_mask, disable_mask, link_mask (these three on a mask layer), clip (clipping mask), flip_h, flip_v (the layer), flip_canvas_h, flip_canvas_v, rotate_canvas_cw, rotate_canvas_ccw, rotate_canvas_180 (the whole canvas), crop_to_selection (crop the canvas to the selection's bounds), invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out. Commands act on the selected layers, the last one active: give `layers` to select them first, as select_layers does. Returns the ids of the layers the command added. content_fill, remove_background and remove_flat_background run in the background: other edits fail with \"The editor is busy\" until they finish.",
             properties: json!({
                 "command": {"type": "string", "enum": COMMANDS},
                 "layers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Layer ids to select first, the last one active (default: the layers selected now); only for commands that edit"},
@@ -1161,7 +1205,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1310,6 +1354,8 @@ pub fn list() -> Vec<Tool> {
                     "delete_layer"
                         | "merge_layers"
                         | "crop_canvas"
+                        | "trim_canvas"
+                        | "rotate_canvas"
                         | "resize_canvas"
                         | "resize_image"
                         | "run_command"

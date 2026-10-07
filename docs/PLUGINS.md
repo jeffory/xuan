@@ -1216,6 +1216,14 @@ the menu commands do):
   Size…**, which may also shrink; `anchor` `[0, 0]` keeps the top-left corner,
   `[0.5, 0.5]` (the default) the centre.
 - `{"op": "resize_image", "width", "height"}`: **Image → Image Size…**.
+- `{"op": "rotate_canvas", "degrees"}`: **Image → Rotate Canvas**, `degrees`
+  clockwise: 90, 180 or 270 (-90 is 270). Layers, masks, guides, document
+  paths and the selection turn with the canvas; a quarter turn swaps the
+  width and height.
+- `{"op": "trim", "based_on"?, "top"?, "bottom"?, "left"?, "right"?}`:
+  **Image → Trim…**. `based_on` is `transparent` (the default), `top_left` or
+  `bottom_right`, the pixel whose colour the margins have; the sides default
+  to `true`. Nothing changes when there is nothing to trim.
 
 ### SVG path data
 
@@ -1517,7 +1525,8 @@ request](#withdrawing-a-request)).
   `flatten`, `mask`, `new_mask_layer`, `delete_mask`, `disable_mask`,
   `link_mask`, `clip`, `select_all`, `deselect`, `invert_selection`,
   `fill_fg`, `fill_bg`, `clear`, `invert`, `flip_h`, `flip_v`,
-  `flip_canvas_h`, `flip_canvas_v`, `select_layer_pixels`,
+  `flip_canvas_h`, `flip_canvas_v`, `rotate_canvas_cw`, `rotate_canvas_ccw`,
+  `rotate_canvas_180`, `crop_to_selection`, `select_layer_pixels`,
   `select_mask_black`, `feather`, `select_subject`, `content_fill`,
   `remove_background` and `remove_flat_background`. The last four run in the
   background like their menu items and become one undo step when they finish;

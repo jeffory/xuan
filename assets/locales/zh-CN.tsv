@@ -61,6 +61,19 @@ Canvas Size…	画布大小…
 Image Size…	图像大小…
 Flip Canvas Horizontal	水平翻转画布
 Flip Canvas Vertical	垂直翻转画布
+Rotate Canvas 90° Clockwise	顺时针旋转画布 90°
+Rotate Canvas 90° Counter-Clockwise	逆时针旋转画布 90°
+Rotate Canvas 180°	旋转画布 180°
+Rotate Canvas	旋转画布
+Crop to Selection	裁剪到选区
+Trim…	裁切…
+Trim	裁切
+Nothing to trim	没有可裁切的内容
+Based on	基于
+Trim away	裁切掉
+Transparent Pixels	透明像素
+Top Left Pixel Colour	左上角像素颜色
+Bottom Right Pixel Colour	右下角像素颜色
 New Layer	新建图层
 New Group	新建组
 New Mask Layer	新建蒙版图层

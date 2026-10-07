@@ -634,6 +634,24 @@ pub(super) const COMMANDS: &[Command] = &[
         .host(Edit)
         .aliases(&["mirror"]),
     cmd("flip_canvas_v", "Flip Canvas Vertical", C::Image).host(Edit),
+    cmd("rotate_canvas_cw", "Rotate Canvas 90° Clockwise", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd(
+        "rotate_canvas_ccw",
+        "Rotate Canvas 90° Counter-Clockwise",
+        C::Image,
+    )
+    .host(Edit)
+    .aliases(&["rotate image", "turn"]),
+    cmd("rotate_canvas_180", "Rotate Canvas 180°", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd("crop_to_selection", "Crop to Selection", C::Image)
+        .when(has_selection)
+        .host(Edit)
+        .aliases(&["crop"]),
+    cmd("trim", "Trim…", C::Image).aliases(&["crop", "remove margins", "borders"]),
     // Layer
     cmd("new_layer", "New Layer", C::Layer)
         .keys(&[ctrl_shift(Key::N)])
