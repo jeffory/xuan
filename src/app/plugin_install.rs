@@ -173,7 +173,7 @@ impl EditorApp {
                             ui.label(RichText::new(tr("Cannot install this plugin")).strong());
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(error).color(ui.visuals().error_fg_color),
+                                    RichText::new(error).color(ui.palette().error),
                                 )
                                 .wrap(),
                             );
@@ -288,7 +288,7 @@ impl EditorApp {
                             ui.add_space(8.0);
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(error).color(ui.visuals().error_fg_color),
+                                    RichText::new(error).color(ui.palette().error),
                                 )
                                 .wrap(),
                             );

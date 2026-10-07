@@ -12,6 +12,7 @@ use xuan::{
     vector::{FillRule, NamedPath, VectorPath},
 };
 
+use super::theme::PaletteExt as _;
 use super::{Dialog, EditorApp, widgets};
 
 /// The dialog's state, kept while it is open.
@@ -337,7 +338,7 @@ impl EditorApp {
                     }
                 });
                 if let Some(error) = &edit.error {
-                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), error);
+                    ui.colored_label(ui.palette().error, error);
                 }
             });
         if add || from_selection {
