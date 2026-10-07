@@ -732,7 +732,10 @@ impl Palette {
             (Some((a, dark_fill)), Some((b, _))) if a <= b => (light_text, dark_fill),
             (_, Some((_, light_fill))) => (dark_text, light_fill),
             (Some((_, dark_fill)), None) => (light_text, dark_fill),
-            (None, None) => ((self.on_accent_text, self.on_accent_muted), self.accent_fill),
+            (None, None) => (
+                (self.on_accent_text, self.on_accent_muted),
+                self.accent_fill,
+            ),
         };
         let readable = |c: Color32| contrast_ratio(text, c) >= ON_ACCENT_TEXT_RATIO;
 

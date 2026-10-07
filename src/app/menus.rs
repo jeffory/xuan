@@ -64,11 +64,7 @@ fn item_button(ui: &mut egui::Ui, enabled: bool, label: &str, shortcut: &str) ->
     let id = ui.next_auto_id();
     let was_lit = enabled && ui.ctx().read_response(id).is_some_and(|r| lit(&r));
     let p = ui.palette();
-    let hint = if was_lit {
-        p.on_accent_muted
-    } else {
-        p.muted
-    };
+    let hint = if was_lit { p.on_accent_muted } else { p.muted };
     let button = Button::new(label).shortcut_text(egui::RichText::new(shortcut).color(hint));
     let response = ui.add_enabled(enabled, button);
     if enabled && lit(&response) != was_lit {

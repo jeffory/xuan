@@ -188,7 +188,10 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
             ratio(p.on_accent_text, p.accent_pressed[1]),
         ),
         // Highlighted menu rows: `menus.rs` item buttons and `widgets::menu_check`.
-        ("menu text/highlight", ratio(p.on_accent_text, p.accent_fill)),
+        (
+            "menu text/highlight",
+            ratio(p.on_accent_text, p.accent_fill),
+        ),
         (
             "menu shortcut hint/highlight",
             ratio(p.on_accent_muted, p.accent_fill),
@@ -198,8 +201,14 @@ fn contrast_pairs(p: &Palette) -> Vec<(String, f32, f32)> {
         // colours, which come from the palette.
         ("error/window", ratio(p.error, p.window)),
         ("error/panel", ratio(p.error, p.panel)),
-        ("egui error_fg_color/window", ratio(v.error_fg_color, p.window)),
-        ("egui warn_fg_color/window", ratio(v.warn_fg_color, p.window)),
+        (
+            "egui error_fg_color/window",
+            ratio(v.error_fg_color, p.window),
+        ),
+        (
+            "egui warn_fg_color/window",
+            ratio(v.warn_fg_color, p.window),
+        ),
         // Hints and weak text (#78).
         ("egui weak text/field", ratio(v.weak_text_color(), p.field)),
     ]
@@ -287,13 +296,19 @@ fn text_edit_hints_are_muted_and_labels_keep_the_text_colour() {
         let name = if p.dark { "dark" } else { "light" };
         let (hint, label) = painted_text_colors(&p);
         assert_eq!(label, p.text, "{name}: a plain label keeps the text colour");
-        assert_ne!(hint, p.text, "{name}: the hint must not look like typed text");
+        assert_ne!(
+            hint, p.text,
+            "{name}: the hint must not look like typed text"
+        );
         assert_eq!(hint, p.muted, "{name}: the hint is muted");
         let r = ratio(hint, p.field);
         assert!(r >= 4.5, "{name} hint/field: {r:.2}");
         // Visibly weaker than typed text on the same field.
         let text = ratio(p.text, p.field);
-        assert!(text / r > 1.5, "{name}: hint {r:.2} too close to text {text:.2}");
+        assert!(
+            text / r > 1.5,
+            "{name}: hint {r:.2} too close to text {text:.2}"
+        );
     }
 }
 
@@ -345,9 +360,17 @@ fn a_system_accent_replaces_the_blue_and_stays_readable() {
             let p = base.with_accent(accent);
             let mut pairs = contrast_pairs(&p);
             pairs.extend([
-                ("text/selected row".into(), ratio(p.text, p.row_selected), 4.5),
+                (
+                    "text/selected row".into(),
+                    ratio(p.text, p.row_selected),
+                    4.5,
+                ),
                 ("check mark/top".into(), ratio(p.on_accent, p.check[0]), 3.0),
-                ("check mark/bottom".into(), ratio(p.on_accent, p.check[1]), 3.0),
+                (
+                    "check mark/bottom".into(),
+                    ratio(p.on_accent, p.check[1]),
+                    3.0,
+                ),
             ]);
             for (label, r, needs) in pairs {
                 if r < needs {
@@ -367,7 +390,9 @@ fn a_system_accent_replaces_the_blue_and_stays_readable() {
     assert!(luminance(p.on_accent_text) < 0.1);
     // Xuan's blue keeps light text.
     assert_eq!(
-        Palette::LIGHT.with_accent(Palette::LIGHT.accent).on_accent_text,
+        Palette::LIGHT
+            .with_accent(Palette::LIGHT.accent)
+            .on_accent_text,
         Color32::WHITE
     );
     // A colour that already fits is kept as it is.
