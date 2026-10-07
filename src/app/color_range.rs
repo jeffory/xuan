@@ -1,4 +1,4 @@
-//! Select → Color Range…, after Compositor's `ColorRangeSheet`: every pixel near the
+//! Select → Colour Range…, after Compositor's `ColorRangeSheet`: every pixel near the
 //! colours clicked on the canvas, anywhere in the image. The selection updates on the
 //! canvas as the colours, Fuzziness and Invert change; OK keeps it as one undo step and
 //! Cancel puts back the selection there was.
@@ -49,7 +49,7 @@ impl EditorApp {
             return;
         };
         session.history.commit();
-        session.history.begin(tr("Color Range"), &session.document);
+        session.history.begin(tr("Colour Range"), &session.document);
         let image = Arc::new(render::render(&session.document));
         let document = session.document.id;
         let original = session.document.selection.clone();
@@ -70,7 +70,7 @@ impl EditorApp {
         self.set_tool(Tool::Dropper);
     }
 
-    /// A click on the canvas while Color Range is open: Shift adds the colour and Alt
+    /// A click on the canvas while Colour Range is open: Shift adds the colour and Alt
     /// takes it away, whichever eyedropper is chosen.
     pub(super) fn sample_color_range(&mut self, point: Point, modifiers: egui::Modifiers) {
         let Some(edit) = &mut self.color_range else {
@@ -142,7 +142,7 @@ impl EditorApp {
             if keep && !edit.range.include.is_empty() {
                 session.document.selection = Some(Arc::new(edit.range.mask(&edit.image)));
                 session.history.commit();
-                self.status = tr("Color Range").into();
+                self.status = tr("Colour Range").into();
             } else {
                 session.history.cancel(&mut session.document);
             }
@@ -177,7 +177,7 @@ impl EditorApp {
         let mut ok = false;
         let mut cancel = false;
         let aspect = edit.image.height() as f32 / edit.image.width().max(1) as f32;
-        widgets::Window::new(tr("Color Range"))
+        widgets::Window::new(tr("Colour Range"))
             .id("color_range")
             .open(&mut open)
             .default_width(340.0)

@@ -82,8 +82,8 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Tools | Eyedropper | I |
 | Tools | Hand | H |
 | Tools | Zoom | Z |
-| Tools | Swap Colors | X |
-| Tools | Reset Colors | D |
+| Tools | Swap Colours | X |
+| Tools | Reset Colours | D |
 | Tools | Decrease Brush Size | [ |
 | Tools | Increase Brush Size | ] |
 | Tools | Decrease Brush Hardness | Shift+[ |

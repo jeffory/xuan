@@ -667,13 +667,10 @@ impl EditorApp {
                         }
                         self.plugin_models_section(ui, manifest);
                         let summary = format!(
-                            "{} {} · {} {} · {} {}",
-                            manifest.actions.len(),
-                            tr("actions"),
-                            manifest.panes.len(),
-                            tr("panes"),
-                            manifest.formats.len(),
-                            tr("formats")
+                            "{} · {} · {}",
+                            counted(manifest.actions.len(), "action", "actions"),
+                            counted(manifest.panes.len(), "pane", "panes"),
+                            counted(manifest.formats.len(), "format", "formats")
                         );
                         ui.label(RichText::new(summary).small().color(ui.palette().muted));
                         let log = self.plugins.log(&id);
@@ -939,43 +936,57 @@ impl EditorApp {
     }
 }
 
+/// "1 pane" or "2 panes".
+fn counted(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", tr(if count == 1 { one } else { many }))
+}
+
+/// Width of the bullet column, so wrapped lines hang under the first.
+const BULLET_INDENT: f32 = 12.0;
+
+/// A bulleted line whose wrapped lines hang under its first.
+pub(super) fn bullet(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_sized([BULLET_INDENT, 0.0], egui::Label::new("•"));
+        ui.add(egui::Label::new(text).wrap());
+    });
+}
+
+/// A small muted note under a bullet, indented to line up with the bullet's text.
+fn bullet_note(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(BULLET_INDENT);
+        ui.add(egui::Label::new(RichText::new(text).small().color(ui.palette().muted)).wrap());
+    });
+}
+
 /// The permissions a plugin declares. `blocked` says whether it starts with
 /// its network blocked ([`xuan::plugins::sandbox`]).
 pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
     if blocked {
-        ui.label(format!("• {}", tr("Network blocked by Xuan (Linux)")));
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "  {}",
-                    tr("It cannot open network sockets, not even to this computer.")
-                ))
-                .small()
-                .color(ui.palette().muted),
-            )
-            .wrap(),
+        bullet(ui, tr("Network blocked by Xuan (Linux)"));
+        bullet_note(
+            ui,
+            tr("It cannot open network sockets, not even to this computer."),
         );
     }
     if !permissions.network.is_empty() {
-        ui.add(
-            egui::Label::new(format!(
-                "• {} {}",
+        bullet(
+            ui,
+            format!(
+                "{} {}",
                 tr("Says it connects to:"),
                 permissions.network.join(", ")
-            ))
-            .wrap(),
+            ),
         );
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "  {}",
-                    tr("Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.")
-                ))
-                .small()
-                .color(ui.palette().muted),
-            )
-            .wrap(),
+        bullet_note(
+            ui,
+            tr(
+                "Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.",
+            ),
         );
     }
     if !manifest.models.is_empty() {
@@ -990,60 +1001,57 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
             })
             .collect::<Vec<_>>()
             .join(", ");
-        ui.add(
-            egui::Label::new(format!(
-                "• {} {models}",
+        bullet(
+            ui,
+            format!(
+                "{} {models}",
                 tr("Uses models that Xuan downloads, after asking you:")
-            ))
-            .wrap(),
+            ),
         );
     }
     if !permissions.secrets.is_empty() {
-        ui.label(format!(
-            "• {} {}",
-            tr("Receives these secrets:"),
-            permissions.secrets.join(", ")
-        ));
+        bullet(
+            ui,
+            format!(
+                "{} {}",
+                tr("Receives these secrets:"),
+                permissions.secrets.join(", ")
+            ),
+        );
     }
     if permissions.document == xuan::plugins::manifest::DocumentAccess::Edit {
-        ui.label(format!(
-            "• {}",
-            tr("Edits documents directly (as undoable steps)")
-        ));
+        bullet(ui, tr("Edits documents directly (as undoable steps)"));
         if permissions.edit_prompt == xuan::plugins::manifest::EditPrompt::Session {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "  {}",
-                        tr("Asks you before its first edit in each session, unless you turn on auto mode.")
-                    ))
-                    .small()
-                    .color(ui.palette().muted),
-                )
-                .wrap(),
+            bullet_note(
+                ui,
+                tr("Asks you before its first edit in each session, unless you turn on auto mode."),
             );
         }
     } else {
-        ui.label(format!(
-            "• {}",
-            tr("Can read the document and propose selections or new documents, but can't change your image")
-        ));
+        bullet(
+            ui,
+            tr(
+                "Can read the document and propose selections or new documents, but can't change your image",
+            ),
+        );
     }
     match permissions.filesystem {
         xuan::plugins::manifest::FilesystemAccess::None => {}
         xuan::plugins::manifest::FilesystemAccess::Read => {
-            ui.label(format!(
-                "• {}",
+            bullet(
+                ui,
                 tr(
-                    "Has Xuan read any file for it, not only those in its own and temporary folders"
-                )
-            ));
+                    "Has Xuan read any file for it, not only those in its own and temporary folders",
+                ),
+            );
         }
         xuan::plugins::manifest::FilesystemAccess::Write => {
-            ui.label(format!(
-                "• {}",
-                tr("Has Xuan read and write any file or folder for it, not only its own and temporary folders")
-            ));
+            bullet(
+                ui,
+                tr(
+                    "Has Xuan read and write any file or folder for it, not only its own and temporary folders",
+                ),
+            );
         }
     }
 }

@@ -612,7 +612,7 @@ impl EditorApp {
             format!("{} — {}", develop.title, tr("Develop"))
         } else {
             self.session().map_or("Xuan".into(), |s| {
-                format!("{}{}", s.title, if s.history.dirty() { "  •" } else { "" })
+                format!("{}{}", s.title, if s.history.edited() { "  •" } else { "" })
             })
         };
         let center = pos2(ui.ctx().content_rect().center().x, rect.center().y);

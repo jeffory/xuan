@@ -89,7 +89,7 @@ the document takes effect on the next frame and is drawn at once.
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
 | reorder layers | `document/edit` `move_layer` (new) |
-| crop / resize canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas` |
+| crop / resize / rotate / trim canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas`, `rotate_canvas`, `trim`; `host/run` `crop_to_selection` |
 | several edits as one undo step (#61) | one `document/edit` with every edit; `"$n"` names a layer added earlier in the request (new) |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
@@ -137,11 +137,12 @@ like the existing ones, rather than anything specific to MCP:
   selection of layers (duplicate, delete).
 - **Copying from a pane.** A pane `button` may carry `copy` text that Xuan
   puts on the clipboard when the user clicks it, for the connection details.
-- **Canvas.** `crop`, `resize_canvas` and `resize_image`. They are accepted
+- **Canvas.** `crop`, `resize_canvas`, `resize_image`, `rotate_canvas` and `trim`. They are accepted
   only in `document/edit`, not in action results, whose images are placed on
   the canvas as it was sent.
 - **More `host/run` commands** flagged `Edit` in the command registry, where a
   menu command already makes one undoable edit without a dialog:
+  `rotate_canvas_cw`, `rotate_canvas_ccw`, `rotate_canvas_180`, `crop_to_selection`,
   `select_layer_pixels`, `select_mask_black`, `feather`, `select_subject`,
   `content_fill`, `remove_background` and `remove_flat_background`. `host/run`
   now refuses commands that are greyed out in their menu.

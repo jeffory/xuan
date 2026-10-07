@@ -398,7 +398,14 @@ impl EditorApp {
                                     ui.separator();
                                     item(ui, &items, "image_size", &mut action);
                                     item(ui, &items, "canvas_size", &mut action);
+                                    item(ui, &items, "trim", &mut action);
+                                    item(ui, &items, "crop_to_selection", &mut action);
                                     ui.separator();
+                                    ui.menu_button(tr("Rotate Canvas"), |ui| {
+                                        item(ui, &items, "rotate_canvas_cw", &mut action);
+                                        item(ui, &items, "rotate_canvas_ccw", &mut action);
+                                        item(ui, &items, "rotate_canvas_180", &mut action);
+                                    });
                                     item(ui, &items, "flip_canvas_h", &mut action);
                                     item(ui, &items, "flip_canvas_v", &mut action);
                                     plugin_items(

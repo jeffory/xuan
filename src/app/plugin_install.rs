@@ -281,7 +281,7 @@ impl EditorApp {
                             GrantAfterInstall::Kept => tr("It stays allowed: you allowed it before with the same folder, command and permissions."),
                             GrantAfterInstall::AsksAgain => tr("Its folder, command or permissions differ from what you allowed, so Xuan asks again before it runs."),
                         };
-                        ui.add(egui::Label::new(format!("• {note}")).wrap());
+                        super::plugin_dialogs::bullet(ui, note);
                         if let Some(error) = &error {
                             ui.add_space(8.0);
                             ui.add(

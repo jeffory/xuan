@@ -184,7 +184,7 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
     ui.add_enabled_ui(!d.settings.negative.enabled, |ui| white_balance(ui, d));
     if d.settings.negative.enabled {
         ui.small(tr(
-            "Use film color balance in the Negative tab instead of camera white balance.",
+            "Use film colour balance in the Negative tab instead of camera white balance.",
         ));
     }
     heading(ui, tr("Light"));
@@ -376,7 +376,7 @@ fn tones(ui: &mut egui::Ui, d: &mut Develop) {
             d.settings.curves[d.curve_channel] = [0.08, 0.28, 0.5, 0.75, 1.0];
         }
     });
-    heading(ui, tr("Color mixer"));
+    heading(ui, tr("Colour mixer"));
     widgets::PopUp::from_id_salt("raw_hsl")
         .selected_text(
             [
@@ -463,7 +463,7 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
     );
     slider(
         ui,
-        tr("Color"),
+        tr("Colour"),
         &mut d.settings.color_noise,
         0.0..=100.0,
         "%",

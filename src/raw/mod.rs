@@ -237,13 +237,13 @@ fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
                 .min_by_key(|(key, _)| **key as u16)
                 .map(|(_, value)| value)
         })
-        .context("No camera color calibration is available")?;
-    ensure!(matrix.len() == 9, "Unsupported camera color matrix");
+        .context("No camera colour calibration is available")?;
+    ensure!(matrix.len() == 9, "Unsupported camera colour matrix");
     let xyz_to_camera = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 3 + j]));
     let camera_to_rgb = pseudo_inverse(normalize(multiply(&xyz_to_camera, &SRGB_TO_XYZ_D65)));
     ensure!(
         camera_to_rgb.iter().flatten().all(|v| v.is_finite()),
-        "Invalid camera color calibration"
+        "Invalid camera colour calibration"
     );
     let as_shot = as_shot_white_balance(raw.wb_coeffs, &xyz_to_camera)?;
     let camera = develop_camera(&raw)?;

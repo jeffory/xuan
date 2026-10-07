@@ -108,6 +108,7 @@ impl EditorApp {
                 Dialog::GridSettings => self.grid_settings_dialog(ctx),
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),
                 Dialog::SelectionAmount => self.selection_amount_dialog(ctx),
+                Dialog::Trim => self.trim_dialog(ctx),
                 Dialog::Paths => self.paths_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {
@@ -426,16 +427,16 @@ impl EditorApp {
                                     )
                                     .changed();
                                 changed |=
-                                    widgets::checkbox(ui, &mut settings.colorize, tr("Colorize"))
+                                    widgets::checkbox(ui, &mut settings.colorize, tr("Colourise"))
                                         .changed();
                                 if settings.range > 0 {
                                     changed |= widgets::checkbox(
                                         ui,
                                         &mut settings.invert_range,
-                                        tr("Invert selected color range"),
+                                        tr("Invert selected colour range"),
                                     )
                                     .changed();
-                                    ui.collapsing(tr("Color range falloff"), |ui| {
+                                    ui.collapsing(tr("Colour range falloff"), |ui| {
                                         for (index, label) in [
                                             tr("Falloff start"),
                                             tr("Range start"),
@@ -506,7 +507,7 @@ impl EditorApp {
                                     )
                                     .changed();
                                 changed |=
-                                    widgets::checkbox(ui, colorize, tr("Colorize")).changed();
+                                    widgets::checkbox(ui, colorize, tr("Colourise")).changed();
                             }
                             Adjustment::Levels {
                                 black,

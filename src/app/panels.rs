@@ -26,7 +26,7 @@ macro_rules! value {
         $(,)?
     ) => {{
         let ui = &mut *($ui);
-        ui.label(RichText::new($label).color(ui.palette().muted));
+        ui.label($label);
         ui.add(
             widgets::Number::new($number)
                 .size(egui::vec2(
@@ -459,8 +459,11 @@ impl EditorApp {
         const MARGIN_X: i8 = 10;
         const MARGIN_Y: i8 = 16;
         const GAP: f32 = 5.0;
-        /// The pinned colour swatches with their separator.
-        const FOOTER_HEIGHT: f32 = 8.0 + 1.0 + 5.0 + 40.0 + 4.0;
+        // The pinned colour swatches under a separator. The footer lays itself out with no item
+        // spacing, so its height is the sum of these and nothing is clipped.
+        const FOOTER_ABOVE: f32 = 8.0;
+        const FOOTER_BELOW: f32 = 5.0;
+        const FOOTER_HEIGHT: f32 = FOOTER_ABOVE + 1.0 + FOOTER_BELOW + widgets::PALETTE_HEIGHT;
         let tools: Vec<Tool> = Tool::ALL
             .into_iter()
             .filter(|t| *t != Tool::Region || self.plugins.action.is_some())
@@ -491,9 +494,18 @@ impl EditorApp {
                             .show_separator_line(false)
                             .exact_height(FOOTER_HEIGHT)
                             .show_inside(ui, |ui| {
-                                ui.add_space(8.0);
-                                ui.separator();
-                                ui.add_space(5.0);
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.add_space(FOOTER_ABOVE);
+                                let (line, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 1.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().hline(
+                                    line.x_range(),
+                                    line.center().y,
+                                    ui.visuals().widgets.noninteractive.bg_stroke,
+                                );
+                                ui.add_space(FOOTER_BELOW);
                                 widgets::palette(ui, &mut self.brush.color, &mut self.background);
                             });
                         let output = egui::ScrollArea::vertical()
