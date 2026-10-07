@@ -315,11 +315,13 @@ fn paint_theme_button(
     let Some(resolved) = theme.resolved() else {
         return false;
     };
-    let Some(pick) = resolved.pick(kind, state, ppp) else {
+    let p = ui.palette();
+    // An image whose colours cannot be read on this title bar is swapped for the tinted
+    // symbolic icon, or for the built-in glyphs when the icon theme has none.
+    let Some(pick) = resolved.readable_pick(kind, state, ppp, p.titlebar) else {
         return false;
     };
     let (asset, highlight, dim) = (pick.asset.clone(), pick.highlight, pick.dim);
-    let p = ui.palette();
     // A monochrome close icon without a hover image of its own is drawn as Breeze does:
     // a circle in the scheme's negative colour with the glyph in the title bar colour.
     let close_fill = (kind == Kind::Close && asset.symbolic)

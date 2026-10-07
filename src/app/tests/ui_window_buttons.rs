@@ -144,3 +144,19 @@ fn changing_the_title_bar_style_updates_an_open_dialog() {
     ui.settle();
     assert!(dialog_close_side(&ui) > 0.0);
 }
+
+#[test]
+fn unreadable_theme_images_fall_back_to_the_glyphs_on_a_light_title_bar() {
+    // The fixture images are light grey (as kde-gtk-config draws them on a dark desktop). They
+    // read on Xuan's dark bar and are used; on its Light bar they would not, and with no icon
+    // theme installed the built-in glyphs are drawn instead (issue 71).
+    let (_directory, _fixture, dark) = compact(ButtonLayout::default());
+    assert_eq!(textures(&dark), 3);
+    let (_directory, _fixture, mut light) = compact(ButtonLayout::default());
+    light.app_mut().config.theme = xuan::config::Theme::Light;
+    light.settle();
+    assert_eq!(textures(&light), 0);
+    assert!(
+        light.has("Minimize window") && light.has("Maximize window") && light.has("Close window")
+    );
+}
