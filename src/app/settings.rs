@@ -147,7 +147,7 @@ impl EditorApp {
         let mut page = ctx.data(|d| d.get_temp::<SettingsPage>(page_id).unwrap_or_default());
         // One height for every page, so the window does not jump when you switch; a page that is
         // taller scrolls. In a small window it shrinks to fit rather than scrolling twice.
-        let height = (widgets::dialog_bounds(ctx).height() - 125.0).clamp(200.0, PAGE_HEIGHT);
+        let height = (widgets::dialog_bounds(ctx).height() - 145.0).clamp(200.0, PAGE_HEIGHT);
         let providers: Vec<_> = Capability::ALL
             .into_iter()
             .map(|capability| (capability, self.provider_choices(capability)))
@@ -197,7 +197,6 @@ impl EditorApp {
                     ui.separator();
                     ui.vertical(|ui| {
                         ui.set_min_width(CONTENT_WIDTH);
-                        ui.set_min_height(height);
                         if page == SettingsPage::Keyboard {
                             super::keybindings::page(
                                 ui,
@@ -264,6 +263,11 @@ impl EditorApp {
         ui.heading(tr("Appearance"));
         ui.add_space(16.0);
         settings_grid(ui, "settings_appearance", |ui| {
+            let theme_note = match config.theme {
+                Theme::System => tr("Follow your desktop's light or dark setting."),
+                Theme::Light => tr("Always use light colours."),
+                Theme::Dark => tr("Always use dark colours."),
+            };
             settings_row(
                 ui,
                 tr("Theme"),
@@ -282,11 +286,7 @@ impl EditorApp {
                             }
                         });
                 },
-                Some(match config.theme {
-                    Theme::System => tr("Follow your desktop's light or dark setting."),
-                    Theme::Light => tr("Always use light colours."),
-                    Theme::Dark => tr("Always use dark colours."),
-                }),
+                Some(theme_note),
             );
             settings_row(
                 ui,
@@ -302,6 +302,15 @@ impl EditorApp {
                     "Highlights take your desktop's accent colour instead of Xuan's blue, when it has one.",
                 )),
             );
+            let title_note = match config.title_bar {
+                TitleBar::System => tr("Use the title bar and window buttons of your desktop."),
+                TitleBar::Compact => {
+                    tr("Show the menus in the title bar, with window buttons on the right.")
+                }
+                TitleBar::MacOs => tr(
+                    "Show the menus in the title bar, with macOS-style window buttons on the left.",
+                ),
+            };
             settings_row(
                 ui,
                 tr("Window title bar"),
@@ -320,18 +329,18 @@ impl EditorApp {
                             }
                         });
                 },
-                Some(match config.title_bar {
-                    TitleBar::System => tr("Use the title bar and window buttons of your desktop."),
-                    TitleBar::Compact => {
-                        tr("Show the menus in the title bar, with window buttons on the right.")
-                    }
-                    TitleBar::MacOs => tr(
-                        "Show the menus in the title bar, with macOS-style window buttons on the left.",
-                    ),
-                }),
+                Some(title_note),
             );
             #[cfg(target_os = "linux")]
             if config.title_bar == TitleBar::Compact {
+                let buttons_note = match config.window_buttons {
+                    xuan::config::WindowButtons::Theme => tr(
+                        "Draw the buttons with the images of your desktop theme, falling back to the built-in ones when it has none.",
+                    ),
+                    xuan::config::WindowButtons::BuiltIn => {
+                        tr("Always draw the buttons that come with Xuan.")
+                    }
+                };
                 settings_row(
                     ui,
                     tr("Window buttons"),
@@ -350,14 +359,7 @@ impl EditorApp {
                                 }
                             });
                     },
-                    Some(match config.window_buttons {
-                        xuan::config::WindowButtons::Theme => tr(
-                            "Draw the buttons with the images of your desktop theme, falling back to the built-in ones when it has none.",
-                        ),
-                        xuan::config::WindowButtons::BuiltIn => {
-                            tr("Always draw the buttons that come with Xuan.")
-                        }
-                    }),
+                    Some(buttons_note),
                 );
                 if config.window_buttons == xuan::config::WindowButtons::Theme {
                     // Where the images came from is for diagnosing, so it is folded away.
@@ -500,6 +502,7 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
             },
             Some(tr("Language changes apply immediately.")),
         );
+        let offline_note = super::plugin_consent::offline_mode_note(config);
         settings_row(
             ui,
             "",
@@ -510,7 +513,7 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
                     tr("Disable plugins that use the network"),
                 );
             },
-            Some(super::plugin_consent::offline_mode_note(config)),
+            Some(offline_note),
         );
         let mut block = config.block_undeclared_network();
         let changed = settings_row(

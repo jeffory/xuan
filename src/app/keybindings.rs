@@ -300,6 +300,58 @@ pub(super) fn search_box(ui: &mut Ui, search: &mut String) {
     );
 }
 
+/// Help → Keyboard Shortcuts: the same list read-only, with the same search box. `others` are
+/// the keys and gestures the editor handles itself, as (keys, action); `/` splits several keys.
+pub(super) fn reference(
+    ui: &mut Ui,
+    keymap: &Keymap,
+    search: &mut String,
+    height: f32,
+    others: &[(&str, &str)],
+) {
+    search_box(ui, search);
+    ui.add_space(6.0);
+    let query = search.trim().to_lowercase();
+    let others: Vec<_> = others
+        .iter()
+        .filter(|(keys, action)| {
+            query.is_empty()
+                || keys.to_lowercase().contains(&query)
+                || action.to_lowercase().contains(&query)
+        })
+        .collect();
+    let any = keymap
+        .entries()
+        .iter()
+        .any(|entry| !entry.keys.is_empty() && matches_search(entry, &query));
+    if !any && others.is_empty() {
+        ui.label(RichText::new(tr("No shortcuts match.")).color(ui.palette().muted));
+        return;
+    }
+    list(
+        ui,
+        keymap,
+        &query,
+        true,
+        height,
+        |ui, entry| {
+            let keys: Vec<String> = entry.keys.iter().map(|k| k.label()).collect();
+            reference_row(ui, entry.label(), &keys);
+        },
+        |ui| {
+            if others.is_empty() {
+                return;
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new(tr("Other")).color(ui.palette().muted));
+            for (keys, action) in others {
+                let keys: Vec<String> = keys.split(" / ").map(str::to_owned).collect();
+                reference_row(ui, action, &keys);
+            }
+        },
+    );
+}
+
 /// The width of the action column, so the keys line up.
 const ACTION_WIDTH: f32 = 210.0;
 
@@ -368,7 +420,7 @@ fn action_cell(ui: &mut Ui, label: &str) {
 fn chip(ui: &mut Ui, text: &str) {
     let p = ui.palette();
     egui::Frame::new()
-        .fill(p.control)
+        .fill(p.control[0])
         .stroke(egui::Stroke::new(1.0, p.control_edge))
         .corner_radius(theme::BUTTON_RADIUS)
         .inner_margin(egui::Margin::symmetric(11, 2))

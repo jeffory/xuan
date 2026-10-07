@@ -53,31 +53,29 @@ fn settings_window_keeps_its_height_on_every_page() {
     }
 }
 
+/// The left edge of every drop-down and checkbox inside the Settings window.
+fn control_lefts(ui: &UiTest) -> Vec<f32> {
+    use egui_kittest::kittest::Queryable as _;
+    let window = window_rect(ui, "app_settings");
+    [Role::ComboBox, Role::CheckBox]
+        .into_iter()
+        .flat_map(|role| ui.harness.query_all_by_role(role))
+        .map(|node| node.rect())
+        .filter(|rect| window.contains_rect(*rect))
+        .map(|rect| rect.left())
+        .collect()
+}
+
 #[test]
 fn general_and_appearance_controls_start_at_the_same_x() {
     let (_directory, mut ui) = open_settings(Vec2::new(1280.0, 860.0), SettingsPage::General);
-    let general = [
-        rect(&ui, "Disable plugins that use the network").left(),
-        ui.harness
-            .get_by_role_and_label(Role::ComboBox, "Language")
-            .rect()
-            .left(),
-    ];
+    let mut all = control_lefts(&ui);
+    assert!(all.len() >= 3, "General has few controls: {all:?}");
     show_settings_page(&ui.ctx(), SettingsPage::Appearance);
     ui.settle();
-    let appearance = [
-        rect(&ui, "Use system accent colour").left(),
-        ui.harness
-            .get_by_role_and_label(Role::ComboBox, "Theme")
-            .rect()
-            .left(),
-        ui.harness
-            .get_by_role_and_label(Role::ComboBox, "Window title bar")
-            .rect()
-            .left(),
-        rect(&ui, "Pixel Grid").left(),
-    ];
-    let all: Vec<f32> = general.into_iter().chain(appearance).collect();
+    let appearance = control_lefts(&ui);
+    assert!(appearance.len() >= 4, "Appearance has few controls: {appearance:?}");
+    all.extend(appearance);
     for x in &all {
         assert!(
             (x - all[0]).abs() <= 1.0,
@@ -147,7 +145,7 @@ fn f1_list_scrolls_in_a_small_window_and_the_last_rows_are_reachable() {
     );
     // The Done button stays in the dialog.
     assert!(dialog.contains_rect(rect(&ui, "Done")));
-    let over = rect(&ui, "Fill Foreground").center();
+    let over = dialog.center();
     ui.harness
         .input_mut()
         .events
