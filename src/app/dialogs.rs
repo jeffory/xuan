@@ -17,67 +17,50 @@ impl EditorApp {
     fn shortcuts_dialog(&mut self, ctx: &egui::Context) {
         let mut open = true;
         let mut customize = false;
+        let mut done = false;
+        let search_id = egui::Id::new("shortcuts_search");
+        let mut search: String = ctx.data(|d| d.get_temp(search_id).unwrap_or_default());
+        // Room for the list: the dialog's bounds less the title, search box, footer and insets.
+        let height = (widgets::dialog_bounds(ctx).height() - 190.0).clamp(120.0, 480.0);
+        let others = [
+            (tr("Drag from a ruler"), tr("New guide")),
+            ("1–0", tr("Brush or layer opacity")),
+            ("Alt-click", tr("Set clone source")),
+            ("Space-drag", tr("Pan canvas")),
+            (
+                tr("Horizontal wheel / Shift+wheel"),
+                tr("Pan canvas horizontally"),
+            ),
+            (tr("Wheel over a slider or number"), tr("Adjust value")),
+            ("Enter / Escape", tr("Apply crop / Cancel gesture")),
+        ];
         widgets::Window::new(tr("Keyboard shortcuts"))
+            .id("shortcuts")
             .default_width(690.0)
             .open(&mut open)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(520.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("shortcut_grid")
-                            .spacing(vec2(35.0, 8.0))
-                            .show(ui, |ui| {
-                                for category in Category::ALL {
-                                    let mut rows = self
-                                        .keymap
-                                        .entries()
-                                        .iter()
-                                        .filter(|e| e.category() == category && !e.keys.is_empty())
-                                        .peekable();
-                                    if rows.peek().is_none() {
-                                        continue;
-                                    }
-                                    ui.label(
-                                        RichText::new(tr(category.name()))
-                                            .color(ui.palette().muted),
-                                    );
-                                    ui.end_row();
-                                    for entry in rows {
-                                        let keys: Vec<String> =
-                                            entry.keys.iter().map(|k| k.label()).collect();
-                                        ui.label(RichText::new(keys.join(" / ")).strong());
-                                        ui.label(entry.label());
-                                        ui.end_row();
-                                    }
-                                }
-                                ui.label(RichText::new(tr("Other")).color(ui.palette().muted));
-                                ui.end_row();
-                                for (key, label) in [
-                                    (tr("Drag from a ruler"), tr("New guide")),
-                                    ("1–0", tr("Brush or layer opacity")),
-                                    ("Alt-click", tr("Set clone source")),
-                                    ("Space-drag", tr("Pan canvas")),
-                                    (
-                                        tr("Horizontal wheel / Shift+wheel"),
-                                        tr("Pan canvas horizontally"),
-                                    ),
-                                    (tr("Wheel over a slider or number"), tr("Adjust value")),
-                                    ("Enter / Escape", tr("Apply crop / Cancel gesture")),
-                                ] {
-                                    ui.label(RichText::new(key).strong());
-                                    ui.label(label);
-                                    ui.end_row();
-                                }
-                            });
-                    });
-                ui.add_space(8.0);
-                customize = widgets::button(ui, tr("Customize…")).clicked();
-            });
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    super::keybindings::reference(ui, &self.keymap, &mut search, height, &others);
+                },
+                |ui, ()| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::single(tr("Done")),
+                        |ui| {
+                            customize = widgets::button(ui, tr("Customize…")).clicked();
+                        },
+                    );
+                    done = response.commit;
+                },
+            );
+        ctx.data_mut(|d| d.insert_temp(search_id, search));
         if customize {
             super::settings::show_settings_page(ctx, super::settings::SettingsPage::Keyboard);
             self.dialog = Some(Dialog::Settings);
-        } else if !open {
+        } else if !open || done {
             self.dialog = None;
+            ctx.data_mut(|d| d.remove::<String>(search_id));
         }
     }
 

@@ -19,6 +19,61 @@ pub(super) enum SettingsPage {
 
 const PAGE_ID: &str = "settings_page";
 
+/// The height of the page area, the same on every page.
+const PAGE_HEIGHT: f32 = 420.0;
+const NAV_WIDTH: f32 = 150.0;
+const CONTENT_WIDTH: f32 = 450.0;
+/// Where the controls start, on every page.
+const LABEL_WIDTH: f32 = 150.0;
+const COLUMN_GAP: f32 = 12.0;
+/// The width of the control column; descriptions wrap to it. Room is left for the scroll bar.
+const CONTROL_WIDTH: f32 = CONTENT_WIDTH - LABEL_WIDTH - COLUMN_GAP - 14.0;
+
+/// A page's rows: a label column and a control column, so the controls line up.
+fn settings_grid(ui: &mut egui::Ui, id: &str, rows: impl FnOnce(&mut egui::Ui)) {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing(egui::vec2(COLUMN_GAP, 16.0))
+        .show(ui, rows);
+}
+
+/// One row of [`settings_grid`]: `label`, then the control, then its description in muted small
+/// text under the control. A checkbox has its own label, so passes none.
+fn settings_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    control: impl FnOnce(&mut egui::Ui) -> R,
+    description: Option<&str>,
+) -> R {
+    ui.vertical(|ui| {
+        ui.set_min_width(LABEL_WIDTH);
+        ui.set_max_width(LABEL_WIDTH);
+        if !label.is_empty() {
+            ui.add_space(2.0);
+            ui.add(egui::Label::new(label).wrap());
+        }
+    });
+    let result = ui
+        .vertical(|ui| {
+            ui.set_max_width(CONTROL_WIDTH);
+            let result = control(ui);
+            if let Some(text) = description {
+                ui.add_space(4.0);
+                describe(ui, text);
+            }
+            result
+        })
+        .inner;
+    ui.end_row();
+    result
+}
+
+/// A description: muted, small, the same on every page.
+fn describe(ui: &mut egui::Ui, text: impl Into<String>) {
+    let text = egui::RichText::new(text).small().color(ui.palette().muted);
+    ui.add(egui::Label::new(text).wrap());
+}
+
 /// Shows `page` the next time Settings draws.
 pub(super) fn show_settings_page(ctx: &egui::Context, page: SettingsPage) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(PAGE_ID), page));
@@ -90,11 +145,9 @@ impl EditorApp {
         let mut editing = false;
         let page_id = egui::Id::new(PAGE_ID);
         let mut page = ctx.data(|d| d.get_temp::<SettingsPage>(page_id).unwrap_or_default());
-        let height = if page == SettingsPage::Keyboard {
-            420.0
-        } else {
-            240.0
-        };
+        // One height for every page, so the window does not jump when you switch; a page that is
+        // taller scrolls. In a small window it shrinks to fit rather than scrolling twice.
+        let height = (widgets::dialog_bounds(ctx).height() - 125.0).clamp(200.0, PAGE_HEIGHT);
         let providers: Vec<_> = Capability::ALL
             .into_iter()
             .map(|capability| (capability, self.provider_choices(capability)))
@@ -107,7 +160,7 @@ impl EditorApp {
                 ui.horizontal_top(|ui| {
                     ui.set_height(height);
                     ui.vertical(|ui| {
-                        ui.set_width(125.0);
+                        ui.set_width(NAV_WIDTH);
                         ui.set_min_height(height);
                         for (option, label, hint) in [
                             (
@@ -143,22 +196,28 @@ impl EditorApp {
                     });
                     ui.separator();
                     ui.vertical(|ui| {
-                        ui.set_min_width(465.0);
-                        match page {
-                            SettingsPage::General => general_settings(ui, &mut config),
-                            SettingsPage::Appearance => {
-                                editing = self.appearance_settings(ui, &mut config);
-                            }
-                            SettingsPage::Selection => {
-                                selection_settings(ui, &mut config, &providers)
-                            }
-                            SettingsPage::Keyboard => super::keybindings::page(
+                        ui.set_min_width(CONTENT_WIDTH);
+                        ui.set_min_height(height);
+                        if page == SettingsPage::Keyboard {
+                            super::keybindings::page(
                                 ui,
                                 &self.keymap,
                                 &mut self.key_editor,
                                 &mut config.keybindings,
-                            ),
+                            );
+                            return;
                         }
+                        egui::ScrollArea::vertical()
+                            .id_salt(("settings_scroll", page as u8))
+                            .max_height(height)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| match page {
+                                SettingsPage::General => general_settings(ui, &mut config),
+                                SettingsPage::Appearance => {
+                                    editing = self.appearance_settings(ui, &mut config);
+                                }
+                                _ => selection_settings(ui, &mut config, &providers),
+                            });
                     });
                 });
             }, |ui, ()| {
@@ -204,159 +263,174 @@ impl EditorApp {
         let mut editing = false;
         ui.heading(tr("Appearance"));
         ui.add_space(16.0);
-        ui.horizontal(|ui| {
-            ui.label(tr("Theme"));
-            widgets::PopUp::from_id_salt("settings_theme")
-                .selected_text(tr(config.theme.name()))
-                .width(180.0)
-                .show_ui(ui, |ui| {
-                    for option in Theme::ALL {
-                        widgets::menu_choice(ui, &mut config.theme, option, tr(option.name()));
-                    }
-                });
-        });
-        ui.add_space(8.0);
-        ui.add(
-            egui::Label::new(match config.theme {
-                Theme::System => tr("Follow your desktop's light or dark setting."),
-                Theme::Light => tr("Always use light colours."),
-                Theme::Dark => tr("Always use dark colours."),
-            })
-            .wrap(),
-        );
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            widgets::checkbox(
+        settings_grid(ui, "settings_appearance", |ui| {
+            settings_row(
                 ui,
-                &mut config.system_accent,
-                tr("Use system accent colour"),
+                tr("Theme"),
+                |ui| {
+                    widgets::PopUp::from_id_salt("settings_theme")
+                        .selected_text(tr(config.theme.name()))
+                        .width(180.0)
+                        .show_ui(ui, |ui| {
+                            for option in Theme::ALL {
+                                widgets::menu_choice(
+                                    ui,
+                                    &mut config.theme,
+                                    option,
+                                    tr(option.name()),
+                                );
+                            }
+                        });
+                },
+                Some(match config.theme {
+                    Theme::System => tr("Follow your desktop's light or dark setting."),
+                    Theme::Light => tr("Always use light colours."),
+                    Theme::Dark => tr("Always use dark colours."),
+                }),
             );
-        });
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(tr(
+            settings_row(
+                ui,
+                "",
+                |ui| {
+                    widgets::checkbox(
+                        ui,
+                        &mut config.system_accent,
+                        tr("Use system accent colour"),
+                    );
+                },
+                Some(tr(
                     "Highlights take your desktop's accent colour instead of Xuan's blue, when it has one.",
-                ))
-                .color(ui.palette().muted),
-            )
-            .wrap(),
-        );
-        ui.add_space(16.0);
-        ui.horizontal(|ui| {
-            ui.label(tr("Window title bar"));
-            widgets::PopUp::from_id_salt("settings_title_bar")
-                .selected_text(tr(config.title_bar.name()))
-                .width(180.0)
-                .show_ui(ui, |ui| {
-                    for option in TitleBar::ALL {
-                        widgets::menu_choice(ui, &mut config.title_bar, option, tr(option.name()));
+                )),
+            );
+            settings_row(
+                ui,
+                tr("Window title bar"),
+                |ui| {
+                    widgets::PopUp::from_id_salt("settings_title_bar")
+                        .selected_text(tr(config.title_bar.name()))
+                        .width(180.0)
+                        .show_ui(ui, |ui| {
+                            for option in TitleBar::ALL {
+                                widgets::menu_choice(
+                                    ui,
+                                    &mut config.title_bar,
+                                    option,
+                                    tr(option.name()),
+                                );
+                            }
+                        });
+                },
+                Some(match config.title_bar {
+                    TitleBar::System => tr("Use the title bar and window buttons of your desktop."),
+                    TitleBar::Compact => {
+                        tr("Show the menus in the title bar, with window buttons on the right.")
                     }
-                });
-        });
-        ui.add_space(8.0);
-        ui.add(
-            egui::Label::new(match config.title_bar {
-                TitleBar::System => tr("Use the title bar and window buttons of your desktop."),
-                TitleBar::Compact => {
-                    tr("Show the menus in the title bar, with window buttons on the right.")
-                }
-                TitleBar::MacOs => tr(
-                    "Show the menus in the title bar, with macOS-style window buttons on the left.",
-                ),
-            })
-            .wrap(),
-        );
-        #[cfg(target_os = "linux")]
-        if config.title_bar == TitleBar::Compact {
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(tr("Window buttons"));
-                widgets::PopUp::from_id_salt("settings_window_buttons")
-                    .selected_text(tr(config.window_buttons.name()))
-                    .width(180.0)
-                    .show_ui(ui, |ui| {
-                        for option in xuan::config::WindowButtons::ALL {
-                            widgets::menu_choice(
-                                ui,
-                                &mut config.window_buttons,
-                                option,
-                                tr(option.name()),
-                            );
+                    TitleBar::MacOs => tr(
+                        "Show the menus in the title bar, with macOS-style window buttons on the left.",
+                    ),
+                }),
+            );
+            #[cfg(target_os = "linux")]
+            if config.title_bar == TitleBar::Compact {
+                settings_row(
+                    ui,
+                    tr("Window buttons"),
+                    |ui| {
+                        widgets::PopUp::from_id_salt("settings_window_buttons")
+                            .selected_text(tr(config.window_buttons.name()))
+                            .width(180.0)
+                            .show_ui(ui, |ui| {
+                                for option in xuan::config::WindowButtons::ALL {
+                                    widgets::menu_choice(
+                                        ui,
+                                        &mut config.window_buttons,
+                                        option,
+                                        tr(option.name()),
+                                    );
+                                }
+                            });
+                    },
+                    Some(match config.window_buttons {
+                        xuan::config::WindowButtons::Theme => tr(
+                            "Draw the buttons with the images of your desktop theme, falling back to the built-in ones when it has none.",
+                        ),
+                        xuan::config::WindowButtons::BuiltIn => {
+                            tr("Always draw the buttons that come with Xuan.")
                         }
-                    });
-            });
-            ui.add_space(8.0);
-            ui.add(
-                egui::Label::new(match config.window_buttons {
-                    xuan::config::WindowButtons::Theme => tr(
-                        "Draw the buttons with the images of your desktop theme, falling back to the built-in ones when it has none.",
-                    ),
-                    xuan::config::WindowButtons::BuiltIn => {
-                        tr("Always draw the buttons that come with Xuan.")
-                    }
-                })
-                .wrap(),
-            );
-            if config.window_buttons == xuan::config::WindowButtons::Theme {
-                let guard = self.window_theme.lock().unwrap_or_else(|e| e.into_inner());
-                let found = guard
-                    .as_ref()
-                    .and_then(|theme| theme.resolved())
-                    .map(|resolved| resolved.describe());
-                let text = match found {
-                    Some((source, Some(hover))) => format!(
-                        "{} {}. {} {}",
-                        tr("Images from"),
-                        tr(source),
-                        tr("Hovered close button:"),
-                        hover.display()
-                    ),
-                    Some((source, None)) => format!("{} {}.", tr("Images from"), tr(source)),
-                    None => tr("No theme images were found, so the built-in buttons are drawn.")
-                        .to_string(),
-                };
-                ui.add_space(4.0);
-                ui.add(
-                    egui::Label::new(egui::RichText::new(text).color(ui.palette().muted)).wrap(),
+                    }),
                 );
+                if config.window_buttons == xuan::config::WindowButtons::Theme {
+                    // Where the images came from is for diagnosing, so it is folded away.
+                    let guard = self.window_theme.lock().unwrap_or_else(|e| e.into_inner());
+                    let found = guard
+                        .as_ref()
+                        .and_then(|theme| theme.resolved())
+                        .map(|resolved| resolved.describe());
+                    let text = match found {
+                        Some((source, Some(hover))) => format!(
+                            "{} {}. {} {}",
+                            tr("Images from"),
+                            tr(source),
+                            tr("Hovered close button:"),
+                            hover.display()
+                        ),
+                        Some((source, None)) => format!("{} {}.", tr("Images from"), tr(source)),
+                        None => {
+                            tr("No theme images were found, so the built-in buttons are drawn.")
+                                .to_string()
+                        }
+                    };
+                    settings_row(
+                        ui,
+                        "",
+                        |ui| {
+                            egui::CollapsingHeader::new(tr("Details"))
+                                .id_salt("settings_window_theme_details")
+                                .show(ui, |ui| describe(ui, text));
+                        },
+                        None,
+                    );
+                }
             }
-        }
-        ui.add_space(8.0);
-        let note = if config.title_bar.client_side() && !self.transparent_window {
-            tr("Rounded window corners appear after restarting Xuan.")
-        } else {
-            tr("Title bar changes apply immediately.")
-        };
-        ui.add(egui::Label::new(egui::RichText::new(note).color(ui.palette().muted)).wrap());
-        ui.add_space(24.0);
-        ui.horizontal(|ui| {
-            widgets::checkbox(ui, &mut config.pixel_grid, tr("Pixel Grid"));
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label(tr("Show pixel grid above"));
-            let mut percent = config.pixel_grid_percent();
-            let response = ui.add(
-                egui::DragValue::new(&mut percent)
-                    .range(PIXEL_GRID_PERCENT_RANGE)
-                    .speed(10.0)
-                    .suffix("%"),
+            settings_row(
+                ui,
+                "",
+                |_| {},
+                Some(if config.title_bar.client_side() && !self.transparent_window {
+                    tr("Rounded window corners appear after restarting Xuan.")
+                } else {
+                    tr("Title bar changes apply immediately.")
+                }),
             );
-            editing = response.dragged() || response.has_focus();
-            if percent != config.pixel_grid_percent() {
-                config.pixel_grid_percent = percent;
-            }
-        });
-        ui.add_space(8.0);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(tr(
+            settings_row(
+                ui,
+                "",
+                |ui| {
+                    widgets::checkbox(ui, &mut config.pixel_grid, tr("Pixel Grid"));
+                },
+                None,
+            );
+            settings_row(
+                ui,
+                tr("Show pixel grid above"),
+                |ui| {
+                    let mut percent = config.pixel_grid_percent();
+                    let response = ui.add(
+                        egui::DragValue::new(&mut percent)
+                            .range(PIXEL_GRID_PERCENT_RANGE)
+                            .speed(10.0)
+                            .suffix("%"),
+                    );
+                    editing = response.dragged() || response.has_focus();
+                    if percent != config.pixel_grid_percent() {
+                        config.pixel_grid_percent = percent;
+                    }
+                },
+                Some(tr(
                     "Outlines individual pixels when zoomed in past this level, between 200% and 6400%.",
-                ))
-                .color(ui.palette().muted),
-            )
-            .wrap(),
-        );
+                )),
+            );
+        });
         editing
     }
 }
@@ -369,107 +443,110 @@ fn selection_settings(
 ) {
     ui.heading(tr("Selection"));
     ui.add_space(16.0);
-    egui::Grid::new("settings_providers")
-        .num_columns(2)
-        .spacing(egui::vec2(12.0, 10.0))
-        .show(ui, |ui| {
-            for (capability, choices) in providers {
-                let current = config.providers.get(*capability).map(str::to_owned);
-                // A chosen plugin that is no longer installed still shows by its id.
-                let shown = choices.iter().find(|(id, _)| *id == current).map_or_else(
-                    || current.clone().unwrap_or_default(),
-                    |(_, label)| label.clone(),
-                );
-                ui.label(format!("{} {}", tr(capability.label()), tr("provider")));
-                let mut chosen = current.clone();
-                widgets::PopUp::from_id_salt(("settings_provider", capability.id()))
-                    .selected_text(shown)
-                    .width(240.0)
-                    .show_ui(ui, |ui| {
-                        for (id, label) in choices {
-                            widgets::menu_choice(ui, &mut chosen, id.clone(), label);
-                        }
-                    });
-                if chosen != current {
-                    config.providers.set(*capability, chosen);
-                }
-                ui.end_row();
+    settings_grid(ui, "settings_providers", |ui| {
+        for (capability, choices) in providers {
+            let current = config.providers.get(*capability).map(str::to_owned);
+            // A chosen plugin that is no longer installed still shows by its id.
+            let shown = choices.iter().find(|(id, _)| *id == current).map_or_else(
+                || current.clone().unwrap_or_default(),
+                |(_, label)| label.clone(),
+            );
+            let mut chosen = current.clone();
+            settings_row(
+                ui,
+                &format!("{} {}", tr(capability.label()), tr("provider")),
+                |ui| {
+                    widgets::PopUp::from_id_salt(("settings_provider", capability.id()))
+                        .selected_text(shown)
+                        .width(CONTROL_WIDTH.min(240.0))
+                        .show_ui(ui, |ui| {
+                            for (id, label) in choices {
+                                widgets::menu_choice(ui, &mut chosen, id.clone(), label);
+                            }
+                        });
+                },
+                None,
+            );
+            if chosen != current {
+                config.providers.set(*capability, chosen);
             }
-        });
+        }
+    });
     ui.add_space(12.0);
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(tr(
-                "Built-in uses Xuan's own classical segmentation, with no machine learning. A plugin that provides one of these, such as a segmentation model, can replace it; it runs under the plugin's usual permissions, and if it cannot run (disabled, or offline mode) the built-in algorithm is used with a notice.",
-            ))
-            .color(ui.palette().muted),
-        )
-        .wrap(),
+    describe(
+        ui,
+        tr(
+            "Built-in uses Xuan's own classical segmentation, with no machine learning. A plugin that provides one of these, such as a segmentation model, can replace it; it runs under the plugin's usual permissions, and if it cannot run (disabled, or offline mode) the built-in algorithm is used with a notice.",
+        ),
     );
 }
 
 fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
     ui.heading(tr("General"));
     ui.add_space(16.0);
-    ui.horizontal(|ui| {
-        ui.label(tr("Language"));
-        widgets::PopUp::from_id_salt("settings_language")
-            .selected_text(config.language.name())
-            .width(180.0)
-            .show_ui(ui, |ui| {
-                for option in [Language::English, Language::SimplifiedChinese] {
-                    widgets::menu_choice(ui, &mut config.language, option, option.name());
-                }
-            });
-    });
-    ui.add_space(8.0);
-    ui.label(tr("Language changes apply immediately."));
-    ui.add_space(16.0);
-    widgets::checkbox(
-        ui,
-        &mut config.disable_network_plugins,
-        tr("Disable plugins that use the network"),
-    );
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(super::plugin_consent::offline_mode_note(config))
-                .small()
-                .color(ui.palette().muted),
-        )
-        .wrap(),
-    );
-    ui.add_space(12.0);
-    let mut block = config.block_undeclared_network();
-    let changed = ui
-        .add_enabled_ui(sandbox::SUPPORTED, |ui| {
-            widgets::checkbox(
-                ui,
-                &mut block,
-                tr("Block network for plugins that don't declare it"),
-            )
-        })
-        .inner
-        .changed();
-    if changed {
-        config.block_undeclared_network = Some(block);
-    }
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new(if sandbox::SUPPORTED {
+    settings_grid(ui, "settings_general", |ui| {
+        settings_row(
+            ui,
+            tr("Language"),
+            |ui| {
+                widgets::PopUp::from_id_salt("settings_language")
+                    .selected_text(config.language.name())
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for option in [Language::English, Language::SimplifiedChinese] {
+                            widgets::menu_choice(ui, &mut config.language, option, option.name());
+                        }
+                    });
+            },
+            Some(tr("Language changes apply immediately.")),
+        );
+        settings_row(
+            ui,
+            "",
+            |ui| {
+                widgets::checkbox(
+                    ui,
+                    &mut config.disable_network_plugins,
+                    tr("Disable plugins that use the network"),
+                );
+            },
+            Some(super::plugin_consent::offline_mode_note(config)),
+        );
+        let mut block = config.block_undeclared_network();
+        let changed = settings_row(
+            ui,
+            "",
+            |ui| {
+                ui.add_enabled_ui(sandbox::SUPPORTED, |ui| {
+                    widgets::checkbox(
+                        ui,
+                        &mut block,
+                        tr("Block network for plugins that don't declare it"),
+                    )
+                })
+                .inner
+                .changed()
+            },
+            Some(if sandbox::SUPPORTED {
                 tr(
                     "Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked.",
                 )
             } else {
                 tr("Only available on Linux.")
-            })
-            .small()
-            .color(ui.palette().muted),
-        )
-        .wrap(),
-    );
-    ui.add_space(20.0);
-    ui.label(egui::RichText::new(tr("Configuration file")).color(ui.palette().muted));
-    if let Ok(path) = Config::path() {
-        ui.add(egui::Label::new(path.display().to_string()).wrap());
-    }
+            }),
+        );
+        if changed {
+            config.block_undeclared_network = Some(block);
+        }
+        if let Ok(path) = Config::path() {
+            settings_row(
+                ui,
+                tr("Configuration file"),
+                |ui| {
+                    ui.add(egui::Label::new(path.display().to_string()).wrap());
+                },
+                None,
+            );
+        }
+    });
 }

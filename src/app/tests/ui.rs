@@ -33,6 +33,9 @@ mod tabs;
 #[path = "ui_dialogs.rs"]
 mod dialogs;
 
+#[path = "ui_settings_shortcuts.rs"]
+mod settings_shortcuts;
+
 #[path = "ui_tool_rail.rs"]
 mod tool_rail;
 

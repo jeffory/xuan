@@ -1197,7 +1197,7 @@ pub fn dialog_bounds(ctx: &egui::Context) -> Rect {
 }
 
 /// Fades the body's edges into the window where more of it is scrolled out of sight.
-fn overflow_fades<R>(ui: &Ui, output: &egui::scroll_area::ScrollAreaOutput<R>) {
+pub fn overflow_fades<R>(ui: &Ui, output: &egui::scroll_area::ScrollAreaOutput<R>) {
     let view = output.inner_rect;
     let hidden = output.content_size.y - view.height();
     if hidden <= 0.5 {
