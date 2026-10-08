@@ -1658,7 +1658,7 @@ impl EditorApp {
     pub(super) fn run_command(&mut self, id: &str) {
         match self.keymap.get(id).map(|entry| &entry.kind) {
             Some(Kind::Builtin(command)) => match command.run {
-                Run::Command => self.command(id),
+                Run::Command => self.ui_command(id),
                 Run::Tool(tool) => self.set_tool(tool),
                 Run::App(run) => run(self),
             },
@@ -1666,7 +1666,7 @@ impl EditorApp {
                 let (plugin, action) = (plugin.clone(), action.clone());
                 self.start_plugin_action(&plugin, &action);
             }
-            None => self.command(id),
+            None => self.ui_command(id),
         }
     }
 
