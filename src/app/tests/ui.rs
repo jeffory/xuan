@@ -81,6 +81,9 @@ mod collage;
 #[path = "ui_camera_raw.rs"]
 mod camera_raw;
 
+#[path = "ui_text_runs.rs"]
+mod text_runs;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

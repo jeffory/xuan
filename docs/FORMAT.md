@@ -4,7 +4,7 @@ A `.xuan` file is a ZIP archive containing `manifest.json` and lossless PNG asse
 
 The document records canvas dimensions, DPI, layer order, IDs, parent groups, clipping references, opacity, blending, visibility, locks, transforms, adjustment parameters, and optional live shape styles. Layers are stored bottom to top; each folder's subtree is composited together in hierarchy order. A folder's `opacity` multiplies into every layer inside it (nested folders multiply too); folders are pass-through, so their `blend` is not used. Every version stores and renders folder opacity, so setting it needs no newer version. Masks have enabled/linked flags and an optional independent placement transform.
 
-Text layers also record an optional `text` object with UTF-8 content, font family, pixel size, RGBA color, and bold, italic, underline, and strikethrough flags. Their PNG assets preserve the rendered appearance when fonts are unavailable on another machine. Fonts are discovered from the system and are not embedded in the project; editing unavailable fonts uses the bundled Inter Variable fallback. Text is limited to 16 KiB and font sizes to 1–1024 pixels. Older version 1 files without text metadata remain supported. Text can also follow a path ([version 11](#text-on-a-path-version-11)).
+Text layers also record an optional `text` object with UTF-8 content, font family, pixel size, RGBA color, and bold, italic, underline, and strikethrough flags. Their PNG assets preserve the rendered appearance when fonts are unavailable on another machine. Fonts are discovered from the system and are not embedded in the project; editing unavailable fonts uses the bundled Inter Variable fallback. Text is limited to 16 KiB and font sizes to 1–1024 pixels. Older version 1 files without text metadata remain supported. Text can also follow a path ([version 11](#text-on-a-path-version-11)). Letters can have their own font family, colour, bold and italic ([version 17](#text-style-runs-version-17)).
 
 Transforms retain original source pixels. Optional perspective corners are normalized coordinates before affine scale/rotation/flip. Channel adjustments retain separate RGB curves/levels and seven hue ranges. Selections, current multi-selection, clipboard contents, and undo/redo snapshots are not serialized.
 
@@ -24,8 +24,9 @@ The importer reads Compositor `.comp` directory packages, format versions 1–11
 | `Gaussian Blur`, `Motion Blur`, `Add Noise` adjustments (9) | Filter layers. Settings beyond Xuan's ranges are reduced (blur radius to 100, motion distance to 200, noise amount to 100); the motion angle is negated because upstream measures it counterclockwise; Gaussian noise becomes uniform and the noise seed is not kept. Filter layers ignore blend modes and clipping |
 | `Black & White`, `Color Balance` adjustments (7) | The same adjustment layers (`blackWhiteSettings`, `colorBalanceSettings`; missing fields take upstream's defaults); the project then saves as `.xuan` version 7 |
 | `text` (content, `fontName`, `fontSize`, color) | Editable text: the PostScript name becomes a family plus bold/italic (`HelveticaNeue-BoldItalic` → Helvetica Neue, bold, italic) |
-| `text` alignment, `tracking`, `leading`, `boxSize`; `colorRuns` (10); `fontRuns` (11) | Not represented. The layer's PNG keeps the original look until the text is edited in Xuan |
-| text over 16 KiB or larger than 1024 px | Imported as plain pixels |
+| `text` `colorRuns` (10), `fontRuns` (11) | [Style runs](#text-style-runs-version-17) with each letter's colour and font (the PostScript name becomes a family plus bold/italic, as for the layer's font), so the letters keep them when the text is edited; the project then saves as `.xuan` version 17. Upstream's ranges count UTF-16 units; a range starting or ending inside a surrogate pair takes the whole letter. Runs that match the layer's own style add nothing |
+| `text` alignment, `tracking`, `leading`, `boxSize` | Not represented. The layer's PNG keeps the original look until the text is edited in Xuan |
+| text over 16 KiB or larger than 1024 px, or with more than 4,096 style runs | Imported as plain pixels |
 | Photoshop blend modes (Linear Burn, Linear Dodge (Add), Soft Light, Hard Light, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide) | The same blend modes; the project then saves as `.xuan` version 7 |
 | `effects` (stroke, shadow, color overlay, inner shadow, outer/inner glow) | Layer effects with the same settings (colors rounded to 8 bits; missing fields take upstream's defaults); the project then saves as `.xuan` version 7. Effects on folders or adjustment layers, which upstream never draws, are left out |
 | `shape` of kind `Line` | Imported as plain pixels |
@@ -54,7 +55,7 @@ The file is read in memory: the header, color mode data (skipped), image resourc
 | Other adjustment layers (Hue/Saturation, Brightness/Contrast, Vibrance, Photo Filter, Channel Mixer, …) | Left out, with the layer |
 | Solid-filled rectangle, rounded rectangle (equal radii) and ellipse shapes without a stroke (`vogk` + `SoCo`/`vscg`) | Editable live shapes |
 | Other shapes and vector content | Photoshop's pixels; solid shapes saved without pixels are drawn from their path; others are left out |
-| Horizontal type (`TySh`) without rotation, skew or warp, 1–1,024 px | Editable text (content, font, size, color, bold, italic, underline, strikethrough), keeping Photoshop's pixels until edited. Alignment, tracking, leading, paragraph boxes and further style runs are not represented |
+| Horizontal type (`TySh`) without rotation, skew or warp, 1–1,024 px | Editable text (content, font, size, color, bold, italic, underline, strikethrough, from the first style run), keeping Photoshop's pixels until edited. Later style runs (`StyleRun`'s `RunArray` and `RunLengthArray`, counted in UTF-16 units) whose font, faux bold or italic, or fill colour differ become [style runs](#text-style-runs-version-17). Alignment, tracking, leading, paragraph boxes and other differences between style runs (size, underline, …) are not represented |
 | Vertical, warped, rotated or unreadable type | Photoshop's pixels |
 | Smart objects, fill layers (solid, gradient, pattern) | Photoshop's pixels (a solid fill saved without pixels covers the canvas) |
 | Layer effects (`lfx2`): stroke (solid), drop shadow, inner shadow, outer glow, inner glow (solid color), color overlay, with the effects scale and global light angle | Editable layer effects, switched-off ones included. Effect blend modes other than Photoshop's defaults, spread/choke, noise, centered strokes, glows from the center and sizes beyond Xuan's ranges are approximated and reported. Effects on folders or layers without pixels are left out |
@@ -438,4 +439,41 @@ A document with a collage record is written as version 16, so older builds repor
 unsupported version instead of silently dropping the layout; everything else keeps the lowest
 version its content needs (1-15). A version 16 document may also carry anything the earlier
 versions can. The reader accepts versions 1-16; older files have no record and need no
+migration.
+
+## Text style runs (version 17)
+
+A layer's `text` object may have `runs`: letters drawn with another font family, colour,
+weight or slant than the layer's own, as when a selection in the Text window is given its own
+font or colour.
+
+```json
+"runs": [
+  {"start": 0, "end": 3, "family": "Helvetica", "color": [255, 0, 0, 255]},
+  {"start": 5, "end": 9, "bold": true, "italic": false}
+]
+```
+
+- `start` and `end` count Unicode scalar values (Rust `char`s, not bytes or UTF-16 units)
+  from the start of `content`; a run covers `start` up to but not including `end`.
+- `family` (a font family name, as the layer's own), `color` (RGBA, 0-255), `bold` and
+  `italic` are each optional; a missing one keeps the layer's. Letters outside every run use
+  the layer's style. Size, underline and strikethrough belong to the whole layer.
+- Runs are sorted, do not overlap, are not empty and end inside the text; there are at most
+  4,096 of them. Runs that break these rules, or a blank or over-long `family`, fail
+  validation on load and save. Xuan writes runs in normal form: each changes something the
+  layer's own style does not have, and neighbouring runs that change the same things are
+  merged.
+
+Each run is shaped with its own face, so kerning and ligatures do not join letters across
+a run boundary. Underline and strikethrough take the colour of the letters above them. When
+runs have different alpha, the text is drawn at the most opaque one and each letter faded in
+proportion, so letters of one colour that overlap do not darken each other, as for text of a
+single colour.
+
+A document with any text style run is written as version 17, so older builds report an
+unsupported version instead of dropping each letter's font and colour the next time the text
+is edited; everything else keeps the lowest version its content needs (1-16), and text without
+runs is written and drawn exactly as before. A version 17 document may also carry anything the
+earlier versions can. The reader accepts versions 1-17; older files have no runs and need no
 migration.

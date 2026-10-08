@@ -254,6 +254,13 @@ like the existing ones, rather than anything specific to MCP:
   references through untouched. When a request of several edits fails, Xuan
   names the edit (`Edit 3 (stroke): …`), which the server maps back to the
   step.
+- **Letters in their own font or colour** (#110). A word with one red letter
+  took a text layer per colour, placed side by side by hand. `create_text_layer`
+  and `set_layer` take `runs` (`start`, `end` in Unicode code points, and any of
+  `family`, `color`, `bold`, `italic`), sent as `runs` on `add_text_layer` and
+  `set_text`; new `text` keeps each unchanged letter's style, and `runs: []`
+  clears them. `get_document` lists each text layer's `runs`. Saved as `.xuan`
+  format 17.
 - **Documents.** `document/list` and `document/activate`.
 - **Undo/redo** needed nothing: they were already `Edit` commands.
 

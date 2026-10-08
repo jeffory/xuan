@@ -224,7 +224,10 @@ pub fn save_hashed(
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 16;
+const LATEST_VERSION: u32 = 17;
+
+/// The first version with style runs on text layers: letters with their own font or colour.
+const TEXT_RUNS: u32 = 17;
 
 /// The first version that records a collage's layout and cells (`document.collage`).
 const COLLAGE: u32 = 16;
@@ -251,8 +254,16 @@ const PHOTOSHOP_VIGNETTE: u32 = 12;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    // Older readers would drop the runs, and with them each letter's font and colour, the
+    // next time the text is edited.
+    if document
+        .layers
+        .iter()
+        .any(|l| l.text.as_ref().is_some_and(|t| !t.runs.is_empty()))
+    {
+        TEXT_RUNS
     // Older readers would drop the record, and with it the collage's layout.
-    if document.collage.is_some() {
+    } else if document.collage.is_some() {
         COLLAGE
     // Older readers do not know the adjustment and would refuse the whole project.
     } else if document.layers.iter().any(|l| {
@@ -1123,6 +1134,64 @@ mod tests {
             bad.layers[2] = serde_json::from_value(json).unwrap();
             bad.layers[2].pixels = pixels;
             assert!(bad.validate().is_err(), "{pointer}");
+        }
+    }
+
+    /// Letters with their own font or colour need version 17; text without runs keeps the
+    /// version it needed before and opens unchanged.
+    #[test]
+    fn text_style_runs_round_trip_as_version_17() {
+        use crate::text::{RunStyle, TextRenderer, TextStyle};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runs.xuan");
+        let mut doc = Document::new(240, 80).unwrap();
+        let mut style = TextStyle {
+            content: "APPle".into(),
+            size: 30.0,
+            ..Default::default()
+        };
+        let mut renderer = TextRenderer::default();
+        let mut layer = Layer::image("APPle", renderer.render(&style).unwrap());
+        layer.text = Some(style.clone());
+        doc.insert(layer);
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 1);
+        let old = load(&path).unwrap();
+        assert_eq!(old.layers[1].text, Some(style.clone()));
+
+        style.set_run_style(
+            0..3,
+            &RunStyle {
+                family: Some("Helvetica".into()),
+                color: Some([255, 0, 0, 255]),
+                ..Default::default()
+            },
+        );
+        doc.layers[1].pixels = Some(Arc::new(renderer.render(&style).unwrap()));
+        doc.layers[1].text = Some(style.clone());
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 17);
+        assert_eq!(
+            manifest["document"]["layers"][1]["text"]["runs"],
+            serde_json::json!([{"start": 0, "end": 3, "family": "Helvetica", "color": [255, 0, 0, 255]}])
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[1].text, Some(style));
+        assert_eq!(render::render(&loaded), render::render(&doc));
+
+        // Runs that overlap or run past the text are refused on load.
+        for runs in [
+            serde_json::json!([{"start": 0, "end": 9, "bold": true}]),
+            serde_json::json!([{"start": 0, "end": 3, "bold": true}, {"start": 2, "end": 4, "italic": true}]),
+        ] {
+            let mut json = manifest["document"]["layers"][1].clone();
+            json["text"]["runs"] = runs;
+            let mut bad = doc.clone();
+            let pixels = bad.layers[1].pixels.clone();
+            bad.layers[1] = serde_json::from_value(json).unwrap();
+            bad.layers[1].pixels = pixels;
+            assert!(bad.validate().is_err());
         }
     }
 

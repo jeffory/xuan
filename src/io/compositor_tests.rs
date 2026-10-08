@@ -369,7 +369,7 @@ fn version_9_imports_blur_and_noise_as_filter_layers() {
 }
 
 #[test]
-fn version_10_imports_text_and_counts_letter_colors() {
+fn version_10_imports_text_and_letter_colors() {
     let id = Uuid::new_v4();
     let mut record = image_layer(id, "Title");
     record["text"] = json!({
@@ -393,12 +393,90 @@ fn version_10_imports_text_and_counts_letter_colors() {
     assert_eq!(text.size, 36.0);
     assert_eq!(text.color, [255, 128, 0, 255]);
     assert!(find(&document, id).pixels.is_some());
-    assert_eq!(report.count(Dropped::TextColors), 1);
+    // "él" keeps its own colour.
+    assert_eq!(
+        text.runs,
+        vec![TextRun {
+            start: 1,
+            end: 3,
+            style: RunStyle {
+                color: Some([0, 0, 255, 255]),
+                ..Default::default()
+            },
+        }]
+    );
     assert_eq!(report.count(Dropped::TextLayout), 0);
 
     let mut older = value.clone();
     older["version"] = json!(9);
     assert!(import(&older).is_err());
+}
+
+/// Upstream counts runs in UTF-16 units; Xuan's runs count letters. Runs that start or end
+/// inside a surrogate pair take the whole letter, colour and font runs combine, and the
+/// letters keep their styles when the text is edited afterwards.
+#[test]
+fn letter_runs_map_utf16_ranges_to_letters_and_survive_editing() {
+    let id = Uuid::new_v4();
+    let mut record = image_layer(id, "Emoji");
+    record["text"] = json!({
+        "content": "a😀bcd", "fontName": "Helvetica", "fontSize": 20,
+        "red": 0, "green": 0, "blue": 0,
+        // "😀" is units 1-2: the colour run starts on its second half.
+        "colorRuns": [{"location": 2, "length": 2, "red": 0, "green": 1, "blue": 0}],
+        "fontRuns": [{"location": 3, "length": 3, "fontName": "Menlo-BoldItalic"}],
+    });
+    let (document, _) = import(&manifest(11, vec![record])).unwrap();
+    let mut text = find(&document, id).text.clone().unwrap();
+    let green = Some([0, 255, 0, 255]);
+    let menlo = RunStyle {
+        family: Some("Menlo".into()),
+        bold: Some(true),
+        italic: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(
+        text.runs,
+        vec![
+            TextRun {
+                start: 1,
+                end: 2,
+                style: RunStyle {
+                    color: green,
+                    ..Default::default()
+                },
+            },
+            TextRun {
+                start: 2,
+                end: 3,
+                style: RunStyle {
+                    color: green,
+                    ..menlo.clone()
+                },
+            },
+            TextRun {
+                start: 3,
+                end: 5,
+                style: menlo.clone(),
+            },
+        ]
+    );
+    text.validate().unwrap();
+    text.replace_content("a😀bcd!".into());
+    assert_eq!(text.runs.last().unwrap().end, 6);
+    assert_eq!(text.letter_style(5).family, "Menlo");
+    assert_eq!(text.letter_style(1).color, [0, 255, 0, 255]);
+    crate::text::TextRenderer::default().render(&text).unwrap();
+
+    // A run that changes nothing from the layer's own style adds none.
+    let mut record = image_layer(id, "Plain");
+    record["text"] = json!({
+        "content": "abc", "fontName": "Helvetica-Bold", "red": 1, "green": 0, "blue": 0,
+        "colorRuns": [{"location": 0, "length": 3, "red": 1, "green": 0, "blue": 0}],
+        "fontRuns": [{"location": 0, "length": 1, "fontName": "Helvetica-Bold"}],
+    });
+    let (document, _) = import(&manifest(11, vec![record])).unwrap();
+    assert!(find(&document, id).text.as_ref().unwrap().runs.is_empty());
 }
 
 #[test]
@@ -451,8 +529,29 @@ fn version_11_imports_text_fonts_effects_and_photoshop_blend_modes() {
         (text.family.as_str(), text.bold),
         ("Times New Roman", false)
     );
-    assert_eq!(report.count(Dropped::TextFonts), 1);
-    assert_eq!(report.count(Dropped::TextColors), 1);
+    // "Mixed" is red and "faces" in Menlo, which Menlo-Regular names.
+    let run = |start, end, style| TextRun { start, end, style };
+    assert_eq!(
+        text.runs,
+        vec![
+            run(
+                0,
+                5,
+                RunStyle {
+                    color: Some([255, 0, 0, 255]),
+                    ..Default::default()
+                }
+            ),
+            run(
+                6,
+                11,
+                RunStyle {
+                    family: Some("Menlo".into()),
+                    ..Default::default()
+                }
+            ),
+        ]
+    );
     assert_eq!(report.count(Dropped::TextLayout), 1);
     // Effects come across with their settings; the hidden shadow stays hidden.
     assert_eq!(report.count(Dropped::LayerEffect), 0);
@@ -519,8 +618,6 @@ fn summarizes_what_the_import_left_out_in_each_language() {
     let every = [
         Dropped::LayerEffect,
         Dropped::TextLayout,
-        Dropped::TextColors,
-        Dropped::TextFonts,
         Dropped::TextAsPixels,
         Dropped::LineShape,
         Dropped::FilterSettings,

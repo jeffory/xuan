@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, ensure};
 use cosmic_text::{
-    Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style, SwashCache, Weight, Wrap,
+    Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Stretch, Style, SwashCache, Weight,
+    Wrap,
 };
 use image::{Pixel, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,12 @@ use crate::{
     document::{Layer, Point, Transform, validate_size},
     vector::{ArcLength, FillRule, VectorPath},
 };
+
+#[path = "text_runs.rs"]
+mod runs;
+
+use runs::valid_family;
+pub use runs::{LetterStyle, MAX_TEXT_RUNS, RunStyle, TextRun};
 
 pub const MAX_TEXT_BYTES: usize = 16_384;
 const FALLBACK_FAMILY: &str = "Inter Variable";
@@ -30,6 +37,9 @@ pub struct TextStyle {
     /// The path the text follows instead of a box (format 11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<TextPath>,
+    /// Letters drawn with another font or colour than the layer's (format 17).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<TextRun>,
 }
 
 impl Default for TextStyle {
@@ -44,6 +54,7 @@ impl Default for TextStyle {
             underline: false,
             strikethrough: false,
             path: None,
+            runs: Vec::new(),
         }
     }
 }
@@ -54,10 +65,7 @@ impl TextStyle {
             self.content.len() <= MAX_TEXT_BYTES,
             "Text is limited to 16 KiB"
         );
-        ensure!(
-            !self.family.trim().is_empty() && self.family.len() <= 1024,
-            "Invalid font family"
-        );
+        ensure!(valid_family(&self.family), "Invalid font family");
         ensure!(
             self.size.is_finite() && (1.0..=1024.0).contains(&self.size),
             "Font size must be between 1 and 1024 pixels"
@@ -65,7 +73,7 @@ impl TextStyle {
         if let Some(path) = &self.path {
             path.validate()?;
         }
-        Ok(())
+        self.validate_runs()
     }
 
     pub fn layer_name(&self) -> String {
@@ -266,6 +274,16 @@ pub struct PathGlyph {
     /// Pixels of synthetic bold and whether italic is synthesised.
     embolden: i32,
     italic: bool,
+    /// The colour of the glyph's letter.
+    color: [u8; 4],
+}
+
+/// How the glyphs of one span of shaped text are drawn.
+#[derive(Clone, Copy, Debug)]
+struct SpanDraw {
+    color: [u8; 4],
+    bold: bool,
+    italic: bool,
 }
 
 /// One font database per editor, loaded lazily when the text tool is first used.
@@ -305,8 +323,27 @@ impl TextRenderer {
             .any(|name| name.eq_ignore_ascii_case(family))
     }
 
-    /// Shape `style`'s text with the closest face of its family, unwrapped.
-    fn shape(&mut self, style: &TextStyle) -> Result<Buffer> {
+    /// The closest available face of `family` for the weight and slant asked for: resolving
+    /// it first matters, as requesting a missing weight or style directly can substitute an
+    /// unrelated family during shaping.
+    fn face(&self, family: &str, bold: bool, italic: bool) -> Result<(Weight, Style, Stretch)> {
+        self.fonts
+            .db()
+            .query(&cosmic_text::fontdb::Query {
+                families: &[Family::Name(family)],
+                weight: if bold { Weight::BOLD } else { Weight::NORMAL },
+                style: if italic { Style::Italic } else { Style::Normal },
+                ..Default::default()
+            })
+            .and_then(|id| self.fonts.db().face(id))
+            .map(|face| (face.weight, face.style, face.stretch))
+            .ok_or_else(|| anyhow::anyhow!("The font could not be loaded"))
+    }
+
+    /// Shape `style`'s text, each of its spans with the closest face of its family,
+    /// unwrapped. Glyphs carry their span's index in `metadata`, which indexes the returned
+    /// list of how each span is drawn.
+    fn shape(&mut self, style: &TextStyle) -> Result<(Buffer, Vec<SpanDraw>)> {
         style.validate()?;
         let line_height = style.size * 1.3;
         ensure!(
@@ -314,52 +351,71 @@ impl TextRenderer {
                 <= crate::document::MAX_SIDE as f32,
             "Text is too tall"
         );
-        let family = if self.has_family(&style.family) {
-            &style.family
-        } else {
-            FALLBACK_FAMILY
+        let spans = style.spans();
+        let mut faces = Vec::with_capacity(spans.len());
+        let mut draws = Vec::with_capacity(spans.len());
+        for (_, run) in &spans {
+            let letter = style.resolve(run);
+            let family = if self.has_family(&letter.family) {
+                letter.family
+            } else {
+                FALLBACK_FAMILY.into()
+            };
+            let face = self.face(&family, letter.bold, letter.italic)?;
+            faces.push((family, face));
+            draws.push(SpanDraw {
+                color: letter.color,
+                bold: letter.bold,
+                italic: letter.italic,
+            });
+        }
+        let attrs = |index: usize| {
+            let (family, (weight, slant, stretch)) = &faces[index];
+            Attrs::new()
+                .family(Family::Name(family))
+                .weight(*weight)
+                .style(*slant)
+                .stretch(*stretch)
+                .metadata(index)
         };
-        // Resolve the closest available face first. Requesting a missing weight or
-        // style directly can substitute an unrelated family during shaping.
-        let face = self
-            .fonts
-            .db()
-            .query(&cosmic_text::fontdb::Query {
-                families: &[Family::Name(family)],
-                weight: if style.bold {
-                    Weight::BOLD
-                } else {
-                    Weight::NORMAL
-                },
-                style: if style.italic {
-                    Style::Italic
-                } else {
-                    Style::Normal
-                },
-                ..Default::default()
-            })
-            .and_then(|id| self.fonts.db().face(id))
-            .ok_or_else(|| anyhow::anyhow!("The font could not be loaded"))?;
-        let attrs = Attrs::new()
-            .family(Family::Name(family))
-            .weight(face.weight)
-            .style(face.style)
-            .stretch(face.stretch);
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(style.size, line_height));
         buffer.set_wrap(&mut self.fonts, Wrap::None);
         buffer.set_size(&mut self.fonts, None, None);
-        buffer.set_text(&mut self.fonts, &style.content, &attrs, Shaping::Advanced);
-        Ok(buffer)
+        if spans.len() == 1 {
+            buffer.set_text(
+                &mut self.fonts,
+                &style.content,
+                &attrs(0),
+                Shaping::Advanced,
+            );
+        } else {
+            buffer.set_rich_text(
+                &mut self.fonts,
+                spans
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (bytes, _))| (&style.content[bytes.clone()], attrs(index))),
+                &attrs(0),
+                Shaping::Advanced,
+                None,
+            );
+        }
+        Ok((buffer, draws))
     }
 
     /// Whether a glyph needs synthetic italic, and how many pixels of synthetic bold, for a
     /// family without those faces.
-    fn synthetic(&self, glyph: &cosmic_text::LayoutGlyph, style: &TextStyle) -> (bool, i32) {
+    fn synthetic(
+        &self,
+        glyph: &cosmic_text::LayoutGlyph,
+        draw: SpanDraw,
+        size: f32,
+    ) -> (bool, i32) {
         let face = self.fonts.db().face(glyph.font_id);
-        let italic = style.italic && face.is_some_and(|face| face.style == Style::Normal);
+        let italic = draw.italic && face.is_some_and(|face| face.style == Style::Normal);
         // Families without a bold face still have a visible bold style.
-        let embolden = if style.bold && face.is_some_and(|face| face.weight < Weight::SEMIBOLD) {
-            (style.size * 0.025).ceil() as i32
+        let embolden = if draw.bold && face.is_some_and(|face| face.weight < Weight::SEMIBOLD) {
+            (size * 0.025).ceil() as i32
         } else {
             0
         };
@@ -369,7 +425,10 @@ impl TextRenderer {
     /// Draw `style`'s text in a box, line by line, ignoring any path.
     pub fn render(&mut self, style: &TextStyle) -> Result<RgbaImage> {
         let line_height = style.size * 1.3;
-        let buffer = self.shape(style)?;
+        let (buffer, draws) = self.shape(style)?;
+        let draw_of = |glyph: &cosmic_text::LayoutGlyph| {
+            draws.get(glyph.metadata).copied().unwrap_or(draws[0])
+        };
 
         let mut right = 1.0_f32;
         let mut bottom = line_height;
@@ -389,7 +448,8 @@ impl TextRenderer {
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
                 let mut physical = glyph.physical((0.0, 0.0), 1.0);
-                let (italic, embolden) = self.synthetic(glyph, style);
+                let draw = draw_of(glyph);
+                let (italic, embolden) = self.synthetic(glyph, draw, style.size);
                 if italic {
                     physical.cache_key.flags |= cosmic_text::CacheKeyFlags::FAKE_ITALIC;
                 }
@@ -403,7 +463,7 @@ impl TextRenderer {
                     right = right.max(x + placement.width as i32 + embolden);
                     bottom = bottom.max(y + placement.height as i32);
                 }
-                glyphs.push((physical, y, embolden));
+                glyphs.push((physical, y, embolden, draw.color));
             }
             let thickness = (style.size / 16.0).max(1.0);
             for (enabled, y) in [
@@ -413,41 +473,68 @@ impl TextRenderer {
                 if enabled && run.line_w > 0.0 {
                     top = top.min(y.floor() as i32);
                     bottom = bottom.max((y + thickness).ceil() as i32);
-                    rules.push((run.line_w, y, thickness));
+                    // Each stretch of the rule takes the colour of the letters it runs under.
+                    let colors: Vec<_> = if draws.len() > 1 {
+                        run.glyphs
+                            .iter()
+                            .map(|g| (g.x, g.x + g.w, draw_of(g).color))
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    rules.push((run.line_w, y, thickness, colors));
                 }
             }
         }
         let (width, height) = ((right - left) as u32, (bottom - top) as u32);
         validate_size(width, height)?;
         let mut pixels = RgbaImage::new(width, height);
-        let color = Color::rgb(style.color[0], style.color[1], style.color[2]);
-        for (glyph, baseline, embolden) in glyphs {
+        // Ink is drawn opaque at the most opaque colour's alpha and faded once at the end, so
+        // overlapping glyphs of one colour do not darken each other; letters in a less opaque
+        // colour are drawn fainter in proportion.
+        let opaque = draws.iter().map(|draw| draw.color[3]).max().unwrap_or(255);
+        let fade = |coverage: u8, alpha: u8| {
+            if alpha == opaque {
+                coverage
+            } else {
+                ((u16::from(coverage) * u16::from(alpha) + u16::from(opaque) / 2)
+                    / u16::from(opaque)) as u8
+            }
+        };
+        for (glyph, baseline, embolden, [r, g, b, a]) in glyphs {
+            let color = Color::rgb(r, g, b);
             cache.with_pixels(&mut self.fonts, glyph.cache_key, color, |x, y, color| {
+                let mut rgba = color.as_rgba();
+                rgba[3] = fade(rgba[3], a);
                 for offset in 0..=embolden {
                     if let Some(pixel) = pixels.get_pixel_mut_checked(
                         (glyph.x + x + offset - left) as u32,
                         (baseline + y - top) as u32,
                     ) {
-                        pixel.blend(&Rgba(color.as_rgba()));
+                        pixel.blend(&Rgba(rgba));
                     }
                 }
             });
         }
-        for (width, y, thickness) in rules {
-            for py in y.floor() as i32..(y + thickness).ceil() as i32 {
-                for px in 0..width.ceil() as i32 {
+        for (width, y, thickness, colors) in rules {
+            for px in 0..width.ceil() as i32 {
+                let centre = px as f32 + 0.5;
+                let [r, g, b, a] = colors
+                    .iter()
+                    .find(|(x0, x1, _)| (*x0..*x1).contains(&centre))
+                    .map_or(draws[0].color, |(_, _, color)| *color);
+                for py in y.floor() as i32..(y + thickness).ceil() as i32 {
                     let coverage = (width - px as f32).min(1.0)
                         * ((y + thickness).min(py as f32 + 1.0) - y.max(py as f32));
-                    let mut rgba = color.as_rgba();
-                    rgba[3] = (coverage * 255.0).round() as u8;
+                    let alpha = fade((coverage * 255.0).round() as u8, a);
                     pixels
                         .get_pixel_mut((px - left) as u32, (py - top) as u32)
-                        .blend(&Rgba(rgba));
+                        .blend(&Rgba([r, g, b, alpha]));
                 }
             }
         }
         for pixel in pixels.pixels_mut() {
-            pixel[3] = ((u16::from(pixel[3]) * u16::from(style.color[3]) + 127) / 255) as u8;
+            pixel[3] = ((u16::from(pixel[3]) * u16::from(opaque) + 127) / 255) as u8;
         }
         Ok(pixels)
     }
@@ -475,7 +562,7 @@ impl TextRenderer {
             PathSide::Left => measure,
             PathSide::Right => measure.reversed(),
         };
-        let buffer = self.shape(style)?;
+        let (buffer, draws) = self.shape(style)?;
         let anchor = f64::from(options.start_offset) / 100.0 * measure.length();
         let spacing = f64::from(options.letter_spacing);
         let end_scale = f64::from(options.size_end.unwrap_or(style.size) / style.size);
@@ -555,7 +642,8 @@ impl TextRenderer {
                         ));
                     }
                 }
-                let (italic, embolden) = self.synthetic(glyph, style);
+                let draw = draws.get(glyph.metadata).copied().unwrap_or(draws[0]);
+                let (italic, embolden) = self.synthetic(glyph, draw, style.size);
                 placed.push(PathGlyph {
                     index,
                     on_path: point,
@@ -569,6 +657,7 @@ impl TextRenderer {
                     rules,
                     embolden,
                     italic,
+                    color: draw.color,
                 });
             }
         }
@@ -601,6 +690,7 @@ impl TextRenderer {
                 bitmap: None,
                 rules: BezPath::new(),
                 opacity: placed.opacity,
+                color: placed.color,
             };
             if let Some(commands) = cache.get_outline_commands(&mut self.fonts, key) {
                 let outline = outline_path(commands);
@@ -663,8 +753,8 @@ impl TextRenderer {
         );
         validate_size(width, height)?;
         let mut pixels = RgbaImage::new(width, height);
-        let [r, g, b, a] = style.color;
         for ink in inks {
+            let [r, g, b, a] = ink.color;
             let alpha = f32::from(a) / 255.0 * ink.opacity;
             ink.draw(&mut pixels, (left, top), [r, g, b], alpha)?;
         }
@@ -679,6 +769,7 @@ struct Ink {
     bitmap: Option<(cosmic_text::SwashImage, Affine)>,
     rules: BezPath,
     opacity: f32,
+    color: [u8; 4],
 }
 
 impl Ink {
@@ -973,6 +1064,204 @@ mod tests {
         let mut layer = Layer::image(style.layer_name(), renderer.render(&style).unwrap());
         layer.text = Some(style);
         layer
+    }
+
+    /// A renderer with the bundled Inter and the UI's Droid Sans Fallback, two families
+    /// whose letters differ.
+    fn two_fonts() -> TextRenderer {
+        let mut db = cosmic_text::fontdb::Database::new();
+        db.load_font_data(include_bytes!("../assets/fonts/InterVariable.ttf").to_vec());
+        db.load_font_data(include_bytes!("../assets/fonts/DroidSansFallbackFull.ttf").to_vec());
+        TextRenderer::with_fonts(FontSystem::new_with_locale_and_db("en-US".into(), db))
+    }
+
+    const DROID: &str = "Droid Sans Fallback";
+    const RED: [u8; 4] = [255, 0, 0, 255];
+
+    /// "APPle" with "APP" red in Droid Sans Fallback and "le" black in Inter.
+    fn apple() -> TextStyle {
+        let mut style = TextStyle {
+            content: "APPle".into(),
+            size: 40.0,
+            underline: true,
+            ..Default::default()
+        };
+        style.set_run_style(
+            0..3,
+            &RunStyle {
+                family: Some(DROID.into()),
+                color: Some(RED),
+                ..Default::default()
+            },
+        );
+        style
+    }
+
+    /// The colour of the most opaque pixel in columns `columns`, above `rows_above`.
+    fn ink(pixels: &RgbaImage, columns: std::ops::Range<u32>, rows_above: u32) -> Rgba<u8> {
+        let mut best = Rgba([0, 0, 0, 0]);
+        for x in columns {
+            for y in 0..rows_above.min(pixels.height()) {
+                let pixel = *pixels.get_pixel(x, y);
+                if pixel[3] > best[3] {
+                    best = pixel;
+                }
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn runs_draw_letters_in_their_own_font_and_colour() {
+        let mut renderer = two_fonts();
+        assert!(renderer.has_family(DROID));
+        let style = apple();
+        let pixels = renderer.render(&style).unwrap();
+        let plain = TextStyle {
+            runs: Vec::new(),
+            ..style.clone()
+        };
+        let plain_pixels = renderer.render(&plain).unwrap();
+        assert_ne!(pixels, plain_pixels);
+        // The red letters are on the left, the black ones on the right, and the underline
+        // under each takes its letters' colour.
+        let (width, height) = pixels.dimensions();
+        let glyph_rows = (style.size * 1.05) as u32;
+        assert_eq!(ink(&pixels, 0..width / 4, glyph_rows), Rgba(RED));
+        assert_eq!(
+            ink(&pixels, width - width / 6..width, glyph_rows),
+            Rgba([0, 0, 0, 255])
+        );
+        let rule = (0..height)
+            .rev()
+            .find(|&y| pixels.get_pixel(width / 10, y)[3] == 255)
+            .unwrap();
+        assert!(rule > glyph_rows - 4, "{rule}");
+        assert_eq!(*pixels.get_pixel(width / 10, rule), Rgba(RED));
+        assert_eq!(*pixels.get_pixel(width - 3, rule), Rgba([0, 0, 0, 255]));
+        // Each span is shaped with its own family: Droid Sans Fallback has no Latin letters,
+        // so its space is the one glyph here it draws itself.
+        let family_of = |renderer: &TextRenderer, glyph: &cosmic_text::LayoutGlyph| {
+            renderer.fonts.db().face(glyph.font_id).unwrap().families[0]
+                .0
+                .clone()
+        };
+        let mut spaced = TextStyle {
+            content: "a b".into(),
+            ..Default::default()
+        };
+        spaced.set_run_style(
+            1..2,
+            &RunStyle {
+                family: Some(DROID.into()),
+                ..Default::default()
+            },
+        );
+        let (buffer, draws) = renderer.shape(&spaced).unwrap();
+        assert_eq!(draws.len(), 3);
+        let line = buffer.layout_runs().next().unwrap();
+        let families: Vec<_> = line
+            .glyphs
+            .iter()
+            .map(|g| family_of(&renderer, g))
+            .collect();
+        assert_eq!(families, [FALLBACK_FAMILY, DROID, FALLBACK_FAMILY]);
+        let metadata: Vec<_> = line.glyphs.iter().map(|g| g.metadata).collect();
+        assert_eq!(metadata, [0, 1, 2]);
+
+        // A run that only makes letters bold or italic changes them.
+        let mut bold = plain.clone();
+        bold.set_run_style(
+            3..5,
+            &RunStyle {
+                bold: Some(true),
+                italic: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_ne!(renderer.render(&bold).unwrap(), plain_pixels);
+    }
+
+    #[test]
+    fn runs_with_their_own_alpha_fade_only_their_letters() {
+        let mut renderer = two_fonts();
+        let mut style = TextStyle {
+            content: "AAAA".into(),
+            size: 40.0,
+            ..Default::default()
+        };
+        style.set_run_style(
+            0..2,
+            &RunStyle {
+                color: Some([255, 0, 0, 100]),
+                ..Default::default()
+            },
+        );
+        let pixels = renderer.render(&style).unwrap();
+        let width = pixels.width();
+        let left = ink(&pixels, 0..width / 3, pixels.height());
+        let right = ink(&pixels, width - width / 3..width, pixels.height());
+        assert_eq!(left, Rgba([255, 0, 0, 100]));
+        assert_eq!(right, Rgba([0, 0, 0, 255]));
+        // With the layer itself translucent and the run opaque, the run is the more opaque.
+        style.set_style_all(&RunStyle {
+            color: Some([0, 0, 0, 60]),
+            ..Default::default()
+        });
+        style.set_run_style(
+            0..2,
+            &RunStyle {
+                color: Some(RED),
+                ..Default::default()
+            },
+        );
+        let pixels = renderer.render(&style).unwrap();
+        assert_eq!(ink(&pixels, 0..width / 3, pixels.height()), Rgba(RED));
+        assert_eq!(
+            ink(&pixels, width - width / 3..width, pixels.height()),
+            Rgba([0, 0, 0, 60])
+        );
+    }
+
+    #[test]
+    fn text_on_a_path_keeps_letter_styles() {
+        let mut renderer = two_fonts();
+        let style = apple();
+        let path = VectorPath::parse("M 0 100 Q 150 0 300 100").unwrap();
+        let glyphs = renderer.layout_on_path(&style, &path).unwrap();
+        let colors: Vec<_> = glyphs.iter().map(|g| g.color).collect();
+        assert_eq!(colors, vec![RED, RED, RED, [0, 0, 0, 255], [0, 0, 0, 255]]);
+        let (pixels, _) = renderer.render_on_path(&style, &path).unwrap();
+        assert!(pixels.pixels().any(|p| *p == Rgba(RED)));
+        assert!(pixels.pixels().any(|p| *p == Rgba([0, 0, 0, 255])));
+        let plain = TextStyle {
+            runs: Vec::new(),
+            ..style
+        };
+        assert_ne!(renderer.render_on_path(&plain, &path).unwrap().0, pixels);
+    }
+
+    #[test]
+    fn runs_survive_editing_the_layer_and_a_project_round_trip() {
+        let mut renderer = two_fonts();
+        let mut layer = layer(&mut renderer, apple());
+        let mut style = layer.text.clone().unwrap();
+        style.replace_content("APPle pie".into());
+        assert_eq!(style.runs.len(), 1);
+        let pixels = renderer.render(&style).unwrap();
+        update_layer(&mut layer, style.clone(), pixels).unwrap();
+        let mut document = Document::new(400, 100).unwrap();
+        document.insert(layer);
+        let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        io::save(&document, &path).unwrap();
+        let loaded = io::load(&path).unwrap();
+        assert_eq!(loaded.active().unwrap().text, Some(style.clone()));
+        assert_eq!(render::render(&loaded), render::render(&document));
+        // Redrawn after loading, it looks the same as before saving.
+        assert_eq!(
+            renderer.render(&style).unwrap(),
+            **loaded.active().unwrap().pixels.as_ref().unwrap()
+        );
     }
 
     #[test]
