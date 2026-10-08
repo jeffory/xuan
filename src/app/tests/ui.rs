@@ -75,6 +75,9 @@ mod adjustment_presets;
 #[path = "ui_collage.rs"]
 mod collage;
 
+#[path = "ui_text_runs.rs"]
+mod text_runs;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

@@ -1330,3 +1330,4 @@ Units & Rulers	单位与标尺
 Units for the rulers and for resolutions	标尺和分辨率的单位
 What View → Rulers measure in. Print units use the document's resolution; percent is of its width or height. Right-click a ruler to change it there.	视图 → 标尺使用的单位。打印单位按文档分辨率换算；百分比相对于文档的宽度或高度。也可右键单击标尺来更改。
 How New Canvas, Canvas Size and Image Size show resolutions. Width and Height have their own Units menu in those dialogs.	新建画布、画布大小和图像大小中分辨率的显示方式。宽度和高度在这些对话框中有各自的单位菜单。
+Font, colour, bold and italic change the {} selected letters	字体、颜色、粗体和斜体只更改所选的 {} 个字符
