@@ -24,6 +24,8 @@ mod layer_effects_dialog;
 mod layers;
 mod layout_grid;
 mod levels_controls;
+#[cfg(target_os = "macos")]
+mod macos;
 mod menus;
 mod navigator;
 mod palette;
@@ -61,6 +63,8 @@ mod trim_dialog;
 mod widgets;
 #[cfg(target_os = "linux")]
 mod window_theme;
+
+pub use chrome::native_window;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -584,6 +588,10 @@ pub struct EditorApp {
     transparent_window: bool,
     /// The decorations last requested from the window system.
     decorated: bool,
+    /// The system draws the window buttons and resize edges (macOS), see [`chrome::NATIVE_BUTTONS`].
+    native_buttons: bool,
+    /// The title bar style the window was created with.
+    startup_title_bar: xuan::config::TitleBar,
     button_layout: chrome::ButtonLayout,
     /// Window-button artwork from the desktop theme, loaded on first use.
     #[cfg(target_os = "linux")]
@@ -637,6 +645,8 @@ impl EditorApp {
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
+        #[cfg(target_os = "macos")]
+        macos::install_quit_handler(&cc.egui_ctx);
         // Install the native renderer before the first RAW worker is started.
         xuan::gpu::scope(app.processor.clone(), || {
             for path in paths {
@@ -780,6 +790,9 @@ impl EditorApp {
             command_trace: None,
             transparent_window: true,
             decorated: false,
+            // Tests see the Linux and Windows title bar wherever they run.
+            native_buttons: chrome::NATIVE_BUTTONS && !cfg!(test),
+            startup_title_bar: xuan::config::TitleBar::Compact,
             button_layout: Default::default(),
             #[cfg(target_os = "linux")]
             window_theme: Default::default(),
@@ -1811,7 +1824,14 @@ impl eframe::App for EditorApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if macos::take_quit_request() {
+            self.request_quit();
+        }
         self.show(ctx);
+        // After the frame, so an edit it made is already counted when macOS asks to quit.
+        #[cfg(target_os = "macos")]
+        macos::set_needs_prompt(self.quit_needs_prompt());
     }
 }
 

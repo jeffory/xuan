@@ -3988,9 +3988,15 @@ fn view_menu_pixel_grid_toggle_applies_and_persists() {
 
 #[test]
 fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
+    use super::chrome::{ButtonLayout, WindowButton::*};
     let (context, mut app) = app();
-    // The traffic lights sit at fixed positions on the left.
-    app.config.title_bar = xuan::config::TitleBar::MacOs;
+    // Buttons on the left, as GNOME's `close,minimize,maximize:` puts them: 30 px each after
+    // the title bar's 14 px margin.
+    app.config.title_bar = xuan::config::TitleBar::Compact;
+    app.button_layout = ButtonLayout {
+        left: vec![Close, Minimize, Maximize],
+        right: vec![],
+    };
     frame(&context, &mut app);
     frame(&context, &mut app);
     let output = pointer_frame(
@@ -4050,7 +4056,7 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
         egui::Modifiers::NONE,
     );
 
-    for (x, maximize) in [(61.0, true), (41.0, false)] {
+    for (x, maximize) in [(89.0, true), (59.0, false)] {
         pointer_frame(
             &context,
             &mut app,
@@ -4086,14 +4092,14 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     pointer_frame(
         &context,
         &mut app,
-        Pos2::new(21.0, 20.0),
+        Pos2::new(29.0, 20.0),
         Some(true),
         egui::Modifiers::NONE,
     );
     let output = pointer_frame(
         &context,
         &mut app,
-        Pos2::new(21.0, 20.0),
+        Pos2::new(29.0, 20.0),
         Some(false),
         egui::Modifiers::NONE,
     );
@@ -4109,6 +4115,102 @@ fn click(context: &egui::Context, app: &mut EditorApp, pos: Pos2) -> egui::FullO
     pointer_frame(context, app, pos, None, egui::Modifiers::NONE);
     pointer_frame(context, app, pos, Some(true), egui::Modifiers::NONE);
     pointer_frame(context, app, pos, Some(false), egui::Modifiers::NONE)
+}
+
+/// macOS: the system draws the window buttons and resize edges, Xuan's menus sit beside them.
+#[test]
+fn native_window_buttons_keep_the_system_decorations_and_leave_room() {
+    use xuan::config::TitleBar;
+    let (context, mut app) = app();
+    let file = layer_label(&context, &mut app, "File");
+    app.native_buttons = true;
+    app.set_startup_title_bar(TitleBar::Compact);
+    frame(&context, &mut app);
+    let output = frame(&context, &mut app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    assert_eq!(app.window_corner_radius(&context), 0);
+    // The menus move right, past the system's buttons.
+    let moved = layer_label(&context, &mut app, "File");
+    assert!(
+        moved.x > file.x + 50.0 && moved.x > 75.0,
+        "{file:?} -> {moved:?}"
+    );
+    // Xuan draws no window buttons and no resize edges of its own. (Later clicks come quickly
+    // enough to be a double-click on the title, which zooms.)
+    let output = click(&context, &mut app, Pos2::new(1221.0, 16.0));
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Maximized(_)
+    )));
+    for x in [1191.0, 1251.0, 29.0] {
+        let output = click(&context, &mut app, Pos2::new(x, 16.0));
+        assert!(!has_command(&output, |c| matches!(
+            c,
+            egui::ViewportCommand::Close | egui::ViewportCommand::Minimized(_)
+        )));
+    }
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::BeginResize(_)
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    // The title still moves the window.
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(950.0, 20.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(970.0, 25.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::StartDrag
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(970.0, 25.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    // The full-size content view stays until Xuan restarts, and so does the title bar.
+    app.config.title_bar = TitleBar::System;
+    let output = frame(&context, &mut app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    assert_eq!(layer_label(&context, &mut app, "File"), moved);
 }
 
 #[test]
@@ -4250,6 +4352,25 @@ fn gnome_button_layout_picks_sides_and_order() {
     );
     assert_eq!(ButtonLayout::parse_gnome("'appmenu:'"), None);
     assert_eq!(ButtonLayout::parse_gnome(""), None);
+}
+
+/// macOS quits at once unless this says the quit flow would ask first (`macos.rs`).
+#[test]
+fn quitting_needs_a_prompt_only_with_unsaved_changes() {
+    let (context, mut app) = app();
+    assert!(!app.quit_needs_prompt());
+    app.dimensions = [16, 16];
+    app.new_document();
+    frame(&context, &mut app);
+    assert!(!app.quit_needs_prompt());
+    assert!(app.begin_quit());
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    assert!(app.quit_needs_prompt());
+    // Once the prompt lets the window close, nothing is left to ask.
+    app.allow_close = true;
+    assert!(!app.quit_needs_prompt());
+    assert!(app.begin_quit());
 }
 
 #[test]

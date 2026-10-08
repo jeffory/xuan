@@ -13,7 +13,7 @@ use xuan::{
     selection::{self, SelectionMode},
 };
 
-use super::{EditorApp, Gesture, Tool, TransformDrag};
+use super::{EditorApp, Gesture, Tool, TransformDrag, commands::ctrl_or_cmd};
 
 /// Colour of the Clone Stamp source marker: dimmer than the pointer's outline.
 pub(super) const CLONE_SOURCE_COLOR: Color32 = Color32::from_rgba_premultiplied(190, 190, 190, 190);
@@ -1203,7 +1203,7 @@ impl EditorApp {
                 self.select_ai_box_at(point);
             }
             Tool::Move => {
-                if self.auto_select || modifiers.ctrl {
+                if self.auto_select || ctrl_or_cmd(modifiers) {
                     self.select_canvas_layer(point, modifiers.shift, false);
                 }
             }
@@ -1421,7 +1421,7 @@ impl EditorApp {
                     .iter()
                     .position(|unit| t.point(*unit).distance(point) * session.zoom < 9.0)
                 {
-                    handle = Some(if modifiers.ctrl && index % 2 == 0 {
+                    handle = Some(if ctrl_or_cmd(modifiers) && index % 2 == 0 {
                         TransformDrag::Distort(index / 2)
                     } else {
                         TransformDrag::Scale(index)
@@ -1442,7 +1442,7 @@ impl EditorApp {
         }
         let mut kind = handle.unwrap_or(TransformDrag::Move);
         if tool == Tool::Move
-            && (self.auto_select || modifiers.ctrl)
+            && (self.auto_select || ctrl_or_cmd(modifiers))
             && handle.is_none()
             && !self.select_canvas_layer(point, modifiers.shift, true)
         {
@@ -1452,7 +1452,9 @@ impl EditorApp {
         // A marquee, shape or crop starts on a nearby Snap To target; Ctrl starts it freely.
         let snapping = self
             .snap_options()
-            .filter(|_| !modifiers.ctrl && matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop))
+            .filter(|_| {
+                !ctrl_or_cmd(modifiers) && matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop)
+            })
             .map(|options| (options, self.displayed_guides()));
         let session = &mut self.sessions[self.current];
         if tool == Tool::Move && session.document.active.is_none() {
@@ -1464,14 +1466,14 @@ impl EditorApp {
         }
         if tool.is_selection()
             && !modifiers.shift
-            && (!modifiers.alt || modifiers.ctrl)
+            && (!modifiers.alt || ctrl_or_cmd(modifiers))
             && session
                 .document
                 .selection
                 .as_ref()
                 .is_some_and(|m| selection::coverage(Some(m), point) > 0.0)
         {
-            if modifiers.ctrl {
+            if ctrl_or_cmd(modifiers) {
                 if let Some((pixels, origin)) = operations::copy_pixels(&session.document, false) {
                     if !modifiers.alt
                         && let Err(error) = paint::fill(&mut session.document, [0; 4], true, false)
@@ -1612,7 +1614,7 @@ impl EditorApp {
         let snapping = if shaped || moving {
             self.snap_lines.clear();
             self.snap_options()
-                .filter(|_| !modifiers.ctrl)
+                .filter(|_| !ctrl_or_cmd(modifiers))
                 .map(|options| (options, self.displayed_guides()))
         } else {
             None

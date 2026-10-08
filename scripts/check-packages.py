@@ -284,6 +284,7 @@ def check_source(temporary):
         "packaging/AppRun",
         ".github/workflows/linux.yml",
         ".github/workflows/windows.yml",
+        ".github/workflows/macos.yml",
         "plugins/mcp-server/Cargo.toml",
         "plugins/mcp-server/Cargo.lock",
         "plugins/mcp-server/plugin.toml",

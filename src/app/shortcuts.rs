@@ -1,7 +1,10 @@
 //! Key dispatch. Commands and their bindings live in the registry (`commands.rs`); this runs the
 //! command a key press is bound to, then handles the keys the editor keeps for itself.
 
-use super::{EditorApp, Tool, commands::Chord};
+use super::{
+    EditorApp, Tool,
+    commands::{Chord, ctrl_or_cmd},
+};
 use egui::{Event, InputState, Key, Modifiers};
 use xuan::i18n::tr;
 
@@ -143,7 +146,7 @@ impl EditorApp {
             }
             return;
         }
-        if modifiers.ctrl {
+        if ctrl_or_cmd(modifiers) {
             return;
         }
         if pressed(Key::Escape) {

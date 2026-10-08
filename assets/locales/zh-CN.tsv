@@ -12,9 +12,10 @@ System	系统
 Compact	紧凑
 Use the title bar and window buttons of your desktop.	使用桌面环境提供的标题栏和窗口按钮。
 Show the menus in the title bar, with window buttons on the right.	在标题栏中显示菜单，窗口按钮位于右侧。
-Show the menus in the title bar, with macOS-style window buttons on the left.	在标题栏中显示菜单，macOS 风格的窗口按钮位于左侧。
+Show the menus in the title bar, beside the window buttons.	在标题栏中显示菜单，位于窗口按钮旁边。
 Rounded window corners appear after restarting Xuan.	重新启动 Xuan 后显示圆角窗口。
 Title bar changes apply immediately.	标题栏更改立即生效。
+Title bar changes apply after restarting Xuan.	重新启动 Xuan 后应用标题栏更改。
 Window buttons	窗口按钮
 Match desktop theme	跟随桌面主题
 Draw the buttons with the images of your desktop theme, falling back to the built-in ones when it has none.	使用桌面主题的图像绘制按钮；主题没有提供时使用内置按钮。

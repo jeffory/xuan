@@ -18,6 +18,7 @@ use xuan::{document::Point, operations};
 use super::{
     EditorApp,
     canvas::near_transform_handle,
+    commands::ctrl_or_cmd,
     pixel_grid::align_to_pixel,
     rulers::RulerLayout,
     snap::{self, SnapOptions, SnapTargets},
@@ -120,7 +121,7 @@ impl EditorApp {
                 i.pointer.latest_pos(),
                 i.pointer.press_origin(),
                 i.pointer.primary_down(),
-                i.modifiers.ctrl,
+                ctrl_or_cmd(i.modifiers),
                 i.key_down(egui::Key::Space),
             )
         });

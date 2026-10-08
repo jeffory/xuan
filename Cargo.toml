@@ -63,6 +63,11 @@ libc = "0.2"
 wgpu = { version = "27.0.1", default-features = false, features = ["dx12"] }
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "27.0.1", default-features = false, features = ["metal"] }
+# Asking before macOS quits (src/app/macos.rs). Already built for arboard and rfd.
+objc2 = "0.6"
+
 [target.'cfg(unix)'.dependencies]
 # Killing a plugin's process group.
 rustix = { version = "1", features = ["process"] }

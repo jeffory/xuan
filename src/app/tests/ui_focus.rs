@@ -131,10 +131,11 @@ fn a_document_tab_shows_focus() {
 fn a_number_field_shows_focus() {
     let mut ui = UiTest::with_document();
     ui.press(Modifiers::COMMAND, Key::N);
+    // The dialog opens with its Width field focused; the tool options behind it come first.
     let field = ui
         .harness
         .get_all_by_role(Role::SpinButton)
-        .next()
+        .find(|node| node.is_focused())
         .expect("the New canvas dialog's width field");
     let rect = field.rect();
     field.focus();

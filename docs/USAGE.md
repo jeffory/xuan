@@ -497,10 +497,10 @@ It also sets the **Window title bar**:
 - **Compact** (the default): the menus share the title bar with minimize,
   maximize, and close buttons on the right. Under GNOME the buttons follow the
   desktop's `button-layout` setting for side and order, and under KDE Plasma the
-  `ButtonsOnLeft` / `ButtonsOnRight` of `kwinrc`.
+  `ButtonsOnLeft` / `ButtonsOnRight` of `kwinrc`. On macOS the menus sit beside the
+  system's own window buttons instead.
 - **System**: the desktop draws the title bar, window buttons, and resize borders,
   and the menus sit in a normal bar below it.
-- **macOS**: the menus share the title bar with macOS-style buttons on the left.
 
 On Linux, **Window buttons** (shown for Compact) chooses the artwork:
 
@@ -525,9 +525,11 @@ On Linux, **Window buttons** (shown for Compact) chooses the artwork:
 - **Built-in** always draws the monochrome buttons that come with Xuan. They are
   also used when the theme provides no usable images, and on Windows.
 
-The title bar changes immediately. Compact and macOS windows have rounded corners,
-which need a window created with transparency: after switching from **System**,
-corners stay square until Xuan restarts.
+The title bar changes immediately. Compact windows have rounded corners, which need
+a window created with transparency: after switching from **System**, corners stay
+square until Xuan restarts. On macOS a title bar change applies after Xuan restarts.
+Earlier releases also offered a drawn macOS-style title bar; a configuration file
+that still names it (`title_bar = "macos"`) opens with Compact.
 
 The **Pixel grid** settings control the overlay: zoomed in past a threshold (500% by default), Xuan outlines individual image
 pixels with a thin, semi-transparent grey grid that stays visible on light and
@@ -567,7 +569,7 @@ The file is created when a preference changes. For example:
 
 ```toml
 language = "zh-CN" # Use "en" for English (the default).
-title_bar = "system" # Or "compact" (the default) or "macos".
+title_bar = "system" # Or "compact" (the default).
 window_buttons = "theme" # Compact buttons: "theme" (the default on Linux) or "builtin".
 rulers = true # View → Rulers (off by default).
 show_grid = false # View → Show → Grid.

@@ -2,6 +2,8 @@
 
 These are the default shortcuts. Each one can be changed, removed or added to in **Edit → Settings… → Keyboard Shortcuts**; the menus and **Help → Keyboard Shortcuts** (F1) always show the ones in effect. **Ctrl+K** opens the command palette, which finds any command by name and shows its shortcut.
 
+On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) and the menus show Mac symbols, such as ⇧⌘S for Save As. Control+Tab still switches tabs, and ⌘H hides Xuan there, so Show Transform Controls has no default shortcut on a Mac.
+
 <!-- BEGIN GENERATED from the command registry (src/app/commands.rs); refresh with XUAN_UPDATE_DOCS=1 cargo test documented_shortcuts -->
 | Category | Command | Shortcut |
 | --- | --- | --- |
