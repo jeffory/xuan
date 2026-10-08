@@ -662,6 +662,73 @@ pub fn crop(document: &mut Document, start: Point, end: Point) -> Result<()> {
     Ok(())
 }
 
+/// Perspective Crop: straightens `quad` (corners on the canvas, top-left first, clockwise) into an
+/// upright `width` × `height` canvas in one step. Every layer and mask placement, of any kind,
+/// takes the projective map composed with its own transform, as the Move tool's Distort does,
+/// so no pixels are resampled or discarded and text and shapes stay editable. A folder, or an
+/// adjustment or filter layer without a mask, draws nothing of its own and is fitted to the new
+/// canvas if the map cannot take it. Paths follow the map point by point (a path reaching the
+/// vanishing line is removed); guides, which would no longer run straight across, and the
+/// selection are cleared. Returns how many paths were removed.
+pub fn perspective_crop(
+    document: &mut Document,
+    quad: crate::crop::perspective::Quad,
+    [width, height]: [u32; 2],
+) -> Result<usize> {
+    use crate::crop::perspective;
+    if let Err(problem) = perspective::check(quad) {
+        anyhow::bail!(tr(problem.message()).to_owned());
+    }
+    validate_size(width, height)?;
+    let map = perspective::rectify(quad, [width, height])
+        .context(tr(perspective::Degenerate::TooSmall.message()))?;
+    let refused = |name: &str| {
+        tr("“{}” reaches the vanishing line of the crop's perspective, so it cannot be straightened. Move the corners closer together, or make the layer smaller first.")
+            .replace("{}", name)
+    };
+    let mut layers = document.layers.clone();
+    for layer in &mut layers {
+        let draws_nothing = layer.group
+            || ((layer.adjustment.is_some() || layer.filter.is_some() || layer.pixels.is_none())
+                && layer.text.is_none()
+                && layer.shape.is_none()
+                && layer.raw.is_none()
+                && layer.mask.is_none());
+        layer.transform = match perspective::map_transform(layer.transform, map) {
+            Some(transform) => transform,
+            None if draws_nothing => Transform::new(width, height),
+            None => anyhow::bail!(refused(&layer.name)),
+        };
+        if let Some(placement) = layer.mask.as_ref().and_then(|m| m.placement) {
+            let mapped =
+                perspective::map_transform(placement, map).with_context(|| refused(&layer.name))?;
+            if let Some(mask) = &mut layer.mask {
+                mask.placement = Some(mapped);
+            }
+        }
+    }
+    document.layers = layers;
+    let before = document.paths.len();
+    document.paths.retain_mut(|path| {
+        let mut behind = false;
+        let mapped = path.d.mapped(|p| {
+            let point = Point::new(p.x as f32, p.y as f32);
+            let mapped = perspective::map_point(map, point).unwrap_or_else(|| {
+                behind = true;
+                point
+            });
+            kurbo::Point::new(f64::from(mapped.x), f64::from(mapped.y))
+        });
+        path.d = mapped;
+        !behind
+    });
+    document.guides.clear();
+    document.width = width;
+    document.height = height;
+    document.selection = None;
+    Ok(before - document.paths.len())
+}
+
 pub fn image_size(document: &mut Document, width: u32, height: u32) -> Result<()> {
     validate_size(width, height)?;
     let old = Transform::new(document.width, document.height);
@@ -1786,6 +1853,235 @@ mod tests {
         let selection = document.selection.as_ref().unwrap();
         assert_eq!(selection.dimensions(), (4, 6));
         assert_eq!(selection::bounds(selection), Some((4 - 1, 5, 4, 6)));
+    }
+
+    /// The corners of a page photographed at an angle, in a 320 × 340 photo.
+    const PHOTO_PAGE: [Point; 4] = [
+        Point::new(62.0, 38.0),
+        Point::new(231.0, 52.0),
+        Point::new(262.0, 318.0),
+        Point::new(31.0, 300.0),
+    ];
+
+    /// A transform that stretches its layer over `quad` of a `width` × `height` canvas.
+    fn onto(quad: [Point; 4], width: u32, height: u32) -> Transform {
+        Transform {
+            warp: Some(quad.map(|p| Point::new(p.x / width as f32, p.y / height as f32))),
+            ..Transform::new(width, height)
+        }
+    }
+
+    /// Where the dark line nearest `at` lies along `pixels` (the darkness-weighted middle of the
+    /// samples within 6 pixels of it).
+    fn line_centre(pixels: impl Fn(u32) -> u8, at: u32) -> f32 {
+        let (mut sum, mut weight) = (0.0, 0.0);
+        for i in at - 6..=at + 6 {
+            let dark = 255.0 - f32::from(pixels(i));
+            sum += (i as f32 + 0.5) * dark;
+            weight += dark;
+        }
+        sum / weight
+    }
+
+    #[test]
+    fn perspective_crop_straightens_a_photographed_grid() {
+        // The page: white, with 2-pixel black lines every 40 pixels each way.
+        let page = RgbaImage::from_fn(200, 280, |x, y| {
+            let line = |v: u32| v % 40 == 39 || (v.is_multiple_of(40) && v > 0);
+            if line(x) || line(y) {
+                Rgba([0, 0, 0, 255])
+            } else {
+                Rgba([255, 255, 255, 255])
+            }
+        });
+        // Photograph it: warp it onto the quad with a known homography and flatten that to pixels.
+        let mut scene = Document::new(320, 340).unwrap();
+        let mut sheet = Layer::image("Page", page);
+        sheet.transform = onto(PHOTO_PAGE, 320, 340);
+        scene.insert(sheet);
+        let photo = render::render_pixels(&scene, 320, 340);
+
+        let mut document = Document::new(320, 340).unwrap();
+        document.insert(Layer::image("Photo", photo));
+        assert_eq!(
+            crate::crop::perspective::output_size(PHOTO_PAGE),
+            [201, 266]
+        );
+        let removed = perspective_crop(&mut document, PHOTO_PAGE, [200, 280]).unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!((document.width, document.height), (200, 280));
+        let result = render::render_pixels(&document, 200, 280);
+        let gray = |x: u32, y: u32| result.get_pixel(x, y)[0];
+        let near_a_line = |v: u32| (v + 6) % 40 <= 12;
+        // The page fills the canvas to its corners.
+        for (x, y) in [(2, 2), (197, 2), (197, 277), (2, 277)] {
+            assert_eq!(result.get_pixel(x, y)[3], 255, "({x}, {y})");
+        }
+        // Each vertical line is straight and in place, within a pixel, from top to bottom.
+        for column in [40, 80, 120, 160] {
+            for y in (3..277).filter(|&y| !near_a_line(y)) {
+                let centre = line_centre(|x| gray(x, y), column);
+                assert!(
+                    (centre - column as f32).abs() < 1.0,
+                    "line {column} at row {y}: {centre}"
+                );
+            }
+        }
+        for row in [40, 80, 120, 160, 200, 240] {
+            for x in (3..197).filter(|&x| !near_a_line(x)) {
+                let centre = line_centre(|y| gray(x, y), row);
+                assert!(
+                    (centre - row as f32).abs() < 1.0,
+                    "line {row} at column {x}: {centre}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn perspective_crop_keeps_layers_masks_and_paths_registered() {
+        let mut document = Document::new(320, 340).unwrap();
+        let mut turned = solid("Turned", 100, 80, [255, 0, 0, 255]);
+        turned.transform = Transform {
+            x: 80.0,
+            y: 90.0,
+            width: 100.0,
+            height: 80.0,
+            rotation: 15.0,
+            ..Transform::new(1, 1)
+        };
+        let mut warped = solid("Warped", 40, 40, [0, 0, 255, 255]);
+        warped.transform = Transform {
+            x: 120.0,
+            y: 110.0,
+            width: 60.0,
+            height: 50.0,
+            flip_y: true,
+            warp: Some([
+                Point::new(0.1, 0.0),
+                Point::new(1.0, 0.1),
+                Point::new(0.9, 1.0),
+                Point::new(0.0, 0.8),
+            ]),
+            ..Transform::new(1, 1)
+        };
+        // A mask placed apart from its layer.
+        let mut mask = crate::document::Mask::white();
+        mask.linked = false;
+        mask.placement = Some(Transform {
+            x: 130.0,
+            y: 100.0,
+            width: 30.0,
+            height: 30.0,
+            ..Transform::new(1, 1)
+        });
+        warped.mask = Some(mask);
+        let mut text = solid("Text", 50, 20, [0, 0, 0, 255]);
+        text.text = Some(crate::text::TextStyle {
+            content: "Hello".into(),
+            ..Default::default()
+        });
+        text.transform.x = 100.0;
+        text.transform.y = 200.0;
+        let mut adjustment = Layer::blank("Invert", 320, 340);
+        adjustment.adjustment = Some(crate::document::Adjustment::Invert);
+        let mut folder = Layer::blank("Folder", 320, 340);
+        folder.group = true;
+        for layer in [turned, warped, text, adjustment, folder] {
+            document.insert(layer);
+        }
+        document.paths.push(crate::vector::NamedPath::new(
+            "Edge",
+            crate::vector::VectorPath::parse("M 62 38 L 231 52").unwrap(),
+        ));
+        document.guides.push(crate::layout::Guide::new(
+            crate::layout::GuideAxis::Vertical,
+            50.0,
+        ));
+        document.selection = Some(Arc::new(GrayImage::new(320, 340)));
+        let before = document.clone();
+        perspective_crop(&mut document, PHOTO_PAGE, [210, 297]).unwrap();
+        let map = crate::crop::perspective::rectify(PHOTO_PAGE, [210, 297]).unwrap();
+        // A point on the canvas shows the same place of each layer and mask as before.
+        for point in [
+            Point::new(120.0, 120.0),
+            Point::new(140.0, 130.0),
+            Point::new(150.0, 140.0),
+            Point::new(110.0, 205.0),
+        ] {
+            let moved = map.map(point);
+            for (old, new) in before.layers.iter().zip(&document.layers) {
+                assert_eq!(old.id, new.id);
+                let (a, b) = (old.transform.inverse(point), new.transform.inverse(moved));
+                assert!(a.distance(b) < 1e-3, "{}: {a:?} != {b:?}", old.name);
+                if let (Some(a), Some(b)) = (
+                    old.mask.as_ref().and_then(|m| m.placement),
+                    new.mask.as_ref().and_then(|m| m.placement),
+                ) {
+                    assert!(a.inverse(point).distance(b.inverse(moved)) < 1e-3);
+                }
+            }
+        }
+        assert!(find(&document, "Text").text.is_some());
+        assert!(find(&document, "Turned").transform.warp.is_some());
+        // Paths follow; guides and the selection go.
+        let edge = document.paths[0].d.bounds().unwrap();
+        assert!(edge.x0.abs() < 1e-2 && edge.y0.abs() < 1e-2);
+        assert!((edge.x1 - 210.0).abs() < 1e-2 && edge.y1.abs() < 1e-2);
+        assert!(document.guides.is_empty());
+        assert!(document.selection.is_none());
+        assert_eq!((document.width, document.height), (210, 297));
+    }
+
+    #[test]
+    fn perspective_crop_refuses_degenerate_corners_and_layers_at_the_vanishing_line() {
+        let mut document = Document::new(600, 400).unwrap();
+        let bow = [PHOTO_PAGE[0], PHOTO_PAGE[1], PHOTO_PAGE[3], PHOTO_PAGE[2]];
+        let error = perspective_crop(&mut document, bow, [100, 100]).unwrap_err();
+        assert!(error.to_string().contains("sides cross"), "{error}");
+        // The sides meet just above the top, inside the canvas.
+        let steep = [
+            Point::new(250.0, 100.0),
+            Point::new(350.0, 100.0),
+            Point::new(600.0, 400.0),
+            Point::new(0.0, 400.0),
+        ];
+        let mut tall = solid("Tall", 600, 400, [9, 9, 9, 255]);
+        tall.transform.y = -300.0;
+        tall.transform.height = 700.0;
+        document.insert(tall);
+        document.paths.push(crate::vector::NamedPath::new(
+            "Sky",
+            crate::vector::VectorPath::parse("M 10 0 L 20 10").unwrap(),
+        ));
+        let before = format!(
+            "{:?}",
+            document
+                .layers
+                .iter()
+                .map(|l| l.transform)
+                .collect::<Vec<_>>()
+        );
+        let error = perspective_crop(&mut document, steep, [300, 300]).unwrap_err();
+        assert!(error.to_string().contains("“Tall”"), "{error}");
+        assert_eq!(
+            before,
+            format!(
+                "{:?}",
+                document
+                    .layers
+                    .iter()
+                    .map(|l| l.transform)
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!((document.width, document.height), (600, 400));
+        // Without it, the blank layer is fitted to the canvas and the path past the line goes.
+        document.layers.retain(|l| l.name != "Tall");
+        let removed = perspective_crop(&mut document, steep, [300, 300]).unwrap();
+        assert_eq!(removed, 1);
+        assert!(document.paths.is_empty());
+        assert_eq!(document.layers[0].transform, Transform::new(300, 300));
     }
 
     #[test]
