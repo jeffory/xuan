@@ -748,9 +748,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "native GPU timing; run explicitly with --nocapture"]
+    #[ignore = "native GPU timing; run with XUAN_BENCHMARK=1 and --nocapture"]
     fn benchmark_tiled_composition() {
         use std::time::Instant;
+        // `scripts/check.sh --gpu` runs every ignored GPU test; this one only when asked.
+        if std::env::var_os("XUAN_BENCHMARK").is_none() {
+            eprintln!("set XUAN_BENCHMARK=1 to time tiled composition");
+            return;
+        }
         let gpu = processor();
         let (width, height) = (9000, 6000);
         let mut document = Document::new(width, height).unwrap();
