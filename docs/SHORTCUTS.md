@@ -136,6 +136,8 @@ Use **File → Open Image from Clipboard** to open copied pixels in a new docume
 
 For a marquee selection, Ctrl+C copies the active layer's selected pixels. If no layer is active, it copies the visible canvas within the selection. Ctrl+V places those pixels on a new layer at their original position. Ctrl+Shift+C always copies the visible composite; Ctrl+X requires an active layer. Successful copies show the copied dimensions in the status bar.
 
+Without a selection, Ctrl+C copies the selected layers whole: folders with their contents, clipped and adjustment layers, editable text, masks, effects, blend mode and opacity. Other apps get the layers' flattened pixels. Ctrl+V pastes the layers complete, as one undo step, until something else is copied: in the same document just above the originals, in another document centred on the canvas, and inside the selected folder when one is selected. Pixel layers clipped to a layer that was not copied keep their clipped look in another document, baked into their pixels.
+
 Shift with a selection adds coverage, Alt subtracts, and Shift+Alt intersects. Drag inside a selection to move its outline; hold Ctrl to move selected pixels, or Ctrl+Alt to duplicate them. The contextual header also offers explicit selection modes.
 
 Drag from the top or left ruler (View → Rulers) to create a guide. With the Move tool, drag a guide to move it, or drop it on a ruler to delete it; Escape cancels the drag. Hold Ctrl while dragging layers, handles, marquees, shapes, selections or guides to bypass View → Snap To.
