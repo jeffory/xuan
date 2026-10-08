@@ -4,6 +4,7 @@ mod ai_regions;
 mod canvas;
 mod chrome;
 mod clipboard;
+mod color_lookup;
 mod color_range;
 mod commands;
 mod crop_tool;
@@ -1416,6 +1417,16 @@ impl EditorApp {
             target: None,
         });
         self.dialog = Some(Dialog::Effect);
+    }
+
+    /// Run what an adjustment menu chose.
+    fn choose_adjustment(&mut self, choice: menus::AdjustmentChoice, as_layer: bool) {
+        match choice {
+            menus::AdjustmentChoice::Settings(adjustment) => {
+                self.start_adjustment(adjustment, as_layer)
+            }
+            menus::AdjustmentChoice::ColorLookup => self.start_color_lookup(as_layer),
+        }
     }
 
     fn start_filter(&mut self, filter: Filter) {

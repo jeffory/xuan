@@ -1239,3 +1239,14 @@ The crop's sides cross. Drag the corners so they go round the shape in order.	�
 The crop's corners must make a convex shape, with no corner pointing inwards or lying on a straight side.	裁剪的角点必须构成凸形，不能有角点向内凹或位于直边上。
 The crop's corners are too close together to straighten.	裁剪的角点彼此太近，无法校正。
 “{}” reaches the vanishing line of the crop's perspective, so it cannot be straightened. Move the corners closer together, or make the layer smaller first.	“{}”到达了裁剪透视的消失线，因此无法校正。请将角点移近，或先缩小该图层。
+Colour Lookup	颜色查找
+Colour Lookup…	颜色查找…
+Colour lookup tables	颜色查找表
+Could not load the colour lookup table	无法载入颜色查找表
+Open an image before adding a colour lookup table	请先打开图像，再添加颜色查找表
+1D table, {} entries	1D 查找表，{} 个条目
+3D table, {} points a side	3D 查找表，每边 {} 个点
+Interpolation	插值
+Tetrahedral	四面体
+Trilinear	三线性
+Load Table…	载入查找表…

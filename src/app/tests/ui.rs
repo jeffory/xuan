@@ -57,6 +57,9 @@ mod crop;
 #[path = "ui_perspective_crop.rs"]
 mod perspective_crop;
 
+#[path = "ui_color_lookup.rs"]
+mod color_lookup;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

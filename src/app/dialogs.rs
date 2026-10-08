@@ -797,7 +797,15 @@ impl EditorApp {
                                 changed |= widgets::checkbox(ui, monochrome, tr("Monochromatic"))
                                     .changed();
                             }
-                            Adjustment::Invert | Adjustment::ColorLookup { .. } => {}
+                            Adjustment::Invert => {}
+                            Adjustment::ColorLookup {
+                                name,
+                                interpolation,
+                                table,
+                            } => {
+                                changed |=
+                                    super::color_lookup::controls(ui, name, interpolation, table);
+                            }
                             Adjustment::BlackWhite {
                                 weights,
                                 tint,
