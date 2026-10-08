@@ -11,21 +11,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::{GridSettings, SnapSettings};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Language {
-    #[default]
-    #[serde(rename = "en")]
-    English,
-    #[serde(rename = "zh-CN")]
-    SimplifiedChinese,
+/// An interface language, saved as its tag (`en`, `zh-CN`): the name of its file in
+/// `assets/locales`. A tag this build has no locale for is kept, so the choice survives running
+/// an older or newer build, and the interface shows English.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub struct Language(String);
+
+impl Default for Language {
+    fn default() -> Self {
+        Self::english()
+    }
+}
+
+impl From<String> for Language {
+    /// Accepts any spelling of a tag (`zh_cn`); English for text that is not one.
+    fn from(tag: String) -> Self {
+        Self(crate::i18n::canonical_tag(&tag).unwrap_or_else(|| crate::i18n::ENGLISH.into()))
+    }
+}
+
+impl From<Language> for String {
+    fn from(language: Language) -> Self {
+        language.0
+    }
 }
 
 impl Language {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::English => "English",
-            Self::SimplifiedChinese => "简体中文",
-        }
+    pub fn new(tag: &str) -> Self {
+        tag.to_owned().into()
+    }
+
+    pub fn english() -> Self {
+        Self(crate::i18n::ENGLISH.into())
+    }
+
+    pub fn tag(&self) -> &str {
+        &self.0
+    }
+
+    /// The language's name for itself, or its tag when this build does not have it.
+    pub fn name(&self) -> &str {
+        crate::i18n::native_name(self).unwrap_or(&self.0)
     }
 }
 
@@ -550,7 +577,7 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
             Err(error) => return Err(error.into()),
         };
-        table.insert("language".into(), toml::Value::try_from(self.language)?);
+        table.insert("language".into(), toml::Value::try_from(&self.language)?);
         table.insert("theme".into(), toml::Value::try_from(self.theme)?);
         table.insert(
             "system_accent".into(),
@@ -682,7 +709,7 @@ mod tests {
         let path = dir.path().join("xuan/config.toml");
         assert_eq!(Config::load(&path).unwrap(), Config::default());
         let chinese = Config {
-            language: Language::SimplifiedChinese,
+            language: Language::new("zh-CN"),
             title_bar: TitleBar::System,
             pixel_grid: false,
             pixel_grid_percent: 1200,
@@ -812,7 +839,49 @@ mod tests {
         assert!(Config::load(&path).is_err());
         assert!(Config::default().save(&path).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "language = [broken");
-        assert!(toml::from_str::<Config>("language = 'unknown'").is_err());
+        assert!(toml::from_str::<Config>("language = 5").is_err());
+    }
+
+    #[test]
+    fn languages_load_by_tag_in_any_spelling() {
+        // Releases with a fixed list of languages saved the same tags.
+        for (saved, tag) in [
+            ("en", "en"),
+            ("zh-CN", "zh-CN"),
+            ("zh_cn", "zh-CN"),
+            ("pt-br", "pt-BR"),
+            ("uk", "uk"),
+            ("unknown", "en"),
+            ("", "en"),
+        ] {
+            let config: Config = toml::from_str(&format!("language = '{saved}'")).unwrap();
+            assert_eq!(config.language.tag(), tag, "{saved}");
+        }
+        // A language this build lacks is shown in English but kept when saving.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "language = 'uk'\n").unwrap();
+        let mut config = Config::load(&path).unwrap();
+        assert_eq!(config.language.name(), "uk");
+        config.pixel_grid = false;
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("language = \"uk\"")
+        );
+        Config {
+            language: Language::new("zh_CN"),
+            ..Config::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("language = \"zh-CN\"")
+        );
+        assert_eq!(Config::load(&path).unwrap().language.name(), "简体中文");
     }
 
     #[test]
@@ -823,7 +892,7 @@ mod tests {
         assert_eq!(
             Config::load(&path).unwrap(),
             Config {
-                language: Language::SimplifiedChinese,
+                language: Language::new("zh-CN"),
                 title_bar: TitleBar::default(),
                 ..Config::default()
             }
@@ -1155,7 +1224,7 @@ mod tests {
         assert_eq!(
             old,
             Config {
-                language: Language::SimplifiedChinese,
+                language: Language::new("zh-CN"),
                 title_bar: TitleBar::System,
                 pixel_grid: false,
                 ..Config::default()

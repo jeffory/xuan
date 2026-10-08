@@ -24,6 +24,9 @@ mod palette;
 #[path = "ui_appearance.rs"]
 mod appearance;
 
+#[path = "ui_language.rs"]
+mod language;
+
 #[path = "ui_empty_state.rs"]
 mod empty_state;
 

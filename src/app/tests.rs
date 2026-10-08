@@ -5910,7 +5910,7 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
         egui::Modifiers::CTRL,
     );
     assert!(app.dialog == Some(Dialog::Settings));
-    app.config.language = xuan::config::Language::SimplifiedChinese;
+    app.config.language = xuan::config::Language::new("zh-CN");
     // egui resolves window placement on its first pass.
     frame(&context, &mut app);
     let output = frame(&context, &mut app);
@@ -5928,15 +5928,6 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
             "Missing {label}: {text:?}"
         );
     }
-    context.fonts_mut(|fonts| {
-        for line in include_str!("../../assets/locales/zh-CN.tsv").lines() {
-            let translated = line.split_once('\t').unwrap().1;
-            assert!(
-                fonts.has_glyphs(&egui::FontId::proportional(12.0), translated),
-                "Missing font glyph: {translated}"
-            );
-        }
-    });
     keyboard_frame(
         &context,
         &mut app,
@@ -5944,9 +5935,81 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
         egui::Modifiers::NONE,
     );
     assert!(app.dialog.is_none());
-    app.config.language = xuan::config::Language::English;
+    app.config.language = xuan::config::Language::english();
     frame(&context, &mut app);
     assert_eq!(Tool::Brush.label(), "Brush");
+}
+
+/// Every translation can be drawn, and the bundled fonts cover what `docs/TRANSLATING.md` says.
+#[test]
+fn bundled_fonts_draw_every_locale_and_the_scripts_the_guide_lists() {
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    context.fonts_mut(|fonts| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let font = egui::FontId::new(12.0, family);
+            for (tag, source) in xuan::i18n::bundled_sources() {
+                for translated in xuan::i18n::catalog::Catalog::parse(source).0.texts() {
+                    assert!(
+                        fonts.has_glyphs(&font, translated),
+                        "Missing font glyph in {tag}: {translated}"
+                    );
+                }
+            }
+        }
+        // Names of languages, in their scripts. Monospace text, such as plugin logs, is drawn with
+        // Hack, which lacks Vietnamese's stacked accents.
+        let proportional = egui::FontId::proportional(12.0);
+        let monospace = egui::FontId::monospace(12.0);
+        for (covered, fonts_for) in [
+            ("Tiếng Việt", &[&proportional][..]),
+            (
+                "Čeština, Polski, Türkçe, Ελληνικά",
+                &[&proportional, &monospace],
+            ),
+            (
+                "Українська ґєії, Русский ёъыэ, Беларуская ў, Српски ђћџ, Қазақ ғқңөұүһі",
+                &[&proportional, &monospace],
+            ),
+            (
+                "简体中文, 繁體中文, 日本語 ひらがな カタカナ",
+                &[&proportional, &monospace],
+            ),
+        ] {
+            for font in fonts_for {
+                assert!(fonts.has_glyphs(font, covered), "{font:?}: {covered}");
+            }
+        }
+        for missing in ["한국어", "العربية", "עברית", "हिन्दी", "বাংলা", "ไทย"]
+        {
+            for font in [&proportional, &monospace] {
+                assert!(
+                    !fonts.has_glyphs(font, missing),
+                    "{missing} can be drawn now: update the table in docs/TRANSLATING.md"
+                );
+            }
+        }
+    });
+}
+
+/// Command labels and category names reach `tr` through variables, so the source scan in
+/// `xuan::i18n` cannot see them; this keeps them in the English catalog translators work from.
+#[test]
+fn every_command_label_and_category_is_in_the_english_catalog() {
+    let (_, english) = xuan::i18n::bundled_sources()
+        .iter()
+        .find(|(tag, _)| *tag == xuan::i18n::ENGLISH)
+        .expect("assets/locales/en.tsv");
+    let english = xuan::i18n::catalog::Catalog::parse(english).0;
+    let names = super::commands::COMMANDS
+        .iter()
+        .map(|command| command.label)
+        .chain(super::commands::Category::ALL.map(|category| category.name()));
+    let missing: Vec<_> = names.filter(|name| english.get(name).is_none()).collect();
+    assert!(
+        missing.is_empty(),
+        "Add these to assets/locales/en.tsv: {missing:#?}"
+    );
 }
 
 fn drop_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {

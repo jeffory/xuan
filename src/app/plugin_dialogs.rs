@@ -4,7 +4,7 @@ use super::theme::PaletteExt as _;
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
-    i18n::tr,
+    i18n::{tr, tr_args, tr_plural},
     plugins::{
         manifest::{Input, InputKind, Manifest, ResultInto, Surface},
         sandbox,
@@ -685,9 +685,9 @@ impl EditorApp {
                         self.plugin_models_section(ui, manifest);
                         let summary = format!(
                             "{} · {} · {}",
-                            counted(manifest.actions.len(), "action", "actions"),
-                            counted(manifest.panes.len(), "pane", "panes"),
-                            counted(manifest.formats.len(), "format", "formats")
+                            tr_plural("{n} actions", manifest.actions.len() as u64),
+                            tr_plural("{n} panes", manifest.panes.len() as u64),
+                            tr_plural("{n} formats", manifest.formats.len() as u64)
                         );
                         ui.label(RichText::new(summary).small().color(ui.palette().muted));
                         let log = self.plugins.log(&id);
@@ -883,9 +883,13 @@ impl EditorApp {
         }
         progress_indicator(ui, job.progress, 120.0);
         if jobs.len() > 1 {
-            let count = tr("{index} of {count}")
-                .replace("{index}", &(index + 1).to_string())
-                .replace("{count}", &jobs.len().to_string());
+            let count = tr_args(
+                "{index} of {count}",
+                &[
+                    ("index", &(index + 1).to_string()),
+                    ("count", &jobs.len().to_string()),
+                ],
+            );
             let button = widgets::button(ui, count).on_hover_text(tr("Show all running jobs"));
             egui::Popup::menu(&button).show(|ui| {
                 ui.set_min_width(280.0);
@@ -981,11 +985,6 @@ impl EditorApp {
             self.resolve_proposal(false);
         }
     }
-}
-
-/// "1 pane" or "2 panes".
-fn counted(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", tr(if count == 1 { one } else { many }))
 }
 
 /// Width of the bullet column, so wrapped lines hang under the first.
