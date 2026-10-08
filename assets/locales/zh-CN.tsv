@@ -191,6 +191,7 @@ Linear	线性
 Radial	径向
 Blur	模糊
 Smudge	涂抹
+Liquify	液化
 Aligned	对齐
 Sample	取样
 Current layer	当前图层
@@ -1172,6 +1173,7 @@ Light colour	亮部颜色
 Light on Dark	暗底亮色
 Dodge / Burn	减淡 / 加深
 Switch Dodge / Burn / Sponge	切换减淡 / 加深 / 海绵
+Switch Blur / Smudge / Liquify	切换模糊 / 涂抹 / 液化
 Dodge	减淡
 Burn	加深
 Sponge	海绵
@@ -1180,6 +1182,7 @@ Desaturate	去色
 Saturate	加色
 Drag to lighten, darken or change saturation · [ ] size · Shift-click straight line · 1–0 exposure · Shift+O switches Dodge / Burn / Sponge	拖动以减淡、加深或改变饱和度 · [ ] 大小 · Shift 单击绘制直线 · 1–0 曝光 · Shift+O 切换减淡 / 加深 / 海绵
 Dodge, Burn and Sponge work on layer pixels, not masks	减淡、加深和海绵只作用于图层像素，不作用于蒙版
+Liquify works on layer pixels, not masks	液化只作用于图层像素，不作用于蒙版
 The tones that change most. The effect fades out smoothly into the other tones.	变化最大的色调。效果会平滑地过渡到其他色调。
 How strong the effect is. Going over the same spot in one stroke does not add to it; start a new stroke to go further.	效果的强度。在同一笔画中反复涂抹同一处不会叠加；要加强效果，请开始新的笔画。
 Imported with changes. Xuan does not draw these parts of the SVG file:	已导入，但有改动。Xuan 不绘制 SVG 文件的以下部分：

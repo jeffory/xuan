@@ -105,6 +105,7 @@ pub enum Tool {
     Erase,
     Heal,
     Clone,
+    /// Blur, Smudge or Liquify, by `EditorApp::blur_mode`; R selects it and Shift+R cycles the mode.
     Blur,
     /// Dodge, Burn or Sponge, by `EditorApp::tone_mode`; O selects it and Shift+O cycles the mode.
     Dodge,

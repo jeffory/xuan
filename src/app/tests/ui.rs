@@ -57,6 +57,9 @@ mod crop;
 #[path = "ui_perspective_crop.rs"]
 mod perspective_crop;
 
+#[path = "ui_liquify.rs"]
+mod liquify;
+
 #[path = "ui_channels.rs"]
 mod channels;
 

@@ -514,6 +514,19 @@ fn switch_tone(app: &mut EditorApp) {
     }
     app.set_tool(Tool::Dodge);
 }
+/// Shift+R: with the Blur / Smudge tool, the next of Blur, Smudge and Liquify;
+/// from another tool, the Blur / Smudge tool as it was last used.
+fn switch_blur(app: &mut EditorApp) {
+    use xuan::paint::PaintMode;
+    if app.tool == Tool::Blur {
+        app.blur_mode = match app.blur_mode {
+            PaintMode::Blur => PaintMode::Smudge,
+            PaintMode::Smudge => PaintMode::Liquify,
+            _ => PaintMode::Blur,
+        };
+    }
+    app.set_tool(Tool::Blur);
+}
 fn gradient_tool(app: &mut EditorApp) {
     app.set_tool(app.gradient_variant);
 }
@@ -1048,6 +1061,13 @@ pub(super) const COMMANDS: &[Command] = &[
         "Blur / Smudge",
         &[bare(Key::R)],
         Run::Tool(Tool::Blur),
+    )
+    .aliases(&["smudge", "liquify", "warp", "push"]),
+    tool(
+        "switch_blur",
+        "Switch Blur / Smudge / Liquify",
+        &[shift(Key::R)],
+        Run::App(switch_blur),
     ),
     tool(
         "tool_dodge",

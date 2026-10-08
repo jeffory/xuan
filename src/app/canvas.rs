@@ -1436,6 +1436,10 @@ impl EditorApp {
             self.status = tr("Dodge, Burn and Sponge work on layer pixels, not masks").into();
             return;
         }
+        if tool == Tool::Blur && self.blur_mode == PaintMode::Liquify && self.editing_mask() {
+            self.status = tr("Liquify works on layer pixels, not masks").into();
+            return;
+        }
         if tool == Tool::Clone && self.clone_source.is_none() {
             self.status = tr("Alt-click on the canvas to set a clone source").into();
             return;
@@ -1502,7 +1506,9 @@ impl EditorApp {
         if tool == Tool::Move && session.document.active.is_none() {
             return;
         }
-        session.history.begin(tool.label(), &session.document);
+        let liquify = tool == Tool::Blur && self.blur_mode == PaintMode::Liquify;
+        let name = if liquify { tr("Liquify") } else { tool.label() };
+        session.history.begin(name, &session.document);
         if tool == Tool::Move && modifiers.alt {
             operations::duplicate(&mut session.document);
         }
@@ -1535,7 +1541,8 @@ impl EditorApp {
                 kind = TransformDrag::Selection;
             }
         }
-        let source = if matches!(tool, Tool::Clone | Tool::Blur) {
+        // Liquify warps the layer as it is, without a copy to sample.
+        let source = if matches!(tool, Tool::Clone | Tool::Blur) && !liquify {
             if tool == Tool::Clone && self.clone_all {
                 Some(Arc::new(render::render(&session.document)))
             } else {
@@ -2054,8 +2061,9 @@ impl EditorApp {
             return;
         }
         // A Dodge, Burn or Sponge stroke that changed no pixel (0% exposure,
-        // or only over transparent pixels) leaves no undo step.
-        if tool == Tool::Dodge
+        // or only over transparent pixels), or a Blur, Smudge or Liquify
+        // stroke that moved nothing, leaves no undo step.
+        if matches!(tool, Tool::Dodge | Tool::Blur)
             && result.is_ok()
             && same_pixels(&gesture.original, &session.document)
         {

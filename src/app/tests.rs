@@ -63,6 +63,9 @@ mod paint_bucket;
 #[path = "tests/dodge_burn.rs"]
 mod dodge_burn;
 
+#[path = "tests/liquify.rs"]
+mod liquify;
+
 #[path = "tests/stroke.rs"]
 mod stroke;
 
