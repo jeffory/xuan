@@ -216,7 +216,10 @@ pub fn save_hashed(
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 15;
+const LATEST_VERSION: u32 = 16;
+
+/// The first version that records a collage's layout and cells (`document.collage`).
+const COLLAGE: u32 = 16;
 
 /// The first version with Color Lookup adjustment layers, whose tables are stored as
 /// `luts/<layer UUID>.cube`.
@@ -240,8 +243,11 @@ const PHOTOSHOP_VIGNETTE: u32 = 12;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    // Older readers would drop the record, and with it the collage's layout.
+    if document.collage.is_some() {
+        COLLAGE
     // Older readers do not know the adjustment and would refuse the whole project.
-    if document.layers.iter().any(|l| {
+    } else if document.layers.iter().any(|l| {
         matches!(
             l.adjustment,
             Some(crate::document::Adjustment::ColorLookup { .. })
@@ -1634,5 +1640,86 @@ mod tests {
         future["version"] = serde_json::json!(LATEST_VERSION + 1);
         write_manifest(&path, &future);
         assert!(load(&path).is_err());
+    }
+
+    /// A collage keeps its layout and cells as version 16; its layers need nothing newer, so
+    /// the same layers without the record keep their lower version.
+    #[test]
+    fn collages_round_trip_as_version_16() {
+        use crate::collage::{self, Layout, Template};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collage.xuan");
+        let layout = Layout {
+            template: Template::LargeTop,
+            spacing: 6,
+            border: 4,
+            color: [10, 20, 30, 255],
+            corner_radius: 5.0,
+            ..Layout::default()
+        };
+        let mut doc = collage::new_document(120, 90, layout).unwrap();
+        let cell = collage::cells(&doc)[2];
+        let photo = Layer::image("Photo", RgbaImage::from_pixel(8, 6, Rgba([200, 0, 0, 255])));
+        collage::place(&mut doc, cell, photo).unwrap();
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 16);
+        assert_eq!(
+            manifest["document"]["collage"]["layout"]["template"],
+            "LargeTop"
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.collage, doc.collage);
+        assert_eq!(collage::cells(&loaded).len(), 4);
+        assert!(!collage::is_empty(&loaded, cell));
+        assert_eq!(
+            crate::render::render(&loaded).as_raw(),
+            crate::render::render(&doc).as_raw()
+        );
+
+        doc.collage = None;
+        save(&doc, &path).unwrap();
+        assert!(manifest_json(&path)["version"].as_u64().unwrap() < 16);
+
+        // A hostile record is refused; one naming layers that are gone is kept, and laying
+        // the collage out again makes them anew.
+        let mut manifest = manifest_json(&path);
+        let id = Uuid::new_v4();
+        for (record, loads) in [
+            (
+                serde_json::json!({"layout": {"template": "Grid", "columns": 0, "rows": 2,
+                "spacing": 0, "border": 0, "color": [0, 0, 0, 255], "corner_radius": 0.0}}),
+                false,
+            ),
+            (
+                serde_json::json!({"layout": {"template": "Mosaic", "columns": 2, "rows": 2,
+                "spacing": 0, "border": 0, "color": [0, 0, 0, 255], "corner_radius": 0.0}}),
+                false,
+            ),
+            (
+                serde_json::json!({"layout": layout, "cells": [id, id]}),
+                false,
+            ),
+            (
+                serde_json::json!({"layout": layout, "background": id, "cells": [Uuid::new_v4()]}),
+                true,
+            ),
+        ] {
+            manifest["version"] = serde_json::json!(16);
+            manifest["document"]["collage"] = record.clone();
+            manifest["pixel_layers"] = serde_json::json!([]);
+            for layer in manifest["document"]["layers"].as_array_mut().unwrap() {
+                layer["shape"] = Value::Null;
+            }
+            write_manifest(&path, &manifest);
+            let result = load(&path);
+            assert_eq!(result.is_ok(), loads, "{record}");
+            if let Ok(mut loaded) = result {
+                assert!(collage::cells(&loaded).is_empty());
+                collage::relayout(&mut loaded, layout).unwrap();
+                assert_eq!(collage::cells(&loaded).len(), 4);
+                loaded.validate().unwrap();
+            }
+        }
     }
 }

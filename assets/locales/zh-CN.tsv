@@ -1281,3 +1281,33 @@ Save the {} selected adjustment layers as a preset.	将所选的 {} 个调整图
 Replaces the preset of this name.	将替换同名预设。
 Save Preset	保存预设
 Save the selected adjustment layer as a preset.	将所选的调整图层保存为预设。
+The border and spacing leave no room for the photos	边框和间距没有给照片留下空间
+Border	边框
+Cell	单元格
+Frame	相框
+One large, two small	一大两小
+One large above three	上一大下三小
+Images	图像
+The photos add up to more than {}, the most this computer opens at once	照片总计超过 {}，即此计算机一次可打开的上限
+Collage	拼图
+New Collage	新建拼图
+Some photos could not be added to the collage.	部分照片无法添加到拼图中。
+Collage Layout	拼图布局
+Collage layout	拼图布局
+New collage	新建拼图
+Create collage	创建拼图
+Photos in a grid of cells. Each cell is a folder with its photo clipped to a frame, so everything stays editable.	照片排列在网格单元格中。每个单元格都是一个文件夹，照片剪贴到相框中，因此一切都可继续编辑。
+Layout	布局
+Columns	列数
+Rows	行数
+Corner radius	圆角半径
+Border colour	边框颜色
+Choose photos…	选择照片…
+Clear photos	清除照片
+No photos yet: drop or import images into the cells later.	尚无照片：稍后可将图像拖放或导入到单元格中。
+{} photos; the first {} fill the cells	{} 张照片；前 {} 张填入单元格
+Photos: {}	照片：{}
+Photos follow their cells. Cells the new layout does not have are removed with their photos.	照片随其单元格移动。新布局中没有的单元格会连同其照片一起移除。
+Place in Cell	放入单元格
+New Collage…	新建拼图…
+Collage Layout…	拼图布局…

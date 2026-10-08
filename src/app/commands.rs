@@ -464,6 +464,10 @@ fn masked_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|l| l.mask.is_some())
 }
+/// The document was made as a collage.
+fn collage_document(app: &EditorApp) -> bool {
+    editing(app) && app.session().is_some_and(|s| s.document.collage.is_some())
+}
 fn has_selection(app: &EditorApp) -> bool {
     editing(app)
         && app
@@ -667,6 +671,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .when(always)
         .aliases(&["document", "create"]),
+    cmd("new_collage", "New Collage…", C::File)
+        .when(not_developing)
+        .aliases(&["photos", "grid", "layout", "montage"]),
     cmd("open", "Open…", C::File)
         .keys(&[ctrl(Key::O)])
         .both()
@@ -782,6 +789,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .when(has_selection)
         .host(Edit)
         .aliases(&["crop"]),
+    cmd("collage_layout", "Collage Layout…", C::Image)
+        .when(collage_document)
+        .aliases(&["spacing", "borders", "grid"]),
     cmd("trim", "Trim…", C::Image).aliases(&["crop", "remove margins", "borders"]),
     // Layer
     cmd("new_layer", "New Layer", C::Layer)

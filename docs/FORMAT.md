@@ -412,3 +412,30 @@ A document in which any layer uses a Color Lookup is written as version 15, so o
 report an unsupported version instead of failing on an adjustment they do not know; everything
 else keeps the lowest version its content needs (1-14). A version 15 document may also carry
 anything the earlier versions can. The reader accepts versions 1-15.
+
+## Collages (version 16)
+
+A document made with File → New Collage… records the collage in `document.collage`, so its
+layout can be changed later (Image → Collage Layout…):
+
+- `layout`: `template` (`Grid`, `LargeLeft` for one large cell beside two small ones, or
+  `LargeTop` for one large cell above three), `columns` and `rows` of the grid (1-10 each; other
+  templates keep them for when the grid is chosen again), `spacing` between cells and `border`
+  around them (0-65,535 pixels), the border `color` (RGBA, 0-255) and the cells'
+  `corner_radius` (0-65,535 pixels; at most half a cell's shorter side is drawn).
+- `background`: the UUID of the rectangle shape layer that fills the canvas with the border
+  colour (optional).
+- `cells`: the UUIDs of the cells' folders, first cell first (at most 100, no duplicates).
+
+The collage itself is ordinary layers: each cell folder holds a rectangle (or rounded
+rectangle) shape layer, its frame, as its lowest layer, and the cell's photo clipped to the
+frame. A record naming layers that are gone, or a folder whose lowest layer is no longer a
+shape, is kept and treated as missing those cells; laying the collage out again makes them
+anew. A malformed record (an unknown template, out-of-range values, duplicate UUIDs) fails the
+load.
+
+A document with a collage record is written as version 16, so older builds report an
+unsupported version instead of silently dropping the layout; everything else keeps the lowest
+version its content needs (1-15). A version 16 document may also carry anything the earlier
+versions can. The reader accepts versions 1-16; older files have no record and need no
+migration.

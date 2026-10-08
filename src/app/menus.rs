@@ -301,6 +301,7 @@ impl EditorApp {
                             ui.spacing_mut().item_spacing.x += 2.0;
                             menu_bar_button(ui, tr("File"), |ui| {
                                 item(ui, &items, "new", &mut action);
+                                item(ui, &items, "new_collage", &mut action);
                                 item(ui, &items, "open", &mut action);
                                 item(ui, &items, "open_clipboard", &mut action);
                                 item(ui, &items, "open_comp", &mut action);
@@ -405,6 +406,7 @@ impl EditorApp {
                                     item(ui, &items, "image_size", &mut action);
                                     item(ui, &items, "canvas_size", &mut action);
                                     item(ui, &items, "trim", &mut action);
+                                    item(ui, &items, "collage_layout", &mut action);
                                     item(ui, &items, "crop_to_selection", &mut action);
                                     ui.separator();
                                     ui.menu_button(tr("Rotate Canvas"), |ui| {

@@ -69,6 +69,9 @@ mod color_lookup;
 #[path = "ui_adjustment_presets.rs"]
 mod adjustment_presets;
 
+#[path = "ui_collage.rs"]
+mod collage;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

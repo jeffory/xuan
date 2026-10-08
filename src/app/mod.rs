@@ -5,6 +5,7 @@ mod canvas;
 mod channel_pane;
 mod chrome;
 mod clipboard;
+mod collage_dialog;
 mod color_lookup;
 mod color_range;
 mod commands;
@@ -496,6 +497,8 @@ enum Dialog {
     AdjustmentPresets,
     /// Edit → Stroke….
     Stroke,
+    /// File → New Collage… and Image → Collage Layout….
+    Collage,
 }
 
 struct EffectEdit {
@@ -632,6 +635,12 @@ pub struct EditorApp {
     selection_amount: Option<selection_dialogs::AmountEdit>,
     /// Image → Trim…: the choices it remembers.
     trim_settings: trim_dialog::TrimSettings,
+    /// File → New Collage… or Image → Collage Layout…, while it is open, and the choices it
+    /// remembers.
+    collage: Option<collage_dialog::CollageEdit>,
+    collage_settings: collage_dialog::CollageSettings,
+    /// While files are inserted together into a collage, the cell the last image filled.
+    collage_filled: Option<Uuid>,
     /// Edit → Stroke…, while it is open, and the choices it remembers.
     stroke: Option<stroke_dialog::StrokeEdit>,
     stroke_settings: stroke_dialog::StrokeSettings,
@@ -877,6 +886,9 @@ impl EditorApp {
             tolerance: 32,
             selection_amount: None,
             trim_settings: Default::default(),
+            collage: None,
+            collage_settings: Default::default(),
+            collage_filled: None,
             stroke: None,
             stroke_settings: Default::default(),
             paths_edit: None,
@@ -1139,6 +1151,15 @@ impl EditorApp {
                             .unwrap_or_default()
                             .to_string_lossy()
                             .to_string();
+                        // In a collage, the image fills a cell.
+                        if let Some(cell) = self.import_cell() {
+                            self.edit(tr("Place in Cell"), |doc| {
+                                xuan::collage::place(doc, cell, Layer::image(name, image))
+                                    .map(|_| ())
+                            });
+                            self.collage_filled = Some(cell);
+                            return Ok(None);
+                        }
                         self.edit(tr("Import Image"), |doc| {
                             let mut layer = Layer::image(name, image);
                             layer.transform.x = (doc.width as f32 - layer.transform.width) * 0.5;
@@ -1376,8 +1397,12 @@ impl EditorApp {
             .add_filter(tr("Images and Xuan projects"), &extensions)
             .pick_files()
         {
-            for path in paths {
-                self.open_path(&path, as_layer);
+            if as_layer {
+                self.insert_files(&paths);
+            } else {
+                for path in paths {
+                    self.open_path(&path, false);
+                }
             }
         }
     }
@@ -1673,6 +1698,8 @@ impl EditorApp {
                 }
                 self.dialog = Some(Dialog::New);
             }
+            "new_collage" => self.open_new_collage(),
+            "collage_layout" => self.open_collage_layout(),
             "open" => self.open_dialog(false),
             "open_clipboard" => self.open_clipboard(),
             "import" => self.open_dialog(true),

@@ -138,10 +138,14 @@ impl EditorApp {
 
     fn finish_drop(&mut self, prompt: DropPrompt, choice: Option<bool>) {
         self.dialog = None;
-        if let Some(as_layer) = choice {
-            for path in &prompt.images {
-                self.open_path(path, as_layer);
+        match choice {
+            Some(true) => self.insert_files(&prompt.images),
+            Some(false) => {
+                for path in &prompt.images {
+                    self.open_path(path, false);
+                }
             }
+            None => {}
         }
         for path in &prompt.projects {
             self.open_path(path, false);
