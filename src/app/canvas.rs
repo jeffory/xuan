@@ -648,31 +648,14 @@ impl EditorApp {
                 if let Some(layout) = &rulers {
                     super::rulers::paint(ui.painter(), layout, origin, zoom);
                 }
-                if let Some((start, end)) = self.crop_rect {
-                    let rect = Rect::from_two_pos(map(start), map(end));
-                    painter.rect_stroke(
-                        rect,
-                        0.0,
-                        Stroke::new(1.5_f32, Color32::WHITE),
-                        StrokeKind::Inside,
-                    );
-                    for f in [1.0 / 3.0, 2.0 / 3.0] {
-                        painter.line_segment(
-                            [
-                                pos2(rect.left() + rect.width() * f, rect.top()),
-                                pos2(rect.left() + rect.width() * f, rect.bottom()),
-                            ],
-                            Stroke::new(0.7_f32, Color32::from_white_alpha(140)),
-                        );
-                        painter.line_segment(
-                            [
-                                pos2(rect.left(), rect.top() + rect.height() * f),
-                                pos2(rect.right(), rect.top() + rect.height() * f),
-                            ],
-                            Stroke::new(0.7_f32, Color32::from_white_alpha(140)),
-                        );
-                    }
-                }
+                let crop_cursor = if self.tool == Tool::Crop {
+                    let hover = response
+                        .hover_pos()
+                        .map(|p| Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom));
+                    self.paint_crop(&painter, canvas, origin, zoom, hover)
+                } else {
+                    None
+                };
                 if let Some(gesture) = &self.gesture {
                     let rect = Rect::from_two_pos(map(gesture.start), map(gesture.last));
                     if (matches!(self.tool, Tool::Marquee | Tool::Shape)
@@ -816,6 +799,8 @@ impl EditorApp {
                         cursor
                     } else if hover_handle.is_some() {
                         egui::CursorIcon::ResizeNwSe
+                    } else if let Some(cursor) = crop_cursor {
+                        cursor
                     } else if self.tool == Tool::Move {
                         egui::CursorIcon::Move
                     } else if self.tool == Tool::Text {
@@ -1483,11 +1468,17 @@ impl EditorApp {
             return;
         }
         let mask_target = self.transforming_mask();
+        if tool == Tool::Crop {
+            self.crop.drag = Some(self.crop.press(point, self.sessions[self.current].zoom));
+        }
+        let drawing_crop = self.crop.drag == Some(super::crop_tool::CropDrag::Draw);
         // A marquee, shape or crop starts on a nearby Snap To target; Ctrl starts it freely.
         let snapping = self
             .snap_options()
             .filter(|_| {
-                !ctrl_or_cmd(modifiers) && matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop)
+                !ctrl_or_cmd(modifiers)
+                    && (matches!(tool, Tool::Marquee | Tool::Shape)
+                        || (tool == Tool::Crop && drawing_crop))
             })
             .map(|options| (options, self.displayed_guides()));
         let session = &mut self.sessions[self.current];
@@ -1637,7 +1628,9 @@ impl EditorApp {
         if let Some(smoothing) = &mut gesture.smoothing {
             point = smoothing.update(point);
         }
-        let shaped = matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop)
+        // Moving or resizing a crop box follows the pointer without snapping.
+        let shaped = (matches!(tool, Tool::Shape | Tool::Marquee)
+            || (tool == Tool::Crop && self.crop.drag == Some(super::crop_tool::CropDrag::Draw)))
             && matches!(gesture.kind, TransformDrag::Move);
         let moving = tool == Tool::Move
             || matches!(
@@ -1664,7 +1657,8 @@ impl EditorApp {
             );
             (point, self.snap_lines) = targets.snap_point(point, tolerance);
         }
-        if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop) {
+        // The Crop tool keeps its own ratio (a square with Shift when Free).
+        if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee) {
             let dx = point.x - gesture.start.x;
             let dy = point.y - gesture.start.y;
             let size = dx.abs().max(dy.abs());
@@ -1858,7 +1852,9 @@ impl EditorApp {
                     Ok(())
                 }
                 Tool::Crop => {
-                    self.crop_rect = Some((gesture.start, point));
+                    let canvas = [gesture.original.width, gesture.original.height];
+                    self.crop
+                        .drag_to(gesture.start, point, canvas, modifiers.shift);
                     Ok(())
                 }
                 _ => Ok(()),
@@ -2018,6 +2014,7 @@ impl EditorApp {
                 }
                 Tool::Crop => {
                     session.history.cancel(&mut session.document);
+                    self.crop.release();
                     return;
                 }
                 // A brush that tapers at the end paints the stroke again now

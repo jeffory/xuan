@@ -48,6 +48,9 @@ mod polish;
 #[path = "ui_focus.rs"]
 mod focus;
 
+#[path = "ui_crop.rs"]
+mod crop;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

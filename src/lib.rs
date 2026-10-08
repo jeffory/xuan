@@ -3,6 +3,7 @@ pub mod buildinfo;
 pub mod canvas_presets;
 pub mod color;
 pub mod config;
+pub mod crop;
 pub mod demo;
 pub mod document;
 pub mod effects;

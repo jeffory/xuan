@@ -6,6 +6,7 @@ mod chrome;
 mod clipboard;
 mod color_range;
 mod commands;
+mod crop_tool;
 mod develop;
 mod develop_controls;
 mod develop_preview;
@@ -185,7 +186,9 @@ impl Tool {
             Self::Wand => {
                 tr("Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect")
             }
-            Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
+            Self::Crop => tr(
+                "Drag to crop · Drag handles to adjust · Enter applies · Escape cancels · Space to pan",
+            ),
             Self::Pencil => tr(
                 "Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
             ),
@@ -577,7 +580,8 @@ pub struct EditorApp {
     dropper_source: eyedropper::SampleSource,
     last_brush: Option<Point>,
     gesture: Option<Gesture>,
-    crop_rect: Option<(Point, Point)>,
+    /// The Crop tool's box and ratio.
+    crop: crop_tool::CropTool,
     /// Lines a drag has snapped to, drawn across the canvas while it lasts.
     snap_lines: Vec<snap::SnapLine>,
     /// A guide being dragged out of a ruler or moved.
@@ -802,7 +806,7 @@ impl EditorApp {
             dropper_source: eyedropper::SampleSource::AllLayers,
             last_brush: None,
             gesture: None,
-            crop_rect: None,
+            crop: Default::default(),
             snap_lines: Vec::new(),
             guide_drag: None,
             grid_edit: None,
@@ -1250,7 +1254,11 @@ impl EditorApp {
             self.gradient_variant = tool;
         }
         self.polygon.clear();
-        self.crop_rect = None;
+        self.crop.rect = None;
+        self.crop.drag = None;
+        if tool == Tool::Crop {
+            self.crop_from_selection();
+        }
     }
 
     fn cancel_gesture(&mut self) {
@@ -1264,6 +1272,7 @@ impl EditorApp {
             session.invalidate();
         }
         self.snap_lines.clear();
+        self.crop.drag = None;
         self.cancel_guide_drag();
     }
 

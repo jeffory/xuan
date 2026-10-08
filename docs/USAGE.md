@@ -209,6 +209,29 @@ to. Hold Ctrl while dragging to move freely.
 The rulers, grid and guide visibility, Lock Guides, the snap settings and the
 default grid are app preferences, saved in the configuration file.
 
+### Crop tool
+
+The Crop tool (**C**) crops the canvas to a box you draw and adjust before applying it.
+
+- **Ratio:** the options bar's **Ratio** menu keeps the box **Free** (any shape; hold Shift for a
+  square), at the canvas's **Original** proportions, at **1:1**, **4:3**, **3:4**, **3:2**,
+  **2:3**, **16:9**, **9:16**, **9:20**, **5:4** or **4:5**, or at a **Custom** W : H typed beside
+  the menu. **Swap** exchanges the ratio's width and height (16:9 becomes 9:16) and turns the box
+  with it. A ratio is kept to the pixel: a 9:16 box is always 9k × 16k pixels, so it grows in
+  whole steps of the ratio (an odd canvas's own ratio, such as 1001:997, is too fine for that, and
+  its sides round to the nearest pixel instead). The ratio stays chosen while Xuan runs, and
+  choosing another refits the box inside the one you have.
+- **Drawing and adjusting:** drag to draw the box; its size in pixels shows below it and in the
+  options bar. Then drag a corner or edge handle to resize it, keeping the ratio (an edge grows
+  the other sides about the box's middle), or drag inside it, or use the arrow keys (Shift for 10
+  pixels), to move it. The box stays on the canvas, and the canvas outside it is dimmed, with the
+  rule of thirds shown while you adjust it. Dragging outside the box draws a new one.
+- **From a selection:** picking the Crop tool (pressing **C**) with a selection starts the box at
+  the selection's bounds, or at the largest box of the ratio inside them.
+- **Apply or cancel:** **Apply** in the options bar, or **Enter**, crops the canvas to the box as
+  one undo step, like **Image → Crop to Selection**, and nothing outside the new canvas is
+  discarded from the layers. **Cancel**, **Escape** or choosing another tool drops the box.
+
 ### Pen tool
 
 The Pen (**P**) draws Bézier paths, as Photoshop's Pen does, and edits them.

@@ -57,6 +57,9 @@ mod canvas_commands;
 #[path = "tests/paint_bucket.rs"]
 mod paint_bucket;
 
+#[path = "tests/crop.rs"]
+mod crop;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
