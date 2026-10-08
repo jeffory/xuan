@@ -453,6 +453,33 @@ OpenRaster files (`.ora`, from Krita, GIMP or MyPaint) open the same way: **File
 
 HEIC/HEIF photos (`.heic`, `.heif`, and `.hif`, including uppercase extensions) open directly on Linux and Windows using the bundled decoder. Use File → Open, import as a layer, or drag a photo into the editor. The primary still image is imported, including tiled images and container rotation/mirroring; sequences and unsupported HEVC coding features report an error. Images use the editor's 8-bit raster pipeline and follow the [size limits](#size-limits). Saved `.xuan` projects embed the decoded pixels, so the original HEIC file is no longer required. HEIC export is not supported. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library. No external converter is required for these formats. See the [project format](FORMAT.md) for details about saved documents.
 
+### Collages
+
+**File → New Collage…** lays several photos out in a grid of cells with borders. Choose a
+**Layout**: a **Grid** of 1–10 columns by 1–10 rows, **One large, two small** (a large cell
+beside two stacked ones) or **One large above three**. Set the canvas **Width** and **Height**,
+the **Spacing** between cells, the **Border** around them, the **Corner radius** of the cells and
+the **Border colour**; a small picture shows the result, and a layout whose border and spacing
+leave no room for the photos cannot be created. **Choose photos…** picks the photos, which fill
+the cells in order (extra photos are left out; a photo that cannot be read is reported and its
+cell stays empty). Empty cells show grey.
+
+The collage is made of ordinary layers, so everything stays editable: a **Border** rectangle
+filling the canvas with the border colour, and one folder per cell (**Cell 1**, **Cell 2**, …)
+holding the cell's **Frame**, a rectangle shape, with the photo clipped to it. Select a photo
+and move or scale it (Move tool, Free Transform) to choose what shows in its cell.
+
+To fill cells afterwards, select a cell (its folder, frame or photo) and use **File → Import
+Image as Layer…** or drop images onto the window and choose **Insert as layer**: the first image
+fills the selected cell, scaled to cover it, replacing the photo it had, and further images fill
+the empty cells after it. RAW, Photoshop, OpenRaster and SVG files are added as ordinary layers.
+
+**Image → Collage Layout…** changes the layout, spacing, borders, corner radius and border colour
+later, in one undo step. Photos move and scale with their cells; cells the new layout does not
+have are removed with their photos, and new cells start empty. The canvas keeps its size (use
+**Image → Canvas Size…** first to change it). The layout is saved in the project
+([format version 16](FORMAT.md#collages-version-16)).
+
 ### Drag and drop
 
 Drag image, Photoshop, OpenRaster or RAW files onto the window to add them. With no document open they

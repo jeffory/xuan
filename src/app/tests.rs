@@ -57,6 +57,9 @@ mod providers;
 #[path = "tests/canvas_commands.rs"]
 mod canvas_commands;
 
+#[path = "tests/collage.rs"]
+mod collage;
+
 #[path = "tests/paint_bucket.rs"]
 mod paint_bucket;
 

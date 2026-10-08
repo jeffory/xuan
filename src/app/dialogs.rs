@@ -116,6 +116,7 @@ impl EditorApp {
                 Dialog::SelectionAmount => self.selection_amount_dialog(ctx),
                 Dialog::Trim => self.trim_dialog(ctx),
                 Dialog::Stroke => self.stroke_dialog(ctx),
+                Dialog::Collage => self.collage_dialog(ctx),
                 Dialog::Paths => self.paths_dialog(ctx),
                 Dialog::AdjustmentPresets => self.presets_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
