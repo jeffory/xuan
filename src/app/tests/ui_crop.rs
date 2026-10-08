@@ -140,3 +140,19 @@ fn apply_and_enter_crop_the_same_way() {
     // The ratio is still chosen for the next crop.
     assert!(by_button.has_role(Role::ComboBox, "9:16"));
 }
+
+#[test]
+fn another_tab_has_no_box_to_cancel_or_apply() {
+    let mut ui = crop_ui();
+    drag_canvas(&mut ui, Point::new(10.0, 10.0), Point::new(50.0, 30.0));
+    assert!(ui.enabled("Cancel"));
+    ui.app_mut().new_document();
+    ui.settle();
+    assert!(!ui.enabled("Cancel") && !ui.enabled("Apply"));
+    ui.key(egui::Key::Enter);
+    assert_eq!(cropped(&ui).0, 120);
+    ui.app_mut().current = 0;
+    ui.settle();
+    assert!(ui.app().crop.rect.is_none());
+    assert!(!ui.enabled("Cancel") && !ui.enabled("Apply"));
+}

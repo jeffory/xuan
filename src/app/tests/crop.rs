@@ -229,3 +229,40 @@ fn a_box_left_on_a_canvas_that_shrank_is_cut_to_it() {
     press(&context, &mut app, egui::Key::Enter);
     assert_eq!(size(&app), (40, 80));
 }
+
+#[test]
+fn a_box_stays_with_its_document() {
+    let (context, mut app) = crop_app();
+    app.set_crop_ratio(Ratio::Preset([9, 16]), [1, 1], false);
+    drag(&context, &mut app, p(10.0, 10.0), p(40.0, 60.0), NONE);
+    assert!(app.crop.rect.is_some());
+    // A new document opens: no box there, and Enter does nothing.
+    app.new_document();
+    frame(&context, &mut app);
+    assert!(app.crop.rect.is_none());
+    press(&context, &mut app, egui::Key::Enter);
+    assert_eq!(size(&app), (120, 100));
+    assert_eq!(steps(&app), 0);
+    // Switching back finds no box either; the ratio is still chosen.
+    app.current = 0;
+    frame(&context, &mut app);
+    assert!(app.crop.rect.is_none());
+    press(&context, &mut app, egui::Key::Enter);
+    assert_eq!((size(&app), steps(&app)), ((120, 100), 0));
+    assert_eq!(app.crop.ratio, Ratio::Preset([9, 16]));
+
+    // Switching tabs within a frame (before the next one starts) cannot crop the other image.
+    drag(&context, &mut app, p(10.0, 10.0), p(40.0, 60.0), NONE);
+    app.current = 1;
+    press(&context, &mut app, egui::Key::Enter);
+    assert_eq!((size(&app), steps(&app)), ((120, 100), 0));
+    app.current = 0;
+    assert_eq!((size(&app), steps(&app)), ((120, 100), 0));
+    // Closing the tab with the box leaves none behind.
+    drag(&context, &mut app, p(10.0, 10.0), p(40.0, 60.0), NONE);
+    let first = app.tab_keys()[0];
+    app.close_tabs([first]);
+    frame(&context, &mut app);
+    assert_eq!(app.sessions.len(), 1, "{:?}", app.close_tab);
+    assert!(app.crop.rect.is_none());
+}

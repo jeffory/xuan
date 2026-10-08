@@ -1934,6 +1934,8 @@ impl EditorApp {
                 .map(|state| xuan::gpu::Processor::new(state.device.clone(), state.queue.clone()));
         }
         xuan::gpu::scope(self.processor.clone(), || self.show_with_processor(ctx));
+        // Tabs can close or switch during the frame, too.
+        self.forget_crop_of_other_documents();
     }
 
     /// Starts following the desktop's theme as `source` reports it. Waits briefly for the first
@@ -1972,6 +1974,7 @@ impl EditorApp {
     }
 
     fn show_with_processor(&mut self, ctx: &egui::Context) {
+        self.forget_crop_of_other_documents();
         self.sync_move_options();
         self.sync_palette(ctx);
 

@@ -158,6 +158,7 @@ impl EditorApp {
             }
         }
         if pressed(Key::Enter) {
+            self.forget_crop_of_other_documents();
             if self.crop.rect.is_some() {
                 self.apply_crop();
             } else if self.polygon.len() >= 3 {

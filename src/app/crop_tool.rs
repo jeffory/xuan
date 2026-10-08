@@ -35,6 +35,8 @@ pub(super) struct CropTool {
     /// The box waiting to be applied, in canvas pixels.
     pub rect: Option<CropBox>,
     pub drag: Option<CropDrag>,
+    /// The document the box belongs to; another tab never sees it.
+    pub document: Option<uuid::Uuid>,
 }
 
 impl Default for CropTool {
@@ -44,6 +46,7 @@ impl Default for CropTool {
             custom: [1, 1],
             rect: None,
             drag: None,
+            document: None,
         }
     }
 }
@@ -116,6 +119,17 @@ fn ratio_label(ratio: Ratio, canvas: [u32; 2]) -> String {
 }
 
 impl EditorApp {
+    /// Drops the box (and any drag of it) once another document is active, or none is: switching
+    /// tabs, closing one or opening another. The ratio stays chosen.
+    pub(super) fn forget_crop_of_other_documents(&mut self) {
+        let current = self.session().map(|s| s.document.id);
+        if self.crop.document != current {
+            self.crop.document = current;
+            self.crop.rect = None;
+            self.crop.drag = None;
+        }
+    }
+
     fn canvas_size(&self) -> Option<[u32; 2]> {
         self.session()
             .map(|s| [s.document.width, s.document.height])
@@ -123,6 +137,7 @@ impl EditorApp {
 
     /// Options bar: Ratio, Custom W : H, Swap, the box's size, then Cancel and Apply.
     pub(super) fn crop_options(&mut self, ui: &mut egui::Ui) {
+        self.forget_crop_of_other_documents();
         let Some(canvas) = self.canvas_size() else {
             return;
         };
@@ -205,6 +220,7 @@ impl EditorApp {
     /// Picking the Crop tool with a selection starts the box at the selection's bounds, in the
     /// chosen ratio.
     pub(super) fn crop_from_selection(&mut self) {
+        self.forget_crop_of_other_documents();
         let Some(session) = self.session() else {
             return;
         };
@@ -224,6 +240,7 @@ impl EditorApp {
 
     /// Crops the canvas to the box as one undo step, then fits the view to it. Apply and Enter.
     pub(super) fn apply_crop(&mut self) {
+        self.forget_crop_of_other_documents();
         let Some(canvas) = self.canvas_size() else {
             return;
         };
@@ -255,6 +272,7 @@ impl EditorApp {
 
     /// Arrow keys move the box rather than the layers beneath it.
     pub(super) fn nudge_crop(&mut self, dx: f32, dy: f32) -> bool {
+        self.forget_crop_of_other_documents();
         let (Some(rect), Some(canvas)) = (self.crop.rect, self.canvas_size()) else {
             return false;
         };
@@ -274,6 +292,10 @@ impl EditorApp {
         hover: Option<Point>,
     ) -> Option<CursorIcon> {
         let size = self.canvas_size()?;
+        // A box from another tab is dropped at the next chance; it is never drawn here.
+        if self.crop.document != self.session().map(|s| s.document.id) {
+            return None;
+        }
         let rect = self.crop.rect?.clamped(size);
         let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
         let (min, max) = rect.corners();

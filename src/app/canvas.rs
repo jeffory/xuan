@@ -1469,6 +1469,7 @@ impl EditorApp {
         }
         let mask_target = self.transforming_mask();
         if tool == Tool::Crop {
+            self.forget_crop_of_other_documents();
             self.crop.drag = Some(self.crop.press(point, self.sessions[self.current].zoom));
         }
         let drawing_crop = self.crop.drag == Some(super::crop_tool::CropDrag::Draw);
