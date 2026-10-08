@@ -191,6 +191,29 @@ pub struct Config {
     pub providers: Providers,
     /// The units sizes and resolutions are shown in.
     pub units: UnitSettings,
+    /// Checking for a newer release (issue 118).
+    pub updates: UpdateSettings,
+}
+
+/// Settings → General → Check for updates, and what the checks remember, in an `[updates]`
+/// table. See [`crate::update`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// Ask GitHub once a day whether a newer release is out. Off unless the user turns it on:
+    /// Xuan makes no network request of its own before then, except when Help → Check for
+    /// Updates… is chosen.
+    pub check: bool,
+    /// When the last check started, in seconds since 1970 (UTC). A value that is not one (a
+    /// negative number, text) reads as never, so the next check is due.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_time"
+    )]
+    pub last_check: Option<u64>,
+    /// The version Skip This Version was chosen for; the automatic check does not offer it again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
 }
 
 /// The units sizes and resolutions are shown in (issue 94), in a `[units]` table.
@@ -215,6 +238,30 @@ impl UnitSettings {
             .filter(|ppi| crate::units::valid_resolution(f64::from(*ppi)))
             .unwrap_or(crate::units::DEFAULT_RESOLUTION)
     }
+}
+
+impl UpdateSettings {
+    /// The `[updates]` table. TOML integers are signed, so a time past the year 292 billion is
+    /// written as the largest one.
+    fn to_toml(&self) -> toml::Value {
+        let mut table = toml::Table::new();
+        table.insert("check".into(), toml::Value::Boolean(self.check));
+        if let Some(time) = self.last_check {
+            let time = i64::try_from(time).unwrap_or(i64::MAX);
+            table.insert("last_check".into(), toml::Value::Integer(time));
+        }
+        if let Some(version) = &self.skipped {
+            table.insert("skipped".into(), toml::Value::String(version.clone()));
+        }
+        toml::Value::Table(table)
+    }
+}
+
+fn lenient_time<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error> {
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value.as_integer().and_then(|time| u64::try_from(time).ok()))
 }
 
 /// Files File → Open Recent remembers.
@@ -309,6 +356,7 @@ impl Default for Config {
             block_undeclared_network: None,
             providers: Providers::default(),
             units: UnitSettings::default(),
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -570,6 +618,11 @@ impl Config {
         } else {
             table.insert("units".into(), toml::Value::try_from(self.units)?);
         }
+        if self.updates == UpdateSettings::default() {
+            table.remove("updates");
+        } else {
+            table.insert("updates".into(), self.updates.to_toml());
+        }
         table.insert("auto_select".into(), toml::Value::Boolean(self.auto_select));
         table.insert(
             "ignore_transparent_pixels".into(),
@@ -642,6 +695,47 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("option = 42"));
         assert_eq!(Config::load(&path).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn update_settings_roundtrip_and_stay_out_of_the_file_until_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("updates"));
+        assert!(!Config::load(&path).unwrap().updates.check);
+        let config = Config {
+            updates: UpdateSettings {
+                check: true,
+                last_check: Some(1_790_000_000),
+                skipped: Some("0.6.0".into()),
+            },
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+        // A time TOML cannot hold is written as the largest it can.
+        let far = Config {
+            updates: UpdateSettings {
+                last_check: Some(u64::MAX),
+                ..UpdateSettings::default()
+            },
+            ..Config::default()
+        };
+        far.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap().updates.last_check;
+        assert_eq!(loaded, Some(i64::MAX as u64));
+        // A hand-edited time that is not one reads as never checked.
+        for value in ["-5", "'yesterday'", "1.5", "[1]"] {
+            fs::write(
+                &path,
+                format!("[updates]\ncheck = true\nlast_check = {value}\n"),
+            )
+            .unwrap();
+            let updates = Config::load(&path).unwrap().updates;
+            assert!(updates.check, "{value}");
+            assert_eq!(updates.last_check, None, "{value}");
+        }
     }
 
     #[test]
