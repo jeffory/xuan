@@ -1420,10 +1420,30 @@ impl EditorApp {
                 tr("Unsaved changes")
             )
         };
+        // Quitting: name the projects Save would save and Discard would lose.
+        let unsaved: Vec<&str> = if self.close_app {
+            (self.sessions.iter())
+                .filter(|session| session.history.dirty())
+                .map(|session| session.title.as_str())
+                .collect()
+        } else {
+            Vec::new()
+        };
         widgets::Window::new(tr("Save your changes?")).show_with_footer(
             ctx,
             |ui| {
                 ui.label(message);
+                if !unsaved.is_empty() {
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("unsaved_projects")
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            for title in &unsaved {
+                                ui.label(format!("• {title}"));
+                            }
+                        });
+                }
             },
             |ui, ()| {
                 let response = widgets::dialog_footer(
