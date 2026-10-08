@@ -96,6 +96,139 @@ fn heic_opens_as_a_document_and_imports_as_an_undoable_layer() {
 }
 
 #[test]
+fn svg_opens_at_its_own_size_and_imports_sharp_at_canvas_size() {
+    let (_, mut app) = app();
+    let dir = tempfile::tempdir().unwrap();
+    app.config_path = Some(dir.path().join("config.toml"));
+    let path = dir.path().join("logo.svg");
+    // A rectangle whose edge, at 1.5 of 4 units, falls mid-pixel at small sizes.
+    std::fs::write(
+        &path,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50" viewBox="0 0 4 1">
+            <rect width="1.5" height="1" fill="blue"/></svg>"#,
+    )
+    .unwrap();
+    assert!(app.open_path(&path, false));
+    assert!(
+        app.error.is_none() && app.notice.is_none(),
+        "{:?}",
+        app.error
+    );
+    let session = app.session().unwrap();
+    assert_eq!(session.title, "logo");
+    assert_eq!(session.source.as_deref(), Some(path.as_path()));
+    assert!(session.path.is_none(), "saving must not overwrite the SVG");
+    assert_eq!((session.document.width, session.document.height), (200, 50));
+    assert_eq!(
+        app.config.recent_files.first().map(|p| p.as_path()),
+        Some(std::path::absolute(&path).unwrap().as_path())
+    );
+
+    app.dimensions = [400, 400];
+    app.new_document();
+    let sessions = app.sessions.len();
+    assert!(app.open_path(&path, true));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), sessions);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 2);
+    let layer = document.active().unwrap();
+    assert_eq!(layer.name, "logo");
+    assert_eq!((layer.transform.x, layer.transform.y), (0.0, 150.0));
+    // Drawn at 400 × 100, not scaled from the file's own 200 × 50.
+    let pixels = layer.pixels.as_deref().unwrap();
+    assert_eq!(pixels.dimensions(), (400, 100));
+    assert_eq!(pixels.get_pixel(149, 50).0, [0, 0, 255, 255]);
+    assert_eq!(pixels.get_pixel(150, 50).0[3], 0);
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
+fn svg_files_pasted_from_the_clipboard_fit_the_canvas() {
+    use super::clipboard::ClipboardContent;
+
+    let (_, mut app) = app();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tall.svgz");
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 2"/>"#;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut encoder, svg).unwrap();
+    std::fs::write(&path, encoder.finish().unwrap()).unwrap();
+    // Without a document, the file opens at its own size.
+    app.paste_content(ClipboardContent::Files(vec![path.clone()]));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (1, 2));
+
+    app.dimensions = [300, 100];
+    app.new_document();
+    app.paste_content(ClipboardContent::Files(vec![path]));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let layer = app.session().unwrap().document.active().unwrap();
+    assert_eq!(
+        (layer.transform.width, layer.transform.height),
+        (50.0, 100.0)
+    );
+    assert_eq!((layer.transform.x, layer.transform.y), (125.0, 0.0));
+}
+
+#[test]
+fn svg_imports_report_what_was_not_drawn_and_refuse_damaged_files() {
+    let (_, mut app) = app();
+    let dir = tempfile::tempdir().unwrap();
+    let text = dir.path().join("text.svg");
+    std::fs::write(
+        &text,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><text>Hi</text>
+            <image href="https://example.com/a.png" width="5" height="5"/></svg>"#,
+    )
+    .unwrap();
+    assert!(app.open_path(&text, false));
+    assert_eq!(app.status, "Imported with changes");
+    let notice = app.notice.take().unwrap();
+    assert!(
+        notice.contains("Text") && notice.contains("linked images"),
+        "{notice}"
+    );
+
+    let sessions = app.sessions.len();
+    for (name, bytes) in [
+        (
+            "broken.svg",
+            b"<svg xmlns='http://www.w3.org/2000/svg'".as_slice(),
+        ),
+        (
+            "huge.svg",
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="90000" height="9"/>"#,
+        ),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        app.error = None;
+        assert!(!app.open_path(&path, false), "{name}");
+        let error = app.error.take().unwrap();
+        assert!(
+            error.contains("Could not open") && error.contains(name),
+            "{error}"
+        );
+        // Drawn to fit the canvas, a file too large to open on its own still imports.
+        assert_eq!(app.open_path(&path, true), name == "huge.svg", "{name}");
+        if name == "huge.svg" {
+            app.command("undo");
+            continue;
+        }
+        let error = app.error.clone().unwrap();
+        assert!(
+            error.contains("Could not open") && error.contains(name),
+            "{error}"
+        );
+    }
+    assert_eq!(app.sessions.len(), sessions);
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
 fn compositor_import_opens_and_reports_what_it_left_out() {
     let (context, mut app) = app();
     let package = tempfile::tempdir().unwrap();

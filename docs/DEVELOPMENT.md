@@ -17,7 +17,7 @@ sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
     libvulkan1 mesa-vulkan-drivers xdg-desktop-portal
 ```
 
-HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
+HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import. SVG and SVGZ import (`src/io/svg.rs`) draws files with the `resvg` crate the title bar already uses, built without text shaping, bitmap decoding or file access; `cargo test --locked svg` covers sizing, sharpness, transparency, limits and that linked files and URLs are never loaded.
 
 ### Windows
 

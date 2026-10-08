@@ -1037,6 +1037,10 @@ impl EditorApp {
             self.open_photoshop(path, as_layer);
             return;
         }
+        if io::is_svg(path) {
+            self.open_svg(path, as_layer);
+            return;
+        }
         if !builtin_extension(path)
             && let Some((plugin, format)) = self.plugin_import_format(path)
         {
@@ -1119,6 +1123,72 @@ impl EditorApp {
                     path.display()
                 ))
             }
+        }
+    }
+
+    /// Open an SVG file at its own size, or import it drawn to fit the canvas so it stays sharp.
+    fn open_svg(&mut self, path: &Path, as_layer: bool) {
+        let name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let canvas = self
+            .session()
+            .filter(|_| as_layer)
+            .map(|s| (s.document.width, s.document.height));
+        let size = match canvas {
+            Some((width, height)) => io::svg::SvgSize::Fit { width, height },
+            None => io::svg::SvgSize::Natural,
+        };
+        let drawn = match io::svg::load(path, size) {
+            Ok(drawn) => drawn,
+            Err(error) => {
+                self.error = Some(format!(
+                    "{} {}\n\n{error:#}",
+                    tr("Could not open"),
+                    path.display()
+                ));
+                return;
+            }
+        };
+        let notice = drawn.notice();
+        if canvas.is_some() {
+            self.edit(tr("Import Image"), |doc| {
+                let mut layer = Layer::image(name, drawn.image);
+                layer.transform.x = ((doc.width as f32 - layer.transform.width) * 0.5).round();
+                layer.transform.y = ((doc.height as f32 - layer.transform.height) * 0.5).round();
+                doc.insert(layer);
+                Ok(())
+            });
+        } else {
+            let (width, height) = drawn.image.dimensions();
+            let mut document = match Document::new(width, height) {
+                Ok(document) => document,
+                Err(error) => {
+                    self.error = Some(format!(
+                        "{} {}\n\n{error:#}",
+                        tr("Could not open"),
+                        path.display()
+                    ));
+                    return;
+                }
+            };
+            let layer = Layer::image(name.clone(), drawn.image);
+            document.select(layer.id, false);
+            document.layers = vec![layer];
+            let mut session = Session::new(document, name, None);
+            session.source = Some(path.to_path_buf());
+            self.sessions.push(session);
+            self.current = self.sessions.len() - 1;
+            self.mask_target = false;
+            self.dialog = None;
+        }
+        if let Some(notice) = notice
+            && self.error.is_none()
+        {
+            self.status = tr("Imported with changes").into();
+            self.notice = Some(notice);
         }
     }
 
@@ -1215,7 +1285,7 @@ impl EditorApp {
     fn open_dialog(&mut self, as_layer: bool) {
         let extensions = [
             "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif",
-            "hif", "psd", "psb",
+            "hif", "psd", "psb", "svg", "svgz",
         ];
         // Portal file filters may be case-sensitive; cameras commonly use uppercase.
         let plugin_extensions = self.plugin_import_extensions();
@@ -2164,6 +2234,8 @@ fn builtin_extension(path: &Path) -> bool {
                     | "heic"
                     | "heif"
                     | "hif"
+                    | "svg"
+                    | "svgz"
             )
         })
 }
