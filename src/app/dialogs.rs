@@ -550,40 +550,6 @@ impl EditorApp {
         }
     }
 
-    /// New canvas: the Preset menu. It shows the preset the fields match, or Custom.
-    fn preset_menu(&mut self, ui: &mut egui::Ui) {
-        let current = presets::find(self.dimensions[0], self.dimensions[1]);
-        let label = |p: &presets::Preset| format!("{}  ({} × {})", tr(p.name), p.width, p.height);
-        ui.horizontal(|ui| {
-            ui.label(tr("Preset"));
-            let mut picked = None;
-            widgets::PopUp::from_id_salt("new_canvas_preset")
-                .selected_text(current.map_or(tr("Custom"), |p| tr(p.name)))
-                .width(210.0)
-                .show_ui(ui, |ui| {
-                    // Custom keeps the fields as they are.
-                    widgets::menu_choice(ui, &mut current.is_none(), true, tr("Custom"));
-                    for group in presets::GROUPS {
-                        ui.label(
-                            RichText::new(tr(group.name))
-                                .small()
-                                .color(ui.palette().muted),
-                        );
-                        for p in group.presets {
-                            let mut selected = current == Some(p);
-                            if widgets::menu_choice(ui, &mut selected, true, label(p)).clicked() {
-                                picked = Some(p);
-                            }
-                        }
-                    }
-                });
-            if let Some(p) = picked {
-                self.dimensions = [p.width, p.height];
-                self.ratio = self.dimensions;
-            }
-        });
-    }
-
     /// With Keep aspect ratio, the side not edited follows the one that was.
     fn keep_ratio_edit(&mut self, before: [u32; 2]) {
         let [width, height] = self.dimensions;
@@ -632,7 +598,7 @@ impl EditorApp {
     }
 
     /// Saves the size and resolution units chosen in a size dialog for next time.
-    fn remember_units(&mut self) {
+    pub(super) fn remember_units(&mut self) {
         let mut units = self.config.units;
         units.size = self.size_units.unit;
         units.resolution = self.size_units.resolution_unit;

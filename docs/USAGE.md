@@ -124,13 +124,22 @@ The **+** button after the last tab starts a new canvas. Hover a tab for its ful
 - **Reorder** document tabs by dragging them; a line shows where the tab will land.
 - **Double-click** the empty part of the bar, or click **+**, for a new canvas.
 - **New canvas size:** **File → New…** (Ctrl+N) takes a Width, Height and Resolution. The
-  **Preset** menu fills Width and Height from **Screens** (4K, 1440p, 1080p, 720p) or **Social**
-  (square, portrait and landscape posts, story / reel, video thumbnail, link preview, banner);
-  it shows the preset the fields match, in either orientation, or **Custom** once you type
-  another size. **Swap** exchanges Width and Height (portrait / landscape), and **Keep aspect
-  ratio** makes the other side follow the one you type, in the proportion it had when you ticked
-  the box or picked a preset. Sizes obey the same limits as every canvas. The size and resolution
-  of the last canvas you created are offered next time (paper size presets are not offered yet).
+  **Preset** menu fills them from a list of sizes, each shown with its size, such as
+  **Full High Definition (1920 × 1080)** or **A4 (210 × 297 mm)**. While the fields are in
+  pixels it offers **Screens** (8K Ultra HD, 4K Ultra HD, Quad HD, Full High Definition, High
+  Definition) and **Social** (square, portrait and landscape posts, story / reel, video
+  thumbnail, link preview, banner). While they are in a print unit (millimetres, centimetres,
+  inches, points or picas) it offers paper sizes instead: **ISO A** (A1–A6), **ISO B** (B4,
+  B5), **US** (Letter, Legal, Tabloid / Ledger, Half Letter, Executive) and **Photo** (4 × 6,
+  5 × 7, 8 × 10 in), all at 300 ppi. Picking a paper size switches the fields to its unit and
+  sets its resolution, so A4 makes 2480 × 3508 px and Letter 2550 × 3300 px; changing the
+  resolution afterwards keeps the paper size (A4 at 150 ppi is 1240 × 1754 px). A0 is left out
+  because at 300 ppi it is larger than Xuan allows on most computers. The menu shows the preset
+  the fields match, in either orientation (a paper size at the current resolution), or
+  **Custom** once you type another size. **Swap** exchanges Width and Height (portrait /
+  landscape), and **Keep aspect ratio** makes the other side follow the one you type, in the
+  proportion it had when you ticked the box or picked a preset. Sizes obey the same limits as
+  every canvas. The size and resolution of the last canvas you created are offered next time.
 - **Units and print size:** File → New, **Image → Canvas Size…** and **Image → Image Size…**
   show Width and Height in the unit chosen from the **Units** menu beside them: pixels, inches,
   centimetres, millimetres, points (1/72 in) or picas (1/6 in), and in Canvas Size and Image

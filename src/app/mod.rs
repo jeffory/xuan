@@ -2,6 +2,7 @@ use theme::PaletteExt as _;
 use xuan::i18n::tr;
 mod ai_regions;
 mod canvas;
+mod canvas_presets_dialog;
 mod channel_pane;
 mod chrome;
 mod clipboard;
@@ -656,6 +657,8 @@ pub struct EditorApp {
     presets_edit: Option<presets_dialog::PresetsEdit>,
     /// The saved adjustment presets.
     adjustment_presets: xuan::adjustment_presets::Library,
+    /// File → New's size presets, read again each time it opens, and what reading them reported.
+    canvas_presets: canvas_presets_dialog::CanvasPresets,
     /// The Pen tool's path being drawn and the path shown for editing.
     pen: pen_tool::PenState,
     expand_amount: u32,
@@ -904,6 +907,7 @@ impl EditorApp {
             paths_edit: None,
             presets_edit: None,
             adjustment_presets: Default::default(),
+            canvas_presets: Default::default(),
             pen: Default::default(),
             expand_amount: 2,
             contract_amount: 2,
@@ -1723,6 +1727,7 @@ impl EditorApp {
                 let units = self.config.units;
                 self.size_units
                     .open(self.dimensions, unit, units.resolution);
+                self.load_canvas_presets();
                 self.dialog = Some(Dialog::New);
             }
             "new_collage" => self.open_new_collage(),

@@ -146,6 +146,12 @@ impl SizeUnits {
     pub fn size_edited(&mut self) {
         self.print = None;
     }
+
+    /// A preset set the size: changes of resolution keep its exact print size, in inches,
+    /// rather than the one its rounded pixels make.
+    pub fn keep_print_size(&mut self, inches: [f64; 2]) {
+        self.print = Some(inches);
+    }
 }
 
 /// Parses a size typed into a field showing `unit`: a plain number, or one with any unit
@@ -333,6 +339,26 @@ mod tests {
         // A large print size is bounded.
         units.resolution_changed(&mut dimensions, 1.0, 9600.0, true);
         assert_eq!(dimensions, [MAX_SIDE, MAX_SIDE]);
+    }
+
+    #[test]
+    fn a_preset_keeps_its_exact_print_size() {
+        // A4 at 300 ppi rounds to 2480 × 3508 px; changes of resolution work from 210 × 297 mm
+        // itself rather than from those pixels.
+        let mut units = units(Unit::Millimeters, [1, 1]);
+        let mut dimensions = [2480, 3508];
+        units.keep_print_size([210.0 / 25.4, 297.0 / 25.4]);
+        units.resolution_changed(&mut dimensions, 300.0, 150.0, true);
+        assert_eq!(dimensions, [1240, 1754]);
+        units.resolution_changed(&mut dimensions, 150.0, 72.0, true);
+        assert_eq!(dimensions, [595, 842]);
+        units.resolution_changed(&mut dimensions, 72.0, 300.0, true);
+        assert_eq!(dimensions, [2480, 3508]);
+        // Editing the size forgets it.
+        units.size_edited();
+        dimensions = [2480, 3509];
+        units.resolution_changed(&mut dimensions, 300.0, 150.0, true);
+        assert_eq!(dimensions, [1240, 1755]);
     }
 
     #[test]
