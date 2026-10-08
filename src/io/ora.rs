@@ -268,7 +268,7 @@ pub fn read<R: Read + Seek>(reader: R, budget: PixelBudget) -> Result<(Document,
     if let Some(resolution) = image
         .attribute("xres")
         .and_then(|v| v.trim().parse::<f32>().ok())
-        .filter(|r| r.is_finite() && (1.0..=9600.0).contains(r))
+        .filter(|r| crate::units::valid_resolution(f64::from(*r)))
     {
         document.resolution = resolution;
     }
