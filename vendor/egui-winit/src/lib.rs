@@ -880,11 +880,14 @@ impl State {
             events: _,                    // handled elsewhere
             mutable_text_under_cursor: _, // only used in eframe web
             ime,
-            #[cfg(feature = "accesskit")]
-            accesskit_update,
             num_completed_passes: _,    // `egui::Context::run` handles this
             request_discard_reasons: _, // `egui::Context::run` handles this
+            ..
         } = platform_output;
+        // `egui_kittest` turns on egui's own `accesskit` feature without ours, so name this field
+        // by access instead of in the pattern above, which would not compile in that build.
+        #[cfg(feature = "accesskit")]
+        let accesskit_update = platform_output.accesskit_update;
 
         for command in commands {
             match command {

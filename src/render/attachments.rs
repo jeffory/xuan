@@ -13,6 +13,15 @@ use super::{own_mask, sample};
 /// Resolve each image's children into a temporary raster. Source pixels and
 /// effect settings in the project remain untouched. Document order is bottom-up.
 pub(crate) fn prepare(document: &Document) -> Cow<'_, Document> {
+    let attached = prepare_attachments(document);
+    // Layer effects draw around the result, after any attached filters and adjustments.
+    match crate::layer_effects::prepare(attached.as_ref()) {
+        Some(prepared) => Cow::Owned(prepared),
+        None => attached,
+    }
+}
+
+fn prepare_attachments(document: &Document) -> Cow<'_, Document> {
     let owners: Vec<_> = document
         .layers
         .iter()

@@ -39,22 +39,55 @@ fn temperature_wb(raw: &DecodedRaw, temperature: f32) -> [f32; 3] {
     neutral.map(|v| (neutral[1] / v.max(0.001)).clamp(0.01, 100.0))
 }
 
-pub fn sample_white_balance(raw: &DecodedRaw, point: Point) -> [f32; 3] {
-    let x = (point.x * raw.camera.width() as f32) as i32;
-    let y = (point.y * raw.camera.height() as f32) as i32;
+/// Half-width of the square patch averaged by the eyedroppers (a 7x7 patch).
+const PATCH_RADIUS: i32 = 3;
+
+/// Average camera RGB over the patch around `point`, a normalized source-image
+/// coordinate (already mapped through [`source_point`] when sampling the edited
+/// view). This is the single implementation behind both eyedroppers.
+///
+/// Returns `None` when `point` lies outside the image (the display shows those
+/// areas as transparent) or when no pixel in the patch is usable. Patch offsets
+/// that fall outside the image are skipped rather than clamped, so edge pixels
+/// are not over-weighted. Non-finite pixels are always rejected; when
+/// `require_positive` is set, pixels with any channel at or below the noise
+/// floor are rejected too.
+pub(crate) fn sample_camera_patch(
+    raw: &DecodedRaw,
+    point: Point,
+    require_positive: bool,
+) -> Option<[f32; 3]> {
+    if !(0.0..=1.0).contains(&point.x) || !(0.0..=1.0).contains(&point.y) {
+        return None;
+    }
+    let (width, height) = (raw.camera.width() as i32, raw.camera.height() as i32);
+    let x = ((point.x * width as f32) as i32).min(width - 1);
+    let y = ((point.y * height as f32) as i32).min(height - 1);
     let mut sum = [0.0; 3];
-    for dy in -3..=3 {
-        for dx in -3..=3 {
-            let p = raw.camera.get_pixel(
-                (x + dx).clamp(0, raw.camera.width() as i32 - 1) as u32,
-                (y + dy).clamp(0, raw.camera.height() as i32 - 1) as u32,
-            );
-            for c in 0..3 {
-                sum[c] += p[c];
+    let mut count = 0_u32;
+    for py in (y - PATCH_RADIUS).max(0)..=(y + PATCH_RADIUS).min(height - 1) {
+        for px in (x - PATCH_RADIUS).max(0)..=(x + PATCH_RADIUS).min(width - 1) {
+            let pixel = raw.camera.get_pixel(px as u32, py as u32);
+            if pixel
+                .0
+                .iter()
+                .all(|v| v.is_finite() && (!require_positive || *v > 0.00001))
+            {
+                for c in 0..3 {
+                    sum[c] += pixel[c];
+                }
+                count += 1;
             }
         }
     }
-    sum.map(|v| (sum[1] / v.max(0.00001)).clamp(0.01, 100.0))
+    (count > 0).then(|| sum.map(|v| v / count as f32))
+}
+
+/// White-balance multipliers that neutralize the patch around `point`, or `None`
+/// when the patch cannot be sampled or has no green signal to normalize against.
+pub fn sample_white_balance(raw: &DecodedRaw, point: Point) -> Option<[f32; 3]> {
+    let mean = sample_camera_patch(raw, point, false)?;
+    (mean[1] > 0.00001).then(|| mean.map(|v| (mean[1] / v.max(0.00001)).clamp(0.01, 100.0)))
 }
 
 pub fn auto_exposure(raw: &DecodedRaw) -> f32 {
@@ -99,19 +132,52 @@ fn sample(image: &Rgb32FImage, x: f32, y: f32) -> [f32; 3] {
     })
 }
 
+/// Inverse lens/geometry mapping with the loop-invariant parts (rotation
+/// sin/cos, aspect, perspective and distortion coefficients) computed once.
+/// `source_point` is defined in terms of this, so batch callers cannot diverge,
+/// and the GPU uniforms (`gpu::raw::RawUniforms`) are built from these fields;
+/// `raw.wgsl` (`source_point`) evaluates the same expression.
+#[derive(Clone, Copy)]
+pub(crate) struct SourceMap {
+    pub sin: f32,
+    pub cos: f32,
+    pub aspect: f32,
+    pub perspective: [f32; 2],
+    pub distortion: f32,
+}
+
+impl SourceMap {
+    pub(crate) fn new(s: &DevelopSettings, aspect: f32) -> Self {
+        let (sin, cos) = s.rotation.to_radians().sin_cos();
+        Self {
+            sin,
+            cos,
+            aspect,
+            perspective: s.perspective,
+            distortion: s.distortion,
+        }
+    }
+
+    pub(crate) fn apply(&self, point: Point) -> Point {
+        let aspect = self.aspect;
+        let (sin, cos) = (self.sin, self.cos);
+        let mut x = (point.x - 0.5) * 2.0;
+        let mut y = (point.y - 0.5) * 2.0 / aspect;
+        (x, y) = (cos * x + sin * y, -sin * x + cos * y);
+        y *= aspect;
+        let perspective =
+            (1.0 + self.perspective[0] * x * 0.004 + self.perspective[1] * y * 0.004).max(0.2);
+        x /= perspective;
+        y /= perspective;
+        let r2 = (x * x + y * y) * 0.5;
+        let scale = 1.0 + self.distortion * 0.003 * r2;
+        Point::new(0.5 + x * scale * 0.5, 0.5 + y * scale * 0.5)
+    }
+}
+
 /// Inverse lens/geometry mapping, shared by rendering and the WB eyedropper.
 pub fn source_point(point: Point, s: &DevelopSettings, aspect: f32) -> Point {
-    let mut x = (point.x - 0.5) * 2.0;
-    let mut y = (point.y - 0.5) * 2.0 / aspect;
-    let (sin, cos) = s.rotation.to_radians().sin_cos();
-    (x, y) = (cos * x + sin * y, -sin * x + cos * y);
-    y *= aspect;
-    let perspective = (1.0 + s.perspective[0] * x * 0.004 + s.perspective[1] * y * 0.004).max(0.2);
-    x /= perspective;
-    y /= perspective;
-    let r2 = (x * x + y * y) * 0.5;
-    let scale = 1.0 + s.distortion * 0.003 * r2;
-    Point::new(0.5 + x * scale * 0.5, 0.5 + y * scale * 0.5)
+    SourceMap::new(s, aspect).apply(point)
 }
 
 fn overlay_weight(overlay: &Overlay, point: Point, aspect: f32) -> f32 {
@@ -236,6 +302,8 @@ where
     };
     wb[1] *= 2.0_f32.powf(-s.tint / 150.0);
     let exposure = 2.0_f32.powf(s.exposure);
+    let geometry = SourceMap::new(s, aspect);
+    let negative = s.negative.enabled.then(|| s.negative.inversion());
     let mut pixels = vec![0.0_f32; width as usize * height as usize * 3];
     pixels
         .par_chunks_mut(width as usize * 3)
@@ -247,7 +315,7 @@ where
                     (x as f32 + 0.5) / width as f32,
                     (y as f32 + 0.5) / height as f32,
                 );
-                let source = source_point(point, s, aspect);
+                let source = geometry.apply(point);
                 let mut camera = sample(
                     &raw.camera,
                     source.x * width as f32 - 0.5,
@@ -265,8 +333,8 @@ where
                 }
                 // Film dyes encode scene density, not the scanner camera's scene
                 // colors. Invert those channels before any positive-image controls.
-                let mut rgb = if s.negative.enabled {
-                    s.negative.convert(camera).map(|v| v * exposure)
+                let mut rgb = if let Some(negative) = &negative {
+                    negative.convert(camera).map(|v| v * exposure)
                 } else {
                     matrix(
                         raw.camera_to_rgb,
@@ -358,8 +426,8 @@ where
         }
     }
     cancelled(cancel)?;
-    let [left, top, right, bottom] = s.crop_pixels([width, height]);
-    let [out_width, out_height] = s.output_size([width, height]);
+    let map = s.output_map([width, height]);
+    let [out_width, out_height] = map.size;
     let mut output = ImageBuffer::<Rgba<T>, Vec<T>>::new(out_width, out_height);
     let out_width = output.width() as usize;
     output
@@ -369,19 +437,15 @@ where
         .try_for_each(|(y, row)| -> Result<()> {
             cancelled(cancel)?;
             for (x, p) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let [x, y] = s.crop_source_pixel(x as u32, y as u32, [right - left, bottom - top]);
-                let rgb = image.get_pixel(left + x, top + y);
+                let [x, y] = map.source_pixel(x as u32, y as u32);
+                let rgb = image.get_pixel(x, y);
                 for c in 0..3 {
                     p[c] = encode(rgb[c].clamp(0.0, 1.0));
                 }
-                let point = source_point(
-                    Point::new(
-                        (left as f32 + x as f32 + 0.5) / width as f32,
-                        (top as f32 + y as f32 + 0.5) / height as f32,
-                    ),
-                    s,
-                    aspect,
-                );
+                let point = geometry.apply(Point::new(
+                    (x as f32 + 0.5) / width as f32,
+                    (y as f32 + 0.5) / height as f32,
+                ));
                 p[3] = encode(
                     if (0.0..=1.0).contains(&point.x) && (0.0..=1.0).contains(&point.y) {
                         1.0

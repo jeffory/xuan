@@ -245,9 +245,47 @@ pub enum Adjustment {
         seed: u32,
     },
     Invert,
+    /// Photoshop's Black & White (upstream's `BlackWhiteSettings`): how bright each family of
+    /// colors becomes in gray, in percent (−200…300), ordered red, yellow, green, cyan, blue,
+    /// magenta; optionally tinted with a hue (0…360°) at a saturation (0…100%). Format 7.
+    BlackWhite {
+        weights: [f32; 6],
+        tint: bool,
+        tint_hue: f32,
+        tint_saturation: f32,
+    },
+    /// Photoshop's Color Balance (upstream's `ColorBalanceSettings`): for shadows, midtones and
+    /// highlights, shifts toward red (from cyan), green (from magenta) and blue (from yellow), in
+    /// percent (−100…100). Format 7.
+    ColorBalance {
+        shadows: [f32; 3],
+        midtones: [f32; 3],
+        highlights: [f32; 3],
+        preserve_luminosity: bool,
+    },
 }
 
 impl Adjustment {
+    /// Photoshop's defaults for Black & White (reds 40, yellows 60, greens 40, cyans 60, blues 20,
+    /// magentas 80; a 20% tint at 40° when tinting).
+    pub const BLACK_WHITE: Self = Self::BlackWhite {
+        weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0],
+        tint: false,
+        tint_hue: 40.0,
+        tint_saturation: 20.0,
+    };
+    pub const COLOR_BALANCE: Self = Self::ColorBalance {
+        shadows: [0.0; 3],
+        midtones: [0.0; 3],
+        highlights: [0.0; 3],
+        preserve_luminosity: true,
+    };
+
+    /// Whether .xuan format 6 and earlier can store this adjustment.
+    pub fn is_legacy(&self) -> bool {
+        !matches!(self, Self::BlackWhite { .. } | Self::ColorBalance { .. })
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::HueSaturation { .. } => "Hue/Saturation",
@@ -260,6 +298,8 @@ impl Adjustment {
             Self::GradientMap { .. } => "Gradient Map",
             Self::Grain { .. } | Self::FilmGrain { .. } => "Grain",
             Self::Invert => "Invert",
+            Self::BlackWhite { .. } => "Black & White",
+            Self::ColorBalance { .. } => "Color Balance",
         }
     }
 }
@@ -269,6 +309,25 @@ pub struct ShapeStyle {
     pub kind: crate::paint::ShapeKind,
     pub color: [u8; 4],
     pub corner_radius: f32,
+}
+
+/// Where a layer produced by a plugin came from, so the action can be repeated.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Generated {
+    pub plugin: String,
+    pub version: String,
+    pub action: String,
+    #[serde(default)]
+    pub inputs: serde_json::Value,
+    /// The layer the source pixels were taken from, if it still exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Uuid>,
+    /// Hash of the source pixels that were sent, to tell whether they changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    /// RFC 3339 timestamp.
+    #[serde(default)]
+    pub created: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -295,6 +354,11 @@ pub struct Layer {
     pub text: Option<crate::text::TextStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<crate::raw::RawAsset>,
+    /// Stroke, shadows, overlay and glows drawn around the layer's pixels (format 7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<crate::layer_effects::LayerEffects>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<Generated>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -327,6 +391,8 @@ impl Layer {
             shape: None,
             text: None,
             raw: None,
+            effects: None,
+            generated: None,
             pixels: None,
         }
     }
@@ -366,6 +432,12 @@ pub struct Document {
     pub resolution: f32,
     pub layers: Vec<Layer>,
     pub active: Option<Uuid>,
+    /// Alignment guides (format version 5). Missing in older projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<crate::layout::Guide>,
+    /// This project's layout grid; `None` uses the app's default grid (format version 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<crate::layout::GridSettings>,
     #[serde(skip)]
     pub selected: HashSet<Uuid>,
     #[serde(skip)]
@@ -384,6 +456,8 @@ impl Document {
             active: Some(layer.id),
             selected: HashSet::from([layer.id]),
             layers: vec![layer],
+            guides: Vec::new(),
+            grid: None,
             selection: None,
         })
     }
@@ -537,13 +611,19 @@ impl Document {
             "Invalid resolution"
         );
         ensure!(self.layers.len() <= MAX_LAYERS, "Too many layers");
-        let ids: HashSet<_> = self.layers.iter().map(|layer| layer.id).collect();
+        crate::layout::validate_guides(&self.guides)?;
+        if let Some(grid) = &self.grid {
+            grid.validate()?;
+        }
+        // Indexed so hostile files with many deeply nested layers validate in linear time.
+        let ids: std::collections::HashMap<_, _> =
+            self.layers.iter().map(|layer| (layer.id, layer)).collect();
         ensure!(
             ids.len() == self.layers.len(),
             "Duplicate layer identifiers"
         );
         ensure!(
-            self.active.is_none_or(|id| ids.contains(&id)),
+            self.active.is_none_or(|id| ids.contains_key(&id)),
             "Missing active layer"
         );
         let mut pixels = 0_u64;
@@ -586,6 +666,14 @@ impl Document {
             if let Some(adjustment) = &layer.adjustment {
                 crate::effects::validate_adjustment(adjustment)?;
             }
+            if let Some(effects) = &layer.effects {
+                effects.validate()?;
+                // As upstream, only layers with pixels of their own take effects.
+                ensure!(
+                    !layer.group && !layer.is_effect(),
+                    "Layer effects need a pixel layer"
+                );
+            }
             if let Some(filter) = &layer.filter {
                 filter.validate()?;
                 ensure!(
@@ -627,10 +715,9 @@ impl Document {
                     visited.insert(id) && visited.len() <= 65,
                     "Cyclic or excessively nested groups"
                 );
-                let container = self
-                    .layers
-                    .iter()
-                    .find(|l| l.id == id)
+                let container = ids
+                    .get(&id)
+                    .copied()
                     .ok_or_else(|| anyhow::anyhow!("Missing parent layer"))?;
                 ensure!(
                     container.group || (container.can_attach_effects() && child.is_effect()),
@@ -646,7 +733,7 @@ impl Document {
                     !layer.group && visited.insert(id) && visited.len() <= 257,
                     "Invalid clipping mask graph"
                 );
-                let target = self.layers.iter().find(|l| l.id == id);
+                let target = ids.get(&id).copied();
                 ensure!(
                     target.is_some_and(|l| !l.group && !l.standalone_mask && l.filter.is_none()),
                     "Missing clipping source"

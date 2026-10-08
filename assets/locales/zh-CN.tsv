@@ -5,6 +5,16 @@ General preferences	常规设置
 Language	语言
 Language changes apply immediately.	语言更改立即生效。
 Configuration file	配置文件
+Appearance	外观
+Window appearance	窗口外观
+Window title bar	窗口标题栏
+System	系统
+Compact	紧凑
+Use the title bar and window buttons of your desktop.	使用桌面环境提供的标题栏和窗口按钮。
+Show the menus in the title bar, with window buttons on the right.	在标题栏中显示菜单，窗口按钮位于右侧。
+Show the menus in the title bar, with macOS-style window buttons on the left.	在标题栏中显示菜单，macOS 风格的窗口按钮位于左侧。
+Rounded window corners appear after restarting Xuan.	重新启动 Xuan 后显示圆角窗口。
+Title bar changes apply immediately.	标题栏更改立即生效。
 Could not load settings	无法加载设置
 Could not save settings	无法保存设置
 Done	完成
@@ -26,6 +36,7 @@ Save As…	另存为…
 Export Image…	导出图像…
 Close Project	关闭项目
 Close RAW Develop	关闭 RAW 冲洗
+Quit	退出
 Undo	撤销
 Redo	重做
 Cut	剪切
@@ -71,7 +82,6 @@ Actual Pixels	实际像素
 Zoom In	放大
 Zoom Out	缩小
 Show Transform Controls	显示变换控件
-Snap to Canvas and Layers	吸附到画布与图层
 Keyboard Shortcuts	键盘快捷键
 About Xuan	关于 Xuan
 Close window	关闭窗口
@@ -91,6 +101,7 @@ Lasso	套索
 Magic Wand	魔棒
 Crop	裁剪
 Brush	画笔
+Pencil	铅笔
 Eraser	橡皮擦
 Spot Healing	污点修复
 Clone Stamp	仿制图章
@@ -155,7 +166,12 @@ Radial	径向
 Blur	模糊
 Smudge	涂抹
 Aligned	对齐
-Sample: All visible layers	取样：所有可见图层
+Sample	取样
+Current layer	当前图层
+All visible layers	所有可见图层
+Point	单点
+3×3	3×3 平均
+5×5	5×5 平均
 Alt-click on the canvas to set a clone source	在画布上 Alt 单击设置仿制来源
 This Layer	当前图层
 All Layers	所有图层
@@ -182,6 +198,15 @@ Hue	色相
 Saturation	饱和度
 Color	颜色
 Luminosity	明度
+Dissolve	溶解
+Darker Color	深色
+Lighter Color	浅色
+Linear Dodge (Add)	线性减淡（添加）
+Vivid Light	亮光
+Linear Light	线性光
+Pin Light	点光
+Hard Mix	实色混合
+Divide	划分
 Lock layer	锁定图层
 Unlock layer	解锁图层
 Toggle visibility	切换可见性
@@ -232,6 +257,7 @@ Some projects have unsaved changes.	部分项目有未保存的更改。
 Discard changes	放弃更改
 Couldn't complete the operation	无法完成操作
 Export image	导出图像
+Close / Quit	关闭 / 退出
 Export…	导出…
 Format	格式
 Quality	质量
@@ -287,6 +313,11 @@ Levels	色阶
 Curves	曲线
 Exposure	曝光
 Gradient Map	渐变映射
+Black & White	黑白
+Color Balance	色彩平衡
+Midtones	中间调
+Preserve Luminosity	保持明度
+Default	默认值
 Film Grain	胶片颗粒
 Invert	反相
 Gaussian Blur	高斯模糊
@@ -420,6 +451,10 @@ Vertical	垂直
 Bounds as a fraction of the rotated image	以旋转后图像的比例设置边界
 Uncrop	取消裁剪
 Square	正方形
+Round	圆形
+Tip	笔尖
+Switch between Brush and Pencil	在画笔与铅笔之间切换
+Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan	拖动绘制硬边像素 · [ ] 大小 · Shift 单击绘制直线 · 1–0 不透明度 · 空格平移
 Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.	镜头校正需手动调整。照片编辑器目前使用 8 位 sRGB；RAW 数据和冲洗设置保留原始精度。
 Local adjustments	局部调整
 Add a mask, then drag over the photo to place it.	添加蒙版后，在照片上拖动以放置蒙版。
@@ -555,3 +590,169 @@ Enable / Disable	启用 / 禁用
 Link / Unlink	链接 / 取消链接
 Create / Release Clipping Mask	创建 / 释放剪贴蒙版
 Load Layer / Mask	载入图层 / 蒙版
+Cannot sample this area. Choose a neutral area of the image.	无法取样此区域。请选择图像中的中性区域。
+Add dropped files	添加拖入的文件
+Insert the dropped file as a layer, or open it as a new document?	将拖入的文件插入为图层，还是作为新文档打开？
+Insert the dropped files as layers, or open them as new documents?	将拖入的文件插入为图层，还是作为新文档打开？
+Open as new document	作为新文档打开
+Insert as layer	插入为图层
+Pixel Grid	像素网格
+Show pixel grid above	显示像素网格的缩放比例高于
+Outlines individual pixels when zoomed in past this level, between 200% and 6400%.	放大超过此比例时勾勒出每个像素，范围为 200% 至 6400%。
+Content-Aware	内容识别
+Create Texture	创建纹理
+Proximity Match	近似匹配
+Spot Healing works on layer pixels, not masks	污点修复只能用于图层像素，不能用于蒙版
+Navigator	导航器
+Show	显示
+Grid	网格
+Guides	参考线
+Grid Settings…	网格设置…
+Grid Settings	网格设置
+Rulers	标尺
+Snap	对齐
+Snap To	对齐到
+Document Bounds	文档边界
+Lock Guides	锁定参考线
+Clear Guides	清除参考线
+New Guide	新建参考线
+Move Guide	移动参考线
+Delete Guide	删除参考线
+Style	样式
+Gridline every	网格线间隔
+pixels	像素
+Subdivisions	子网格
+A subdivision every	每隔
+pixels.	像素一条子网格线。
+Use no more subdivisions than the pixels between gridlines.	子网格数不能超过网格线之间的像素数。
+Restore Defaults	恢复默认值
+Choose a custom grid color	选择自定义网格颜色
+Light Gray	浅灰色
+Light Blue	浅蓝色
+Light Red	浅红色
+Medium Blue	中蓝色
+Cyan	青色
+Black	黑色
+Custom	自定义
+Lines	直线
+Dashed Lines	虚线
+Dots	点线
+Rulers / Grid / Guides	标尺 / 网格 / 参考线
+Snap / Lock guides	对齐 / 锁定参考线
+Drag from a ruler	从标尺拖动
+New guide	新建参考线
+No document open	未打开文档
+Imported with changes	已导入（有改动）
+Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
+Layer effects on folders or adjustment layers	文件夹或调整图层上的图层效果
+Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
+Per-letter text colors (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
+Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
+Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以像素导入）
+Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
+Blur or noise settings adapted to Xuan	已按 Xuan 调整的模糊或杂色设置
+Clipping masks on blur or noise layers	模糊或杂色图层上的剪贴蒙版
+Layer Effects	图层效果
+Layer Effects…	图层效果…
+Stroke	描边
+Drop Shadow	投影
+Color Overlay	颜色叠加
+Inner Shadow	内阴影
+Outer Glow	外发光
+Inner Glow	内发光
+Position	位置
+Outside	外部
+Inside	内部
+Remove Effect	移除效果
+Add Effect	添加效果
+Not on this layer	此图层上没有
+Effects stay editable; the pixels are not changed	效果可随时编辑，不会改变像素
+Select a pixel or text layer to add effects	请选择像素或文字图层以添加效果
+Free Transform	自由变换
+Re-run Plugin Action…	重新运行插件操作…
+Inverse Selection	反选
+Show Grid	显示网格
+Show Guides	显示参考线
+Reset Panel Layout	重置面板布局
+Manage Plugins…	管理插件…
+Window	窗口
+Tools	工具
+Plugins	插件
+Switch Rectangle / Ellipse Marquee	切换矩形 / 椭圆选框
+Switch Freehand / Polygonal Lasso	切换自由 / 多边形套索
+Switch Rectangle / Ellipse Shape	切换矩形 / 椭圆形状
+Swap Colors	交换颜色
+Reset Colors	复位颜色
+Decrease Brush Size	减小画笔大小
+Increase Brush Size	增大画笔大小
+Decrease Brush Hardness	降低画笔硬度
+Increase Brush Hardness	提高画笔硬度
+Rotate Left	向左旋转
+Rotate Right	向右旋转
+Show Edited	显示编辑后
+Show Original	显示原图
+Split View	分割视图
+Side by Side View	并排视图
+Show Clipping	显示溢出
+Search commands or keys	搜索命令或按键
+Reset All	全部重置
+Reassign	重新分配
+{key} is already used by “{command}”.	{key} 已被“{command}”使用。
+{key} is reserved for the editor and cannot be assigned.	{key} 由编辑器保留，无法分配。
+Single letters and digits are kept for tools. Add Ctrl or Alt.	单个字母和数字保留给工具，请加上 Ctrl 或 Alt。
+Click a shortcut and press keys. Escape cancels; Backspace removes it.	点击快捷键后按下新按键。Esc 取消，Backspace 移除。
+Press keys…	请按键…
+Add shortcut	添加快捷键
+Restore the default shortcut	恢复默认快捷键
+Change the keys that run commands	更改运行命令的按键
+Other	其他
+Customize…	自定义…
+Imported with changes. These parts of the Photoshop file aren't supported yet:	已导入，但有改动。Photoshop 文件的以下部分暂不支持：
+Folder blend mode	文件夹混合模式
+passes through	按“穿透”处理
+Bevel, satin, gradient or pattern effects and other effects Xuan doesn't have (left out)	斜面、光泽、渐变或图案效果等 Xuan 不支持的效果（已省略）
+Effect blend modes, spread, noise or centered strokes (drawn approximately)	效果的混合模式、扩展、杂色或居中描边（近似绘制）
+Fill opacity on layers with effects (drawn at full fill)	带效果图层的填充不透明度（按完全填充绘制）
+Vertical, warped or transformed text (imported as pixels)	竖排、变形或经过变换的文字（以像素导入）
+Text with several styles (kept until the text is edited)	包含多种样式的文字（编辑文字前保持原样）
+Vector shapes (imported as pixels)	矢量形状（以像素导入）
+Vector masks (left out)	矢量蒙版（已省略）
+Shapes saved without pixels that Xuan can't draw (left out)	未保存像素且 Xuan 无法绘制的形状（已省略）
+Smart objects (imported as pixels)	智能对象（以像素导入）
+Fill layers (imported as pixels)	填充图层（以像素导入）
+Layers cropped to the canvas to fit the memory limit	为符合内存限制而裁切到画布的图层
+Clipping masks on folders or left-out layers	文件夹或已省略图层上的剪贴蒙版
+Photoshop files are limited to 1 GiB	Photoshop 文件不能超过 1 GiB
+The Photoshop file is damaged or incomplete	Photoshop 文件已损坏或不完整
+The Photoshop file's layers don't fit in the 100-megapixel limit, even when cropped to the canvas	即使裁切到画布，Photoshop 文件的图层仍超出 1 亿像素的限制
+This is not a Photoshop file	这不是 Photoshop 文件
+This Photoshop file version isn't supported	不支持此 Photoshop 文件版本
+Only 8-bit RGB Photoshop files can be imported. In Photoshop, choose Image → Mode → RGB Color and 8 Bits/Channel, then save again.	只能导入 8 位 RGB 的 Photoshop 文件。请在 Photoshop 中选择“图像 → 模式 → RGB 颜色”和“8 位/通道”，然后重新存储。
+This Photoshop file uses the {} color mode.	此 Photoshop 文件使用 {} 颜色模式。
+This Photoshop file uses {} bits per channel.	此 Photoshop 文件每通道 {} 位。
+Bitmap	位图
+Grayscale	灰度
+Indexed Color	索引颜色
+CMYK	CMYK
+Multichannel	多通道
+Duotone	双色调
+Lab	Lab
+unknown	未知
+A Photoshop layer's bounds are out of range	Photoshop 图层的边界超出范围
+The Photoshop file has too many layers	Photoshop 文件的图层过多
+This Photoshop file uses an unsupported compression method	此 Photoshop 文件使用了不支持的压缩方式
+The Photoshop file's folders are nested too deeply	Photoshop 文件的文件夹嵌套过深
+Background	背景
+Blend mode	混合模式
+drawn as Normal	按“正常”绘制
+Adjustment layer	调整图层
+left out	已省略
+Import “{}”?	导入“{}”？
+Xuan will convert these Photoshop features. Nothing is applied until you continue.	Xuan 将转换以下 Photoshop 功能。继续之前不会应用任何更改。
+Import	导入
+Import Photoshop File	导入 Photoshop 文件
+Too many layers	图层过多
+Command Palette…	命令面板…
+Type a command…	输入命令…
+No matching commands	没有匹配的命令
+Recent	最近使用

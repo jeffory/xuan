@@ -9,9 +9,77 @@ use xuan::{
     io, operations, render,
 };
 
-use super::{Dialog, EditorApp, theme};
+use super::{Dialog, EditorApp, commands::Category, theme};
 
 impl EditorApp {
+    /// Help → Keyboard Shortcuts: the bindings in effect, from the command registry, and the
+    /// keys and gestures the editor handles itself.
+    fn shortcuts_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let mut customize = false;
+        widgets::Window::new(tr("Keyboard shortcuts"))
+            .default_width(690.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(520.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("shortcut_grid")
+                            .spacing(vec2(35.0, 8.0))
+                            .show(ui, |ui| {
+                                for category in Category::ALL {
+                                    let mut rows = self
+                                        .keymap
+                                        .entries()
+                                        .iter()
+                                        .filter(|e| e.category() == category && !e.keys.is_empty())
+                                        .peekable();
+                                    if rows.peek().is_none() {
+                                        continue;
+                                    }
+                                    ui.label(
+                                        RichText::new(tr(category.name())).color(theme::MUTED),
+                                    );
+                                    ui.end_row();
+                                    for entry in rows {
+                                        let keys: Vec<String> =
+                                            entry.keys.iter().map(|k| k.label()).collect();
+                                        ui.label(RichText::new(keys.join(" / ")).strong());
+                                        ui.label(entry.label());
+                                        ui.end_row();
+                                    }
+                                }
+                                ui.label(RichText::new(tr("Other")).color(theme::MUTED));
+                                ui.end_row();
+                                for (key, label) in [
+                                    (tr("Drag from a ruler"), tr("New guide")),
+                                    ("1–0", tr("Brush or layer opacity")),
+                                    ("Alt-click", tr("Set clone source")),
+                                    ("Space-drag", tr("Pan canvas")),
+                                    (
+                                        tr("Horizontal wheel / Shift+wheel"),
+                                        tr("Pan canvas horizontally"),
+                                    ),
+                                    (tr("Wheel over a slider or number"), tr("Adjust value")),
+                                    ("Enter / Escape", tr("Apply crop / Cancel gesture")),
+                                ] {
+                                    ui.label(RichText::new(key).strong());
+                                    ui.label(label);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                ui.add_space(8.0);
+                customize = widgets::button(ui, tr("Customize…")).clicked();
+            });
+        if customize {
+            super::settings::show_settings_page(ctx, super::settings::SettingsPage::Keyboard);
+            self.dialog = Some(Dialog::Settings);
+        } else if !open {
+            self.dialog = None;
+        }
+    }
+
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.job {
             widgets::Window::new(&job.name).show(ctx, |ui| {
@@ -34,62 +102,13 @@ impl EditorApp {
                 Dialog::Effect => self.effect_dialog(ctx),
                 Dialog::Text => self.text_dialog(ctx),
                 Dialog::Export => self.export_dialog(ctx),
-                Dialog::Shortcuts => {
-                    let mut open = true;
-                    widgets::Window::new(tr("Keyboard shortcuts"))
-                        .default_width(690.0)
-                        .open(&mut open)
-                        .show(ctx, |ui| {
-                            egui::Grid::new("shortcut_grid")
-                                .spacing(vec2(35.0, 10.0))
-                                .show(ui, |ui| {
-                                    for (key, label) in [
-                                        ("Ctrl+N / O / S", tr("New / Open / Save")),
-                                        ("Ctrl+Shift+O", tr("Import image as layer")),
-                                        ("Ctrl+Alt+Shift+S", tr("Export image")),
-                                        ("Ctrl+Z / Ctrl+Shift+Z", tr("Undo / Redo")),
-                                        (
-                                            "Ctrl+J / Ctrl+E / Ctrl+G",
-                                            tr("Duplicate / Merge / Group"),
-                                        ),
-                                        ("Ctrl+A / Ctrl+D", tr("Select all / Deselect")),
-                                        ("Ctrl+C / Ctrl+V", tr("Copy / Paste image")),
-                                        ("Ctrl+0 / Ctrl+1", tr("Fit / Actual pixels")),
-                                        (
-                                            "V / M / L / W / C",
-                                            tr("Move / Marquee / Lasso / Wand / Crop"),
-                                        ),
-                                        (
-                                            "B / E / J / S / R",
-                                            tr("Brush / Eraser / Heal / Clone / Blur"),
-                                        ),
-                                        (
-                                            "G / U / I / H / Z",
-                                            tr("Gradient / Shape / Eyedropper / Hand / Zoom"),
-                                        ),
-                                        ("[ / ] · Shift+[ / ]", tr("Brush size / Hardness")),
-                                        ("T", tr("Text")),
-                                        ("1–0", tr("Brush or layer opacity")),
-                                        ("Alt-click", tr("Set clone source")),
-                                        ("X / D", tr("Swap / Reset colors")),
-                                        ("Space-drag", tr("Pan canvas")),
-                                        (
-                                            tr("Horizontal wheel / Shift+wheel"),
-                                            tr("Pan canvas horizontally"),
-                                        ),
-                                        (tr("Wheel over a slider or number"), tr("Adjust value")),
-                                        ("Enter / Escape", tr("Apply crop / Cancel gesture")),
-                                    ] {
-                                        ui.label(RichText::new(key).strong());
-                                        ui.label(label);
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                    if !open {
-                        self.dialog = None;
-                    }
-                }
+                Dialog::DropChoice => self.drop_dialog(ctx),
+                Dialog::PluginPermissions => self.plugin_permissions_dialog(ctx),
+                Dialog::Plugins => self.plugin_manager_dialog(ctx),
+                Dialog::PluginProposal => self.plugin_proposal_dialog(ctx),
+                Dialog::GridSettings => self.grid_settings_dialog(ctx),
+                Dialog::LayerEffects => self.layer_effects_dialog(ctx),
+                Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {
                     let mut open = true;
                     widgets::Window::new(tr("About Xuan"))
@@ -111,6 +130,21 @@ impl EditorApp {
             }
         }
         self.close_dialog(ctx);
+        self.photoshop_dialog(ctx);
+        if let Some(notice) = self.notice.clone() {
+            let mut dismiss = false;
+            widgets::Window::new(tr("Imported with changes"))
+                .id("import_notice")
+                .default_width(460.0)
+                .show(ctx, |ui| {
+                    ui.label(notice);
+                    ui.add_space(12.0);
+                    dismiss = widgets::primary_button(ui, tr("OK")).clicked();
+                });
+            if dismiss {
+                self.notice = None;
+            }
+        }
         if let Some(error) = self.error.clone() {
             let mut dismiss = false;
             widgets::Window::new(tr("Couldn't complete the operation"))
@@ -502,6 +536,97 @@ impl EditorApp {
                                 widgets::checkbox(ui, monochrome, tr("Monochromatic")).changed();
                         }
                         Adjustment::Invert => {}
+                        Adjustment::BlackWhite {
+                            weights,
+                            tint,
+                            tint_hue,
+                            tint_saturation,
+                        } => {
+                            for (weight, name) in weights
+                                .iter_mut()
+                                .zip(["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"])
+                            {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(weight, -200.0..=300.0)
+                                            .text(tr(name))
+                                            .suffix("%")
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                            }
+                            changed |= widgets::checkbox(ui, tint, tr("Tint")).changed();
+                            ui.add_enabled_ui(*tint, |ui| {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(tint_hue, 0.0..=360.0)
+                                            .text(tr("Hue"))
+                                            .suffix("°")
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(tint_saturation, 0.0..=100.0)
+                                            .text(tr("Saturation"))
+                                            .suffix("%")
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                            });
+                            if widgets::button(ui, tr("Default")).clicked() {
+                                if let Adjustment::BlackWhite {
+                                    weights: defaults, ..
+                                } = Adjustment::BLACK_WHITE
+                                {
+                                    *weights = defaults;
+                                }
+                                changed = true;
+                            }
+                        }
+                        Adjustment::ColorBalance {
+                            shadows,
+                            midtones,
+                            highlights,
+                            preserve_luminosity,
+                        } => {
+                            let tone_id = ui.id().with("color_balance_tone");
+                            let mut tone = ui.data(|d| d.get_temp::<usize>(tone_id).unwrap_or(1));
+                            widgets::segmented(
+                                ui,
+                                &mut tone,
+                                &[
+                                    (0, tr("Shadows")),
+                                    (1, tr("Midtones")),
+                                    (2, tr("Highlights")),
+                                ],
+                            );
+                            ui.data_mut(|d| d.insert_temp(tone_id, tone));
+                            let values = match tone {
+                                0 => shadows,
+                                2 => highlights,
+                                _ => midtones,
+                            };
+                            for (value, (low, high)) in values.iter_mut().zip([
+                                ("Cyan", "Red"),
+                                ("Magenta", "Green"),
+                                ("Yellow", "Blue"),
+                            ]) {
+                                changed |= ui
+                                    .add(
+                                        widgets::Slider::new(value, -100.0..=100.0)
+                                            .text(format!("{} – {}", tr(low), tr(high)))
+                                            .max_decimals(0),
+                                    )
+                                    .changed();
+                            }
+                            changed |= widgets::checkbox(
+                                ui,
+                                preserve_luminosity,
+                                tr("Preserve Luminosity"),
+                            )
+                            .changed();
+                        }
                     }
                 }
                 if let Some(filter) = &mut edit.filter {
@@ -679,6 +804,19 @@ impl EditorApp {
             self.dialog = None;
             return;
         }
+        let plugin_formats = self.plugin_export_formats();
+        let formats: Vec<(String, String)> = ["png", "jpg", "tiff", "webp"]
+            .iter()
+            .map(|f| (f.to_string(), f.to_uppercase()))
+            .chain(
+                plugin_formats
+                    .iter()
+                    .filter(|(extension, ..)| {
+                        !["png", "jpg", "tiff", "webp"].contains(&extension.as_str())
+                    })
+                    .map(|(extension, label, ..)| (extension.clone(), label.clone())),
+            )
+            .collect();
         if self.export_changed {
             let doc = &self.session().unwrap().document;
             let factor = (700.0 / doc.width.max(doc.height) as f32).min(1.0);
@@ -734,12 +872,12 @@ impl EditorApp {
                     widgets::PopUp::from_id_salt("export_format")
                         .selected_text(self.export_format.to_uppercase())
                         .show_ui(ui, |ui| {
-                            for format in ["png", "jpg", "tiff", "webp"] {
+                            for (format, label) in &formats {
                                 self.export_changed |= widgets::menu_choice(
                                     ui,
                                     &mut self.export_format,
-                                    format.into(),
-                                    format.to_uppercase(),
+                                    format.clone(),
+                                    label,
                                 )
                                 .changed();
                             }
@@ -772,21 +910,39 @@ impl EditorApp {
                 });
             });
         if export {
-            let session = self.session().unwrap();
+            let title = self.session().unwrap().title.clone();
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter(
                     self.export_format.to_uppercase(),
                     &[self.export_format.as_str()],
                 )
-                .set_file_name(format!("{}.{}", session.title, self.export_format))
+                .set_file_name(format!("{title}.{}", self.export_format))
                 .save_file()
             {
-                match io::export(&session.document, &path, self.jpeg_quality) {
-                    Ok(()) => {
-                        self.status = format!("{} {}", tr("Exported"), path.display());
-                        self.dialog = None;
+                match plugin_formats
+                    .iter()
+                    .find(|(extension, ..)| *extension == self.export_format)
+                {
+                    // The plugin writes the file in the background and the
+                    // status bar reports when it is done.
+                    Some((_, _, plugin, format)) => {
+                        let (plugin, format) = (plugin.clone(), format.clone());
+                        match self.start_plugin_export(&plugin, &format, &path) {
+                            Ok(()) => self.dialog = None,
+                            Err(error) => self.error = Some(format!("{error:#}")),
+                        }
                     }
-                    Err(error) => self.error = Some(error.to_string()),
+                    None => match io::export(
+                        &self.session().unwrap().document,
+                        &path,
+                        self.jpeg_quality,
+                    ) {
+                        Ok(()) => {
+                            self.status = format!("{} {}", tr("Exported"), path.display());
+                            self.dialog = None;
+                        }
+                        Err(error) => self.error = Some(format!("{error:#}")),
+                    },
                 }
             }
         }

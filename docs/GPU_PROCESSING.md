@@ -11,7 +11,8 @@ continue to work.
 | Module / operation | Execution |
 | --- | --- |
 | All four raster filters | GPU Gaussian Blur, Motion Blur, Add Noise, and Lens Correction; selection blending and Gaussian mask targets also use compute |
-| Every adjustment variant | GPU Hue/Saturation, hue ranges/colorize, Levels/channel levels, Curves/channel curves, Exposure, Gradient Map, Film Grain, Grain, and Invert; destructive pixels, masks, and adjustment layers |
+| Every adjustment variant | GPU Hue/Saturation, hue ranges/colorize, Levels/channel levels, Curves/channel curves, Exposure, Gradient Map, Film Grain, Grain, Black & White, Color Balance, and Invert; destructive pixels, masks, and adjustment layers |
+| Layer effects | GPU stroke (separable reach), drop and inner shadows (bilinear shift, separable Gaussian), outer and inner glows, color overlay and the final compose, for rasters of 16,384 pixels or more; smaller ones and machines without a GPU use the CPU passes in `layer_effects`. Results are cached by pixels, mask and settings |
 | Canvas composition | GPU blending, adjustments, standalone filters, masks, inherited coverage, and clipping; cached source textures and mipmaps |
 | Export, merge, copy merged, isolated retouch rasters | Full requested resolution on GPU, with straight-alpha readback; independent of the canvas preview cap |
 | Image resampling | GPU separable premultiplied Lanczos3; Triangle resampling for masks, selections, and floating-point RAW proxies |

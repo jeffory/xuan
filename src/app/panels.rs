@@ -3,9 +3,11 @@ use egui::RichText;
 use xuan::i18n::tr;
 use xuan::{
     paint::{PaintMode, ShapeKind},
+    retouch::HealMode,
     selection::SelectionMode,
 };
 
+use super::eyedropper::{SampleSize, SampleSource};
 use super::{EditorApp, Tool, icons, theme};
 
 const DEFAULT_VALUE_WIDTH: f32 = 74.0;
@@ -148,6 +150,17 @@ impl EditorApp {
                                                 ],
                                             );
                                         }
+                                        if self.tool == Tool::Heal {
+                                            widgets::segmented(
+                                                ui,
+                                                &mut self.heal_mode,
+                                                &[
+                                                    (HealMode::ContentAware, tr("Content-Aware")),
+                                                    (HealMode::CreateTexture, tr("Create Texture")),
+                                                    (HealMode::ProximityMatch, tr("Proximity Match")),
+                                                ],
+                                            );
+                                        }
                                         if self.tool == Tool::Clone {
                                             widgets::checkbox(
                                                 ui,
@@ -161,15 +174,24 @@ impl EditorApp {
                                             );
                                         }
                                         value!(ui, tr("Size"), &mut self.brush.diameter, 1.0..=2000.0, " px", width = 62.0);
-                                        ui.label(tr("Hardness"));
-                                        ui.add(
-                                            widgets::Slider::new(
-                                                &mut self.brush.hardness,
-                                                0.0..=1.0,
-                                            )
-                                            .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
-                                            .percentage(),
-                                        );
+                                        if self.tool == Tool::Pencil {
+                                            ui.label(tr("Tip"));
+                                            widgets::segmented(
+                                                ui,
+                                                &mut self.brush.square,
+                                                &[(false, tr("Round")), (true, tr("Square"))],
+                                            );
+                                        } else {
+                                            ui.label(tr("Hardness"));
+                                            ui.add(
+                                                widgets::Slider::new(
+                                                    &mut self.brush.hardness,
+                                                    0.0..=1.0,
+                                                )
+                                                .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                                                .percentage(),
+                                            );
+                                        }
                                         ui.label(tr("Opacity"));
                                         ui.add(
                                             widgets::Slider::new(
@@ -291,7 +313,24 @@ impl EditorApp {
                                         );
                                     }
                                     Tool::Dropper => {
-                                        ui.label(tr("Sample: All visible layers"));
+                                        ui.label(tr("Sample"));
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.dropper_source,
+                                            &[
+                                                (SampleSource::CurrentLayer, tr("Current layer")),
+                                                (SampleSource::AllLayers, tr("All visible layers")),
+                                            ],
+                                        );
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.dropper_size,
+                                            &[
+                                                (SampleSize::Point, tr("Point")),
+                                                (SampleSize::Three, tr("3×3")),
+                                                (SampleSize::Five, tr("5×5")),
+                                            ],
+                                        );
                                         widgets::color_well(ui, &mut self.brush.color);
                                     }
                                     Tool::Hand | Tool::Zoom => {
@@ -317,7 +356,7 @@ impl EditorApp {
     }
 
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
-        super::chrome::status_bar(ctx, "status_bar").show(ctx, |ui| {
+        super::chrome::status_bar(self.window_corner_radius(ctx), "status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if let Some(session) = self.session() {
                     ui.add_sized(
@@ -383,7 +422,13 @@ impl EditorApp {
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 5.0;
                             for t in Tool::ALL {
-                                if icons::tool_button(ui, t, self.tool == t).clicked() {
+                                if t == Tool::Region && self.plugins.action.is_none() {
+                                    continue;
+                                }
+                                let shortcut = super::commands::tool_command(t)
+                                    .map(|id| self.keymap.shortcut(id))
+                                    .unwrap_or_default();
+                                if icons::tool_button(ui, t, self.tool == t, &shortcut).clicked() {
                                     tool = Some(t);
                                 }
                             }

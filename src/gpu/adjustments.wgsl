@@ -41,8 +41,55 @@ fn blend(d: vec3<f32>, s: vec3<f32>, mode: u32) -> vec3<f32> {
         case 10u: { return set_lum(set_sat(d, sat(s)), lum(d)); }
         case 11u: { return set_lum(s, lum(d)); }
         case 12u: { return set_lum(d, lum(s)); }
+        // The modes added with .xuan format 7, in `BlendMode::ALL` order; see
+        // `blend_channel` in blend.rs for the formulas. 13 (Dissolve) blends as
+        // Normal once `composite` has thresholded its alpha.
+        case 14u: { return max(d + s - 1.0, vec3(0.0)); }
+        case 15u: { return select(d, s, lum(s) < lum(d)); }
+        case 16u: { return min(d + s, vec3(1.0)); }
+        case 17u: { return select(d, s, lum(s) > lum(d)); }
+        case 18u: {
+            return select(2.0 * d * (1.0 - s) + sqrt(d) * (2.0 * s - 1.0),
+                2.0 * d * s + d * d * (1.0 - 2.0 * s), s <= vec3(0.5));
+        }
+        case 19u: { return select(1.0 - 2.0 * (1.0 - d) * (1.0 - s), 2.0 * d * s, s <= vec3(0.5)); }
+        case 20u: {
+            return vec3(vivid_light(d.r, s.r), vivid_light(d.g, s.g), vivid_light(d.b, s.b));
+        }
+        case 21u: { return clamp(d + 2.0 * s - 1.0, vec3(0.0), vec3(1.0)); }
+        case 22u: { return select(max(d, 2.0 * s - 1.0), min(d, 2.0 * s), s <= vec3(0.5)); }
+        case 23u: { return select(vec3(0.0), vec3(1.0), floor((d + s) * 255.0 + 0.5) >= vec3(255.0)); }
+        case 24u: { return d + s - 2.0 * d * s; }
+        case 25u: { return max(d - s, vec3(0.0)); }
+        case 26u: {
+            return select(min(d / max(s, vec3(0.000001)), vec3(1.0)),
+                select(vec3(0.0), vec3(1.0), d * 255.0 >= vec3(0.5)), s * 255.0 < vec3(0.5));
+        }
         default: { return s; }
     }
+}
+
+fn color_dodge(d: f32, s: f32) -> f32 {
+    if d == 0.0 { return 0.0; }
+    if s >= 1.0 { return 1.0; }
+    return min(d / (1.0 - s), 1.0);
+}
+
+fn color_burn(d: f32, s: f32) -> f32 {
+    if d == 1.0 { return 1.0; }
+    if s <= 0.0 { return 0.0; }
+    return 1.0 - min((1.0 - d) / s, 1.0);
+}
+
+fn vivid_light(d: f32, s: f32) -> f32 {
+    if s <= 0.5 { return color_burn(d, 2.0 * s); }
+    return color_dodge(d, 2.0 * s - 1.0);
+}
+
+/// Dissolve's per-pixel threshold, the same hash as `blend::dissolve_value`.
+fn dissolve_value(pixel: vec2<i32>) -> f32 {
+    let hash = mix32(bitcast<u32>(pixel.x) * 0x9e3779b1u ^ mix32(bitcast<u32>(pixel.y) * 0x85ebca77u));
+    return f32(hash >> 8u) / 16777216.0;
 }
 
 fn hue_to_rgb(hue: f32, saturation: f32, lightness: f32) -> vec3<f32> {
@@ -149,6 +196,53 @@ fn adjust_hsv(rgb: vec3<f32>, a: vec4<f32>) -> vec3<f32> {
             return hue_to_rgb(hue, clamp(saturation, 0.0, 1.0), lightness);
 }
 
+// `effects::black_white`: weights red, yellow, green, cyan in `w`, blue and magenta in `t.xy`, then
+// the tint hue and saturation (0 for none) in `t.zw`.
+fn black_white(rgb: vec3<f32>, w: vec4<f32>, t: vec4<f32>) -> vec3<f32> {
+    let weights = array<f32, 6>(w.x, w.y, w.z, w.w, t.x, t.y);
+    let high = max(rgb.r, max(rgb.g, rgb.b));
+    let low = min(rgb.r, min(rgb.g, rgb.b));
+    let mid = rgb.r + rgb.g + rgb.b - high - low;
+    var primary = 4u;
+    var secondary = select(5u, 3u, rgb.g >= rgb.r);
+    if high == rgb.r {
+        primary = 0u;
+        secondary = select(5u, 1u, rgb.g >= rgb.b);
+    } else if high == rgb.g {
+        primary = 2u;
+        secondary = select(3u, 1u, rgb.r >= rgb.b);
+    }
+    let gray = clamp(low + (mid - low) * weights[secondary] / 100.0
+        + (high - mid) * weights[primary] / 100.0, 0.0, 1.0);
+    if t.w <= 0.0 { return vec3(gray); }
+    let chroma = (1.0 - abs(2.0 * gray - 1.0)) * t.w / 100.0;
+    let sector = (t.z - floor(t.z / 360.0) * 360.0) / 60.0;
+    let x = chroma * (1.0 - abs(sector - floor(sector / 2.0) * 2.0 - 1.0));
+    var color = vec3(chroma, 0.0, x);
+    if sector < 1.0 { color = vec3(chroma, x, 0.0); }
+    else if sector < 2.0 { color = vec3(x, chroma, 0.0); }
+    else if sector < 3.0 { color = vec3(0.0, chroma, x); }
+    else if sector < 4.0 { color = vec3(0.0, x, chroma); }
+    else if sector < 5.0 { color = vec3(x, 0.0, chroma); }
+    return clamp(color + gray - chroma / 2.0, vec3(0.0), vec3(1.0));
+}
+
+// `effects::color_balance`: shadow shifts and Preserve Luminosity in `s`, midtones in `m`,
+// highlights in `h`, all in percent.
+fn color_balance(rgb: vec3<f32>, s: vec4<f32>, m: vec4<f32>, h: vec4<f32>) -> vec3<f32> {
+    let before = dot(rgb, vec3(0.299, 0.587, 0.114));
+    let shadow = clamp((rgb - 0.333) / -0.25 + 0.5, vec3(0.0), vec3(1.0)) * 0.7;
+    let highlight = clamp((rgb + 0.333 - 1.0) / 0.25 + 0.5, vec3(0.0), vec3(1.0)) * 0.7;
+    let mid = clamp((rgb - 0.333) / 0.25 + 0.5, vec3(0.0), vec3(1.0))
+        * clamp((rgb + 0.333 - 1.0) / -0.25 + 0.5, vec3(0.0), vec3(1.0)) * 0.7;
+    var c = clamp(rgb + (s.xyz * shadow + m.xyz * mid + h.xyz * highlight) / 100.0, vec3(0.0), vec3(1.0));
+    if s.w > 0.0 {
+        let after = dot(c, vec3(0.299, 0.587, 0.114));
+        if after > 0.0001 { c = clamp(c * (before / after), vec3(0.0), vec3(1.0)); }
+    }
+    return c;
+}
+
 fn adjust(rgb: vec3<f32>, point: vec2<f32>) -> vec3<f32> {
     let a = params.first;
     let b = params.second;
@@ -206,6 +300,8 @@ fn adjust(rgb: vec3<f32>, point: vec2<f32>) -> vec3<f32> {
             let delta = film_grain(point, a) * a.x / 100.0 * 0.35 * (0.4 + 2.4 * level * (1.0 - level));
             return rgb + delta;
         }
+        case 14u: { return black_white(rgb, a, b); }
+        case 15u: { return color_balance(rgb, a, b, params.points[0]); }
         default: { return rgb; }
     }
 }

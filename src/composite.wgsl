@@ -100,6 +100,9 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
         src = sample_source(uv);
     }
     src.a *= amount;
+    if params.flags.x == 13u {
+        src.a = select(0.0, 1.0, dissolve_value(vec2<i32>(floor(point))) < src.a);
+    }
     let alpha = src.a + dst.a * (1.0 - src.a);
     let color = ((1.0 - src.a) * dst.a * dst.rgb + (1.0 - dst.a) * src.a * src.rgb
         + dst.a * src.a * blend(dst.rgb, src.rgb, params.flags.x)) / max(alpha, 0.000001);

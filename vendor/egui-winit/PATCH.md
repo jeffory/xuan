@@ -14,6 +14,12 @@ or empty. Xuan uses that event to read the image clipboard. egui text fields
 already ignore empty paste payloads, and normal text paste still normalizes
 line endings. The manifest's license paths are adjusted for this directory.
 
+A second, build-only change keeps `handle_platform_output` compiling when
+egui's `accesskit` feature is on but this crate's is not, which
+`egui_kittest` (a dev-dependency used by the UI tests) causes. The
+`accesskit_update` field is read by access rather than named in the
+destructuring pattern.
+
 Run the patch's regression test with:
 
 ```sh

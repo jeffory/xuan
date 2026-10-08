@@ -195,7 +195,10 @@ impl EditorApp {
             }
             ClipboardContent::Files(paths) => {
                 self.clipboard = None;
-                if paths.iter().any(|p| xuan::raw::is_raw(p)) {
+                if paths
+                    .iter()
+                    .any(|p| xuan::raw::is_raw(p) || io::is_photoshop(p))
+                {
                     for path in paths {
                         self.open_path(&path, true);
                     }

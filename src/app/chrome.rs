@@ -1,15 +1,18 @@
-use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use xuan::i18n::tr;
+use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, emath::GuiRounding as _, pos2, vec2};
+use xuan::{config::TitleBar, i18n::tr};
 
 use super::{EditorApp, theme};
 
-pub(super) fn title_bar(ctx: &egui::Context, id: &'static str) -> egui::TopBottomPanel {
+/// Size of one compact-style window button.
+const BUTTON_SIZE: egui::Vec2 = vec2(30.0, 22.0);
+
+pub(super) fn title_bar(radius: u8, id: &'static str) -> egui::TopBottomPanel {
     egui::TopBottomPanel::top(id).exact_height(32.0).frame(
         egui::Frame::new()
             .fill(theme::TITLEBAR)
             .corner_radius(egui::CornerRadius {
-                nw: theme::window_corner_radius(ctx),
-                ne: theme::window_corner_radius(ctx),
+                nw: radius,
+                ne: radius,
                 sw: 0,
                 se: 0,
             })
@@ -17,22 +20,284 @@ pub(super) fn title_bar(ctx: &egui::Context, id: &'static str) -> egui::TopBotto
     )
 }
 
-pub(super) fn status_bar(ctx: &egui::Context, id: &'static str) -> egui::TopBottomPanel {
+pub(super) fn status_bar(radius: u8, id: &'static str) -> egui::TopBottomPanel {
     egui::TopBottomPanel::bottom(id).exact_height(30.0).frame(
         egui::Frame::new()
             .fill(theme::PANEL)
             .corner_radius(egui::CornerRadius {
                 nw: 0,
                 ne: 0,
-                sw: theme::window_corner_radius(ctx),
-                se: theme::window_corner_radius(ctx),
+                sw: radius,
+                se: radius,
             })
             .inner_margin(egui::Margin::symmetric(18, 4)),
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WindowButton {
+    Minimize,
+    Maximize,
+    Close,
+}
+
+/// Which compact-style window buttons sit on each side of the title bar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ButtonLayout {
+    pub left: Vec<WindowButton>,
+    pub right: Vec<WindowButton>,
+}
+
+impl Default for ButtonLayout {
+    /// Windows, KDE and most GNOME distributions put all three on the right.
+    fn default() -> Self {
+        Self {
+            left: Vec::new(),
+            right: vec![
+                WindowButton::Minimize,
+                WindowButton::Maximize,
+                WindowButton::Close,
+            ],
+        }
+    }
+}
+
+impl ButtonLayout {
+    /// Parses GNOME's `org.gnome.desktop.wm.preferences button-layout`, such as
+    /// `'appmenu:minimize,maximize,close'`. Unknown entries (`appmenu`, `icon`,
+    /// `spacer`) are skipped. Returns `None` when no button is left, so the
+    /// window can always be closed from the title bar.
+    pub(super) fn parse_gnome(value: &str) -> Option<Self> {
+        let value = value.trim().trim_matches('\'');
+        let (left, right) = value.split_once(':').unwrap_or((value, ""));
+        let side = |text: &str| -> Vec<WindowButton> {
+            text.split(',')
+                .filter_map(|name| match name.trim() {
+                    "minimize" => Some(WindowButton::Minimize),
+                    "maximize" => Some(WindowButton::Maximize),
+                    "close" => Some(WindowButton::Close),
+                    _ => None,
+                })
+                .collect()
+        };
+        let layout = Self {
+            left: side(left),
+            right: side(right),
+        };
+        (!layout.left.is_empty() || !layout.right.is_empty()).then_some(layout)
+    }
+
+    /// Follows GNOME's button layout when running under GNOME. Elsewhere, or if
+    /// `gsettings` is missing or slow, keeps the default.
+    pub(super) fn from_desktop() -> Self {
+        if !cfg!(target_os = "linux")
+            || !std::env::var("XDG_CURRENT_DESKTOP")
+                .is_ok_and(|desktop| desktop.split(':').any(|d| d.eq_ignore_ascii_case("GNOME")))
+        {
+            return Self::default();
+        }
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output = std::process::Command::new("gsettings")
+                .args(["get", "org.gnome.desktop.wm.preferences", "button-layout"])
+                .stderr(std::process::Stdio::null())
+                .output();
+            let _ = send.send(output);
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .ok()
+            .and_then(Result::ok)
+            .filter(|output| output.status.success())
+            .and_then(|output| Self::parse_gnome(&String::from_utf8_lossy(&output.stdout)))
+            .unwrap_or_default()
+    }
+}
+
 impl EditorApp {
-    pub(super) fn window_controls(&mut self, ui: &mut egui::Ui) {
+    /// The window draws rounded corners only with a client-side title bar on a
+    /// window that was created transparent, and never when it fills the screen.
+    pub(super) fn window_corner_radius(&self, ctx: &egui::Context) -> u8 {
+        if self.config.title_bar.client_side() && self.transparent_window {
+            theme::window_corner_radius(ctx)
+        } else {
+            0
+        }
+    }
+
+    /// Applies the title bar style's decorations. egui can switch decorations
+    /// at runtime; transparency (and so rounded corners) is fixed at startup.
+    pub(super) fn sync_decorations(&mut self, ctx: &egui::Context) {
+        let decorated = !self.config.title_bar.client_side();
+        if self.decorated != decorated {
+            self.decorated = decorated;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(decorated));
+        }
+    }
+
+    /// Records how the native window was created, before the first frame.
+    pub fn set_startup_title_bar(&mut self, style: TitleBar) {
+        self.transparent_window = style.client_side();
+        self.decorated = !style.client_side();
+    }
+
+    /// Title-bar items before the menus.
+    pub(super) fn leading_window_controls(&mut self, ui: &mut egui::Ui) {
+        match self.config.title_bar {
+            TitleBar::System => {}
+            TitleBar::MacOs => self.traffic_lights(ui),
+            TitleBar::Compact => {
+                let buttons = self.button_layout.left.clone();
+                if !buttons.is_empty() {
+                    self.window_buttons(ui, &buttons);
+                    ui.add_space(8.0);
+                }
+            }
+        }
+    }
+
+    /// Title-bar items after the menus: the centered title, which also moves
+    /// the window, and any right-hand window buttons.
+    pub(super) fn trailing_window_controls(&mut self, ui: &mut egui::Ui) {
+        let buttons = match self.config.title_bar {
+            // The system title bar shows the title and moves the window.
+            TitleBar::System => return,
+            TitleBar::MacOs => Vec::new(),
+            TitleBar::Compact => self.button_layout.right.clone(),
+        };
+        let reserve = if buttons.is_empty() {
+            0.0
+        } else {
+            buttons.len() as f32 * BUTTON_SIZE.x + ui.spacing().item_spacing.x
+        };
+        self.titlebar_drag(ui, reserve);
+        self.window_buttons(ui, &buttons);
+    }
+
+    /// Compact-style monochrome minimize, maximize and close buttons.
+    fn window_buttons(&mut self, ui: &mut egui::Ui, buttons: &[WindowButton]) {
+        let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
+        let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+        let spacing = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for &button in buttons {
+            let (rect, response) = ui.allocate_exact_size(BUTTON_SIZE, Sense::click());
+            let label = match button {
+                WindowButton::Minimize => tr("Minimize window"),
+                WindowButton::Maximize if maximized => tr("Restore window"),
+                WindowButton::Maximize => tr("Maximize window"),
+                WindowButton::Close => tr("Close window"),
+            };
+            response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+            let painter = ui.painter();
+            if response.hovered() || response.has_focus() {
+                let alpha = if response.is_pointer_button_down_on() {
+                    36
+                } else {
+                    20
+                };
+                painter.rect_filled(
+                    rect.shrink2(vec2(2.0, 0.0)),
+                    theme::BUTTON_RADIUS,
+                    Color32::from_white_alpha(alpha),
+                );
+            }
+            let color = if focused || response.hovered() {
+                theme::TEXT
+            } else {
+                theme::MUTED
+            };
+            let stroke = Stroke::new(1.0_f32, color);
+            // Pixel-centered 1 px strokes stay crisp at integer offsets.
+            let c = rect
+                .center()
+                .round_to_pixel_center(painter.pixels_per_point());
+            match button {
+                WindowButton::Minimize => {
+                    painter.line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], stroke);
+                }
+                WindowButton::Maximize if maximized => {
+                    // Two overlapping windows: the front one, then the visible
+                    // top and right edges of the one behind it.
+                    painter.rect_stroke(
+                        Rect::from_min_max(c + vec2(-4.0, -2.0), c + vec2(2.0, 4.0)),
+                        0.0,
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                    painter.add(egui::Shape::line(
+                        vec![
+                            c + vec2(-2.0, -2.0),
+                            c + vec2(-2.0, -4.0),
+                            c + vec2(4.0, -4.0),
+                            c + vec2(4.0, 2.0),
+                            c + vec2(2.0, 2.0),
+                        ],
+                        stroke,
+                    ));
+                }
+                WindowButton::Maximize => {
+                    painter.rect_stroke(
+                        Rect::from_center_size(c, vec2(8.0, 8.0)),
+                        0.0,
+                        stroke,
+                        StrokeKind::Middle,
+                    );
+                }
+                WindowButton::Close => {
+                    painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
+                    painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
+                }
+            }
+            if response.clicked() {
+                self.window_button_action(ui.ctx(), button, maximized);
+            }
+            response.on_hover_text(label);
+        }
+        ui.spacing_mut().item_spacing.x = spacing;
+    }
+
+    fn window_button_action(&mut self, ctx: &egui::Context, button: WindowButton, maximized: bool) {
+        match button {
+            WindowButton::Close => self.request_quit(),
+            WindowButton::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            WindowButton::Maximize => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized))
+            }
+        }
+    }
+
+    /// Quits through the same flow as a window-manager close: the title-bar
+    /// close button, File → Quit and Ctrl+Q all end up here.
+    pub(super) fn request_quit(&mut self) {
+        if self.begin_quit() {
+            self.context.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Returns `true` when the window may close now. Otherwise starts the
+    /// Develop or unsaved-changes prompt, which closes the window when done.
+    pub(super) fn begin_quit(&mut self) -> bool {
+        if self.allow_close {
+            return true;
+        }
+        if self.develop.is_some() || !self.inactive_develop.is_empty() {
+            self.request_develop_close(super::develop::DevelopClose::Window);
+            false
+        } else if self.sessions.iter().any(|s| s.history.dirty()) {
+            if let Some(job) = &self.job {
+                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.close_app = true;
+            false
+        } else {
+            true
+        }
+    }
+
+    /// macOS-style close, minimize and maximize buttons.
+    fn traffic_lights(&mut self, ui: &mut egui::Ui) {
         let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
         let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
         let (group, _) = ui.allocate_exact_size(vec2(62.0, 22.0), Sense::hover());
@@ -108,36 +373,21 @@ impl EditorApp {
                 }
             }
             if response.clicked() {
-                match index {
-                    0 => {
-                        // Route through the same save/cancel flow as a window-manager close.
-                        if self.develop.is_some() || !self.inactive_develop.is_empty() {
-                            self.request_develop_close(super::develop::DevelopClose::Window);
-                        } else if self.sessions.iter().any(|s| s.history.dirty()) {
-                            if let Some(job) = &self.job {
-                                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                            }
-                            self.close_app = true;
-                        } else {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    }
-                    1 => ui
-                        .ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                    _ => ui
-                        .ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized)),
-                }
+                let button = match index {
+                    0 => WindowButton::Close,
+                    1 => WindowButton::Minimize,
+                    _ => WindowButton::Maximize,
+                };
+                self.window_button_action(ui.ctx(), button, maximized);
             }
             response.on_hover_text(label);
         }
         ui.add_space(8.0);
     }
 
-    pub(super) fn titlebar_drag(&self, ui: &mut egui::Ui) {
+    fn titlebar_drag(&self, ui: &mut egui::Ui, reserve: f32) {
         let (rect, response) = ui.allocate_exact_size(
-            vec2(ui.available_width().max(0.0), 22.0),
+            vec2((ui.available_width() - reserve).max(0.0), 22.0),
             Sense::click_and_drag(),
         );
         let title = if let Some(develop) = &self.develop {
@@ -175,9 +425,12 @@ impl EditorApp {
 
     /// Undecorated Wayland/X11 windows need client-provided edge hit targets.
     pub(super) fn window_resize(&self, ctx: &egui::Context) {
-        if ctx.input(|i| {
-            i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
-        }) {
+        // System decorations come with the window manager's own resize borders.
+        if !self.config.title_bar.client_side()
+            || ctx.input(|i| {
+                i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
+            })
+        {
             return;
         }
         let screen = ctx.content_rect();

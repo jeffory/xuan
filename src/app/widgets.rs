@@ -314,6 +314,15 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
 }
 
 pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
+    described_checkbox(ui, value, label, label)
+}
+
+/// A checkbox without visible text, named `description` for assistive technology.
+pub fn bare_checkbox(ui: &mut Ui, value: &mut bool, description: &str) -> Response {
+    described_checkbox(ui, value, "", description)
+}
+
+fn described_checkbox(ui: &mut Ui, value: &mut bool, label: &str, description: &str) -> Response {
     let galley = ui
         .painter()
         .layout_no_wrap(label.into(), FontId::proportional(12.0), theme::TEXT);
@@ -329,7 +338,12 @@ pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *value, label)
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            *value,
+            description,
+        )
     });
     let box_rect =
         Rect::from_center_size(pos2(rect.left() + 7.0, rect.center().y), vec2(14.0, 14.0));
@@ -652,6 +666,29 @@ impl PopUp {
     ) -> Option<egui::InnerResponse<R>> {
         let response = self.button(ui);
         egui::Popup::menu(&response).width(self.width).show(content)
+    }
+
+    /// Like `show_ui`, for long lists: the menu opens on the side of the button with more room
+    /// (and is kept on screen), rather than always below it.
+    pub fn show_tall_ui<R>(
+        self,
+        ui: &mut Ui,
+        content: impl FnOnce(&mut Ui) -> R,
+    ) -> Option<egui::InnerResponse<R>> {
+        let response = self.button(ui);
+        let screen = ui.ctx().content_rect();
+        let above = response.rect.top() - screen.top();
+        let below = screen.bottom() - response.rect.bottom();
+        let align = if above > below {
+            egui::RectAlign::TOP_START
+        } else {
+            egui::RectAlign::BOTTOM_START
+        };
+        egui::Popup::menu(&response)
+            .width(self.width)
+            .align(align)
+            .align_alternatives(&[])
+            .show(content)
     }
 
     pub fn button(&self, ui: &mut Ui) -> Response {
@@ -1106,5 +1143,65 @@ pub fn selectable_value<T: PartialEq>(
         *value = option;
         response.mark_changed();
     }
+    response
+}
+
+/// A menu toggle: a check mark when `checked`, the label, and a right-aligned shortcut hint. Its
+/// accessible label is "<label> <shortcut>", like other menu items.
+pub fn menu_check(ui: &mut Ui, checked: bool, label: &str, shortcut: &str) -> Response {
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_owned(), FontId::proportional(12.0), theme::TEXT);
+    let hint = ui.painter().layout_no_wrap(
+        shortcut.to_owned(),
+        FontId::proportional(12.0),
+        theme::MUTED,
+    );
+    let gap = if shortcut.is_empty() { 0.0 } else { 24.0 };
+    let width = galley.size().x + hint.size().x + 32.0 + gap;
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width().max(width), 22.0), Sense::click());
+    let accessible = if shortcut.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label} {shortcut}")
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            checked,
+            &accessible,
+        )
+    });
+    let enabled = ui.is_enabled();
+    let text = if enabled { theme::TEXT } else { theme::MUTED };
+    if enabled && (response.hovered() || response.has_focus()) {
+        ui.painter().rect_filled(rect, 4.0, theme::ACCENT);
+    }
+    if checked {
+        let center = pos2(rect.left() + 10.0, rect.center().y);
+        ui.painter().add(egui::Shape::line(
+            vec![
+                center + vec2(-3.0, 0.0),
+                center + vec2(-1.0, 2.5),
+                center + vec2(4.0, -3.0),
+            ],
+            Stroke::new(1.3_f32, text),
+        ));
+    }
+    ui.painter().galley(
+        pos2(rect.left() + 23.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        text,
+    );
+    ui.painter().galley(
+        pos2(
+            rect.right() - 8.0 - hint.size().x,
+            rect.center().y - hint.size().y / 2.0,
+        ),
+        hint,
+        theme::MUTED,
+    );
     response
 }

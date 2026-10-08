@@ -4,7 +4,7 @@ Run the commands below from the repository root. For installation and editing, s
 
 ## Prerequisites
 
-Requires Rust **1.88+** and a C toolchain.
+Requires Rust **1.89+** and a C toolchain.
 
 ### Linux
 
@@ -136,6 +136,61 @@ cargo test --locked --package egui-winit --lib clipboard_paste
 
 The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
 
+## Writing UI tests
+
+UI interaction tests run the real `EditorApp` under [`egui_kittest`](https://crates.io/crates/egui_kittest) with simulated pointer, keyboard and file-drop input. They need no GPU and no window, and the whole set runs in about a second:
+
+```sh
+cargo test --locked --bins app::tests::ui
+```
+
+The harness is `UiTest` in `src/app/tests/ui.rs`; flows live next to it, and the generated shortcut check is in `src/app/tests/ui_shortcuts.rs`.
+
+```rust
+let mut ui = UiTest::with_document();   // or UiTest::new() for an empty editor
+ui.open_menu("File");
+ui.click("Close Project Ctrl+W");      // find by accessibility label, then a real click
+assert!(ui.app().close_tab.is_some());
+ui.key(egui::Key::Escape);              // ui.press(Modifiers::CTRL, Key::W) for chords
+ui.drop_files(&[&path]);                // injects `dropped_files`
+```
+
+- Widgets are found by their AccessKit label. Menu items are labelled `"<name> <shortcut>"`, for example `"Save Ctrl+S"`. A widget drawn by hand needs `response.widget_info(...)` before a test can find or click it; `ui.enabled(label)` reports its disabled state.
+- Assert on app state (`ui.app()`), not on pixels. Do not start a flow with `app.command(...)` or by setting fields, except to build the starting point (a dirty document, a Develop session).
+- `UiTest` steps three frames after each action so floating windows can measure themselves. `click_and_stop` leaves the output of the handling frame in place for checking viewport commands such as `Close`.
+- `ui.drag(from, to)` presses, moves in steps and releases the primary button, for canvas and ruler drags. Flows that change a preference (View menu toggles, Grid Settings) write the configuration file; call `ui.isolate_config(dir)` with a temporary directory first, or set `app.config_path` in non-kittest tests.
+- Commands that open native file dialogs (Open, Save, Export) must not run in tests. Set `app.command_trace = Some(Vec::new())` to make `command()` only record names; the shortcut test does this.
+- Commands, their labels, categories, default shortcuts, where they apply and whether plugins may run them live in the command registry, `src/app/commands.rs`. Key dispatch, menu shortcut hints, Help → Keyboard Shortcuts, Settings → Keyboard Shortcuts and `host/run` all read it; a new menu item uses `item(ui, &items, "id", …)` and needs a registry entry (a test checks), and its label a zh-CN translation.
+- The command table in `docs/SHORTCUTS.md` is generated from the registry. After changing a default shortcut or label, run `XUAN_UPDATE_DOCS=1 cargo test documented_shortcuts` to refresh it. The shortcut test presses every default binding; a key-only action (`Run::App`) needs an entry in `app_effect()`, and the hand-written second table in `PROSE` or `other_effect()`.
+- Snapshot images are not used: kittest snapshots need a wgpu renderer.
+- `egui_kittest` turns on egui's `accesskit` feature, which is why the vendored `egui-winit` reads `accesskit_update` by field access (see `vendor/egui-winit/PATCH.md`).
+
+## Golden images
+
+Rendering regressions are caught by golden-image tests in [`src/goldens.rs`](../src/goldens.rs). Each scene is rendered through the real CPU compositor or RAW Develop pipeline and compared with a checked-in PNG in [`testdata/goldens`](../testdata/goldens):
+
+| Scene | Covers |
+| --- | --- |
+| `demo` | the `--demo` document, downscaled to 256 × 192 |
+| `blend_modes` | one strip per blend mode, top to bottom in menu order, over a gradient |
+| `layer_mask` | a radial layer mask and an unlinked, independently placed mask |
+| `clipping_mask` | layers clipped to an ellipse, one with Screen blending |
+| `adjustment_layers` | masked Hue/Saturation, Levels at partial opacity, Invert clipped to a shape |
+| `text_and_shapes` | every shape kind (one rotated) and text in the bundled Inter font |
+| `raw_default`, `raw_negative`, `raw_quarter_turn` | Develop of the Nikon D70 [RAW fixture](#raw-test-fixtures) with default settings, negative conversion and a quarter turn |
+
+```sh
+cargo test --locked goldens                         # compare (CPU)
+XUAN_UPDATE_GOLDENS=1 cargo test --locked goldens   # rewrite goldens after an intended change
+cargo test --locked --lib gpu::goldens -- --ignored # the same scenes on the GPU
+```
+
+The CPU output is the source of truth: the update command only rewrites goldens from the CPU renderer, and only files whose pixels changed. Review the PNG changes like any other diff before committing them. Fetch the RAW fixtures first, or the three RAW scenes are skipped and their goldens left untouched.
+
+A scene passes when at most a small fraction of its pixels differ from the golden by more than a per-channel tolerance. The CPU allows 2 levels on 0.2% of the pixels (3 levels on 0.5% for RAW Develop), which absorbs one-ulp differences between the Linux and Windows maths libraries while failing on any visible change. The GPU test, run by `scripts/check.sh --gpu`, compares against the same goldens with looser limits (4 levels on 0.5% of the pixels, 6 levels on 1% for RAW Develop), because GPU arithmetic, shader maths and mipmapped downscaling differ from the CPU reference. On Mesa lavapipe every scene is within one level. Text uses only the bundled font, never system fonts, so it renders identically on every platform.
+
+On a mismatch the test writes `expected.png`, `actual.png` and `diff.png` (red: over the tolerance, yellow: within it) to `target/golden-failures/<cpu|gpu>/<scene>/`; set `XUAN_GOLDEN_FAILURES` to use another directory. CI uploads that directory as the `golden-failures-linux` or `golden-failures-windows` artifact when the job fails.
+
 ## Tablet input checks
 
 Tablet regression checks run with `cargo test --locked tablet`. They cover native
@@ -154,7 +209,21 @@ scales. Automated tests do not certify individual Wacom or Parblo models.
 
 ## RAW sample checks
 
-The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local Nikon, Canon, Fujifilm, or Sony RAW file:
+### RAW test fixtures
+
+CI decodes real camera files (Nikon NEF, Canon CR2/CR3/CRW, Fujifilm X-Trans RAF, Sony ARW, a Canon sRAW that must be rejected, and a Nikon D1H that must be rejected as an unsupported camera) so that regressions in the `rawler` decode path, sensor-layout checks, demosaicing, orientation, colour matrices and white balance are caught. The files are CC0 samples from raw.pixls.us, pinned by SHA-256 in `testdata/raw/fixtures.txt` and not committed. Sources and licenses are listed in [testdata/raw/README.md](../testdata/raw/README.md).
+
+```sh
+scripts/fetch-raw-fixtures.sh                      # about 60 MB into testdata/raw/cache/ (ignored by Git)
+cargo test --locked real_                          # run just the real-camera tests
+XUAN_REQUIRE_RAW_FIXTURES=1 cargo test --locked    # fail instead of skip when a fixture is missing
+```
+
+Set `XUAN_RAW_FIXTURE_DIR` to use another cache directory for both the script and the tests. Without the fixtures the `real_*` tests skip with a message, so a plain `cargo test` still works offline. CI sets `XUAN_REQUIRE_RAW_FIXTURES=1`, fetches the files before `scripts/check.sh` and caches them keyed on the manifest hash.
+
+### Other RAW files
+
+Camera files are not committed to the repository. Optional tests use any local Nikon, Canon, Fujifilm, or Sony RAW file:
 
 ```sh
 XUAN_TEST_RAW=/path/to/photo.CR3 cargo test --locked sample_raw -- --ignored --nocapture

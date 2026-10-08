@@ -1,15 +1,22 @@
 pub mod blend;
 pub mod color;
 pub mod config;
+pub mod demo;
 pub mod document;
 pub mod effects;
 pub mod geometry;
+#[cfg(test)]
+mod goldens;
 pub mod gpu;
 pub mod history;
 pub mod i18n;
 pub mod io;
+pub mod layer_effects;
+pub mod layout;
 pub mod operations;
 pub mod paint;
+pub mod panes;
+pub mod plugins;
 pub mod raw;
 pub mod render;
 pub mod retouch;

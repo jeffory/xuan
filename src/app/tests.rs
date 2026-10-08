@@ -3,8 +3,32 @@ use super::*;
 #[path = "tests/canvas_preview.rs"]
 mod canvas_preview;
 
+#[path = "tests/eyedropper.rs"]
+mod eyedropper;
+
+#[path = "tests/navigator.rs"]
+mod navigator;
+
+#[path = "tests/snapping.rs"]
+mod snapping;
+
 #[path = "tests/stroke_smoothing.rs"]
 mod stroke_smoothing;
+
+#[path = "tests/plugins.rs"]
+mod plugins;
+
+#[path = "tests/plugin_examples.rs"]
+mod plugin_examples;
+
+#[path = "tests/ui.rs"]
+mod ui;
+
+#[path = "tests/keymap.rs"]
+mod keymap;
+
+#[path = "tests/palette.rs"]
+mod command_palette;
 
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -30,6 +54,166 @@ fn heic_opens_as_a_document_and_imports_as_an_undoable_layer() {
     );
     app.command("undo");
     assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
+fn compositor_import_opens_and_reports_what_it_left_out() {
+    let (context, mut app) = app();
+    let package = tempfile::tempdir().unwrap();
+    let id = uuid::Uuid::new_v4().to_string().to_uppercase();
+    std::fs::create_dir(package.path().join("images")).unwrap();
+    image::RgbaImage::new(2, 2)
+        .save(package.path().join(format!("images/{id}.png")))
+        .unwrap();
+    let manifest = serde_json::json!({
+        "format": "com.compositor.project", "version": 11, "colorSpace": "sRGB",
+        "documentID": uuid::Uuid::new_v4(), "width": 2, "height": 2, "activeLayerID": id,
+        "layers": [{"id": id, "name": "Photo", "isVisible": true, "imageFile": format!("{id}.png"),
+            "blendMode": "Hard Mix", "effects": {"stroke": {"size": 2}},
+            "shape": {"kind": "Line", "red": 0, "green": 0, "blue": 0, "cornerRadius": 0,
+                "lineWidth": 3, "start": [0, 0], "end": [1, 1]},
+            "transform": {"origin": [0, 0], "size": [2, 2], "rotation": 0}}],
+    });
+    std::fs::write(
+        package.path().join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    app.open_path(package.path(), false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), 1);
+    assert!(
+        app.session().unwrap().path.is_none(),
+        "saving must not overwrite the package"
+    );
+    let notice = app.notice.clone().unwrap();
+    assert!(notice.contains("Live line shapes"), "{notice}");
+    // Photoshop blend modes and layer effects come across.
+    let layer = &app.session().unwrap().document.layers[0];
+    assert_eq!(layer.blend, xuan::blend::BlendMode::HardMix);
+    assert_eq!(layer.effects.as_ref().unwrap().stroke.unwrap().size, 2.0);
+    assert!(
+        !notice.contains("Hard Mix") && !notice.contains("Layer effects"),
+        "{notice}"
+    );
+    keyboard_frame(&context, &mut app, Vec::new(), egui::Modifiers::NONE);
+    assert!(app.notice.is_some());
+}
+
+/// A 4×2 RGB Photoshop file (color `mode`) with one opaque layer, "Art", using `blend`.
+fn photoshop_file(mode: u16, blend: &[u8; 4]) -> Vec<u8> {
+    let mut out = b"8BPS\0\x01\0\0\0\0\0\0\0\x03".to_vec();
+    out.extend(2_u32.to_be_bytes());
+    out.extend(4_u32.to_be_bytes());
+    out.extend(8_u16.to_be_bytes());
+    out.extend(mode.to_be_bytes());
+    out.extend([0; 8]); // no color mode data or image resources
+    let mut info = 1_i16.to_be_bytes().to_vec();
+    for v in [0_i32, 0, 2, 4] {
+        info.extend(v.to_be_bytes());
+    }
+    info.extend(3_u16.to_be_bytes());
+    for id in 0..3_i16 {
+        info.extend(id.to_be_bytes());
+        info.extend(10_u32.to_be_bytes());
+    }
+    info.extend(b"8BIM");
+    info.extend(blend);
+    info.extend([255, 0, 0, 0]);
+    let extra = [0, 0, 0, 0, 0, 0, 0, 0, 3, b'A', b'r', b't'];
+    info.extend((extra.len() as u32).to_be_bytes());
+    info.extend(extra);
+    for channel in 0..3 {
+        info.extend([0, 0]);
+        info.extend([channel * 100; 8]);
+    }
+    let mut section = (info.len() as u32).to_be_bytes().to_vec();
+    section.extend(info);
+    section.extend([0; 4]);
+    out.extend((section.len() as u32).to_be_bytes());
+    out.extend(section);
+    out.extend([0, 0]);
+    out.extend([255; 24]);
+    out
+}
+
+#[test]
+fn photoshop_import_shows_its_report_before_applying() {
+    let (context, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Poster.psd");
+    std::fs::write(&path, photoshop_file(3, b"zzzz")).unwrap();
+
+    // Nothing is applied while the report is up, and keys and drops wait for it.
+    app.open_path(&path, false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.sessions.is_empty());
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(lines.iter().any(|l| l.contains("“Unknown”")), "{lines:?}");
+    assert!(app.drops_blocked());
+    keyboard_frame(&context, &mut app, Vec::new(), egui::Modifiers::NONE);
+    assert!(app.pending_photoshop_lines().is_some());
+    // Escape cancels; Enter imports.
+    let escape = text_key(egui::Key::Escape, egui::Modifiers::NONE);
+    keyboard_frame(&context, &mut app, vec![escape], egui::Modifiers::NONE);
+    assert!(app.sessions.is_empty() && !app.drops_blocked());
+
+    app.open_path(&path, false);
+    let enter = text_key(egui::Key::Enter, egui::Modifiers::NONE);
+    keyboard_frame(&context, &mut app, vec![enter], egui::Modifiers::NONE);
+    assert_eq!(app.sessions.len(), 1);
+    let session = app.session().unwrap();
+    assert_eq!(session.title, "Poster");
+    assert!(session.path.is_none(), "saving must not overwrite the PSD");
+    assert_eq!((session.document.width, session.document.height), (4, 2));
+    assert_eq!(session.document.layers[0].name, "Art");
+    assert_eq!(app.status, "Imported with changes");
+
+    // A file Xuan represents completely opens without asking.
+    std::fs::write(&path, photoshop_file(3, b"mul ")).unwrap();
+    app.open_path(&path, false);
+    assert!(app.pending_photoshop_lines().is_none());
+    assert_eq!(app.sessions.len(), 2);
+
+    // Unsupported color modes are refused with a clear message.
+    std::fs::write(&path, photoshop_file(4, b"norm")).unwrap();
+    app.open_path(&path, false);
+    let error = app.error.take().unwrap();
+    assert!(
+        error.contains("CMYK") && error.contains("8-bit RGB"),
+        "{error}"
+    );
+    assert_eq!(app.sessions.len(), 2);
+}
+
+#[test]
+fn photoshop_files_import_as_a_centered_folder_and_drop_like_images() {
+    let (_, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Art.PSB");
+    // A version 1 file named .psb still opens: the header decides.
+    std::fs::write(&path, photoshop_file(3, b"norm")).unwrap();
+    app.dimensions = [10, 6];
+    app.new_document();
+    app.open_path(&path, true);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), 1);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 3);
+    let folder = document.active().unwrap();
+    assert!(folder.group && folder.name == "Art");
+    let art = &document.layers[1];
+    assert_eq!(art.parent, Some(folder.id));
+    assert_eq!((art.transform.x, art.transform.y), (3.0, 2.0));
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+
+    // Dropped onto an open document, a PSD is offered as a layer like any image.
+    app.queue_drop(vec![path.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    app.drop_choose_for_test(Some(true));
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
 }
 
 #[test]
@@ -805,7 +989,7 @@ fn benchmark_large_image_editing() {
             None,
         )];
         app.tool = tool;
-        app.snap = false;
+        app.config.snap.enabled = false;
         for _ in 0..3 {
             frame(&context, &mut app);
         }
@@ -1082,6 +1266,8 @@ fn native_clipboard_shortcuts_copy_cut_and_paste_selected_pixels() {
     app.sessions
         .push(Session::new(document, "Clipboard".into(), None));
     app.set_tool(Tool::Marquee);
+    // At this zoom the 1 px margin is within the snap reach of the canvas edge.
+    app.config.snap.enabled = false;
     drag(
         &context,
         &mut app,
@@ -1657,6 +1843,8 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
         egui::Modifiers::NONE,
     );
     assert!(app.session().unwrap().document.active.is_none());
+    // The 4x3 marquee sits within snap reach of the pasted layers' edges.
+    app.config.snap.enabled = false;
     app.set_tool(Tool::Marquee);
     drag(
         &context,
@@ -2364,7 +2552,7 @@ fn canvas_layers(app: &mut EditorApp) -> [Uuid; 2] {
     let document = &mut app.session_mut().unwrap().document;
     document.layers = vec![bottom, top];
     document.select(ids[0], false);
-    app.snap = false;
+    app.config.snap.enabled = false;
     ids
 }
 
@@ -2836,7 +3024,7 @@ fn transform_handles_and_control_drag_distortion_change_geometry() {
     app.dimensions = [64, 48];
     app.new_document();
     app.command("fill_fg");
-    app.snap = false;
+    app.config.snap.enabled = false;
     app.lock_ratio = false;
     drag(
         &context,
@@ -3626,8 +3814,36 @@ fn menu_bar_hover_switches_only_while_a_menu_is_open() {
 }
 
 #[test]
+fn view_menu_pixel_grid_toggle_applies_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    assert!(app.config.pixel_grid);
+    let view = layer_label(&context, &mut app, "View") + Vec2::splat(5.0);
+    for expected in [false, true] {
+        pointer_frame(&context, &mut app, view, None, egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, view, Some(true), egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, view, Some(false), egui::Modifiers::NONE);
+        let item = layer_label(&context, &mut app, "Pixel Grid") + Vec2::splat(5.0);
+        click(&context, &mut app, item);
+        assert_eq!(app.config.pixel_grid, expected);
+        assert_eq!(
+            xuan::config::Config::load(&path).unwrap().pixel_grid,
+            expected
+        );
+        assert!(app.error.is_none());
+        // Keep the menu from lingering into the next round.
+        egui::Popup::close_all(&context);
+        frame(&context, &mut app);
+    }
+}
+
+#[test]
 fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     let (context, mut app) = app();
+    // The traffic lights sit at fixed positions on the left.
+    app.config.title_bar = xuan::config::TitleBar::MacOs;
     frame(&context, &mut app);
     frame(&context, &mut app);
     let output = pointer_frame(
@@ -3742,6 +3958,236 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     assert_eq!(app.sessions.len(), 1);
 }
 
+fn click(context: &egui::Context, app: &mut EditorApp, pos: Pos2) -> egui::FullOutput {
+    pointer_frame(context, app, pos, None, egui::Modifiers::NONE);
+    pointer_frame(context, app, pos, Some(true), egui::Modifiers::NONE);
+    pointer_frame(context, app, pos, Some(false), egui::Modifiers::NONE)
+}
+
+#[test]
+fn compact_titlebar_has_window_buttons_on_the_right() {
+    use xuan::config::TitleBar;
+    let (context, mut app) = app();
+    assert_eq!(app.config.title_bar, TitleBar::default());
+    app.config.title_bar = TitleBar::Compact;
+    frame(&context, &mut app);
+    let output = frame(&context, &mut app);
+    // Already undecorated, as the window was created.
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    // The title bar has a 14 px side margin and 30 px buttons, ending at the right.
+    let y = 16.0;
+    let output = click(&context, &mut app, Pos2::new(1191.0, y));
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Minimized(true)
+    )));
+    let output = click(&context, &mut app, Pos2::new(1221.0, y));
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Maximized(true)
+    )));
+    let output = click(&context, &mut app, Pos2::new(1251.0, y));
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Close
+    )));
+
+    // Closing with unsaved work goes through the save prompt.
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    let output = click(&context, &mut app, Pos2::new(1251.0, y));
+    assert!(app.close_app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Close
+    )));
+    assert_eq!(app.sessions.len(), 1);
+}
+
+#[test]
+fn system_titlebar_switches_decorations_at_runtime() {
+    use xuan::config::TitleBar;
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    assert_eq!(app.window_corner_radius(&context), 12);
+
+    app.config.title_bar = TitleBar::System;
+    let output = frame(&context, &mut app);
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(true)
+    )));
+    let output = frame(&context, &mut app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    assert_eq!(app.window_corner_radius(&context), 0);
+    // The window manager draws the controls and resize borders.
+    for pos in [Pos2::new(1251.0, 16.0), Pos2::new(21.0, 20.0)] {
+        let output = click(&context, &mut app, pos);
+        assert!(!has_command(&output, |c| matches!(
+            c,
+            egui::ViewportCommand::Close | egui::ViewportCommand::Minimized(_)
+        )));
+    }
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::BeginResize(_)
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+
+    // Back to a client-side title bar. A window created opaque stays square.
+    app.set_startup_title_bar(TitleBar::System);
+    app.config.title_bar = TitleBar::Compact;
+    let output = frame(&context, &mut app);
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(false)
+    )));
+    assert_eq!(app.window_corner_radius(&context), 0);
+}
+
+#[test]
+fn gnome_button_layout_picks_sides_and_order() {
+    use super::chrome::{ButtonLayout, WindowButton::*};
+    assert_eq!(
+        ButtonLayout::parse_gnome("'appmenu:minimize,maximize,close'\n"),
+        Some(ButtonLayout::default())
+    );
+    assert_eq!(
+        ButtonLayout::parse_gnome("'appmenu:close'"),
+        Some(ButtonLayout {
+            left: vec![],
+            right: vec![Close]
+        })
+    );
+    assert_eq!(
+        ButtonLayout::parse_gnome("close,minimize,maximize:icon"),
+        Some(ButtonLayout {
+            left: vec![Close, Minimize, Maximize],
+            right: vec![]
+        })
+    );
+    assert_eq!(
+        ButtonLayout::parse_gnome("close"),
+        Some(ButtonLayout {
+            left: vec![Close],
+            right: vec![]
+        })
+    );
+    assert_eq!(ButtonLayout::parse_gnome("'appmenu:'"), None);
+    assert_eq!(ButtonLayout::parse_gnome(""), None);
+}
+
+#[test]
+fn quit_with_unsaved_changes_prompts_from_menu_shortcut_and_window_manager() {
+    let ctrl = egui::Modifiers::CTRL;
+    for source in ["shortcut", "menu", "window manager"] {
+        let (context, mut app) = app();
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        let output = match source {
+            "shortcut" => {
+                keyboard_frame(&context, &mut app, vec![text_key(egui::Key::Q, ctrl)], ctrl)
+            }
+            "menu" => {
+                let file = layer_label(&context, &mut app, "File") + Vec2::splat(5.0);
+                pointer_frame(&context, &mut app, file, Some(true), egui::Modifiers::NONE);
+                pointer_frame(&context, &mut app, file, Some(false), egui::Modifiers::NONE);
+                let quit = layer_label(&context, &mut app, "Quit") + Vec2::splat(5.0);
+                pointer_frame(&context, &mut app, quit, None, egui::Modifiers::NONE);
+                pointer_frame(&context, &mut app, quit, Some(true), egui::Modifiers::NONE);
+                pointer_frame(&context, &mut app, quit, Some(false), egui::Modifiers::NONE)
+            }
+            _ => {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        Vec2::new(1280.0, 860.0),
+                    )),
+                    ..Default::default()
+                };
+                input
+                    .viewports
+                    .entry(egui::ViewportId::ROOT)
+                    .or_default()
+                    .events
+                    .push(egui::ViewportEvent::Close);
+                let output = context.run(input, |ctx| app.show(ctx));
+                assert!(has_command(&output, |c| matches!(
+                    c,
+                    egui::ViewportCommand::CancelClose
+                )));
+                output
+            }
+        };
+        assert!(app.close_app, "Quit via {source} did not prompt");
+        assert!(
+            !has_command(&output, |c| matches!(c, egui::ViewportCommand::Close)),
+            "Quit via {source} closed without saving"
+        );
+        assert_eq!(app.sessions.len(), 1);
+        assert!(app.sessions[0].history.dirty());
+        layer_label(&context, &mut app, "Some projects have unsaved changes.");
+    }
+
+    // Ctrl+Q stays available during a job and cancels it before prompting.
+    {
+        let (context, mut app) = app();
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        app.start_job("Long edit", |_, cancel| {
+            while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            anyhow::bail!("cancelled")
+        });
+        let cancel = app.job.as_ref().unwrap().cancel.clone();
+        keyboard_frame(&context, &mut app, vec![text_key(egui::Key::Q, ctrl)], ctrl);
+        assert!(app.close_app);
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    // Without unsaved work, Quit closes the window straight away.
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    let output = keyboard_frame(&context, &mut app, vec![text_key(egui::Key::Q, ctrl)], ctrl);
+    assert!(!app.close_app);
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Close
+    )));
+}
+
 #[test]
 fn native_window_gestures_work_without_a_mouse_release_event() {
     let (context, mut app) = app();
@@ -3788,7 +4234,8 @@ fn native_window_gestures_work_without_a_mouse_release_event() {
     }
 
     // A normal control must also respond to the first click after a drag.
-    let minimize = Pos2::new(41.0, 20.0);
+    // This is the compact title bar's minimize button, left of maximize and close.
+    let minimize = Pos2::new(1191.0, 16.0);
     pointer_frame(&context, &mut app, minimize, None, egui::Modifiers::NONE);
     pointer_frame(
         &context,
@@ -4324,6 +4771,80 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
     );
 }
 
+/// Open Settings on the Appearance page and return the threshold field's position.
+fn settings_threshold_field(context: &egui::Context, app: &mut EditorApp) -> Pos2 {
+    app.dialog = Some(Dialog::Settings);
+    settings::show_settings_page(context, settings::SettingsPage::Appearance);
+    frame(context, app);
+    layer_label(context, app, "500%") + Vec2::new(8.0, 6.0)
+}
+
+#[test]
+fn dragging_the_pixel_grid_threshold_saves_once_after_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    let field = settings_threshold_field(&context, &mut app);
+    pointer_frame(&context, &mut app, field, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, field, Some(true), egui::Modifiers::NONE);
+    for step in 1..=6 {
+        let pos = field + Vec2::new(25.0 * step as f32, 0.0);
+        pointer_frame(&context, &mut app, pos, None, egui::Modifiers::NONE);
+        // Applied live while dragging, but nothing is written yet.
+        assert!(!path.exists(), "written mid-drag at step {step}");
+    }
+    assert!(app.config.pixel_grid_percent > 500, "live update");
+    let live = app.config.pixel_grid_percent;
+    let end = field + Vec2::new(150.0, 0.0);
+    pointer_frame(&context, &mut app, end, Some(false), egui::Modifiers::NONE);
+    frame(&context, &mut app);
+    let saved = xuan::config::Config::load(&path).unwrap();
+    assert_eq!(saved.pixel_grid_percent, app.config.pixel_grid_percent);
+    assert!(saved.pixel_grid_percent >= live);
+    // Idle frames do not write again.
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+    assert!(!app.config_dirty && app.error.is_none());
+}
+
+#[test]
+fn closing_settings_mid_drag_still_saves_the_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("xuan/config.toml");
+    let (context, mut app) = app();
+    app.config_path = Some(path.clone());
+    let field = settings_threshold_field(&context, &mut app);
+    pointer_frame(&context, &mut app, field, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, field, Some(true), egui::Modifiers::NONE);
+    for step in 1..=4 {
+        let pos = field + Vec2::new(25.0 * step as f32, 0.0);
+        pointer_frame(&context, &mut app, pos, None, egui::Modifiers::NONE);
+    }
+    assert!(!path.exists());
+    let dragged = app.config.pixel_grid_percent;
+    assert!(dragged > 500);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog.is_none());
+    assert_eq!(
+        xuan::config::Config::load(&path)
+            .unwrap()
+            .pixel_grid_percent,
+        dragged
+    );
+}
+
 #[test]
 fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
     let (context, mut app) = app();
@@ -4371,4 +4892,234 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
     app.config.language = xuan::config::Language::English;
     frame(&context, &mut app);
     assert_eq!(Tool::Brush.label(), "Brush");
+}
+
+fn drop_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temporary = tempfile::tempdir().unwrap();
+    let image = temporary.path().join("photo.png");
+    RgbaImage::from_pixel(6, 4, image::Rgba([21, 87, 163, 255]))
+        .save(&image)
+        .unwrap();
+    let project = temporary.path().join("saved.xuan");
+    let mut doc = Document::new(9, 7).unwrap();
+    doc.insert(Layer::image("Saved", RgbaImage::new(9, 7)));
+    xuan::io::save(&doc, &project).unwrap();
+    (temporary, image, project)
+}
+
+fn app_with_document() -> (egui::Context, EditorApp) {
+    let (context, mut app) = app();
+    app.dimensions = [20, 16];
+    app.new_document();
+    (context, app)
+}
+
+#[test]
+fn drop_without_document_opens_without_prompt() {
+    let (_directory, image, _) = drop_fixture();
+    let (_, mut app) = app();
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 1);
+    assert_eq!(app.sessions[0].title, "photo");
+    assert_eq!(app.sessions[0].document.layers.len(), 1);
+}
+
+#[test]
+fn drop_with_document_prompts_and_each_choice_applies() {
+    let (_directory, image, _) = drop_fixture();
+    let (context, mut app) = app_with_document();
+    let layers = app.session().unwrap().document.layers.len();
+    app.queue_drop(vec![image.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert_eq!(app.sessions.len(), 1);
+
+    // Enter inserts as a layer, the default.
+    let enter = vec![text_key(egui::Key::Enter, egui::Modifiers::NONE)];
+    keyboard_frame(&context, &mut app, enter, egui::Modifiers::NONE);
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 1);
+    assert_eq!(app.session().unwrap().document.layers.len(), layers + 1);
+
+    // Open as new document.
+    app.queue_drop(vec![image.clone()]);
+    app.process_drops();
+    app.drop_choose_for_test(Some(false));
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.sessions[1].title, "photo");
+
+    // Cancel (Esc) does nothing.
+    app.current = 0;
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    let escape = vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)];
+    keyboard_frame(&context, &mut app, escape, egui::Modifiers::NONE);
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.sessions[0].document.layers.len(), layers + 1);
+}
+
+#[test]
+fn drop_of_only_projects_never_prompts_and_mixed_drops_open_projects_after_choice() {
+    let (_directory, image, project) = drop_fixture();
+    let (_, mut app) = app_with_document();
+    app.queue_drop(vec![project.clone()]);
+    app.process_drops();
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+
+    app.current = 0;
+    let layers = app.sessions[0].document.layers.len();
+    app.queue_drop(vec![project.clone(), image.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert_eq!(app.sessions.len(), 2, "projects wait for the choice");
+    app.drop_choose_for_test(Some(true));
+    assert_eq!(app.sessions.len(), 3);
+    assert_eq!(app.sessions[0].document.layers.len(), layers + 1);
+
+    // Cancel still opens the project.
+    app.current = 0;
+    app.queue_drop(vec![image, project]);
+    app.process_drops();
+    app.drop_choose_for_test(None);
+    assert_eq!(app.sessions.len(), 4);
+    assert_eq!(app.sessions[0].document.layers.len(), layers + 1);
+}
+
+#[test]
+fn drops_are_queued_while_blocked_and_handled_afterwards() {
+    let (_directory, image, _) = drop_fixture();
+    let (_, mut app) = app_with_document();
+    app.dialog = Some(Dialog::About);
+    app.queue_drop(vec![image.clone()]);
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::About));
+    assert_eq!(app.pending_drops.len(), 1);
+    app.dialog = None;
+    app.error = Some("boom".into());
+    app.process_drops();
+    assert_eq!(app.pending_drops.len(), 1);
+    app.error = None;
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    // The first drop prompts; the second waits for the prompt to resolve.
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert_eq!(app.pending_drops.len(), 1);
+    app.drop_choose_for_test(Some(false));
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+    assert!(app.pending_drops.is_empty());
+    app.drop_choose_for_test(None);
+    assert!(app.dialog.is_none());
+    assert_eq!(app.sessions.len(), 2);
+}
+
+#[test]
+fn drops_wait_while_develop_is_open() {
+    let (_directory, image, _) = drop_fixture();
+    let (_, mut app) = app_with_document();
+    let layer = app.session_mut().unwrap().document.active_mut().unwrap();
+    let id = layer.id;
+    layer.pixels = Some(Arc::new(RgbaImage::from_pixel(
+        20,
+        16,
+        image::Rgba([100, 90, 80, 255]),
+    )));
+    layer.raw = Some(xuan::raw::RawAsset {
+        filename: "camera.NEF".into(),
+        bytes: Arc::new(vec![1, 2, 3]),
+        metadata: xuan::raw::RawMetadata {
+            width: 20,
+            height: 16,
+            ..Default::default()
+        },
+        settings: xuan::raw::DevelopSettings::default(),
+    });
+    app.start_develop_layer(id);
+    assert!(app.develop.is_some());
+    app.queue_drop(vec![image]);
+    app.process_drops();
+    assert!(app.dialog.is_none());
+    assert_eq!(app.pending_drops.len(), 1);
+    app.cancel_develop();
+    app.process_drops();
+    assert!(app.dialog == Some(Dialog::DropChoice));
+}
+
+#[test]
+fn spot_healing_is_one_undo_step_and_leaves_masks_alone() {
+    let (context, mut app) = app();
+    app.dimensions = [64, 48];
+    app.new_document();
+    let original = image::RgbaImage::from_fn(64, 48, |x, y| {
+        let (dx, dy) = (x as f32 - 32.0, y as f32 - 24.0);
+        if dx.hypot(dy) < 3.0 {
+            image::Rgba([250, 0, 0, 255])
+        } else {
+            image::Rgba([(3 * x) as u8, (4 * y) as u8, 90, 255])
+        }
+    });
+    let session = app.session_mut().unwrap();
+    session.document.layers[0].pixels = Some(std::sync::Arc::new(original.clone()));
+    let transform = session.document.layers[0].transform;
+    let steps = session.history.names().count();
+    app.set_tool(Tool::Heal);
+    app.brush.diameter = 12.0;
+    app.brush.hardness = 1.0;
+    app.brush.opacity = 1.0;
+    let wait = |app: &mut EditorApp| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.job.is_some() {
+            app.poll_job();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    };
+    drag(
+        &context,
+        &mut app,
+        Point::new(31.0, 24.0),
+        Point::new(33.0, 24.0),
+        egui::Modifiers::NONE,
+    );
+    wait(&mut app);
+    let session = app.session().unwrap();
+    assert_eq!(app.error, None);
+    assert_eq!(session.history.undo_name(), Some("Spot Healing"));
+    assert_eq!(session.history.names().count(), steps + 1);
+    let layer = &session.document.layers[0];
+    assert_eq!(layer.transform, transform);
+    let healed = layer.pixels.as_ref().unwrap();
+    assert_eq!(healed.dimensions(), (64, 48));
+    assert!(healed.get_pixel(32, 24)[0] < 200);
+    assert_eq!(healed.get_pixel(5, 5), original.get_pixel(5, 5));
+    app.command("undo");
+    let layer = &app.session().unwrap().document.layers[0];
+    assert_eq!(**layer.pixels.as_ref().unwrap(), original);
+    assert_eq!(layer.transform, transform);
+
+    // As upstream, Spot Healing has nothing to do on a mask.
+    let session = app.session_mut().unwrap();
+    session.document.layers[0].mask = Some(xuan::document::Mask::white());
+    let steps = session.history.names().count();
+    app.mask_target = true;
+    drag(
+        &context,
+        &mut app,
+        Point::new(31.0, 24.0),
+        Point::new(33.0, 24.0),
+        egui::Modifiers::NONE,
+    );
+    wait(&mut app);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps);
+    assert_eq!(
+        **session.document.layers[0].pixels.as_ref().unwrap(),
+        original
+    );
+    assert_eq!(app.status, "Spot Healing works on layer pixels, not masks");
 }

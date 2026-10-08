@@ -171,7 +171,11 @@ impl DevelopSettings {
     }
 
     pub fn output_size(&self, source: [u32; 2]) -> [u32; 2] {
-        let [left, top, right, bottom] = self.crop_pixels(source);
+        self.output_size_for_crop(self.crop_pixels(source))
+    }
+
+    /// Output size for crop bounds already computed by `crop_pixels`.
+    pub fn output_size_for_crop(&self, [left, top, right, bottom]: [u32; 4]) -> [u32; 2] {
         if self.quarter_turns.is_multiple_of(2) {
             [right - left, bottom - top]
         } else {
@@ -206,12 +210,26 @@ impl DevelopSettings {
         self.crop = rotate_crop(crop, (4 - self.quarter_turns) % 4);
     }
 
-    pub(crate) fn crop_source_pixel(&self, x: u32, y: u32, size: [u32; 2]) -> [u32; 2] {
-        match self.quarter_turns {
-            1 => [y, size[1] - 1 - x],
-            2 => [size[0] - 1 - x, size[1] - 1 - y],
-            3 => [size[0] - 1 - y, x],
-            _ => [x, y],
+    /// Integer mapping from output pixels to uncropped development pixels for
+    /// a `source`-sized development image. This is the only description of the
+    /// final crop and quarter turn: the CPU encoder applies it directly and the
+    /// GPU encoder receives its coefficients (see `gpu::raw::RawUniforms`).
+    pub(crate) fn output_map(&self, source: [u32; 2]) -> OutputMap {
+        let crop = self.crop_pixels(source);
+        let [left, top, right, bottom] = crop;
+        let extent = [(right - left) as i32, (bottom - top) as i32];
+        let (axes, offset) = quarter_turn_affine((4 - self.quarter_turns % 4) % 4);
+        // Normalized display -> image is `axes * p + offset` with entries in
+        // {-1, 0, 1} and offsets in {0, 1}. At pixel centers (p = (i + 0.5) / n)
+        // a reversed axis maps index i to extent - 1 - i; a forward one to i.
+        let origin = std::array::from_fn(|r| {
+            let reversed = axes[r].iter().filter(|&&a| a < 0).count() as i32;
+            [left, top][r] as i32 + offset[r] * extent[r] - reversed
+        });
+        OutputMap {
+            origin,
+            axes,
+            size: self.output_size_for_crop(crop),
         }
     }
 
@@ -304,6 +322,39 @@ pub fn rotate_point(point: Point, quarter_turns: u8) -> Point {
         2 => Point::new(1.0 - point.x, 1.0 - point.y),
         3 => Point::new(point.y, 1.0 - point.x),
         _ => point,
+    }
+}
+
+/// The affine form of [`rotate_point`] as `(matrix rows, offset)`, so that
+/// `rotate_point(p) == matrix * p + offset`. Derived by evaluating the single
+/// quarter-turn definition at the origin and unit axes; values are exact.
+fn quarter_turn_affine(quarter_turns: u8) -> ([[i32; 2]; 2], [i32; 2]) {
+    let o = rotate_point(Point::new(0.0, 0.0), quarter_turns);
+    let x = rotate_point(Point::new(1.0, 0.0), quarter_turns);
+    let y = rotate_point(Point::new(0.0, 1.0), quarter_turns);
+    (
+        [
+            [(x.x - o.x) as i32, (y.x - o.x) as i32],
+            [(x.y - o.y) as i32, (y.y - o.y) as i32],
+        ],
+        [o.x as i32, o.y as i32],
+    )
+}
+
+/// Output pixel `(x, y)` reads development pixel `origin + axes * (x, y)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutputMap {
+    pub origin: [i32; 2],
+    /// Matrix rows: development x and y in terms of output x and y.
+    pub axes: [[i32; 2]; 2],
+    /// Output dimensions after cropping and quarter turns.
+    pub size: [u32; 2],
+}
+
+impl OutputMap {
+    pub fn source_pixel(&self, x: u32, y: u32) -> [u32; 2] {
+        let (x, y) = (x as i32, y as i32);
+        std::array::from_fn(|r| (self.origin[r] + self.axes[r][0] * x + self.axes[r][1] * y) as u32)
     }
 }
 

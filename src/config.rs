@@ -1,5 +1,6 @@
 //! User preferences, independent of projects and egui's window persistence.
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -7,6 +8,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::layout::{GridSettings, SnapSettings};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
@@ -26,13 +29,228 @@ impl Language {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// How the main window draws its title bar and window controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitleBar {
+    /// Native decorations from the window manager; the menu bar is a normal panel.
+    #[serde(rename = "system")]
+    System,
+    /// Client-side title bar holding the menus, with monochrome controls.
+    #[serde(rename = "compact")]
+    Compact,
+    /// Client-side title bar with macOS traffic-light controls on the left.
+    #[serde(rename = "macos")]
+    MacOs,
+}
+
+impl Default for TitleBar {
+    fn default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Compact
+        }
+    }
+}
+
+impl TitleBar {
+    pub const ALL: [Self; 3] = [Self::System, Self::Compact, Self::MacOs];
+
+    /// The app draws the title bar itself, with system decorations turned off.
+    pub fn client_side(self) -> bool {
+        self != Self::System
+    }
+
+    /// Untranslated display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Compact => "Compact",
+            Self::MacOs => "macOS",
+        }
+    }
+}
+
+/// Lowest and highest zoom, in percent, at which the pixel grid may start to show.
+pub const PIXEL_GRID_PERCENT_RANGE: std::ops::RangeInclusive<u32> = 200..=6400;
+pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub language: Language,
+    pub title_bar: TitleBar,
+    /// View → Pixel Grid.
+    pub pixel_grid: bool,
+    /// Zoom, in percent, from which the pixel grid is drawn.
+    pub pixel_grid_percent: u32,
+    /// View → Rulers.
+    pub rulers: bool,
+    /// View → Show → Grid: the layout grid, separate from the pixel grid.
+    pub show_grid: bool,
+    /// View → Show → Guides.
+    pub show_guides: bool,
+    /// View → Lock Guides.
+    pub lock_guides: bool,
+    /// View → Snap and View → Snap To.
+    pub snap: SnapSettings,
+    /// The layout grid for projects without one of their own (View → Grid Settings…).
+    pub grid: GridSettings,
+    /// Right sidebar arrangement; see [`crate::panes`].
+    pub panes: crate::panes::Layout,
+    /// Per-plugin state keyed by plugin identifier.
+    pub plugins: BTreeMap<String, PluginConfig>,
+    /// Key bindings the user changed, by command id: `merge = "Ctrl+E"`, `""` for none, or a
+    /// list of shortcuts. Commands not listed keep their defaults, including new defaults of
+    /// later releases. The editor interprets the values and ignores ones it does not know.
+    pub keybindings: toml::Table,
+    /// Command ids run from the command palette, most recent first.
+    pub recent_commands: Vec<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            language: Language::default(),
+            title_bar: TitleBar::default(),
+            pixel_grid: true,
+            pixel_grid_percent: DEFAULT_PIXEL_GRID_PERCENT,
+            // Upstream's defaults: rulers and grid hidden, guides shown and unlocked.
+            rulers: false,
+            show_grid: false,
+            show_guides: true,
+            lock_guides: false,
+            snap: SnapSettings::default(),
+            grid: GridSettings::default(),
+            panes: crate::panes::Layout::default(),
+            plugins: BTreeMap::new(),
+            keybindings: toml::Table::new(),
+            recent_commands: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginConfig {
+    pub enabled: bool,
+    /// What the user allowed to run. A plugin whose folder, command or
+    /// permissions no longer match runs only after the user reviews it again.
+    /// Configurations from before grants were recorded (`granted = true`)
+    /// have none, so those plugins are reviewed again too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant: Option<PluginGrant>,
+    /// Values for the settings the manifest declares, by setting identifier.
+    pub settings: toml::Table,
+}
+
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            grant: None,
+            settings: toml::Table::new(),
+        }
+    }
+}
+
+/// A plugin the user allowed to run, exactly as they reviewed it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PluginGrant {
+    /// The plugin folder, canonicalized.
+    pub dir: PathBuf,
+    pub command: Vec<String>,
+    pub permissions: crate::plugins::manifest::Permissions,
+}
+
+/// Plugin secrets such as API keys, kept out of `config.toml` in a file that
+/// only the owner can read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secrets(pub BTreeMap<String, BTreeMap<String, String>>);
+
+impl Secrets {
+    pub fn path() -> Result<PathBuf> {
+        Ok(Config::path()?.with_file_name("secrets.toml"))
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        match fs::read_to_string(path) {
+            // The parser's message quotes the offending line, which holds a
+            // secret; only its position is reported.
+            Ok(text) => toml::from_str(&text).map_err(|error| {
+                let line = error
+                    .span()
+                    .map(|span| text.as_bytes()[..span.start.min(text.len())]
+                        .iter()
+                        .filter(|&&byte| byte == b'\n')
+                        .count()
+                        + 1);
+                match line {
+                    Some(line) => anyhow::anyhow!(
+                        "Cannot parse {}: invalid TOML on line {line} (not shown, as it may hold a secret)",
+                        path.display()
+                    ),
+                    None => anyhow::anyhow!("Cannot parse {}: invalid TOML", path.display()),
+                }
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error).with_context(|| format!("Cannot read {}", path.display())),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        let parent = path.parent().context("Secrets path has no parent")?;
+        fs::create_dir_all(parent)?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.as_file()
+                .set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        file.write_all(toml::to_string_pretty(&self.0)?.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(path)
+            .with_context(|| format!("Cannot save {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Forget every secret of a plugin.
+    pub fn clear(&mut self, plugin: &str) -> bool {
+        self.0.remove(plugin).is_some()
+    }
+
+    pub fn get(&self, plugin: &str, key: &str) -> Option<&str> {
+        self.0.get(plugin)?.get(key).map(String::as_str)
+    }
+
+    pub fn set(&mut self, plugin: &str, key: &str, value: &str) {
+        if value.is_empty() {
+            if let Some(map) = self.0.get_mut(plugin) {
+                map.remove(key);
+                if map.is_empty() {
+                    self.0.remove(plugin);
+                }
+            }
+        } else {
+            self.0
+                .entry(plugin.into())
+                .or_default()
+                .insert(key.into(), value.into());
+        }
+    }
 }
 
 impl Config {
+    /// The grid threshold, forced into the supported range even for hand-edited files.
+    pub fn pixel_grid_percent(&self) -> u32 {
+        self.pixel_grid_percent.clamp(
+            *PIXEL_GRID_PERCENT_RANGE.start(),
+            *PIXEL_GRID_PERCENT_RANGE.end(),
+        )
+    }
+
     pub fn path() -> Result<PathBuf> {
         let variable = if cfg!(windows) {
             "APPDATA"
@@ -48,7 +266,10 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         match fs::read_to_string(path) {
             Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("Cannot parse {}", path.display()))
+                let mut config: Self = toml::from_str(&text)
+                    .with_context(|| format!("Cannot parse {}", path.display()))?;
+                config.panes.sanitize();
+                Ok(config)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error).with_context(|| format!("Cannot read {}", path.display())),
@@ -63,6 +284,39 @@ impl Config {
             Err(error) => return Err(error.into()),
         };
         table.insert("language".into(), toml::Value::try_from(self.language)?);
+        table.insert("title_bar".into(), toml::Value::try_from(self.title_bar)?);
+        table.insert("pixel_grid".into(), toml::Value::Boolean(self.pixel_grid));
+        table.insert(
+            "pixel_grid_percent".into(),
+            toml::Value::Integer(self.pixel_grid_percent().into()),
+        );
+        table.insert("rulers".into(), toml::Value::Boolean(self.rulers));
+        table.insert("show_grid".into(), toml::Value::Boolean(self.show_grid));
+        table.insert("show_guides".into(), toml::Value::Boolean(self.show_guides));
+        table.insert("lock_guides".into(), toml::Value::Boolean(self.lock_guides));
+        table.insert("snap".into(), toml::Value::try_from(self.snap)?);
+        table.insert(
+            "grid".into(),
+            toml::Value::try_from(self.grid.normalized())?,
+        );
+        table.insert("panes".into(), toml::Value::try_from(&self.panes)?);
+        table.insert("plugins".into(), toml::Value::try_from(&self.plugins)?);
+        if self.keybindings.is_empty() {
+            table.remove("keybindings");
+        } else {
+            table.insert(
+                "keybindings".into(),
+                toml::Value::Table(self.keybindings.clone()),
+            );
+        }
+        if self.recent_commands.is_empty() {
+            table.remove("recent_commands");
+        } else {
+            table.insert(
+                "recent_commands".into(),
+                toml::Value::try_from(&self.recent_commands)?,
+            );
+        }
         let parent = path.parent().context("Configuration path has no parent")?;
         fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -98,6 +352,10 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), Config::default());
         let chinese = Config {
             language: Language::SimplifiedChinese,
+            title_bar: TitleBar::MacOs,
+            pixel_grid: false,
+            pixel_grid_percent: 1200,
+            ..Config::default()
         };
         chinese.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), chinese);
@@ -120,6 +378,141 @@ mod tests {
     }
 
     #[test]
+    fn settings_from_older_releases_load_with_the_default_title_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "language = 'zh-CN'\n").unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap(),
+            Config {
+                language: Language::SimplifiedChinese,
+                title_bar: TitleBar::default(),
+                ..Config::default()
+            }
+        );
+    }
+
+    #[test]
+    fn pixel_grid_defaults_persist_and_older_files_still_load() {
+        let defaults = Config::default();
+        assert!(defaults.pixel_grid);
+        assert_eq!(defaults.pixel_grid_percent, 500);
+        // Files from before the pixel grid existed.
+        let old: Config = toml::from_str("language = 'zh-CN'\ntitle_bar = 'system'\n").unwrap();
+        assert_eq!(old.title_bar, TitleBar::System);
+        assert!(old.pixel_grid);
+        assert_eq!(old.pixel_grid_percent(), 500);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "language = 'en'\n").unwrap();
+        assert_eq!(Config::load(&path).unwrap(), Config::default());
+        // A partial new-style file keeps the other default.
+        let partial: Config = toml::from_str("pixel_grid = false").unwrap();
+        assert!(!partial.pixel_grid && partial.pixel_grid_percent == 500);
+
+        let custom = Config {
+            pixel_grid: false,
+            pixel_grid_percent: 800,
+            ..Config::default()
+        };
+        custom.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), custom);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("pixel_grid = false") && text.contains("pixel_grid_percent = 800"));
+    }
+
+    #[test]
+    fn pixel_grid_threshold_is_clamped_to_the_supported_range() {
+        for (stored, effective) in [
+            (0, 200),
+            (199, 200),
+            (200, 200),
+            (6400, 6400),
+            (99999, 6400),
+        ] {
+            let config = Config {
+                pixel_grid_percent: stored,
+                ..Config::default()
+            };
+            assert_eq!(config.pixel_grid_percent(), effective);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config {
+            pixel_grid_percent: 50,
+            ..Config::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert_eq!(Config::load(&path).unwrap().pixel_grid_percent, 200);
+    }
+
+    #[test]
+    fn title_bar_style_persists_and_defaults_to_compact() {
+        let config: Config = toml::from_str("language = 'en'").unwrap();
+        assert_eq!(config.title_bar, TitleBar::default());
+        if !cfg!(target_os = "macos") {
+            assert_eq!(TitleBar::default(), TitleBar::Compact);
+        }
+        for style in TitleBar::ALL {
+            let config = Config {
+                title_bar: style,
+                ..Config::default()
+            };
+            let text = toml::to_string(&config).unwrap();
+            assert_eq!(toml::from_str::<Config>(&text).unwrap(), config);
+        }
+        let config: Config = toml::from_str("title_bar = 'system'").unwrap();
+        assert_eq!(config.title_bar, TitleBar::System);
+        assert!(!TitleBar::System.client_side());
+        assert!(TitleBar::Compact.client_side() && TitleBar::MacOs.client_side());
+    }
+
+    #[test]
+    fn secrets_are_stored_separately_with_owner_only_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("xuan/secrets.toml");
+        assert_eq!(Secrets::load(&path).unwrap(), Secrets::default());
+        let mut secrets = Secrets::default();
+        secrets.set("comfy", "api_key", "sk-123");
+        secrets.save(&path).unwrap();
+        assert_eq!(
+            Secrets::load(&path).unwrap().get("comfy", "api_key"),
+            Some("sk-123")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        secrets.set("comfy", "api_key", "");
+        assert!(secrets.0.is_empty());
+        // A broken file is reported without quoting the secret on the bad line.
+        fs::write(&path, "[comfy]\napi_key = \"sk-live-123\nother = 1\n").unwrap();
+        let error = format!("{:#}", Secrets::load(&path).unwrap_err());
+        assert!(!error.contains("sk-live"), "{error}");
+        assert!(error.contains("line 2"), "{error}");
+        let mut config = Config::default();
+        config
+            .plugins
+            .entry("comfy".into())
+            .or_default()
+            .settings
+            .insert("max_side".into(), toml::Value::Integer(1024));
+        let config_path = dir.path().join("xuan/config.toml");
+        config.save(&config_path).unwrap();
+        assert_eq!(Config::load(&config_path).unwrap(), config);
+        assert!(
+            fs::read_to_string(&config_path)
+                .unwrap()
+                .contains("[plugins.comfy.settings]")
+        );
+    }
+
+    #[test]
     fn uses_platform_config_home() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().to_path_buf();
@@ -134,5 +527,103 @@ mod tests {
             );
         }
         assert!(config_path(None, None).is_err());
+    }
+
+    #[test]
+    fn view_aids_default_like_upstream_and_older_files_still_load() {
+        let defaults = Config::default();
+        assert!(!defaults.rulers && !defaults.show_grid && !defaults.lock_guides);
+        assert!(defaults.show_guides);
+        assert_eq!(defaults.snap, SnapSettings::default());
+        assert!(defaults.snap.enabled && defaults.snap.guides && !defaults.snap.grid);
+        assert!(defaults.snap.layers && defaults.snap.bounds);
+        assert_eq!(defaults.grid, GridSettings::default());
+
+        // A file written before rulers, guides and the layout grid existed.
+        let old: Config =
+            toml::from_str("language = 'zh-CN'\ntitle_bar = 'system'\npixel_grid = false\n")
+                .unwrap();
+        assert_eq!(
+            old,
+            Config {
+                language: Language::SimplifiedChinese,
+                title_bar: TitleBar::System,
+                pixel_grid: false,
+                ..Config::default()
+            }
+        );
+        // Partial tables keep the other defaults.
+        let partial: Config =
+            toml::from_str("[snap]\ngrid = true\n[grid]\nspacing = 100\n").unwrap();
+        assert!(partial.snap.grid && partial.snap.enabled && partial.snap.layers);
+        assert_eq!(partial.grid.spacing, 100);
+        assert_eq!(partial.grid.subdivisions, 8);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let custom = Config {
+            rulers: true,
+            show_grid: true,
+            show_guides: false,
+            lock_guides: true,
+            snap: SnapSettings {
+                enabled: false,
+                guides: false,
+                grid: true,
+                layers: false,
+                bounds: false,
+            },
+            grid: GridSettings {
+                spacing: 32,
+                subdivisions: 2,
+                color: crate::layout::GridColor::Cyan,
+                style: crate::layout::GridStyle::Dots,
+                opacity: 80,
+                ..GridSettings::default()
+            },
+            ..Config::default()
+        };
+        custom.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), custom);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("rulers = true") && text.contains("[snap]"));
+        assert!(text.contains("[grid]") && text.contains("style = \"dots\""));
+    }
+
+    #[test]
+    fn key_bindings_keep_only_overrides_and_older_files_still_load() {
+        // A file from before customisable key bindings.
+        let old: Config = toml::from_str("language = 'zh-CN'\npixel_grid = false\n").unwrap();
+        assert!(old.keybindings.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("keybindings"));
+
+        let mut custom = Config::default();
+        custom
+            .keybindings
+            .insert("merge".into(), toml::Value::String("Ctrl+Shift+M".into()));
+        custom.keybindings.insert(
+            "invert_selection".into(),
+            toml::Value::String(String::new()),
+        );
+        custom.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[keybindings]") && text.contains("merge = \"Ctrl+Shift+M\""));
+        assert!(text.contains("invert_selection = \"\""));
+        assert_eq!(Config::load(&path).unwrap(), custom);
+
+        // Unknown commands and odd values load as they are; the editor ignores them.
+        fs::write(
+            &path,
+            "[keybindings]\nfuture_command = 'Ctrl+K'\nmerge = 42\n",
+        )
+        .unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.keybindings.len(), 2);
+        // Clearing every override removes the table again.
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("keybindings"));
     }
 }

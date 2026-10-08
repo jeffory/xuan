@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        update-types: [minor, patch]
+    ignore:
+      # egui-winit is vendored and patched in vendor/; egui, eframe and the
+      # patch must move together, so upgrade them by hand.
+      - dependency-name: egui
+      - dependency-name: eframe
+      - dependency-name: egui_extras
+      - dependency-name: egui-winit
+      # Pinned exactly; decoder changes need manual RAW regression checks.
+      - dependency-name: rawler

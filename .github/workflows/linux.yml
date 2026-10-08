@@ -1,19 +1,27 @@
 name: Linux
 on:
   push:
-    branches: ['**']
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
   workflow_call:
 permissions:
   contents: read
+# Literal prefix: inside a reusable-workflow call github.workflow is the
+# caller's name, which would put Linux and Windows in one group.
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     # Keep native release binaries usable on glibc 2.35 and newer.
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
       XUAN_MAX_GLIBC: '2.35'
+      # Missing real-camera fixtures fail the RAW tests instead of skipping.
+      XUAN_REQUIRE_RAW_FIXTURES: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -41,11 +49,25 @@ jobs:
           echo "$RUNNER_TEMP/appimage-tools" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/appimage-tools/bin" >> "$GITHUB_PATH"
       - name: Set up Rust
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
+        # Installs the toolchain pinned in rust-toolchain.toml.
+        run: rustup toolchain install
+      - name: Cache RAW test fixtures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: testdata/raw/cache
+          key: raw-fixtures-${{ hashFiles('testdata/raw/fixtures.txt') }}
+      - name: Fetch RAW test fixtures
+        run: scripts/fetch-raw-fixtures.sh
       - name: Check and test
         run: scripts/check.sh --gpu
+      - name: Upload golden-image differences
+        # Written by the golden tests (src/goldens.rs) when a rendering differs.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: golden-failures-linux
+          path: target/golden-failures/
+          if-no-files-found: ignore
       - name: Validate desktop integration
         run: desktop-file-validate packaging/me.silverl.xuan.desktop
       - name: Package

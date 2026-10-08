@@ -2,21 +2,39 @@ use xuan::i18n::tr;
 mod canvas;
 mod chrome;
 mod clipboard;
+mod commands;
 mod develop;
 mod develop_controls;
 mod develop_preview;
 mod dialogs;
+mod drops;
+mod eyedropper;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;
+mod grid_settings;
+mod guides;
 mod icons;
 mod jobs;
+mod keybindings;
+mod layer_effects_dialog;
 mod layers;
+mod layout_grid;
 mod levels_controls;
 mod menus;
+mod navigator;
+mod palette;
 mod panels;
+mod panes;
+mod photoshop;
+mod pixel_grid;
+mod plugin_dialogs;
+mod plugin_panes;
+mod plugins;
+mod rulers;
 mod settings;
 mod shortcuts;
+mod snap;
 mod stroke_smoothing;
 mod tablet;
 #[cfg(test)]
@@ -54,6 +72,7 @@ pub enum Tool {
     Wand,
     Crop,
     Brush,
+    Pencil,
     Erase,
     Heal,
     Clone,
@@ -64,16 +83,19 @@ pub enum Tool {
     Dropper,
     Hand,
     Zoom,
+    /// Marks regions for a plugin action; shown only while one is open.
+    Region,
 }
 
 impl Tool {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 18] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
         Self::Wand,
         Self::Crop,
         Self::Brush,
+        Self::Pencil,
         Self::Erase,
         Self::Heal,
         Self::Clone,
@@ -84,6 +106,7 @@ impl Tool {
         Self::Dropper,
         Self::Hand,
         Self::Zoom,
+        Self::Region,
     ];
 
     fn label(self) -> &'static str {
@@ -94,6 +117,7 @@ impl Tool {
             Self::Wand => tr("Magic Wand"),
             Self::Crop => tr("Crop"),
             Self::Brush => tr("Brush"),
+            Self::Pencil => tr("Pencil"),
             Self::Erase => tr("Eraser"),
             Self::Heal => tr("Spot Healing"),
             Self::Clone => tr("Clone Stamp"),
@@ -104,32 +128,13 @@ impl Tool {
             Self::Dropper => tr("Eyedropper"),
             Self::Hand => tr("Hand"),
             Self::Zoom => tr("Zoom"),
-        }
-    }
-    fn shortcut(self) -> &'static str {
-        match self {
-            Self::Move => "V",
-            Self::Marquee => "M",
-            Self::Lasso => "L",
-            Self::Wand => "W",
-            Self::Crop => "C",
-            Self::Brush => "B",
-            Self::Erase => "E",
-            Self::Heal => "J",
-            Self::Clone => "S",
-            Self::Blur => "R",
-            Self::Gradient => "G",
-            Self::Shape => "U",
-            Self::Text => "T",
-            Self::Dropper => "I",
-            Self::Hand => "H",
-            Self::Zoom => "Z",
+            Self::Region => tr("Region"),
         }
     }
     fn is_brush(self) -> bool {
         matches!(
             self,
-            Self::Brush | Self::Erase | Self::Heal | Self::Clone | Self::Blur
+            Self::Brush | Self::Pencil | Self::Erase | Self::Heal | Self::Clone | Self::Blur
         )
     }
     fn is_selection(self) -> bool {
@@ -150,6 +155,9 @@ impl Tool {
                 tr("Click to select similar colors · Shift add · Alt subtract · Ctrl+D deselect")
             }
             Self::Crop => tr("Drag to crop · Enter applies · Escape cancels · Space to pan"),
+            Self::Pencil => tr(
+                "Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
+            ),
             Self::Brush | Self::Erase => tr(
                 "Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan",
             ),
@@ -166,6 +174,9 @@ impl Tool {
             }
             Self::Hand => tr("Drag to pan · Scroll to zoom · Ctrl+0 fits canvas"),
             Self::Zoom => tr("Click to zoom in · Alt-click to zoom out · Ctrl+1 actual pixels"),
+            Self::Region => {
+                tr("Drag to mark a region for the plugin · Click a region to edit its details")
+            }
         }
     }
 }
@@ -185,7 +196,11 @@ struct Session {
     preview_size: [u32; 2],
     composite: Option<Arc<RgbaImage>>,
     thumbnails: HashMap<(Uuid, bool), layers::LayerThumbnail>,
+    navigator: navigator::ThumbnailCache,
     collapsed: HashSet<Uuid>,
+    sample_cache: Option<eyedropper::SampleCache>,
+    /// Full renders made for eyedropper sampling; lets tests check the cache.
+    sample_renders: usize,
 }
 
 impl Session {
@@ -207,12 +222,16 @@ impl Session {
             preview_size: [0, 0],
             composite: None,
             thumbnails: HashMap::new(),
+            navigator: navigator::ThumbnailCache::default(),
             collapsed: HashSet::new(),
+            sample_cache: None,
+            sample_renders: 0,
         }
     }
 
     fn invalidate(&mut self) {
         self.dirty_preview = true;
+        self.sample_cache = None;
     }
 
     fn refresh(&mut self, ctx: &egui::Context, state: Option<&eframe::egui_wgpu::RenderState>) {
@@ -289,7 +308,7 @@ impl Session {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dialog {
     New,
     CanvasSize,
@@ -300,6 +319,13 @@ enum Dialog {
     Shortcuts,
     About,
     Settings,
+    DropChoice,
+    PluginPermissions,
+    Plugins,
+    PluginProposal,
+    GridSettings,
+    /// Layer → Layer Effects…; not `Effect`, which edits adjustments and filters.
+    LayerEffects,
 }
 
 struct EffectEdit {
@@ -349,6 +375,8 @@ struct Gesture {
     clone_offset: Point,
     source: Option<Arc<RgbaImage>>,
     reference: Option<Transform>,
+    /// The selection's bounds when the drag moves a selection outline: [min, max].
+    selection_bounds: Option<[Point; 2]>,
 }
 
 impl Gesture {
@@ -359,6 +387,7 @@ impl Gesture {
                     tool,
                     Tool::Move
                         | Tool::Brush
+                        | Tool::Pencil
                         | Tool::Erase
                         | Tool::Clone
                         | Tool::Blur
@@ -370,6 +399,19 @@ impl Gesture {
 
 pub struct EditorApp {
     config: xuan::config::Config,
+    /// Where preferences are saved. `None` (headless sessions and tests) keeps
+    /// them in memory only.
+    config_path: Option<PathBuf>,
+    /// Settings changed in memory (a field mid-drag) but not yet written.
+    config_dirty: bool,
+    /// The command registry with the user's key bindings applied.
+    keymap: commands::Keymap,
+    /// The command palette (Ctrl+K), while it is open.
+    palette: Option<palette::Palette>,
+    /// Settings → Keyboard Shortcuts: search, key capture and a conflict waiting for an answer.
+    key_editor: keybindings::KeyEditor,
+    pane_drag: Option<panes::PaneDrag>,
+    plugins: plugins::PluginState,
     tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
@@ -385,6 +427,8 @@ pub struct EditorApp {
     tool: Tool,
     brush: Brush,
     brush_smoothing: f32,
+    /// The tool plain B selects: Brush or Pencil, whichever was used last.
+    brush_variant: Tool,
     pressure_size: bool,
     pressure_opacity: bool,
     tilt_shape: bool,
@@ -406,30 +450,54 @@ pub struct EditorApp {
     text_renderer: Option<xuan::text::TextRenderer>,
     text_edit: Option<text_controls::TextEdit>,
     blur_mode: PaintMode,
+    heal_mode: xuan::retouch::HealMode,
     auto_select: bool,
     ignore_transparent_pixels: bool,
     show_controls: bool,
-    snap: bool,
     lock_ratio: bool,
     clone_source: Option<Point>,
     clone_offset: Option<Point>,
     clone_aligned: bool,
     clone_all: bool,
+    dropper: Option<eyedropper::DropperGesture>,
+    dropper_size: eyedropper::SampleSize,
+    dropper_source: eyedropper::SampleSource,
     last_brush: Option<Point>,
     gesture: Option<Gesture>,
     crop_rect: Option<(Point, Point)>,
-    guides: Vec<(bool, f32)>,
+    /// Lines a drag has snapped to, drawn across the canvas while it lasts.
+    snap_lines: Vec<snap::SnapLine>,
+    /// A guide being dragged out of a ruler or moved.
+    guide_drag: Option<guides::GuideDrag>,
+    /// View → Grid Settings… while it is open.
+    grid_edit: Option<grid_settings::GridEdit>,
     dialog: Option<Dialog>,
     dimensions: [u32; 2],
     resolution: f32,
     anchor: [f32; 2],
     effect: Option<EffectEdit>,
+    /// Layer → Layer Effects… while it is open.
+    layer_effects: Option<layer_effects_dialog::LayerEffectsEdit>,
     error: Option<String>,
+    /// A non-fatal message about a finished operation, such as what an import left out.
+    notice: Option<String>,
+    /// Photoshop files read and waiting for their conversion report to be accepted.
+    photoshop_imports: photoshop::PendingImports,
     status: String,
     rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
     close_app: bool,
+    drop_prompt: Option<drops::DropPrompt>,
+    pending_drops: std::collections::VecDeque<Vec<PathBuf>>,
     allow_close: bool,
+    /// When set, `command` only records its name here (UI tests avoid native dialogs this way).
+    #[cfg(test)]
+    command_trace: Option<Vec<String>>,
+    /// Whether the native window was created transparent (needed for rounded corners).
+    transparent_window: bool,
+    /// The decorations last requested from the window system.
+    decorated: bool,
+    button_layout: chrome::ButtonLayout,
     clipboard: Option<(RgbaImage, Point)>,
     system_clipboard: Option<arboard::Clipboard>,
     jpeg_quality: u8,
@@ -441,6 +509,10 @@ pub struct EditorApp {
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
+    /// Area the canvas occupied last frame, for the Navigator's viewport box.
+    canvas_viewport: Option<egui::Rect>,
+    /// Viewport, zoom and pan the Navigator last drew; a change schedules a repaint.
+    navigator_view: Option<(egui::Rect, f32, Vec2)>,
 }
 
 impl EditorApp {
@@ -462,6 +534,8 @@ impl EditorApp {
             Self::with_context(&cc.egui_ctx, vec![], demo, screenshot)
         });
         app.load_config();
+        app.load_plugins();
+        app.button_layout = chrome::ButtonLayout::from_desktop();
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
@@ -507,6 +581,13 @@ impl EditorApp {
         egui_extras::install_image_loaders(ctx);
         let mut app = Self {
             config: Default::default(),
+            config_path: None,
+            config_dirty: false,
+            keymap: Default::default(),
+            palette: None,
+            key_editor: Default::default(),
+            pane_drag: None,
+            plugins: Default::default(),
             tablet: None,
             context: ctx.clone(),
             window_title: String::new(),
@@ -522,6 +603,7 @@ impl EditorApp {
             tool: Tool::Move,
             brush: Brush::default(),
             brush_smoothing: 0.0,
+            brush_variant: Tool::Brush,
             pressure_size: true,
             pressure_opacity: false,
             tilt_shape: false,
@@ -543,30 +625,45 @@ impl EditorApp {
             text_renderer: None,
             text_edit: None,
             blur_mode: PaintMode::Blur,
+            heal_mode: xuan::retouch::HealMode::ContentAware,
             auto_select: true,
             ignore_transparent_pixels: true,
             show_controls: true,
-            snap: true,
             lock_ratio: true,
             clone_source: None,
             clone_offset: None,
             clone_aligned: true,
             clone_all: true,
+            dropper: None,
+            dropper_size: eyedropper::SampleSize::default(),
+            dropper_source: eyedropper::SampleSource::AllLayers,
             last_brush: None,
             gesture: None,
             crop_rect: None,
-            guides: Vec::new(),
+            snap_lines: Vec::new(),
+            guide_drag: None,
+            grid_edit: None,
             dialog: None,
             dimensions: [1920, 1080],
             resolution: 72.0,
             anchor: [0.5, 0.5],
             effect: None,
+            layer_effects: None,
             error: None,
+            notice: None,
+            photoshop_imports: Default::default(),
             status: String::new(),
             rename: None,
             close_tab: None,
             close_app: false,
+            drop_prompt: None,
+            pending_drops: Default::default(),
             allow_close: false,
+            #[cfg(test)]
+            command_trace: None,
+            transparent_window: true,
+            decorated: false,
+            button_layout: Default::default(),
             clipboard: None,
             system_clipboard: None,
             jpeg_quality: 90,
@@ -578,6 +675,8 @@ impl EditorApp {
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
+            canvas_viewport: None,
+            navigator_view: None,
         };
         if demo {
             app.add_demo();
@@ -697,9 +796,23 @@ impl EditorApp {
             self.queue_raw(path, as_layer);
             return;
         }
+        if io::is_photoshop(path) {
+            self.open_photoshop(path, as_layer);
+            return;
+        }
+        if !builtin_extension(path)
+            && let Some((plugin, format)) = self.plugin_import_format(path)
+        {
+            self.open_with_plugin(&plugin, &format, path, as_layer);
+            return;
+        }
         let project = path.is_dir() || path.extension().is_some_and(|e| e == "xuan");
+        let mut report = io::ImportReport::default();
         let result = if project {
-            io::load(path)
+            io::load_with_report(path).map(|(document, imported)| {
+                report = imported;
+                document
+            })
         } else {
             io::import_image(path)
                 .and_then(|image| {
@@ -753,6 +866,10 @@ impl EditorApp {
                 self.current = self.sessions.len() - 1;
                 self.mask_target = false;
                 self.dialog = None;
+                if let Some(summary) = report.summary() {
+                    self.status = tr("Imported with changes").into();
+                    self.notice = Some(summary);
+                }
             }
             Err(error) => {
                 self.error = Some(format!(
@@ -788,16 +905,85 @@ impl EditorApp {
         self.mask_target = false;
     }
 
+    /// Open a file through the plugin that declared its format. The plugin
+    /// answers in the background; [`EditorApp::open_imported`] opens it then.
+    fn open_with_plugin(&mut self, plugin: &str, format: &str, path: &Path, as_layer: bool) {
+        if let Err(error) = self.start_plugin_import(plugin, format, path, as_layer) {
+            self.error = Some(format!(
+                "{} {}\n\n{error:#}",
+                tr("Could not open"),
+                path.display()
+            ))
+        }
+    }
+
+    /// Show a document a plugin imported, as a new tab or a layer.
+    fn open_imported(&mut self, document: Document, path: &Path, as_layer: bool) {
+        let title = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if as_layer && !self.sessions.is_empty() {
+            let image = xuan::render::render(&document);
+            self.edit(tr("Import Image"), |doc| {
+                let mut layer = Layer::image(title, image);
+                layer.transform.x = (doc.width as f32 - layer.transform.width) * 0.5;
+                layer.transform.y = (doc.height as f32 - layer.transform.height) * 0.5;
+                doc.insert(layer);
+                Ok(())
+            });
+            return;
+        }
+        self.sessions.push(Session::new(document, title, None));
+        self.current = self.sessions.len() - 1;
+        self.session_mut().unwrap().history.mark_modified();
+        self.mask_target = false;
+    }
+
+    /// Repeat the plugin action that generated the active layer.
+    fn rerun_plugin_action(&mut self) {
+        let Some(generated) = self
+            .session()
+            .and_then(|s| s.document.active())
+            .and_then(|layer| layer.generated.clone())
+        else {
+            return;
+        };
+        if self.plugins.manifest(&generated.plugin).is_none() {
+            self.error = Some(format!(
+                "{} {}",
+                tr("This layer was generated by a plugin that is not installed:"),
+                generated.plugin
+            ));
+            return;
+        }
+        if let Some(source) = generated.source
+            && let Some(session) = self.session_mut()
+            && session.document.layers.iter().any(|l| l.id == source)
+        {
+            session.document.select(source, false);
+        }
+        self.start_plugin_action_with(
+            &generated.plugin,
+            &generated.action,
+            Some(&generated.inputs),
+        );
+    }
+
     fn open_dialog(&mut self, as_layer: bool) {
         let extensions = [
             "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif",
-            "hif",
+            "hif", "psd", "psb",
         ];
         // Portal file filters may be case-sensitive; cameras commonly use uppercase.
+        let plugin_extensions = self.plugin_import_extensions();
         let extensions: Vec<_> = extensions
             .iter()
-            .chain(xuan::raw::EXTENSIONS)
-            .flat_map(|extension| [extension.to_string(), extension.to_ascii_uppercase()])
+            .map(|e| e.to_string())
+            .chain(xuan::raw::EXTENSIONS.iter().map(|e| e.to_string()))
+            .chain(plugin_extensions)
+            .flat_map(|extension| [extension.clone(), extension.to_ascii_uppercase()])
             .collect();
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter(tr("Images and Xuan projects"), &extensions)
@@ -850,12 +1036,17 @@ impl EditorApp {
     fn set_tool(&mut self, tool: Tool) {
         self.cancel_gesture();
         self.tool = tool;
+        self.release_sample_caches();
+        if matches!(tool, Tool::Brush | Tool::Pencil) {
+            self.brush_variant = tool;
+        }
         self.polygon.clear();
         self.crop_rect = None;
     }
 
     fn cancel_gesture(&mut self) {
         self.pen_stroke = false;
+        self.dropper_cancel();
         if let Some(gesture) = self.gesture.take()
             && !gesture.panning
             && let Some(session) = self.session_mut()
@@ -863,7 +1054,8 @@ impl EditorApp {
             session.history.cancel(&mut session.document);
             session.invalidate();
         }
-        self.guides.clear();
+        self.snap_lines.clear();
+        self.cancel_guide_drag();
     }
 
     fn start_adjustment(&mut self, adjustment: Adjustment, as_layer: bool) {
@@ -940,57 +1132,32 @@ impl EditorApp {
     }
 
     fn add_demo(&mut self) {
-        let mut document = Document::new(1200, 900).unwrap();
-        document.layers.clear();
-        let sky = RgbaImage::from_fn(1200, 900, |x, y| {
-            let t = y as f32 / 900.0;
-            let grain = ((x.wrapping_mul(73) ^ y.wrapping_mul(137)) % 7) as f32 - 3.0;
-            image::Rgba([
-                (221.0 - t * 53.0 + grain) as u8,
-                (183.0 - t * 65.0 + grain) as u8,
-                (143.0 - t * 56.0 + grain) as u8,
-                255,
-            ])
-        });
-        document.layers.push(Layer::image("Warm paper", sky));
-        document.layers.push(
-            paint::shape(
-                Point::new(758.0, 142.0),
-                Point::new(944.0, 328.0),
-                ShapeKind::Ellipse,
-                [248, 222, 162, 255],
-                0.0,
-            )
-            .unwrap(),
-        );
-        document.layers.last_mut().unwrap().name = "Afternoon sun".into();
-        for (name, base, amplitude, phase, color) in [
-            ("Distant ridge", 435.0, 80.0, 0.4, [173, 115, 84, 255]),
-            ("Sandstone", 550.0, 130.0, 2.6, [137, 80, 60, 255]),
-            ("Foreground dune", 695.0, 105.0, 4.4, [84, 58, 53, 255]),
-        ] {
-            let pixels = RgbaImage::from_fn(1200, 900, |x, y| {
-                let line = base + (x as f32 / 420.0 + phase).sin() * amplitude;
-                let mut c = color;
-                c[3] = ((y as f32 - line).clamp(0.0, 1.0) * 255.0) as u8;
-                image::Rgba(c)
-            });
-            document.layers.push(Layer::image(name, pixels));
-        }
-        document.select(document.layers[1].id, false);
-        self.sessions
-            .push(Session::new(document, "Dune study".into(), None));
+        self.sessions.push(Session::new(
+            xuan::demo::document(),
+            xuan::demo::TITLE.into(),
+            None,
+        ));
         self.current = self.sessions.len() - 1;
     }
 
     fn command(&mut self, command: &str) {
+        #[cfg(test)]
+        if let Some(trace) = &mut self.command_trace {
+            trace.push(command.to_owned());
+            return;
+        }
+        if command == "quit" {
+            // Ctrl+Q and the close button reach this while a job runs.
+            self.request_quit();
+            return;
+        }
         if self.job.is_some() {
             return;
         }
         if let Some(develop) = &mut self.develop {
             match command {
                 "new" | "open" | "open_clipboard" | "open_comp" => self.suspend_develop(),
-                "about" | "shortcuts" | "settings" => {}
+                "about" | "shortcuts" | "settings" | "reset_panels" | "plugins" => {}
                 "close" => {
                     self.request_develop_close(develop::DevelopClose::Tab);
                     return;
@@ -1011,6 +1178,10 @@ impl EditorApp {
             }
         }
         match command {
+            "layer_effects" => self.start_layer_effects(None),
+            "reset_panels" => self.reset_panes(),
+            "plugins" => self.dialog = Some(Dialog::Plugins),
+            "rerun_plugin" => self.rerun_plugin_action(),
             "develop" => {
                 if let Some(id) = self.session().and_then(|s| s.document.active) {
                     self.start_develop_layer(id);
@@ -1370,7 +1541,7 @@ impl EditorApp {
             "zoom_in" | "zoom_out" => {
                 if let Some(session) = self.session_mut() {
                     session.zoom = (session.zoom * if command == "zoom_in" { 1.25 } else { 0.8 })
-                        .clamp(0.01, 64.0);
+                        .clamp(*canvas::ZOOM_LIMITS.start(), *canvas::ZOOM_LIMITS.end());
                     session.fit = false;
                 }
             }
@@ -1380,6 +1551,21 @@ impl EditorApp {
                     xuan::effects::apply_adjustment(doc, &Adjustment::Invert, mask)
                 });
             }
+            "toggle_rulers" => self.set_view_option(|config| config.rulers = !config.rulers),
+            "toggle_grid" => self.set_view_option(|config| config.show_grid = !config.show_grid),
+            "toggle_guides" => {
+                self.cancel_guide_drag();
+                self.set_view_option(|config| config.show_guides = !config.show_guides);
+            }
+            "toggle_snap" => {
+                self.set_view_option(|config| config.snap.enabled = !config.snap.enabled)
+            }
+            "lock_guides" => {
+                self.cancel_guide_drag();
+                self.set_view_option(|config| config.lock_guides = !config.lock_guides);
+            }
+            "clear_guides" => self.clear_guides(),
+            "grid_settings" => self.open_grid_settings(),
             "settings" => self.dialog = Some(Dialog::Settings),
             "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "about" => self.dialog = Some(Dialog::About),
@@ -1398,6 +1584,7 @@ impl eframe::App for EditorApp {
     fn on_exit(&mut self) {
         // Stop the tablet queue before eframe destroys its Wayland window/display.
         self.tablet = None;
+        self.plugins.stop_all();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -1430,47 +1617,41 @@ impl EditorApp {
         self.poll_job();
         self.poll_develop(ctx);
         self.frames += 1;
-        if (self.develop.is_some() || !self.inactive_develop.is_empty())
-            && !self.allow_close
-            && ctx.input(|i| i.viewport().close_requested())
-        {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.begin_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.request_develop_close(develop::DevelopClose::Window);
         }
-        if ctx.input(|i| i.viewport().close_requested())
-            && !self.allow_close
-            && self.develop.is_none()
-            && self.inactive_develop.is_empty()
-            && self.sessions.iter().any(|s| s.history.dirty())
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if let Some(job) = &self.job {
-                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            self.close_app = true;
-        }
-        if self.dialog.is_none()
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        self.queue_drop(dropped.into_iter().filter_map(|f| f.path).collect());
+        if self.job.is_some()
+            && self.dialog.is_none()
             && self.develop_close_requested.is_none()
-            && self.job.is_none()
             && self.error.is_none()
             && self.close_tab.is_none()
             && !self.close_app
+            && !ctx.wants_keyboard_input()
+            && ctx.input_mut(|i| {
+                self.keymap
+                    .keys("quit")
+                    .iter()
+                    .any(|c| shortcuts::consume_exact(i, c.mods, c.key))
+            })
         {
+            // Like the close button, Ctrl+Q works during a job; quitting cancels it.
+            self.request_quit();
+        }
+        if !self.drops_blocked() {
             self.shortcuts(ctx);
-            let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-            for file in dropped {
-                if let Some(path) = file.path {
-                    self.open_path(&path, true);
-                }
-            }
+            self.process_drops();
         }
         // Keep antialiased panel seams opaque while preserving the rounded window corners.
         ctx.layer_painter(egui::LayerId::background()).rect_filled(
             ctx.content_rect(),
-            theme::window_corner_radius(ctx),
+            self.window_corner_radius(ctx),
             theme::PANEL,
         );
+        self.sync_decorations(ctx);
         self.window_resize(ctx);
+        self.poll_plugins();
         self.menus(ctx);
         self.tabs(ctx);
         if self.develop.is_some() {
@@ -1479,14 +1660,24 @@ impl EditorApp {
             self.tool_options(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);
-            self.layers_panel(ctx);
+            self.sidebar(ctx);
             self.canvas(ctx);
+            self.plugin_action_dialog(ctx);
+            self.plugin_job_windows(ctx);
         }
         self.dialogs(ctx);
+        self.command_palette(ctx);
+        // A proposal is accepted only through its Accept button. Anything that
+        // closed or replaced its dialog discards it.
+        if self.plugins.proposal.is_some() && self.dialog != Some(Dialog::PluginProposal) {
+            self.resolve_proposal(false);
+        }
         if self.gesture.is_none()
             && self.effect.is_none()
+            && self.layer_effects.is_none()
             && self.text_edit.is_none()
             && self.job.is_none()
+            && self.plugins.proposal.is_none()
             && !ctx.input(|i| i.pointer.any_down())
             && let Some(session) = self.session_mut()
         {
@@ -1545,4 +1736,28 @@ impl EditorApp {
             ctx.request_repaint();
         }
     }
+}
+
+/// Files Xuan opens itself, which a plugin format cannot override.
+fn builtin_extension(path: &Path) -> bool {
+    path.is_dir()
+        || xuan::raw::is_raw(path)
+        || io::is_photoshop(path)
+        || path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "xuan"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "tif"
+                    | "tiff"
+                    | "webp"
+                    | "bmp"
+                    | "gif"
+                    | "heic"
+                    | "heif"
+                    | "hif"
+            )
+        })
 }

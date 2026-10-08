@@ -3,7 +3,8 @@ use xuan::i18n::tr;
 
 use super::{Tool, theme};
 
-pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
+/// A tool rail button. Its tooltip names the tool and its current `shortcut`, if any.
+pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, shortcut: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::click());
     let painter = ui.painter();
     if selected || response.hovered() {
@@ -24,7 +25,11 @@ pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
     }
     let icon_padding = if tool == Tool::Gradient { 9.0 } else { 7.0 };
     draw(ui, tool, rect.shrink(icon_padding), theme::TEXT);
-    response.on_hover_text(format!("{} ({})", tool.label(), tool.shortcut()))
+    if shortcut.is_empty() {
+        response.on_hover_text(tool.label())
+    } else {
+        response.on_hover_text(format!("{} ({shortcut})", tool.label()))
+    }
 }
 
 pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
@@ -35,6 +40,7 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
         Tool::Wand => egui::include_image!("../../assets/svg/wand.svg"),
         Tool::Crop => egui::include_image!("../../assets/svg/crop.svg"),
         Tool::Brush => egui::include_image!("../../assets/svg/brush.svg"),
+        Tool::Pencil => egui::include_image!("../../assets/svg/pencil.svg"),
         Tool::Erase => egui::include_image!("../../assets/svg/eraser.svg"),
         Tool::Heal => egui::include_image!("../../assets/svg/bandage.svg"),
         Tool::Clone => egui::include_image!("../../assets/svg/stamp.svg"),
@@ -44,6 +50,17 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
         Tool::Dropper => egui::include_image!("../../assets/svg/color-picker.svg"),
         Tool::Hand => egui::include_image!("../../assets/svg/hand.svg"),
         Tool::Zoom => egui::include_image!("../../assets/svg/zoom.svg"),
+        Tool::Region => {
+            let painter = ui.painter();
+            let inner = rect.shrink(rect.width() * 0.1);
+            painter.rect_stroke(inner, 1.0, Stroke::new(1.35_f32, color), StrokeKind::Inside);
+            painter.rect_filled(
+                Rect::from_min_size(inner.min, inner.size() * vec2(0.45, 0.35)),
+                0.0,
+                color,
+            );
+            return;
+        }
         Tool::Gradient => {
             let painter = ui.painter();
             for i in 0..16 {

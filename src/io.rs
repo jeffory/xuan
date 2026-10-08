@@ -9,20 +9,23 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use image::{DynamicImage, ImageFormat, ImageReader, RgbaImage};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
-    blend::BlendMode,
-    document::{Adjustment, Document, Layer, MAX_PIXELS, Mask, Point, Transform, validate_size},
+    document::{Document, MAX_PIXELS, validate_size},
     render,
 };
 
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
 const MAX_ASSET: u64 = 512 * 1024 * 1024;
 
+mod compositor;
 mod heif;
+pub mod psd;
+
+pub use compositor::{Dropped, ImportReport, ImportSource};
+pub use psd::is_photoshop;
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -72,6 +75,12 @@ fn reserve_pixels(width: u32, height: u32, used: &mut u64) -> Result<()> {
 
 pub fn import_image(path: &Path) -> Result<RgbaImage> {
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
+    // Opening a FIFO or device could block forever.
+    ensure!(
+        metadata.is_file(),
+        "{} is not a regular file",
+        path.display()
+    );
     ensure!(metadata.len() <= MAX_ASSET, "Image exceeds 512 MiB");
     let mut bytes = Vec::new();
     File::open(path)?
@@ -103,23 +112,7 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let manifest = Manifest {
             format: "me.silverl.xuan".into(),
-            version: if document.layers.iter().any(|l| {
-                l.filter.is_some()
-                    || l.parent.is_some_and(|id| {
-                        document
-                            .layers
-                            .iter()
-                            .any(|p| p.id == id && p.can_attach_effects())
-                    })
-            }) {
-                4
-            } else if document.layers.iter().any(|l| l.standalone_mask) {
-                3
-            } else if document.layers.iter().any(|l| l.raw.is_some()) {
-                2
-            } else {
-                1
-            },
+            version: format_version(document),
             document: document.clone(),
             pixel_layers: document
                 .layers
@@ -163,6 +156,41 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The newest version supported by `load`.
+const LATEST_VERSION: u32 = 7;
+
+/// The lowest format version that can hold everything `document` uses, so
+/// older readers keep opening projects that do not need the newer features.
+fn format_version(document: &Document) -> u32 {
+    if document.layers.iter().any(|l| {
+        !l.blend.is_legacy()
+            || l.adjustment.as_ref().is_some_and(|a| !a.is_legacy())
+            || l.effects.is_some()
+    }) {
+        7
+    } else if document.layers.iter().any(|l| l.generated.is_some()) {
+        6
+    } else if !document.guides.is_empty() || document.grid.is_some() {
+        5
+    } else if document.layers.iter().any(|l| {
+        l.filter.is_some()
+            || l.parent.is_some_and(|id| {
+                document
+                    .layers
+                    .iter()
+                    .any(|p| p.id == id && p.can_attach_effects())
+            })
+    }) {
+        4
+    } else if document.layers.iter().any(|l| l.standalone_mask) {
+        3
+    } else if document.layers.iter().any(|l| l.raw.is_some()) {
+        2
+    } else {
+        1
+    }
+}
+
 fn zip_read(archive: &mut ZipArchive<File>, name: &str, limit: u64) -> Result<Vec<u8>> {
     let file = archive
         .by_name(name)
@@ -186,7 +214,7 @@ pub fn load(path: &Path) -> Result<Document> {
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
-        manifest.format == "me.silverl.xuan" && (1..=4).contains(&manifest.version),
+        manifest.format == "me.silverl.xuan" && (1..=LATEST_VERSION).contains(&manifest.version),
         "Unsupported xuan project version"
     );
     let mut used_pixels = 0;
@@ -251,307 +279,21 @@ fn package_read(root: &Path, relative: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn number(value: &Value, key: &str, default: f32) -> f32 {
-    value[key].as_f64().map_or(default, |v| v as f32)
-}
-fn identifier(value: &Value) -> Result<Option<Uuid>> {
-    value
-        .as_str()
-        .map(Uuid::parse_str)
-        .transpose()
-        .map_err(Into::into)
-}
-
-fn comp_transform(value: &Value) -> Result<Transform> {
-    let pair = |value: &Value, a: &str, b: &str| -> Result<(f32, f32)> {
-        let (x, y) = if let Some(values) = value.as_array() {
-            ensure!(values.len() == 2, "Invalid transform coordinates");
-            (values[0].as_f64(), values[1].as_f64())
-        } else {
-            (value[a].as_f64(), value[b].as_f64())
-        };
-        Ok((
-            x.context("Missing transform coordinate")? as f32,
-            y.context("Missing transform coordinate")? as f32,
-        ))
-    };
-    let (x, y) = pair(&value["origin"], "x", "y")?;
-    let (width, height) = pair(&value["size"], "width", "height")?;
-    let t = Transform {
-        x,
-        y,
-        width,
-        height,
-        rotation: number(value, "rotation", 0.0),
-        flip_x: value["flipX"].as_bool().unwrap_or(false),
-        flip_y: value["flipY"].as_bool().unwrap_or(false),
-        warp: None,
-    };
-    ensure!(t.valid(), "Invalid Compositor layer transform");
-    Ok(t)
-}
-
-// Swift dictionaries with enum keys are encoded as alternating key/value arrays.
-fn swift_dictionary_get<'a>(value: &'a Value, key: &str) -> &'a Value {
-    if let Some(array) = value.as_array() {
-        for pair in array.as_chunks::<2>().0 {
-            if pair[0].as_str() == Some(key) {
-                return &pair[1];
-            }
-        }
-        &Value::Null
-    } else {
-        &value[key]
-    }
-}
-
-fn comp_adjustment(value: &Value) -> Result<Adjustment> {
-    let kind = value["kind"]
-        .as_str()
-        .context("Adjustment kind is missing")?;
-    let result = match kind {
-        "Hue/Saturation" => {
-            let hsv = &value["hsvSettings"];
-            if hsv.is_null() {
-                Adjustment::HueSaturation {
-                    hue: number(value, "hue", 0.0),
-                    saturation: number(value, "saturation", 0.0),
-                    lightness: number(value, "lightness", 0.0),
-                    colorize: value["colorize"].as_bool().unwrap_or(false),
-                }
-            } else {
-                let mut settings = crate::color::HueSettings {
-                    range: crate::color::HueSettings::RANGES
-                        .iter()
-                        .position(|name| Some(*name) == hsv["range"].as_str())
-                        .unwrap_or(0),
-                    colorize: hsv["colorize"].as_bool().unwrap_or(false),
-                    invert_range: hsv["invertRange"].as_bool().unwrap_or(false),
-                    ..Default::default()
-                };
-                for (index, name) in crate::color::HueSettings::RANGES.iter().enumerate() {
-                    let adjustment = swift_dictionary_get(&hsv["adjustments"], name);
-                    settings.adjustments[index] = [
-                        number(adjustment, "hue", 0.0),
-                        number(adjustment, "saturation", 0.0),
-                        number(adjustment, "lightness", 0.0),
-                    ];
-                    let band = swift_dictionary_get(&hsv["bands"], name);
-                    if !band.is_null() {
-                        settings.bands[index] = [
-                            number(band, "falloffStart", 0.0),
-                            number(band, "rangeStart", 0.0),
-                            number(band, "rangeEnd", 360.0),
-                            number(band, "falloffEnd", 360.0),
-                        ];
-                    }
-                }
-                Adjustment::HueRanges {
-                    settings: Box::new(settings),
-                }
-            }
-        }
-        "Levels" => {
-            let input = value["levels"]["ranges"]
-                .as_array()
-                .context("Missing levels ranges")?;
-            ensure!(input.len() == 4, "Invalid levels ranges");
-            let ranges = std::array::from_fn(|i| {
-                let r = &input[i];
-                [
-                    number(r, "black", 0.0),
-                    number(r, "gamma", 1.0),
-                    number(r, "white", 255.0),
-                    number(r, "outputBlack", 0.0),
-                    number(r, "outputWhite", 255.0),
-                ]
-            });
-            Adjustment::LevelsChannels { ranges }
-        }
-        "Curves" => {
-            let input = value["curves"]["channels"]
-                .as_array()
-                .context("Missing curve channels")?;
-            ensure!(
-                input.len() == 4 && input.iter().all(|c| c.is_array()),
-                "Invalid curve channels"
-            );
-            let channels = std::array::from_fn(|i| {
-                input[i]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|p| Point::new(number(p, "x", 0.0) / 255.0, number(p, "y", 0.0) / 255.0))
-                    .collect()
-            });
-            Adjustment::CurvesChannels { channels }
-        }
-        "Exposure" => {
-            let settings = &value["exposureSettings"];
-            Adjustment::Exposure {
-                exposure: number(settings, "exposure", 0.0),
-                offset: number(settings, "offset", 0.0),
-                gamma: number(settings, "gamma", 1.0),
-            }
-        }
-        "Gradient Map" => {
-            let color = |key| {
-                let c = &value["gradientMapSettings"][key];
-                [
-                    number(c, "red", if key == "shadows" { 0.0 } else { 1.0 }),
-                    number(c, "green", if key == "shadows" { 0.0 } else { 1.0 }),
-                    number(c, "blue", if key == "shadows" { 0.0 } else { 1.0 }),
-                    1.0,
-                ]
-                .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-            };
-            Adjustment::GradientMap {
-                shadows: color(
-                    if value["gradientMapSettings"]["reversed"]
-                        .as_bool()
-                        .unwrap_or(false)
-                    {
-                        "highlights"
-                    } else {
-                        "shadows"
-                    },
-                ),
-                highlights: color(
-                    if value["gradientMapSettings"]["reversed"]
-                        .as_bool()
-                        .unwrap_or(false)
-                    {
-                        "shadows"
-                    } else {
-                        "highlights"
-                    },
-                ),
-            }
-        }
-        "Grain" => {
-            let settings = &value["grainSettings"];
-            Adjustment::FilmGrain {
-                amount: number(settings, "amount", 0.0),
-                size: number(settings, "size", 1.0),
-                roughness: number(settings, "roughness", 50.0),
-                seed: settings["seed"].as_u64().unwrap_or(1) as u32,
-            }
-        }
-        _ => bail!("Unsupported Compositor adjustment: {kind}"),
-    };
-    crate::effects::validate_adjustment(&result)?;
-    Ok(result)
-}
-
+/// Open a Compositor `.comp` package (format versions 1–11); see [`compositor::load`].
 pub fn load_compositor(path: &Path) -> Result<Document> {
-    let manifest: Value = serde_json::from_slice(&package_read(
-        path,
-        Path::new("manifest.json"),
-        MAX_MANIFEST,
-    )?)?;
-    ensure!(
-        manifest["format"] == "com.compositor.project",
-        "Not a Compositor project"
-    );
-    let version = manifest["version"]
-        .as_u64()
-        .context("Project version missing")?;
-    ensure!(
-        (1..=7).contains(&version),
-        "Unsupported Compositor project version {version}"
-    );
-    ensure!(
-        manifest["colorSpace"].as_str().unwrap_or("sRGB") == "sRGB",
-        "Unsupported color space"
-    );
-    let width = u32::try_from(manifest["width"].as_u64().context("Missing canvas width")?)?;
-    let height = u32::try_from(
-        manifest["height"]
-            .as_u64()
-            .context("Missing canvas height")?,
-    )?;
-    let mut document = Document::new(width, height)?;
-    document.id = identifier(&manifest["documentID"])?.context("Missing document ID")?;
-    document.resolution = number(&manifest, "resolution", 72.0);
-    document.layers.clear();
-    let records = manifest["layers"].as_array().context("Missing layers")?;
-    ensure!(records.len() <= 10_000, "Too many layers");
-    let mut image_pixels = 0;
-    let mut mask_pixels = 0;
-    for record in records {
-        let id = identifier(&record["id"])?.context("Missing layer ID")?;
-        let mut layer = Layer::blank(
-            record["name"].as_str().context("Missing layer name")?,
-            width,
-            height,
-        );
-        layer.id = id;
-        layer.visible = record["isVisible"].as_bool().unwrap_or(true);
-        layer.transform = comp_transform(&record["transform"])?;
-        layer.parent = identifier(&record["parentID"])?;
-        layer.group = record["isGroup"].as_bool().unwrap_or(false);
-        layer.opacity = number(record, "opacity", 1.0);
-        let blend_name = record["blendMode"].as_str().unwrap_or("Normal");
-        layer.blend = BlendMode::ALL
-            .into_iter()
-            .find(|b| b.name() == blend_name)
-            .context("Unknown blend mode")?;
-        layer.clip_to = identifier(&record["maskSourceID"])?;
-        if let Some(name) = record["imageFile"].as_str() {
-            ensure!(
-                name.eq_ignore_ascii_case(&format!("{id}.png")),
-                "Unsafe layer asset path"
-            );
-            let bytes = package_read(path, &Path::new("images").join(name), MAX_ASSET)?;
-            layer.pixels = Some(Arc::new(decode_image(bytes, &mut image_pixels)?.to_rgba8()));
-        }
-        if let Some(name) = record["maskFile"].as_str() {
-            ensure!(
-                name.eq_ignore_ascii_case(&format!("{id}.mask.png")),
-                "Unsafe mask asset path"
-            );
-            let bytes = package_read(path, &Path::new("images").join(name), MAX_ASSET)?;
-            layer.mask = Some(Mask {
-                pixels: Arc::new(decode_image(bytes, &mut mask_pixels)?.to_luma8()),
-                enabled: record["maskEnabled"].as_bool().unwrap_or(true),
-                linked: record["maskLinked"].as_bool().unwrap_or(true),
-                placement: if record["maskPlacement"].is_null() {
-                    None
-                } else {
-                    Some(comp_transform(&record["maskPlacement"])?)
-                },
-            });
-        }
-        if let Some(shape) = record["shape"].as_object() {
-            let radius = shape
-                .get("cornerRadius")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0) as f32;
-            ensure!(radius.is_finite() && radius >= 0.0, "Invalid shape radius");
-            let kind = if record["shape"]["kind"] == "Ellipse" {
-                crate::paint::ShapeKind::Ellipse
-            } else if radius > 0.0 {
-                crate::paint::ShapeKind::RoundedRectangle
-            } else {
-                crate::paint::ShapeKind::Rectangle
-            };
-            let color =
-                |key| (number(&record["shape"], key, 0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
-            layer.shape = Some(crate::document::ShapeStyle {
-                kind,
-                color: [color("red"), color("green"), color("blue"), 255],
-                corner_radius: radius,
-            });
-        }
-        if !record["adjustment"].is_null() {
-            layer.adjustment = Some(comp_adjustment(&record["adjustment"])?);
-        }
-        document.layers.push(layer);
+    compositor::load(path).map(|(document, _)| document)
+}
+
+/// Open a project like [`load`], also returning what a Compositor or Photoshop import left out
+/// or changed. `.xuan` projects always load completely, so their report is empty.
+pub fn load_with_report(path: &Path) -> Result<(Document, ImportReport)> {
+    if path.is_dir() {
+        compositor::load(path)
+    } else if is_photoshop(path) {
+        psd::load(path, psd::PixelBudget::default())
+    } else {
+        Ok((load(path)?, ImportReport::default()))
     }
-    document.active = identifier(&manifest["activeLayerID"])?;
-    document.selected = document.active.into_iter().collect();
-    document.validate()?;
-    Ok(document)
 }
 
 pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
@@ -606,7 +348,9 @@ pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::{Layer, Mask, Transform};
     use image::{GrayImage, Luma, Rgba};
+    use serde_json::Value;
 
     #[test]
     fn exports_all_formats_and_png_print_resolution() {
@@ -636,30 +380,6 @@ mod tests {
         let density = reader.info().pixel_dims.unwrap();
         assert_eq!(density.xppu, 11811);
         assert_eq!(density.unit, png::Unit::Meter);
-    }
-
-    #[test]
-    fn imports_swift_enum_dictionaries_and_individual_color_channels() {
-        let value = serde_json::json!({"kind":"Hue/Saturation", "hsvSettings": {
-            "range":"Reds", "colorize":false, "invertRange":true,
-            "adjustments":["Master", {"hue":5,"saturation":0,"lightness":0}, "Reds", {"hue":40,"saturation":-20,"lightness":3}],
-            "bands":["Reds", {"falloffStart":310,"rangeStart":340,"rangeEnd":20,"falloffEnd":50}]
-        }});
-        let Adjustment::HueRanges { settings } = comp_adjustment(&value).unwrap() else {
-            panic!("expected selective hue settings");
-        };
-        assert_eq!(settings.range, 1);
-        assert_eq!(settings.adjustments[1], [40.0, -20.0, 3.0]);
-        assert_eq!(settings.bands[1], [310.0, 340.0, 20.0, 50.0]);
-        assert!(settings.invert_range);
-        let default =
-            serde_json::json!({"black":0,"gamma":1,"white":255,"outputBlack":0,"outputWhite":255});
-        let mut value = serde_json::json!({"kind":"Levels","levels":{"ranges":[default,default,default,default]}});
-        value["levels"]["ranges"][1]["gamma"] = serde_json::json!(1.5);
-        let Adjustment::LevelsChannels { ranges } = comp_adjustment(&value).unwrap() else {
-            panic!("expected channel levels");
-        };
-        assert_eq!(ranges[1][1], 1.5);
     }
 
     #[test]
@@ -733,20 +453,231 @@ mod tests {
         assert_eq!(load(&path).unwrap().width, 3);
     }
 
+    fn manifest_json(path: &Path) -> Value {
+        let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
+        serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST).unwrap())
+            .unwrap()
+    }
+
     #[test]
-    fn imports_swift_transform_and_rejects_path_traversal() {
+    fn guides_and_grid_round_trip_as_version_5() {
+        use crate::layout::{GridColor, GridSettings, GridStyle, Guide, GuideAxis};
         let directory = tempfile::tempdir().unwrap();
-        fs::create_dir(directory.path().join("images")).unwrap();
+        let path = directory.path().join("guides.xuan");
+        let mut doc = Document::new(40, 30).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::new(40, 30)));
+        save(&doc, &path).unwrap();
+        // Without guides or a grid of its own, a project keeps the older version and keys.
+        let plain = manifest_json(&path);
+        assert_eq!(plain["version"], 1);
+        assert!(plain["document"].get("guides").is_none());
+        assert!(plain["document"].get("grid").is_none());
+
+        doc.guides = vec![
+            Guide::new(GuideAxis::Vertical, 12.5),
+            Guide::new(GuideAxis::Horizontal, -4.0),
+        ];
+        let grid = GridSettings {
+            spacing: 100,
+            subdivisions: 4,
+            color: GridColor::Custom,
+            custom_color: [10, 20, 30],
+            style: GridStyle::DashedLines,
+            opacity: 70,
+        };
+        doc.grid = Some(grid);
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 5);
+        assert_eq!(manifest["document"]["guides"][0]["axis"], "vertical");
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.guides, doc.guides);
+        assert_eq!(loaded.grid, Some(grid));
+
+        // Guides alone also need version 5.
+        doc.grid = None;
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 5);
+        assert_eq!(load(&path).unwrap().grid, None);
+    }
+
+    #[test]
+    fn photoshop_blend_modes_round_trip_as_version_7() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("blend.xuan");
+        let mut doc = Document::new(4, 4).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::new(4, 4)));
+        // The thirteen original modes still save as version 1.
+        for mode in &crate::blend::BlendMode::ALL[..13] {
+            doc.layers[0].blend = *mode;
+            save(&doc, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 1, "{}", mode.name());
+        }
+        for mode in &crate::blend::BlendMode::ALL[13..] {
+            doc.layers[0].blend = *mode;
+            save(&doc, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 7, "{}", mode.name());
+            assert_eq!(load(&path).unwrap().layers[0].blend, *mode);
+        }
+        assert_eq!(
+            manifest_json(&path)["document"]["layers"][0]["blend"],
+            "Divide"
+        );
+        // So do Black & White and Color Balance adjustment layers.
+        doc.layers[0].blend = crate::blend::BlendMode::Normal;
+        use crate::document::Adjustment;
+        for adjustment in [Adjustment::BLACK_WHITE, Adjustment::COLOR_BALANCE] {
+            let mut layer = Layer::blank(adjustment.name(), 4, 4);
+            layer.pixels = None;
+            layer.adjustment = Some(adjustment.clone());
+            let mut with_layer = doc.clone();
+            with_layer.layers.push(layer);
+            save(&with_layer, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 7);
+            assert_eq!(load(&path).unwrap().layers[1].adjustment, Some(adjustment));
+        }
+        // And layer effects.
+        let mut effects = crate::layer_effects::LayerEffects::default();
+        for kind in crate::layer_effects::EffectKind::ALL {
+            effects.add(kind, [10, 20, 30]);
+        }
+        effects.set_enabled(crate::layer_effects::EffectKind::InnerGlow, false);
+        let mut with_effects = doc.clone();
+        with_effects.layers[0].effects = Some(effects.clone());
+        let effects_path = directory.path().join("effects.xuan");
+        save(&with_effects, &effects_path).unwrap();
+        assert_eq!(manifest_json(&effects_path)["version"], 7);
+        assert_eq!(
+            load(&effects_path).unwrap().layers[0].effects,
+            Some(effects.clone())
+        );
+        // Plugin provenance alone stays version 6; with these features it is version 7,
+        // and both survive the round trip.
+        let generated = crate::document::Generated {
+            plugin: "example.plugin".into(),
+            version: "1.0.0".into(),
+            action: "outline".into(),
+            inputs: serde_json::json!({"radius": 3}),
+            source: Some(doc.layers[0].id),
+            source_hash: Some("fnv1a:0123456789abcdef".into()),
+            created: "2026-10-05T12:00:00Z".into(),
+        };
+        let mut provenance = doc.clone();
+        provenance.layers[0].generated = Some(generated.clone());
+        save(&provenance, &effects_path).unwrap();
+        assert_eq!(manifest_json(&effects_path)["version"], 6);
+        provenance.layers[0].effects = Some(effects.clone());
+        provenance.layers[0].blend = crate::blend::BlendMode::LinearDodge;
+        save(&provenance, &effects_path).unwrap();
+        assert_eq!(manifest_json(&effects_path)["version"], 7);
+        let loaded = load(&effects_path).unwrap();
+        assert_eq!(loaded.layers[0].generated, Some(generated));
+        assert_eq!(loaded.layers[0].effects, Some(effects));
+        assert_eq!(loaded.layers[0].blend, crate::blend::BlendMode::LinearDodge);
+        // Out of range settings are refused on load.
+        let mut manifest = manifest_json(&path);
+        manifest["document"]["layers"][1]["adjustment"]["ColorBalance"]["shadows"][0] =
+            serde_json::json!(500.0);
+        manifest["pixel_layers"] = serde_json::json!([doc.layers[0].id]);
+        let broken = directory.path().join("broken.xuan");
+        let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let image = zip_read(
+            &mut archive,
+            &format!("images/{}.png", doc.layers[0].id),
+            MAX_ASSET,
+        )
+        .unwrap();
+        let mut writer = ZipWriter::new(File::create(&broken).unwrap());
+        writer
+            .start_file("manifest.json", SimpleFileOptions::default())
+            .unwrap();
+        writer
+            .write_all(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        writer
+            .start_file(
+                format!("images/{}.png", doc.layers[0].id),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(&image).unwrap();
+        writer.finish().unwrap();
+        assert!(load(&broken).is_err());
+    }
+
+    fn write_manifest(path: &Path, manifest: &Value) {
+        let mut archive = ZipWriter::new(File::create(path).unwrap());
+        archive
+            .start_file("manifest.json", SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(&serde_json::to_vec(manifest).unwrap())
+            .unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn projects_from_before_guides_still_load() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old.xuan");
+        for version in 1..=4 {
+            // Written as a release before format version 5 wrote it: no guide or grid keys.
+            write_manifest(
+                &path,
+                &serde_json::json!({
+                    "format": "me.silverl.xuan",
+                    "version": version,
+                    "document": {"id": Uuid::new_v4(), "width": 8, "height": 6,
+                        "resolution": 72.0, "layers": [], "active": null},
+                    "pixel_layers": [],
+                }),
+            );
+            let loaded = load(&path).unwrap();
+            assert_eq!((loaded.width, loaded.height), (8, 6));
+            assert!(loaded.guides.is_empty() && loaded.grid.is_none());
+        }
+    }
+
+    #[test]
+    fn invalid_guides_or_grid_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bad.xuan");
+        let document = |guides: Value, grid: Value| {
+            serde_json::json!({
+                "format": "me.silverl.xuan",
+                "version": 5,
+                "document": {"id": Uuid::new_v4(), "width": 8, "height": 6, "resolution": 72.0,
+                    "layers": [], "active": null, "guides": guides, "grid": grid},
+                "pixel_layers": [],
+            })
+        };
         let id = Uuid::new_v4();
-        let mut value = serde_json::json!({"format":"com.compositor.project", "version":7, "documentID":Uuid::new_v4(), "width":2, "height":2, "activeLayerID":id,
-            "layers":[{"id":id,"name":"Test", "isVisible":true,"transform":{"origin":[1,2],"size":[2,2],"rotation":30,"flipX":true,"flipY":false}}]});
-        let manifest = directory.path().join("manifest.json");
-        fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
-        let document = load_compositor(directory.path()).unwrap();
-        assert_eq!(document.layers[0].transform.rotation, 30.0);
-        assert!(document.layers[0].transform.flip_x);
-        value["layers"][0]["imageFile"] = Value::String("../../outside.png".into());
-        fs::write(manifest, serde_json::to_vec(&value).unwrap()).unwrap();
-        assert!(load_compositor(directory.path()).is_err());
+        let guide = serde_json::json!({"id": id, "axis": "vertical", "position": 3.0});
+        write_manifest(&path, &document(serde_json::json!([guide]), Value::Null));
+        assert_eq!(load(&path).unwrap().guides.len(), 1);
+        for (guides, grid) in [
+            (serde_json::json!([guide, guide]), Value::Null),
+            (
+                serde_json::json!([{"id": id, "axis": "vertical", "position": 5.0e7}]),
+                Value::Null,
+            ),
+            (
+                serde_json::json!([{"id": id, "axis": "diagonal", "position": 1.0}]),
+                Value::Null,
+            ),
+            (
+                serde_json::json!([]),
+                serde_json::json!({"spacing": 4, "subdivisions": 8}),
+            ),
+            (serde_json::json!([]), serde_json::json!({"opacity": 0})),
+        ] {
+            write_manifest(&path, &document(guides.clone(), grid.clone()));
+            assert!(load(&path).is_err(), "{guides} {grid}");
+        }
+        // A future version is refused rather than half read.
+        let mut future = document(serde_json::json!([]), Value::Null);
+        future["version"] = serde_json::json!(LATEST_VERSION + 1);
+        write_manifest(&path, &future);
+        assert!(load(&path).is_err());
     }
 }

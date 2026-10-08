@@ -17,6 +17,12 @@ mod tablet_tests;
 #[path = "paint/stroke_tests.rs"]
 mod stroke_tests;
 
+#[cfg(test)]
+#[path = "paint/pencil_tests.rs"]
+mod pencil_tests;
+
+mod pencil;
+pub use pencil::tip_offsets;
 mod stroke;
 pub use stroke::Stroke;
 
@@ -28,6 +34,8 @@ pub enum PaintMode {
     Blur,
     Heal,
     Smudge,
+    /// Hard-edged, non-antialiased dabs on whole pixels.
+    Pencil,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +46,8 @@ pub struct Brush {
     pub color: [u8; 4],
     /// Pen tilt in degrees; zero produces the usual circular brush.
     pub tilt: [f32; 2],
+    /// Pencil tip: square instead of round. Other tools ignore this.
+    pub square: bool,
 }
 
 impl Default for Brush {
@@ -48,6 +58,7 @@ impl Default for Brush {
             opacity: 1.0,
             color: [0, 0, 0, 255],
             tilt: [0.0; 2],
+            square: false,
         }
     }
 }
@@ -195,7 +206,15 @@ fn stroke_segment(
     options: StrokeOptions<'_>,
     mut stroke: Option<&mut Stroke>,
 ) -> Result<()> {
-    let max_radius = (from_brush.diameter.max(brush.diameter) * 0.5).max(0.5);
+    let max_radius = if options.mode == PaintMode::Pencil {
+        // Dabs snap to whole pixels, so they can reach one pixel past the samples.
+        (from_brush.diameter.max(brush.diameter) * 0.5)
+            .ceil()
+            .max(1.0)
+            + 1.0
+    } else {
+        (from_brush.diameter.max(brush.diameter) * 0.5).max(0.5)
+    };
     let StrokeOptions {
         mode,
         mask_target,
@@ -210,7 +229,10 @@ fn stroke_segment(
         prepare_mask(layer)?;
     } else {
         ensure_pixels(layer)?;
-        if matches!(mode, PaintMode::Paint | PaintMode::Clone) {
+        if matches!(
+            mode,
+            PaintMode::Paint | PaintMode::Clone | PaintMode::Pencil
+        ) {
             let offset = expand_stroke_bounds(layer, from, to, max_radius)?;
             if let Some(stroke) = &mut stroke {
                 stroke.shift(offset);
@@ -253,6 +275,29 @@ fn stroke_segment(
     }
     if let Some(stroke) = &mut stroke {
         stroke.prepare(layer, mask_target, [left, top, right, bottom]);
+    }
+    if mode == PaintMode::Pencil {
+        let mut local = Stroke::default();
+        let coverage = match stroke {
+            Some(stroke) => stroke,
+            None => {
+                local.prepare(layer, mask_target, [left, top, right, bottom]);
+                &mut local
+            }
+        };
+        pencil::segment(
+            layer,
+            selection.as_deref(),
+            coverage,
+            pencil::Segment {
+                mask_target,
+                bounds: [left, top, right, bottom],
+                transform,
+                endpoints: [from, to],
+                brushes: [from_brush, brush],
+            },
+        );
+        return Ok(());
     }
     if crate::gpu::stroke(
         layer,
@@ -401,7 +446,7 @@ fn stroke_segment(
                         continue;
                     }
                 }
-                PaintMode::Paint => {}
+                PaintMode::Paint | PaintMode::Pencil => {}
             }
             color[3] *= amount;
             pixel.0 = composite(old, color, BlendMode::Normal)

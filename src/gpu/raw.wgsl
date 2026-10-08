@@ -1,5 +1,30 @@
 // Common raster buffer helpers precede this shader. Float intermediates stay on
 // the device from camera conversion through detail enhancement and final encoding.
+// Rows of `config` for the development passes (camera, denoise, tone and
+// encode). Rust builds them in one place, `RawUniforms` in raw.rs; a unit test
+// checks every constant here against that struct's field offsets. The overlay
+// and detail passes receive their own small configs and index them directly.
+const RAW_SIZE: u32 = 0u;
+const RAW_GEOMETRY: u32 = 1u;
+const RAW_LENS: u32 = 2u;
+const RAW_WHITE_BALANCE: u32 = 3u;
+const RAW_CAMERA_TO_RGB: u32 = 4u;
+const RAW_NOISE: u32 = 7u;
+const RAW_TONE: u32 = 8u;
+const RAW_PRESENCE: u32 = 9u;
+const RAW_COLOR: u32 = 10u;
+const RAW_BW_MIX: u32 = 11u;
+const RAW_SPLIT_TONE: u32 = 12u;
+const RAW_OUTPUT: u32 = 13u;
+const RAW_ENCODING: u32 = 14u;
+const RAW_OUTPUT_AXES: u32 = 15u;
+const RAW_CURVES: u32 = 16u;
+const RAW_HSL: u32 = 24u;
+const RAW_NEGATIVE_BASE: u32 = 32u;
+const RAW_NEGATIVE_DENSITY: u32 = 33u;
+const RAW_NEGATIVE_GAIN: u32 = 34u;
+const RAW_ROWS: u32 = 35u;
+
 fn raw_luma(rgb: vec3<f32>) -> f32 { return dot(rgb, vec3(0.2126, 0.7152, 0.0722)); }
 
 fn smooth_weight(value: f32) -> f32 {
@@ -8,24 +33,24 @@ fn smooth_weight(value: f32) -> f32 {
 }
 
 fn source_point(uv: vec2<f32>) -> vec2<f32> {
-    let aspect = config[0].x / config[0].y;
+    let aspect = config[RAW_SIZE].z;
     let p = (uv - 0.5) * 2.0 / vec2(1.0, aspect);
     var point =
-        vec2(config[1].x * p.x + config[1].y * p.y, -config[1].y * p.x + config[1].x * p.y) *
+        vec2(config[RAW_GEOMETRY].x * p.x + config[RAW_GEOMETRY].y * p.y, -config[RAW_GEOMETRY].y * p.x + config[RAW_GEOMETRY].x * p.y) *
         vec2(1.0, aspect);
-    point /= max(1.0 + 0.004 * dot(config[1].zw, point), 0.2);
-    return 0.5 + point * (1.0 + config[2].x * 0.003 * dot(point, point) * 0.5) * 0.5;
+    point /= max(1.0 + 0.004 * dot(config[RAW_GEOMETRY].zw, point), 0.2);
+    return 0.5 + point * (1.0 + config[RAW_LENS].x * 0.003 * dot(point, point) * 0.5) * 0.5;
 }
 
 fn camera_at(p: vec2<i32>) -> vec3<f32> {
-    let size = vec2<u32>(config[0].xy);
+    let size = vec2<u32>(config[RAW_SIZE].xy);
     let q = vec2<u32>(clamp(p, vec2(0), vec2<i32>(size) - 1));
     let i = (q.y * size.x + q.x) * 3u;
     return bitcast<vec3<f32>>(vec3(input[i], input[i + 1u], input[i + 2u]));
 }
 
 fn camera_sample(uv: vec2<f32>) -> vec3<f32> {
-    let p = clamp(uv * config[0].xy - 0.5, vec2(0.0), config[0].xy - 1.0);
+    let p = clamp(uv * config[RAW_SIZE].xy - 0.5, vec2(0.0), config[RAW_SIZE].xy - 1.0);
     let low = vec2<i32>(floor(p));
     let f = fract(p);
     return mix(mix(camera_at(low), camera_at(low + vec2(1, 0)), f.x),
@@ -34,33 +59,33 @@ fn camera_sample(uv: vec2<f32>) -> vec3<f32> {
 
 @compute @workgroup_size(8, 8)
 fn raw_camera(@builtin(global_invocation_id) id: vec3<u32>) {
-    let size = vec2<u32>(config[0].xy);
+    let size = vec2<u32>(config[RAW_SIZE].xy);
     if (any(id.xy >= size)) {
         return;
     }
-    let uv = (vec2<f32>(id.xy) + 0.5) / config[0].xy;
+    let uv = (vec2<f32>(id.xy) + 0.5) / config[RAW_SIZE].xy;
     let source = source_point(uv);
     var camera = camera_sample(source);
-    camera.r = camera_sample((source - 0.5) * (1.0 + config[2].y * 0.0002) + 0.5).r;
-    camera.b = camera_sample((source - 0.5) * (1.0 + config[2].z * 0.0002) + 0.5).b;
+    camera.r = camera_sample((source - 0.5) * (1.0 + config[RAW_LENS].y * 0.0002) + 0.5).r;
+    camera.b = camera_sample((source - 0.5) * (1.0 + config[RAW_LENS].z * 0.0002) + 0.5).b;
     var rgb: vec3<f32>;
-    if (config[32].w > 0.5) {
-        let density = log2(config[32].xyz / max(camera, vec3(0.00001))) / log2(10.0);
-        let positive = clamp((density - config[33].w) / config[33].xyz, vec3(0.0), vec3(1.0));
-        rgb = pow(positive, vec3(config[34].w)) * exp2(config[34].xyz) * config[3].w;
+    if (config[RAW_NEGATIVE_BASE].w > 0.5) {
+        let density = log2(config[RAW_NEGATIVE_BASE].xyz / max(camera, vec3(0.00001))) / log2(10.0);
+        let positive = clamp((density - config[RAW_NEGATIVE_DENSITY].w) / config[RAW_NEGATIVE_DENSITY].xyz, vec3(0.0), vec3(1.0));
+        rgb = pow(positive, vec3(config[RAW_NEGATIVE_GAIN].w)) * config[RAW_NEGATIVE_GAIN].xyz * config[RAW_WHITE_BALANCE].w;
     } else {
-        camera *= config[3].xyz * config[3].w;
-        rgb = vec3(dot(config[4].xyz, camera), dot(config[5].xyz, camera), dot(config[6].xyz, camera));
+        camera *= config[RAW_WHITE_BALANCE].xyz * config[RAW_WHITE_BALANCE].w;
+        rgb = vec3(dot(config[RAW_CAMERA_TO_RGB].xyz, camera), dot(config[RAW_CAMERA_TO_RGB + 1u].xyz, camera), dot(config[RAW_CAMERA_TO_RGB + 2u].xyz, camera));
     }
     let radial = dot(uv - 0.5, uv - 0.5) * 2.0;
-    rgb = max(rgb * exp2(config[2].w * 0.03 * radial * radial), vec3(0.0));
+    rgb = max(rgb * exp2(config[RAW_LENS].w * 0.03 * radial * radial), vec3(0.0));
     let alpha = select(0.0, 1.0, all(source >= vec2(0.0)) && all(source <= vec2(1.0)));
     store_float(id.y * size.x + id.x, vec4(rgb, alpha));
 }
 
 @compute @workgroup_size(8, 8)
 fn raw_denoise(@builtin(global_invocation_id) id: vec3<u32>) {
-    let size = vec2<u32>(config[0].xy);
+    let size = vec2<u32>(config[RAW_SIZE].xy);
     if (any(id.xy >= size)) {
         return;
     }
@@ -81,9 +106,9 @@ fn raw_denoise(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let mean = sum / max(weights, 0.00001);
     let mean_lum = raw_luma(mean);
-    let destination = lum + (mean_lum - lum) * config[7].x / 100.0;
+    let destination = lum + (mean_lum - lum) * config[RAW_NOISE].x / 100.0;
     let chroma =
-        (center.rgb - lum) * (1.0 - config[7].y / 100.0) + (mean - mean_lum) * config[7].y / 100.0;
+        (center.rgb - lum) * (1.0 - config[RAW_NOISE].y / 100.0) + (mean - mean_lum) * config[RAW_NOISE].y / 100.0;
     store_float(i, vec4(max(destination + chroma, vec3(0.0)), center.a));
 }
 
@@ -129,7 +154,7 @@ fn raw_overlay(@builtin(global_invocation_id) id: vec3<u32>) {
 fn raw_curve(value: f32, channel: u32) -> f32 {
     let x = clamp(value, 0.0, 1.0) * 4.0;
     let i = min(u32(x), 3u);
-    let base = 16u + channel * 2u;
+    let base = RAW_CURVES + channel * 2u;
     let a = config[base][i];
     var b = config[base + 1u].x;
     if (i < 3u) {
@@ -177,7 +202,7 @@ fn raw_rgb(hsl: vec3<f32>) -> vec3<f32> {
 
 @compute @workgroup_size(8, 8)
 fn raw_tone(@builtin(global_invocation_id) id: vec3<u32>) {
-    let size = vec2<u32>(config[0].xy);
+    let size = vec2<u32>(config[RAW_SIZE].xy);
     if (any(id.xy >= size)) {
         return;
     }
@@ -187,34 +212,34 @@ fn raw_tone(@builtin(global_invocation_id) id: vec3<u32>) {
     let lum = max(raw_luma(rgb), 0.00001);
     let shadow = pow(1.0 - clamp(lum / 0.5, 0.0, 1.0), 2.0);
     let highlight = smooth_weight((lum - 0.18) / 0.82);
-    let gain = exp2((config[8].x * shadow + config[8].y * highlight) / 50.0);
-    rgb = max(rgb * gain * exp2(config[8].z / 100.0) + config[8].w / 1000.0, vec3(0.0));
-    rgb = max((rgb - config[9].x / 1000.0) / (1.0 - config[9].x / 500.0), vec3(0.0));
-    rgb = pow(rgb, vec3(exp2(-config[9].y / 100.0)));
+    let gain = exp2((config[RAW_TONE].x * shadow + config[RAW_TONE].y * highlight) / 50.0);
+    rgb = max(rgb * gain * exp2(config[RAW_TONE].z / 100.0) + config[RAW_TONE].w / 1000.0, vec3(0.0));
+    rgb = max((rgb - config[RAW_PRESENCE].x / 1000.0) / (1.0 - config[RAW_PRESENCE].x / 500.0), vec3(0.0));
+    rgb = pow(rgb, vec3(exp2(-config[RAW_PRESENCE].y / 100.0)));
     rgb = select(1.055 * pow(rgb, vec3(1.0 / 2.4)) - 0.055, rgb * 12.92, rgb <= vec3(0.0031308));
-    rgb = clamp((rgb - 0.5) * exp2(config[9].z / 100.0) + 0.5, vec3(0.0), vec3(1.0));
-    let excess = max((rgb.r + rgb.b) * 0.5 - rgb.g, 0.0) * config[9].w / 100.0;
+    rgb = clamp((rgb - 0.5) * exp2(config[RAW_PRESENCE].z / 100.0) + 0.5, vec3(0.0), vec3(1.0));
+    let excess = max((rgb.r + rgb.b) * 0.5 - rgb.g, 0.0) * config[RAW_PRESENCE].w / 100.0;
     rgb -= vec3(excess, 0.0, excess);
     rgb = vec3(raw_curve(raw_curve(rgb.r, 0u), 1u), raw_curve(raw_curve(rgb.g, 0u), 2u),
                raw_curve(raw_curve(rgb.b, 0u), 3u));
     var hsl = raw_hsl(rgb);
     var change = vec3(0.0);
     for (var band = 0u; band < 8u; band++) {
-        let row = config[24u + band];
+        let row = config[RAW_HSL + band];
         let distance = abs(((hsl.x - row.w + 180.0) % 360.0 + 360.0) % 360.0 - 180.0);
         change += row.xyz * max(1.0 - distance / 45.0, 0.0);
     }
     hsl.x += change.x * 0.3;
-    hsl.y = clamp(hsl.y * (1.0 + config[10].x / 100.0 + change.y / 100.0) *
-                      (1.0 + config[10].y / 100.0 * (1.0 - hsl.y)),
+    hsl.y = clamp(hsl.y * (1.0 + config[RAW_COLOR].x / 100.0 + change.y / 100.0) *
+                      (1.0 + config[RAW_COLOR].y / 100.0 * (1.0 - hsl.y)),
                   0.0, 1.0);
     hsl.z = clamp(hsl.z + change.z / 200.0, 0.0, 1.0);
     rgb = raw_rgb(hsl);
-    if (config[10].z != 0.0) {
-        rgb = vec3(clamp(dot(rgb, config[11].xyz), 0.0, 1.0));
+    if (config[RAW_COLOR].z != 0.0) {
+        rgb = vec3(clamp(dot(rgb, config[RAW_BW_MIX].xyz), 0.0, 1.0));
     }
-    let high = smooth_weight(raw_luma(rgb) + config[10].w / 200.0);
-    let tones = config[12];
+    let high = smooth_weight(raw_luma(rgb) + config[RAW_COLOR].w / 200.0);
+    let tones = config[RAW_SPLIT_TONE];
     rgb = mix(rgb, raw_rgb(vec3(tones.x, 1.0, 0.5)), tones.y / 100.0 * (1.0 - high) * 0.35);
     rgb = mix(rgb, raw_rgb(vec3(tones.z, 1.0, 0.5)), tones.w / 100.0 * high * 0.35);
     store_float(i, vec4(rgb, p.a));
@@ -241,30 +266,27 @@ fn raw_detail(@builtin(global_invocation_id) id: vec3<u32>) {
 
 @compute @workgroup_size(8, 8)
 fn raw_encode(@builtin(global_invocation_id) id: vec3<u32>) {
-    let size = vec2<u32>(config[13].zw);
+    let size = vec2<u32>(config[RAW_OUTPUT].zw);
     if (any(id.xy >= size)) {
         return;
     }
-    let crop_size = vec2<u32>(config[15].xy);
-    var point = id.xy;
-    switch u32(config[15].z) {
-        case 1u: { point = vec2(id.y, crop_size.y - 1u - id.x); }
-        case 2u: { point = crop_size - 1u - id.xy; }
-        case 3u: { point = vec2(crop_size.x - 1u - id.y, id.x); }
-        default: {}
-    }
-    let source = point + vec2<u32>(config[13].xy);
-    var p = load_float(source.y * u32(config[0].x) + source.x);
+    // Crop and quarter turn as one integer affine map, precomputed on the CPU
+    // (`DevelopSettings::output_map`). Coefficients are small exact integers.
+    let axes = vec4<i32>(config[RAW_OUTPUT_AXES]);
+    let p = vec2<i32>(id.xy);
+    let source = vec2<u32>(vec2<i32>(config[RAW_OUTPUT].xy) +
+                           vec2(axes.x * p.x + axes.y * p.y, axes.z * p.x + axes.w * p.y));
+    var value = load_float(source.y * u32(config[RAW_SIZE].x) + source.x);
     // Native preview textures use egui's premultiplied alpha convention.
-    if (config[14].z != 0.0) {
-        p = vec4(p.rgb * p.a, p.a);
+    if (config[RAW_ENCODING].z != 0.0) {
+        value = vec4(value.rgb * value.a, value.a);
     }
-    let stride = max(size.x, u32(config[14].y));
+    let stride = max(size.x, u32(config[RAW_ENCODING].y));
     let i = id.y * stride + id.x;
-    if (config[14].x == 8.0) {
-        result[i] = packed(p);
+    if (config[RAW_ENCODING].x == 8.0) {
+        result[i] = packed(value);
     } else {
-        let v = vec4<u32>(floor(clamp(p, vec4(0.0), vec4(1.0)) * 65535.0 + 0.5));
+        let v = vec4<u32>(floor(clamp(value, vec4(0.0), vec4(1.0)) * 65535.0 + 0.5));
         result[i * 2u] = v.r | (v.g << 16u);
         result[i * 2u + 1u] = v.b | (v.a << 16u);
     }

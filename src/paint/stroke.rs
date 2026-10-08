@@ -27,8 +27,11 @@ impl Stroke {
         brush: &Brush,
         options: StrokeOptions<'_>,
     ) -> Result<()> {
-        let accumulate =
-            options.mask_target || matches!(options.mode, PaintMode::Paint | PaintMode::Erase);
+        let accumulate = options.mask_target
+            || matches!(
+                options.mode,
+                PaintMode::Paint | PaintMode::Erase | PaintMode::Pencil
+            );
         super::stroke_segment(
             document,
             from,

@@ -145,6 +145,81 @@ fn film_grain(point: Point, size: f32, roughness: f32, seed: u32) -> f32 {
     smooth + (fine - smooth) * roughness / 100.0
 }
 
+/// Upstream's `adjust_black_white` (Rendering/AdjustPixels.c): a color is min(r, g, b) of gray,
+/// plus (mid − min) of the secondary between its two brightest channels, plus (max − mid) of the
+/// primary of its brightest, each taken at its weight. A tint makes the gray the lightness of a
+/// color at `hue`. `blackWhite` in gpu/adjustments.wgsl mirrors this.
+pub fn black_white(rgb: [f32; 3], weights: &[f32; 6], saturation: f32, hue: f32) -> [f32; 3] {
+    let [r, g, b] = rgb;
+    let high = r.max(g.max(b));
+    let low = r.min(g.min(b));
+    let mid = r + g + b - high - low;
+    // 0 red, 1 yellow, 2 green, 3 cyan, 4 blue, 5 magenta.
+    let (primary, secondary) = if high == r {
+        (0, if g >= b { 1 } else { 5 })
+    } else if high == g {
+        (2, if r >= b { 1 } else { 3 })
+    } else {
+        (4, if g >= r { 3 } else { 5 })
+    };
+    let gray =
+        (low + (mid - low) * weights[secondary] / 100.0 + (high - mid) * weights[primary] / 100.0)
+            .clamp(0.0, 1.0);
+    if saturation <= 0.0 {
+        return [gray; 3];
+    }
+    let chroma = (1.0 - (2.0 * gray - 1.0).abs()) * saturation / 100.0;
+    let sector = hue.rem_euclid(360.0) / 60.0;
+    let x = chroma * (1.0 - (sector.rem_euclid(2.0) - 1.0).abs());
+    let rgb = if sector < 1.0 {
+        [chroma, x, 0.0]
+    } else if sector < 2.0 {
+        [x, chroma, 0.0]
+    } else if sector < 3.0 {
+        [0.0, chroma, x]
+    } else if sector < 4.0 {
+        [0.0, x, chroma]
+    } else if sector < 5.0 {
+        [x, 0.0, chroma]
+    } else {
+        [chroma, 0.0, x]
+    };
+    rgb.map(|v| (v + gray - chroma / 2.0).clamp(0.0, 1.0))
+}
+
+/// How much a tone belongs to the shadows, midtones and highlights (upstream's `tonal_weights`):
+/// three overlapping ramps, so a shift fades in and out rather than banding at a threshold.
+fn tonal_weights(v: f32) -> [f32; 3] {
+    const A: f32 = 0.25;
+    const B: f32 = 0.333;
+    const SCALE: f32 = 0.7;
+    let shadow = ((v - B) / -A + 0.5).clamp(0.0, 1.0);
+    let highlight = ((v + B - 1.0) / A + 0.5).clamp(0.0, 1.0);
+    let rising = ((v - B) / A + 0.5).clamp(0.0, 1.0);
+    let falling = ((v + B - 1.0) / -A + 0.5).clamp(0.0, 1.0);
+    [shadow * SCALE, rising * falling * SCALE, highlight * SCALE]
+}
+
+/// Upstream's `adjust_color_balance` (Rendering/AdjustPixels.c), with shifts in percent for
+/// shadows, midtones and highlights. Preserve Luminosity scales the result back to the pixel's
+/// Rec. 601 brightness. `colorBalance` in gpu/adjustments.wgsl mirrors this.
+pub fn color_balance(rgb: [f32; 3], shifts: [&[f32; 3]; 3], preserve_luminosity: bool) -> [f32; 3] {
+    let brightness = |c: [f32; 3]| 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+    let before = brightness(rgb);
+    let mut c: [f32; 3] = std::array::from_fn(|i| {
+        let [s, m, h] = tonal_weights(rgb[i]);
+        (rgb[i] + (shifts[0][i] * s + shifts[1][i] * m + shifts[2][i] * h) / 100.0).clamp(0.0, 1.0)
+    });
+    if preserve_luminosity {
+        let after = brightness(c);
+        if after > 0.0001 {
+            let ratio = before / after;
+            c = c.map(|v| (v * ratio).clamp(0.0, 1.0));
+        }
+    }
+    c
+}
+
 pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4] {
     let rgb = [pixel[0], pixel[1], pixel[2]];
     let rgb = match adjustment {
@@ -223,6 +298,23 @@ pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4
                     / 100.0
         }),
         Adjustment::Invert => rgb.map(|v| 1.0 - v),
+        Adjustment::BlackWhite {
+            weights,
+            tint,
+            tint_hue,
+            tint_saturation,
+        } => black_white(
+            rgb,
+            weights,
+            if *tint { *tint_saturation } else { 0.0 },
+            *tint_hue,
+        ),
+        Adjustment::ColorBalance {
+            shadows,
+            midtones,
+            highlights,
+            preserve_luminosity,
+        } => color_balance(rgb, [shadows, midtones, highlights], *preserve_luminosity),
     };
     [
         rgb[0].clamp(0.0, 1.0),
@@ -819,6 +911,32 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
         }
         Adjustment::Grain { amount, .. } => amount.is_finite() && (0.0..=100.0).contains(amount),
         Adjustment::GradientMap { .. } | Adjustment::Invert => true,
+        // Upstream's ranges (BlackWhiteSettings and ColorBalanceSettings in
+        // Document/ImageAdjustments.swift).
+        Adjustment::BlackWhite {
+            weights,
+            tint_hue,
+            tint_saturation,
+            ..
+        } => {
+            weights
+                .iter()
+                .all(|w| w.is_finite() && (-200.0..=300.0).contains(w))
+                && tint_hue.is_finite()
+                && (0.0..=360.0).contains(tint_hue)
+                && tint_saturation.is_finite()
+                && (0.0..=100.0).contains(tint_saturation)
+        }
+        Adjustment::ColorBalance {
+            shadows,
+            midtones,
+            highlights,
+            ..
+        } => shadows
+            .iter()
+            .chain(midtones)
+            .chain(highlights)
+            .all(|v| v.is_finite() && (-100.0..=100.0).contains(v)),
     };
     ensure!(valid, "Invalid adjustment settings");
     Ok(())
@@ -827,6 +945,98 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn close3(actual: [f32; 3], expected: [f32; 3]) {
+        assert!(
+            actual
+                .iter()
+                .zip(expected)
+                .all(|(a, e)| (a - e).abs() < 1e-4),
+            "{actual:?} != {expected:?}"
+        );
+    }
+
+    /// Photoshop's defaults: a pure color becomes its family's weight in gray, and a secondary
+    /// such as yellow its own weight (upstream's adjust_black_white).
+    #[test]
+    fn black_white_weighs_each_color_family() {
+        let Adjustment::BlackWhite { weights, .. } = Adjustment::BLACK_WHITE else {
+            unreachable!()
+        };
+        for (color, gray) in [
+            ([1.0, 0.0, 0.0], 0.4),
+            ([1.0, 1.0, 0.0], 0.6),
+            ([0.0, 1.0, 0.0], 0.4),
+            ([0.0, 1.0, 1.0], 0.6),
+            ([0.0, 0.0, 1.0], 0.2),
+            ([1.0, 0.0, 1.0], 0.8),
+            ([0.5, 0.5, 0.5], 0.5),
+            // Half red over a quarter gray: 0.25 + 0.25·yellows(0.6)·0 + 0.25·reds(0.4).
+            ([0.5, 0.25, 0.25], 0.35),
+        ] {
+            close3(black_white(color, &weights, 0.0, 0.0), [gray; 3]);
+        }
+        // Weights beyond 100% clip.
+        close3(
+            black_white([1.0, 0.0, 0.0], &[300.0; 6], 0.0, 0.0),
+            [1.0; 3],
+        );
+        // A full tint at 0° turns mid gray into pure red; the tone is kept.
+        close3(black_white([0.5; 3], &weights, 100.0, 0.0), [1.0, 0.0, 0.0]);
+        close3(
+            black_white([0.5; 3], &weights, 50.0, 240.0),
+            [0.25, 0.25, 0.75],
+        );
+        let pixel = adjust(
+            [1.0, 0.0, 0.0, 0.5],
+            &Adjustment::BLACK_WHITE,
+            Point::default(),
+        );
+        assert_eq!(pixel[3], 0.5);
+    }
+
+    /// Upstream's adjust_color_balance: a midtone shift moves mid gray by 70% of it, and
+    /// Preserve Luminosity scales the result back to the original brightness.
+    #[test]
+    fn color_balance_shifts_tones_and_can_preserve_luminosity() {
+        let red_mids = [&[0.0; 3], &[100.0, 0.0, 0.0], &[0.0; 3]];
+        close3(color_balance([0.5; 3], red_mids, false), [1.0, 0.5, 0.5]);
+        let ratio = 0.5 / (0.299 + 0.587 * 0.5 + 0.114 * 0.5);
+        close3(
+            color_balance([0.5; 3], red_mids, true),
+            [ratio, 0.5 * ratio, 0.5 * ratio],
+        );
+        // Midtone shifts leave black and white alone; shadow shifts reach black.
+        close3(color_balance([0.0; 3], red_mids, false), [0.0; 3]);
+        close3(color_balance([1.0; 3], red_mids, false), [1.0; 3]);
+        let blue_shadows = [&[0.0, 0.0, 50.0], &[0.0; 3], &[0.0; 3]];
+        close3(
+            color_balance([0.0; 3], blue_shadows, false),
+            [0.0, 0.0, 0.35],
+        );
+        // No shift, no change.
+        let none = [&[0.0; 3]; 3];
+        close3(color_balance([0.2, 0.6, 0.9], none, true), [0.2, 0.6, 0.9]);
+        assert!(validate_adjustment(&Adjustment::COLOR_BALANCE).is_ok());
+        assert!(
+            validate_adjustment(&Adjustment::ColorBalance {
+                shadows: [101.0, 0.0, 0.0],
+                midtones: [0.0; 3],
+                highlights: [0.0; 3],
+                preserve_luminosity: true,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_adjustment(&Adjustment::BlackWhite {
+                weights: [-201.0; 6],
+                tint: false,
+                tint_hue: 0.0,
+                tint_saturation: 0.0,
+            })
+            .is_err()
+        );
+    }
 
     // The original implementation is an independent reference for sampling and alpha.
     fn reference_motion_blur(image: &RgbaImage, distance: f32, angle: f32) -> RgbaImage {

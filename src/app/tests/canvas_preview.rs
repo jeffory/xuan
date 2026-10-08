@@ -72,6 +72,10 @@ fn magnified_preview_respects_the_texture_limit() {
     }
 }
 
+fn grid_color() -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(128, 128, 128, 96)
+}
+
 #[test]
 fn pixel_grid_requires_a_native_resolution_preview() {
     let (context, mut app) = app();
@@ -84,13 +88,10 @@ fn pixel_grid_requires_a_native_resolution_preview() {
     for (limit, expected_grid) in [(1024, false), (8192, true)] {
         context.input_mut(|input| input.max_texture_side = limit);
         let output = frame(&context, &mut app);
-        let has_grid = output.shapes.iter().any(|shape| {
-            matches!(
-                shape.shape,
-                egui::Shape::LineSegment { stroke, .. }
-                    if stroke == egui::Stroke::new(0.5_f32, egui::Color32::from_white_alpha(28))
-            )
-        });
+        let has_grid = output
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color == grid_color())));
         assert_eq!(has_grid, expected_grid);
     }
 }

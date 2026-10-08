@@ -1,120 +1,120 @@
-use super::{EditorApp, Tool};
-use egui::{Event, Key, Modifiers};
+//! Key dispatch. Commands and their bindings live in the registry (`commands.rs`); this runs the
+//! command a key press is bound to, then handles the keys the editor keeps for itself.
+
+use super::{EditorApp, Tool, commands::Chord};
+use egui::{Event, InputState, Key, Modifiers};
 use xuan::i18n::tr;
+
+/// Removes the first press of exactly this chord from the input. Unlike
+/// [`InputState::consume_key`], extra Shift or Alt makes a different chord.
+pub(super) fn consume_exact(input: &mut InputState, mods: Modifiers, key: Key) -> bool {
+    let chord = Chord { mods, key };
+    let mut found = false;
+    input.events.retain(|event| {
+        let hit = !found
+            && matches!(
+                event,
+                Event::Key { key: k, modifiers: m, pressed: true, .. } if chord.matches(*m, *k)
+            );
+        found |= hit;
+        !hit
+    });
+    found
+}
 
 impl EditorApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.wants_keyboard_input() {
+        if self.palette.is_some() || ctx.wants_keyboard_input() {
             return;
         }
+        let developing = self.develop.is_some();
 
-        // Native backends translate clipboard shortcuts into these events,
+        // Native backends turn the clipboard chords into these events instead of key presses,
         // including Ctrl+Shift+C. Leave them alone when a text field has focus.
-        let clipboard_commands = ctx.input_mut(|input| {
-            let mut commands = Vec::new();
-            if self.develop.is_some() {
-                return commands;
-            }
+        let clipboard = ctx.input_mut(|input| {
+            let mut chords = Vec::new();
+            let mods = Chord::from_event(input.modifiers, Key::C).mods;
             input.events.retain(|event| {
-                let command = match event {
-                    Event::Copy if input.modifiers.shift => "copy_merged",
-                    Event::Copy => "copy",
-                    Event::Cut => "cut",
-                    Event::Paste(text) => {
-                        commands.push(("paste", Some(text.clone())));
-                        return false;
-                    }
+                let (key, text) = match event {
+                    Event::Copy => (Key::C, None),
+                    Event::Cut => (Key::X, None),
+                    Event::Paste(text) => (Key::V, Some(text.clone())),
                     _ => return true,
                 };
-                commands.push((command, None));
+                let mods = Modifiers { ctrl: true, ..mods };
+                chords.push((Chord { mods, key }, text));
                 false
             });
-            commands
+            chords
         });
-        if !clipboard_commands.is_empty() {
-            for (command, text) in clipboard_commands {
-                if command == "paste" {
+        if !clipboard.is_empty() {
+            for (chord, text) in clipboard {
+                let Some(id) = self
+                    .keymap
+                    .lookup(chord.mods, chord.key, developing)
+                    .map(|entry| entry.id.clone())
+                else {
+                    continue;
+                };
+                if !self.command_enabled(&id) {
+                    continue;
+                }
+                if id == "paste" {
                     self.paste_clipboard(text.as_deref());
                 } else {
-                    self.command(command);
+                    self.run_shortcut(&id);
                 }
             }
             return;
         }
 
-        let pressed = |key| ctx.input(|i| i.key_pressed(key));
-        let modifiers = ctx.input(|i| i.modifiers);
-        let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
-        let ctrl = Modifiers::CTRL;
-        let shift = Modifiers::CTRL | Modifiers::SHIFT;
-        for (mods, key, command) in [
-            (ctrl | Modifiers::ALT | Modifiers::SHIFT, Key::S, "export"),
-            (shift, Key::N, "new_layer"),
-            (shift, Key::O, "import"),
-            (shift, Key::S, "save_as"),
-            (shift, Key::Z, "redo"),
-            (shift, Key::C, "copy_merged"),
-            (shift, Key::G, "ungroup"),
-            (shift, Key::I, "invert_selection"),
-            (ctrl | Modifiers::ALT, Key::G, "clip"),
-            (ctrl, Key::Comma, "settings"),
-            (ctrl, Key::N, "new"),
-            (ctrl, Key::O, "open"),
-            (ctrl, Key::S, "save"),
-            (ctrl, Key::W, "close"),
-            (ctrl, Key::Z, "undo"),
-            (ctrl, Key::Y, "redo"),
-            (ctrl, Key::J, "duplicate"),
-            (ctrl, Key::G, "group"),
-            (ctrl, Key::E, "merge"),
-            (ctrl, Key::A, "select_all"),
-            (ctrl, Key::D, "deselect"),
-            (ctrl, Key::I, "invert"),
-            (ctrl, Key::L, "levels"),
-            (ctrl, Key::U, "hue"),
-            (ctrl, Key::M, "curves"),
-            (ctrl, Key::C, "copy"),
-            (ctrl, Key::X, "cut"),
-            (ctrl, Key::V, "paste"),
-            (ctrl, Key::Num0, "fit"),
-            (ctrl, Key::Num1, "actual"),
-            (ctrl, Key::Plus, "zoom_in"),
-            (ctrl, Key::Equals, "zoom_in"),
-            (ctrl, Key::Minus, "zoom_out"),
-            (Modifiers::ALT, Key::Backspace, "fill_fg"),
-            (ctrl, Key::Backspace, "fill_bg"),
-        ] {
-            if consume(mods, key) {
-                self.command(command);
+        // Bound keys, in the order they were pressed. A command ends the frame's key handling;
+        // tool keys and other quick actions let later keys through.
+        let presses: Vec<(Modifiers, Key)> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => Some((*modifiers, *key)),
+                    _ => None,
+                })
+                .collect()
+        });
+        for (mods, key) in presses {
+            let Some((id, quick)) = self.keymap.lookup(mods, key, developing).map(|entry| {
+                let quick = matches!(
+                    &entry.kind,
+                    super::commands::Kind::Builtin(command)
+                        if !matches!(command.run, super::commands::Run::Command)
+                );
+                (entry.id.clone(), quick)
+            }) else {
+                continue;
+            };
+            ctx.input_mut(|i| consume_exact(i, mods, key));
+            if !self.command_enabled(&id) {
+                continue;
+            }
+            self.run_shortcut(&id);
+            if !quick {
                 return;
             }
         }
+
+        let pressed = |key| ctx.input(|i| i.key_pressed(key));
+        let modifiers = ctx.input(|i| i.modifiers);
         if let Some(develop) = &mut self.develop {
             if pressed(Key::Escape) {
-                develop.picker = false;
-                develop.film_base_picker = false;
-                develop.draw_overlay = false;
-            }
-            if pressed(Key::F1) {
-                self.command("shortcuts");
+                develop.tool = super::develop::CanvasTool::None;
             }
             return;
         }
         if modifiers.ctrl {
-            if pressed(Key::H) {
-                self.show_controls = !self.show_controls;
-            }
-            if pressed(Key::T) {
-                self.set_tool(Tool::Move);
-                self.show_controls = true;
-            }
             return;
-        }
-        if modifiers.shift && pressed(Key::F5) {
-            self.command("content_fill");
-        }
-        if pressed(Key::F1) {
-            self.command("shortcuts");
         }
         if pressed(Key::Escape) {
             self.cancel_gesture();
@@ -129,72 +129,6 @@ impl EditorApp {
                 }
             } else if self.polygon.len() >= 3 {
                 self.finish_polygon();
-            }
-        }
-        if pressed(Key::Delete) || pressed(Key::Backspace) {
-            if self
-                .session()
-                .is_some_and(|s| s.document.selection.is_some())
-            {
-                self.command("clear");
-            } else {
-                self.command("delete_layer");
-            }
-        }
-        for (key, tool) in [
-            (Key::V, Tool::Move),
-            (Key::M, Tool::Marquee),
-            (Key::L, Tool::Lasso),
-            (Key::W, Tool::Wand),
-            (Key::C, Tool::Crop),
-            (Key::B, Tool::Brush),
-            (Key::E, Tool::Erase),
-            (Key::J, Tool::Heal),
-            (Key::S, Tool::Clone),
-            (Key::R, Tool::Blur),
-            (Key::G, Tool::Gradient),
-            (Key::U, Tool::Shape),
-            (Key::T, Tool::Text),
-            (Key::I, Tool::Dropper),
-            (Key::H, Tool::Hand),
-            (Key::Z, Tool::Zoom),
-        ] {
-            if pressed(key) {
-                if modifiers.shift && tool == Tool::Marquee {
-                    self.ellipse = !self.ellipse;
-                }
-                if modifiers.shift && tool == Tool::Lasso {
-                    self.polygonal = !self.polygonal;
-                }
-                if modifiers.shift && tool == Tool::Shape {
-                    self.shape_kind = if self.shape_kind == xuan::paint::ShapeKind::Ellipse {
-                        xuan::paint::ShapeKind::Rectangle
-                    } else {
-                        xuan::paint::ShapeKind::Ellipse
-                    };
-                }
-                self.set_tool(tool);
-            }
-        }
-        if pressed(Key::X) {
-            std::mem::swap(&mut self.brush.color, &mut self.background);
-        }
-        if pressed(Key::D) {
-            self.brush.color = [0, 0, 0, 255];
-            self.background = [255; 4];
-        }
-        if pressed(Key::OpenBracket) {
-            if modifiers.shift {
-                self.brush.hardness = (self.brush.hardness - 0.1).max(0.0);
-            } else {
-                self.brush.diameter = (self.brush.diameter / 1.15).round().max(1.0);
-            }
-        }
-        if pressed(Key::CloseBracket) {
-            if modifiers.shift {
-                self.brush.hardness = (self.brush.hardness + 0.1).min(1.0);
-            } else {
-                self.brush.diameter = (self.brush.diameter * 1.15).round().min(2000.0);
             }
         }
         for (index, key) in [

@@ -182,6 +182,25 @@ fn processing_adjustments_and_composition_match_cpu() {
                 Point::new(1.0, 1.0),
             ],
         },
+        Adjustment::BLACK_WHITE,
+        Adjustment::BlackWhite {
+            weights: [-40.0, 120.0, 40.0, 250.0, -100.0, 80.0],
+            tint: true,
+            tint_hue: 213.0,
+            tint_saturation: 45.0,
+        },
+        Adjustment::ColorBalance {
+            shadows: [40.0, -20.0, 10.0],
+            midtones: [-30.0, 20.0, 50.0],
+            highlights: [20.0, 0.0, -40.0],
+            preserve_luminosity: true,
+        },
+        Adjustment::ColorBalance {
+            shadows: [-100.0, 100.0, -60.0],
+            midtones: [30.0, -70.0, 0.0],
+            highlights: [100.0, 40.0, -100.0],
+            preserve_luminosity: false,
+        },
     ] {
         let mut document = Document::new(120, 100).unwrap();
         let mut layer = Layer::image("source", source.clone());
@@ -202,6 +221,121 @@ fn processing_adjustments_and_composition_match_cpu() {
             &crate::render::render(&document),
             3,
         );
+    }
+}
+
+/// Count pixels whose premultiplied channels differ by more than `tolerance`.
+fn premultiplied_mismatches(a: &RgbaImage, b: &RgbaImage, tolerance: u8) -> usize {
+    let premultiply = |p: &Rgba<u8>| {
+        let a = p[3] as f32 / 255.0;
+        [
+            p[0] as f32 * a,
+            p[1] as f32 * a,
+            p[2] as f32 * a,
+            p[3] as f32,
+        ]
+    };
+    a.pixels()
+        .zip(b.pixels())
+        .filter(|(p, q)| {
+            premultiply(p)
+                .iter()
+                .zip(premultiply(q))
+                .any(|(x, y)| (x - y).abs() > tolerance as f32)
+        })
+        .count()
+}
+
+/// Every blend mode, over partly transparent and opaque backdrops, at an
+/// opacity, with a rotated source. Hard Mix, Dissolve, Darker Color and
+/// Lighter Color switch between two results, so a pixel sitting on the
+/// threshold may switch differently in the GPU's 16-bit float canvas; they
+/// may differ on a few pixels, the rest on none.
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_blend_modes_match_cpu() {
+    use crate::blend::BlendMode;
+    let gpu = processor();
+    for opaque in [false, true] {
+        let mut document = Document::new(96, 80).unwrap();
+        document.layers = vec![Layer::image(
+            "Backdrop",
+            RgbaImage::from_fn(96, 80, |x, y| {
+                Rgba([
+                    (x * 255 / 95) as u8,
+                    (y * 255 / 79) as u8,
+                    ((x + y) * 3 % 256) as u8,
+                    if opaque {
+                        255
+                    } else {
+                        120 + (x % 5) as u8 * 30
+                    },
+                ])
+            }),
+        )];
+        let mut top = Layer::image("Top", fixture(71, 53));
+        top.transform.x = 9.0;
+        top.transform.y = 11.0;
+        top.transform.rotation = 11.0;
+        top.opacity = 0.8;
+        document.layers.push(top);
+        for mode in BlendMode::ALL {
+            document.layers[1].blend = mode;
+            let cpu = crate::render::render(&document);
+            let actual = gpu.compose(&document, 96, 80).unwrap();
+            let allowed = match mode {
+                BlendMode::HardMix
+                | BlendMode::Dissolve
+                | BlendMode::DarkerColor
+                | BlendMode::LighterColor => 96 * 80 / 200,
+                _ => 0,
+            };
+            let mismatches = premultiplied_mismatches(&actual, &cpu, 3);
+            assert!(
+                mismatches <= allowed,
+                "{} (opaque backdrop {opaque}): {mismatches} pixels differ",
+                mode.name()
+            );
+        }
+    }
+}
+
+/// Every layer effect, alone and together, on a soft-edged shape: the GPU passes match
+/// `layer_effects::render_cpu` within two levels.
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_layer_effects_match_cpu() {
+    use crate::layer_effects::{EffectKind, LayerEffects, pad, render_cpu};
+    let gpu = processor();
+    let source = RgbaImage::from_fn(120, 90, |x, y| {
+        let (dx, dy) = (x as f32 - 60.0, y as f32 - 45.0);
+        let edge = (40.0 - (dx * dx / 1.6 + dy * dy).sqrt()).clamp(0.0, 1.0);
+        Rgba([(x * 2) as u8, (y * 2) as u8, 180, (edge * 255.0) as u8])
+    });
+    let mut every = LayerEffects::default();
+    for kind in EffectKind::ALL {
+        every.add(kind, [230, 60, 40]);
+    }
+    every.stroke.as_mut().unwrap().inside = true;
+    let mut cases: Vec<LayerEffects> = EffectKind::ALL
+        .iter()
+        .map(|kind| {
+            let mut effects = LayerEffects::default();
+            effects.add(*kind, [20, 200, 90]);
+            effects
+        })
+        .collect();
+    cases.push(every);
+    let mut sharp = LayerEffects::default();
+    sharp.add(EffectKind::DropShadow, [0; 3]);
+    sharp.drop_shadow.as_mut().unwrap().blur = 0.0;
+    sharp.drop_shadow.as_mut().unwrap().angle = 33.0;
+    cases.push(sharp);
+    for effects in cases {
+        let padded = pad(&source, crate::layer_effects::margin(&effects));
+        let expected = render_cpu(&padded, &effects);
+        let actual = gpu.layer_effects(&padded, &effects).unwrap();
+        compare(&actual, &expected, 2);
     }
 }
 
@@ -290,6 +424,14 @@ fn processing_raw_matches_cpu_at_both_depths() {
             ..Default::default()
         },
     ];
+    let negative = NegativeSettings {
+        enabled: true,
+        film_base: [0.9, 0.5, 0.2],
+        density_range: [1.7, 2.1, 2.4],
+        black_point: -0.07,
+        gamma: 1.8,
+        balance: [0.3, -0.2, 0.1],
+    };
     let cancel = AtomicBool::new(false);
     for s in [
         DevelopSettings {
@@ -316,14 +458,14 @@ fn processing_raw_matches_cpu_at_both_depths() {
             ..settings.clone()
         },
         DevelopSettings {
-            negative: NegativeSettings {
-                enabled: true,
-                film_base: [0.9, 0.5, 0.2],
-                density_range: [1.7, 2.1, 2.4],
-                black_point: -0.07,
-                gamma: 1.8,
-                balance: [0.3, -0.2, 0.1],
-            },
+            negative: negative.clone(),
+            ..settings.clone()
+        },
+        // Crop, quarter turn and inversion together, from one set of uniforms.
+        DevelopSettings {
+            negative,
+            quarter_turns: 3,
+            crop: [0.13, 0.02, 0.71, 0.97],
             ..settings.clone()
         },
         DevelopSettings {
@@ -1127,6 +1269,12 @@ fn processing_resident_raw_previews_match_output_and_keep_old_frames_immutable()
             crop: [0.031, 0.017, 0.969, 0.94],
             clarity: 12.0,
             texture: 8.0,
+            // The preview shares the full-resolution uniforms, inversion included.
+            negative: crate::raw::NegativeSettings {
+                enabled: i == 1,
+                film_base: [0.9, 0.8, 0.7],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let preview = scope(Some(gpu.clone()), || {
