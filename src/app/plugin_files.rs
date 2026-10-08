@@ -730,15 +730,10 @@ impl EditorApp {
                 self.status = format!("{} {} · {source}", tr("Exported"), path.display());
             }
             None => {
-                io::save(&session.document, &path).map_err(failed)?;
                 // Saved as the user chose, the project now lives there.
-                session.title = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into();
-                session.path = Some(path.clone());
-                session.history.mark_saved();
+                session
+                    .save_project(&path, &mut self.file_watch)
+                    .map_err(failed)?;
                 self.status = format!("{} · {source}", tr("Project saved"));
             }
         }
@@ -833,16 +828,11 @@ impl EditorApp {
                 }
             }
             None => {
-                io::save(&session.document, path).map_err(failed)?;
                 // Saved as the plugin named it and the user allowed, the
                 // project now lives there, as with Save As.
-                session.title = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into();
-                session.path = Some(path.clone());
-                session.history.mark_saved();
+                session
+                    .save_project(path, &mut self.file_watch)
+                    .map_err(failed)?;
                 if asked {
                     tr("Saved")
                 } else {

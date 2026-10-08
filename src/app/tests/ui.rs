@@ -33,6 +33,9 @@ mod recent;
 #[path = "ui_tabs.rs"]
 mod tabs;
 
+#[path = "ui_reload.rs"]
+mod reload;
+
 #[path = "ui_dialogs.rs"]
 mod dialogs;
 

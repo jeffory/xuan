@@ -1209,3 +1209,7 @@ Import OpenRaster File	导入 OpenRaster 文件
 Xuan will convert these OpenRaster features. Nothing is applied until you continue.	Xuan 将转换以下 OpenRaster 功能。继续之前不会应用任何更改。
 OpenRaster keeps layers, folders, blend modes and opacity	OpenRaster 保留图层、文件夹、混合模式和不透明度
 These are flattened:	以下内容将被合并：
+This file was changed by another program.	此文件已被其他程序更改。
+Reload	重新载入
+Keep mine	保留我的版本
+Reloaded	已重新载入

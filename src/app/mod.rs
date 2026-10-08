@@ -47,6 +47,7 @@ mod plugin_sessions;
 mod plugins;
 mod providers;
 mod recent;
+mod reload;
 mod rulers;
 mod selection_dialogs;
 mod settings;
@@ -262,6 +263,9 @@ struct Session {
     /// Boxes drawn with the AI Region tool, and the selected one.
     ai_boxes: Vec<ai_regions::AiBox>,
     ai_selected: Option<usize>,
+    /// The file's new content, loaded after another program changed it, waiting to replace the
+    /// document (see `reload.rs`).
+    external: Option<Box<Document>>,
 }
 
 impl Session {
@@ -290,6 +294,7 @@ impl Session {
             sample_renders: 0,
             ai_boxes: Vec::new(),
             ai_selected: None,
+            external: None,
         }
     }
 
@@ -510,6 +515,8 @@ pub struct EditorApp {
     config_dirty: bool,
     /// Which recent files exist, as of a moment ago.
     recent_exists: recent::RecentExists,
+    /// Follows open projects' files for changes other programs make.
+    file_watch: reload::FileWatch,
     /// The command registry with the user's key bindings applied.
     keymap: commands::Keymap,
     /// The command palette (Ctrl+K), while it is open.
@@ -762,6 +769,7 @@ impl EditorApp {
             config_path: None,
             config_dirty: false,
             recent_exists: Default::default(),
+            file_watch: reload::FileWatch::new(ctx.clone()),
             keymap: Default::default(),
             palette: None,
             key_editor: Default::default(),
@@ -1324,16 +1332,9 @@ impl EditorApp {
         if path.extension().is_none() {
             path.set_extension("xuan");
         }
-        let session = self.session_mut().unwrap();
-        match io::save(&session.document, &path) {
+        let session = &mut self.sessions[self.current];
+        match session.save_project(&path, &mut self.file_watch) {
             Ok(()) => {
-                session.title = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into();
-                session.path = Some(path.clone());
-                session.history.mark_saved();
                 self.status = tr("Project saved").into();
                 self.remember_recent(&path);
                 true
@@ -2085,6 +2086,7 @@ impl EditorApp {
 
         self.poll_job();
         self.poll_develop(ctx);
+        self.follow_files();
         self.frames += 1;
         if ctx.input(|i| i.viewport().close_requested()) && !self.begin_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2131,6 +2133,7 @@ impl EditorApp {
             // Tool options, then the tabs as the canvas's own header.
             self.tool_options(ctx);
             self.tabs(ctx);
+            self.reload_bar(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);
             self.sidebar(ctx);
