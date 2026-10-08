@@ -55,6 +55,7 @@ mod rulers;
 mod selection_dialogs;
 mod settings;
 mod shortcuts;
+mod size_units;
 mod snap;
 mod stroke_dialog;
 mod stroke_smoothing;
@@ -698,6 +699,8 @@ pub struct EditorApp {
     new_image_exact: bool,
     new_image_action: Option<(String, String)>,
     anchor: [f32; 2],
+    /// The size dialogs' units, Resample and Relative.
+    size_units: size_units::SizeUnits,
     effect: Option<EffectEdit>,
     /// Layer → Layer Effects… while it is open.
     layer_effects: Option<layer_effects_dialog::LayerEffectsEdit>,
@@ -926,6 +929,7 @@ impl EditorApp {
             new_image_exact: false,
             new_image_action: None,
             anchor: [0.5, 0.5],
+            size_units: Default::default(),
             effect: None,
             layer_effects: None,
             error: None,
@@ -1075,8 +1079,12 @@ impl EditorApp {
         match Document::new(self.dimensions[0], self.dimensions[1]) {
             Ok(mut document) => {
                 document.resolution = self.resolution;
-                if self.config.new_canvas_size != Some(self.dimensions) {
+                let resolution = Some(self.resolution);
+                if self.config.new_canvas_size != Some(self.dimensions)
+                    || self.config.units.new_canvas_resolution != resolution
+                {
                     self.config.new_canvas_size = Some(self.dimensions);
+                    self.config.units.new_canvas_resolution = resolution;
                     self.save_config();
                 }
                 self.sessions
@@ -1674,6 +1682,14 @@ impl EditorApp {
                 if let Some(size) = xuan::canvas_presets::usable(self.config.new_canvas_size) {
                     self.dimensions = size;
                 }
+                self.resolution = self.config.units.new_canvas_resolution();
+                // Percent needs a document to be a percentage of.
+                let unit = Some(self.config.units.size)
+                    .filter(|unit| *unit != xuan::units::Unit::Percent)
+                    .unwrap_or_default();
+                let units = self.config.units;
+                self.size_units
+                    .open(self.dimensions, unit, units.resolution);
                 self.dialog = Some(Dialog::New);
             }
             "open" => self.open_dialog(false),
@@ -2037,7 +2053,11 @@ impl EditorApp {
                     let dimensions = [session.document.width, session.document.height];
                     let resolution = session.document.resolution;
                     self.dimensions = dimensions;
+                    self.ratio = dimensions;
                     self.resolution = resolution;
+                    let units = self.config.units;
+                    self.size_units
+                        .open(dimensions, units.size, units.resolution);
                     self.dialog = Some(if command == "canvas_size" {
                         Dialog::CanvasSize
                     } else {

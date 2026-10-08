@@ -70,8 +70,8 @@ impl Unit {
         match self {
             Self::Pixels => "Pixels",
             Self::Inches => "Inches",
-            Self::Centimeters => "Centimeters",
-            Self::Millimeters => "Millimeters",
+            Self::Centimeters => "Centimetres",
+            Self::Millimeters => "Millimetres",
             Self::Points => "Points",
             Self::Picas => "Picas",
             Self::Percent => "Percent",

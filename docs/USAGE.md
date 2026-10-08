@@ -101,8 +101,25 @@ The **+** button after the last tab starts a new canvas. Hover a tab for its ful
   it shows the preset the fields match, in either orientation, or **Custom** once you type
   another size. **Swap** exchanges Width and Height (portrait / landscape), and **Keep aspect
   ratio** makes the other side follow the one you type, in the proportion it had when you ticked
-  the box or picked a preset. Sizes obey the same limits as every canvas. The size of the last
-  canvas you created is offered next time (paper sizes wait on physical units).
+  the box or picked a preset. Sizes obey the same limits as every canvas. The size and resolution
+  of the last canvas you created are offered next time (paper size presets are not offered yet).
+- **Units and print size:** File → New, **Image → Canvas Size…** and **Image → Image Size…**
+  show Width and Height in the unit chosen from the **Units** menu beside them: pixels, inches,
+  centimetres, millimetres, points (1/72 in) or picas (1/6 in), and in Canvas Size and Image
+  Size also percent of the current size. Print units convert through the **Resolution**, shown
+  in pixels per inch or per centimetre, so 210 × 297 mm at 300 ppi makes a 2480 × 3508 px (A4)
+  canvas. Pixels stay the source of truth: switching units never changes the size, sizes are
+  rounded to whole pixels, and the line under the fields shows the pixel size and megapixels
+  (and, in Image Size, the memory the pixels take). A size field also takes a value with a unit
+  typed after it, such as `10cm`, `4 in`, `210mm`, `12pt` or `50%`; a plain number is in the
+  menu's unit. Zero, negative and unreadable sizes and resolutions are refused and the field
+  keeps its value. In File → New, changing the resolution of a size in print units keeps its
+  print size, so the pixels change. **Image Size**'s **Resample** (on by default) does the same,
+  and **Keep aspect ratio** links Width to Height; with Resample off the pixels stay as they
+  are, Width and Height (in print units) set the print size by changing the resolution, and
+  only the resolution is saved, as one undo step. **Canvas Size**'s **Relative** makes Width
+  and Height an amount added to (or, negative, taken from) the current size. The units you
+  last chose are saved in the configuration file.
 - **Right-click** a tab for **Close Tab**, **Close Other Tabs**, **Close Tabs to the
   Right**, **Reopen Closed Tab**, **Copy Path** and **Show in Folder** (which selects the
   file in the file manager on Windows, macOS and Linux desktops that support it, and

@@ -1281,3 +1281,18 @@ Save the {} selected adjustment layers as a preset.	将所选的 {} 个调整图
 Replaces the preset of this name.	将替换同名预设。
 Save Preset	保存预设
 Save the selected adjustment layer as a preset.	将所选的调整图层保存为预设。
+Units	单位
+Pixels	像素
+Inches	英寸
+Centimetres	厘米
+Millimetres	毫米
+Points	点
+Picas	派卡
+Percent	百分比
+Pixels/inch	像素/英寸
+Pixels/cm	像素/厘米
+Resample	重新采样
+Off, the pixels stay as they are: Width, Height and Resolution change only the print size	关闭时像素保持不变：宽度、高度和分辨率只改变打印尺寸
+Relative	相对
+Width and Height are added to the current size	宽度和高度加到当前尺寸上
+MP	百万像素
