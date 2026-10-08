@@ -2327,3 +2327,50 @@ fn text_layers_are_set_along_paths_and_their_options_changed() {
         json!(["string", "null"])
     );
 }
+
+#[test]
+fn text_layers_take_letter_runs() {
+    let editor = FakeEditor::new(false);
+    let layer = "11111111-1111-1111-1111-111111111111";
+    let runs = json!([{"start": 0, "end": 3, "family": "Georgia", "color": "#ff0000"}]);
+    for (tool, arguments) in [
+        ("create_text_layer", json!({"text": "APPle", "runs": runs})),
+        // Some clients quote lists; the runs are read as JSON.
+        (
+            "create_text_layer",
+            json!({"text": "APPle", "runs": runs.to_string()}),
+        ),
+        (
+            "set_layer",
+            json!({"layer": layer, "text": "APPle pie", "runs": []}),
+        ),
+    ] {
+        let result = call_tool(&editor, tool, arguments.clone());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "{tool} {arguments}: {result:?}"
+        );
+    }
+    let edits: Vec<Value> = edit_requests(&editor)
+        .into_iter()
+        .map(|r| r["edits"].clone())
+        .collect();
+    assert_eq!(
+        edits[0],
+        json!([{"op": "add_text_layer", "text": "APPle", "runs": runs}])
+    );
+    assert_eq!(edits[1][0]["runs"], runs);
+    assert_eq!(
+        edits[2],
+        json!([{"op": "set_text", "layer": layer, "text": "APPle pie", "runs": []}])
+    );
+    let create = (tools::list().into_iter())
+        .find(|t| t.name == "create_text_layer")
+        .unwrap()
+        .input_schema;
+    assert_eq!(
+        create["properties"]["runs"]["items"]["required"],
+        json!(["start", "end"])
+    );
+}

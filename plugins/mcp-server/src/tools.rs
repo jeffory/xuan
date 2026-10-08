@@ -171,6 +171,27 @@ fn fill_rule() -> Value {
     json!({"type": "string", "enum": ["nonzero", "evenodd"],
            "description": "Which parts of the path are inside, as SVG's fill-rule (default nonzero); with evenodd an inner subpath always cuts a hole"})
 }
+/// Letters of a text layer with their own style, for create_text_layer and set_layer.
+fn text_runs() -> Value {
+    json!({
+        "type": "array",
+        "description": "Letters with their own font, colour, bold or italic: sorted, not overlapping. `start` and `end` count Unicode code points (not UTF-16 units) from the start of the text, `end` excluded; what a run leaves out is the layer's",
+        "items": {
+            "type": "object",
+            "properties": {
+                "start": {"type": "integer", "minimum": 0},
+                "end": {"type": "integer", "minimum": 1},
+                "family": {"type": "string", "description": "Font family name"},
+                "color": color("The letters' colour"),
+                "bold": {"type": "boolean"},
+                "italic": {"type": "boolean"},
+            },
+            "required": ["start", "end"],
+            "additionalProperties": false,
+        },
+    })
+}
+
 /// How text follows its path, for create_text_layer and set_layer.
 fn path_options() -> Value {
     json!({
@@ -358,7 +379,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text, `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "fill": number("0–1; pixel, text and shape layers only"),
@@ -366,6 +387,7 @@ fn specs() -> Vec<Spec> {
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
                 "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees"),
                 "text": {"type": "string", "description": "A text layer's new text"},
+                "runs": text_runs(),
                 "path": {"type": ["string", "null"], "description": "A text layer's path, SVG path data in document pixels; null puts the text back in a box"},
                 "path_options": path_options(),
             }),
@@ -389,11 +411,12 @@ fn specs() -> Vec<Spec> {
                         "height",
                         "rotation",
                         "text",
+                        "runs",
                         "path",
                         "path_options",
                     ],
                 )?;
-                let args = unquote(args, "path_options");
+                let args = unquote(unquote(args, "path_options"), "runs");
                 // Locks protect layers from the agent: it may lock, but only
                 // the user unlocks.
                 if args.get("locked") == Some(&json!(false)) {
@@ -421,7 +444,11 @@ fn specs() -> Vec<Spec> {
                     edits.push(Value::Object(set));
                 }
                 // Text and its path; `null` for the path puts the text back in a box.
-                let mut text = op("set_text", &args, &["layer", "text", "path_options"]);
+                let mut text = op(
+                    "set_text",
+                    &args,
+                    &["layer", "text", "runs", "path_options"],
+                );
                 if let Some(path) = args.get("path") {
                     if !(path.is_null() || path.is_string()) {
                         return Err("`path` must be SVG path data or null".into());
@@ -469,11 +496,12 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "create_text_layer",
             title: "Create a text layer",
-            description: "An editable text layer with its top-left corner at x, y; or, with `path` (SVG path data in document pixels, which also places it: give no x or y), text set along that path, each letter moved to its distance along it and turned to its direction. `path_options` sets where it starts, alignment, side, letter spacing, whether letters turn, and size and opacity ramps from the first letter to the last. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa.",
+            description: "An editable text layer with its top-left corner at x, y; or, with `path` (SVG path data in document pixels, which also places it: give no x or y), text set along that path, each letter moved to its distance along it and turned to its direction. `path_options` sets where it starts, alignment, side, letter spacing, whether letters turn, and size and opacity ramps from the first letter to the last. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa. `runs` gives letters their own font, colour, bold or italic, e.g. \"APPle\" with [{\"start\": 0, \"end\": 3, \"family\": \"Georgia\", \"color\": \"#ff0000\"}] for a red \"APP\" in Georgia.",
             properties: json!({
                 "text": {"type": "string"}, "x": number("Left"), "y": number("Top"), "family": {"type": "string"},
                 "size": number("Font size in pixels"), "color": color("Text colour"), "bold": {"type": "boolean"},
                 "italic": {"type": "boolean"}, "underline": {"type": "boolean"}, "strikethrough": {"type": "boolean"},
+                "runs": text_runs(),
                 "path": svg_path(TEXT_PATH), "path_options": path_options(),
                 "name": name(), "above": above(),
             }),
@@ -493,10 +521,11 @@ fn specs() -> Vec<Spec> {
                     "italic",
                     "underline",
                     "strikethrough",
+                    "runs",
                     "name",
                     "above",
                 ];
-                let args = unquote(pick(args, &keys)?, "path_options");
+                let args = unquote(unquote(pick(args, &keys)?, "path_options"), "runs");
                 let given = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
                 if given("path") {
                     if let Some(key) = ["x", "y"].into_iter().find(|k| given(k)) {
@@ -1868,13 +1897,13 @@ fn pick(args: Map<String, Value>, allowed: &[&str]) -> Result<Map<String, Value>
 }
 
 /// The arguments with `key` read as JSON when a client sent it as a string,
-/// as some send `"\"Invert\""` or an object in quotes.
+/// as some send `"\"Invert\""` or an object or list in quotes.
 fn unquote(mut args: Map<String, Value>, key: &str) -> Map<String, Value> {
     if let Some(Value::String(text)) = args.get(key) {
         let text = text.trim();
         let value = serde_json::from_str::<Value>(text)
             .ok()
-            .filter(|value| value.is_string() || value.is_object())
+            .filter(|value| value.is_string() || value.is_object() || value.is_array())
             .unwrap_or_else(|| json!(text));
         args.insert(key.into(), value);
     }

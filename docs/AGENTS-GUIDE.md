@@ -199,7 +199,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer) | `layer/export` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
-| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation; a text layer's `text`, `path` and `path_options` | `set`, `set_text`, `transform` |
+| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation; a text layer's `text`, `runs`, `path` and `path_options` | `set`, `set_text`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
 | `create_text_layer` | Editable text in a box, or with `path` along an SVG path | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
@@ -293,6 +293,22 @@ another curve (`null` puts it back in a box), `path_options` for any of the
 options (the others are kept). Moving, scaling or rotating the layer takes
 the path along; `get_document` reports the layer's `text`, with its `path`
 where it is now and its `path_options`.
+
+### Letters in their own font or colour
+
+One text layer can mix fonts and colours: `runs` on `create_text_layer` (and
+`set_layer`) lists letters with their own `family`, `color`, `bold` or
+`italic`. `start` and `end` count Unicode code points from the start of the
+text, `end` excluded:
+
+```json
+{"tool": "create_text_layer", "arguments": {"text": "APPle", "color": "#000000",
+  "runs": [{"start": 0, "end": 3, "family": "Georgia", "color": "#ff0000"}]}}
+```
+
+New `text` from `set_layer` keeps each unchanged letter's style; `runs: []`
+puts every letter back in the layer's own style. `get_document` lists a text
+layer's `runs`.
 
 ### Layers, masks and the active layer
 

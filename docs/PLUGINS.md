@@ -1164,17 +1164,23 @@ Layers and their properties:
   "name"?, "above"?}`: an empty pixel layer, or a mask layer made from the
   selection (all white without one), the size of the canvas.
 - `{"op": "add_text_layer", "text", "x"?, "y"?, "family"?, "size"?, "color"?,
-  "bold"?, "italic"?, "underline"?, "strikethrough"?, "name"?, "above"?}`: an
-  editable text layer with its top-left corner at `x`, `y`. `size` is in pixels
-  (1–1024, default 48), the text at most 16 KiB; an unknown `family` falls back
-  to Xuan's bundled font.
+  "bold"?, "italic"?, "underline"?, "strikethrough"?, "runs"?, "name"?,
+  "above"?}`: an editable text layer with its top-left corner at `x`, `y`.
+  `size` is in pixels (1–1024, default 48), the text at most 16 KiB; an unknown
+  `family` falls back to Xuan's bundled font. `runs` gives letters their own
+  font, colour, bold or italic; see [Text style runs](#text-style-runs).
 - `{"op": "add_text_layer", "text", "path", "path_options"?, …}`: text set
   along `path`, [SVG path data](#svg-path-data) in document coordinates, which
   also places the layer (give no `x` or `y`); the other fields are as above.
   See [Text on a path](#text-on-a-path).
 - `{"op": "set_text", "layer", "text"?, "family"?, "size"?, "color"?, "bold"?,
-  "italic"?, "underline"?, "strikethrough"?, "path"?: d | null,
-  "path_options"?}`: change a text layer, keeping what is left out. `path`
+  "italic"?, "underline"?, "strikethrough"?, "runs"?, "path"?: d | null,
+  "path_options"?}`: change a text layer, keeping what is left out. New `text`
+  keeps each unchanged letter's own style (letters typed in take the style of
+  the letter before them). `family`, `color`, `bold` and `italic` are the whole
+  layer's, as in the Text window with nothing selected: every letter takes them,
+  and runs stop changing them. `runs`, applied after those, replaces the
+  letters' styles (`[]` clears them). `path`
   (document coordinates) sets the text along a path, `null` returns it to a
   box at the layer's top-left corner, and `path_options` changes how it
   follows the path, keeping the options it leaves out. The layer must not be
@@ -1378,8 +1384,30 @@ first, a line height further from the path each.
 | `size_end` | none | Font size of the last letter (1–1024), ramping from `size` at the first; the letters close up as they shrink |
 | `opacity_start`, `opacity_end` | `1` | Opacity of the first and last letter (0–1), blending between them and multiplying the colour's alpha |
 
+### Text style runs
+
+A text layer's `runs` are letters drawn with another font family, colour,
+weight or slant than the layer's own (saved in `.xuan` format 17):
+
+```json
+{"op": "add_text_layer", "text": "APPle", "color": "#000000", "runs": [
+  {"start": 0, "end": 3, "family": "Georgia", "color": "#ff0000"}]}
+```
+
+draws "APP" red in Georgia and "le" black in the layer's font. Each run has
+`start` and `end` (excluded), counted in Unicode code points from the start of
+the text, not UTF-16 units: in JavaScript, index `[...text]`, not `text`.
+`family`, `color` (`#rrggbb` or `#rrggbbaa`), `bold` and `italic` are each
+optional; what a run leaves out is the layer's. Size, underline and
+strikethrough belong to the whole layer. Runs must be sorted, not overlap, not
+be empty and end inside the text, at most 4,096 of them, or the edit fails;
+unknown keys fail too. Runs that change nothing are dropped and neighbours that
+change the same things merged, so a description may list fewer runs than were
+sent. Text on a path keeps each letter's style.
+
 A text layer's description has `text`: `{text, family, size, color, bold,
-italic, underline, strikethrough}`, and for text on a path also `path` (where
+italic, underline, strikethrough, runs}` (`runs` as above, `[]` without any),
+and for text on a path also `path` (where
 the path is now, in document coordinates; `null` once the layer is warped),
 `path_options`, and `local_path` and `local_size`, the path as stored in the
 layer's own box. Other layers have `text: null`.

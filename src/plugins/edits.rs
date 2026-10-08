@@ -18,7 +18,7 @@ use crate::{
     effects::Filter,
     paint::ShapeKind,
     selection::SelectionMode,
-    text::{PathTextOptions, TextPath, TextRenderer, TextStyle},
+    text::{PathTextOptions, RunStyle, TextPath, TextRenderer, TextRun, TextStyle},
     vector::{FillRule, VectorPath},
 };
 
@@ -106,6 +106,7 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
             "italic": style.italic,
             "underline": style.underline,
             "strikethrough": style.strikethrough,
+            "runs": style.runs.iter().map(TextRunSpec::from).collect::<Vec<_>>(),
         });
         if let Some(path) = &style.path {
             // As for path shapes: where the path is now, in document coordinates (null once
@@ -1008,6 +1009,9 @@ pub enum Edit {
         underline: bool,
         #[serde(default)]
         strikethrough: bool,
+        /// Letters with their own font, colour, weight or slant.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        runs: Vec<TextRunSpec>,
         #[serde(default)]
         name: Option<String>,
         #[serde(default)]
@@ -1016,6 +1020,8 @@ pub enum Edit {
     /// Change a text layer's text and style. `path` (SVG path data in document coordinates)
     /// sets the text along a path, and `null` returns it to a box; `path_options` changes how
     /// it follows the path, keeping the options it leaves out. Left out, nothing changes.
+    /// New text keeps each unchanged letter's style; a family, colour, bold or italic is the
+    /// whole layer's and replaces the letters' own; `runs` then replaces the letters' styles.
     SetText {
         layer: Uuid,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1034,6 +1040,8 @@ pub enum Edit {
         underline: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         strikethrough: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        runs: Option<Vec<TextRunSpec>>,
         #[serde(
             default,
             deserialize_with = "nullable",
@@ -1115,6 +1123,57 @@ pub enum Edit {
 pub struct GradientStop {
     pub position: f32,
     pub color: Color,
+}
+
+/// A text style run as plugins give and read it ([`TextRun`]): letters `start..end`, counted
+/// in Unicode scalar values from the start of the text, with what they change.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextRunSpec {
+    pub start: usize,
+    pub end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+}
+
+impl From<&TextRun> for TextRunSpec {
+    fn from(run: &TextRun) -> Self {
+        Self {
+            start: run.start,
+            end: run.end,
+            family: run.style.family.clone(),
+            color: run.style.color.map(Color),
+            bold: run.style.bold,
+            italic: run.style.italic,
+        }
+    }
+}
+
+/// Replace `style`'s runs with `runs`, which must be sorted, not overlap and lie inside the
+/// text; runs that change nothing are dropped and matching neighbours merged.
+fn set_runs(style: &mut TextStyle, runs: &[TextRunSpec]) -> Result<()> {
+    style.runs = runs
+        .iter()
+        .map(|run| TextRun {
+            start: run.start,
+            end: run.end,
+            style: RunStyle {
+                family: run.family.clone(),
+                color: run.color.map(|c| c.0),
+                bold: run.bold,
+                italic: run.italic,
+            },
+        })
+        .collect();
+    style.validate()?;
+    style.normalize_runs();
+    Ok(())
 }
 
 /// Most colour stops one gradient may have.
@@ -2440,12 +2499,13 @@ fn apply_each(
                 italic,
                 underline,
                 strikethrough,
+                runs,
                 name,
                 above,
             } => {
                 reader.add_layer()?;
                 let defaults = TextStyle::default();
-                let style = TextStyle {
+                let mut style = TextStyle {
                     content: text.clone(),
                     family: family.clone().unwrap_or(defaults.family),
                     size: size.unwrap_or(defaults.size),
@@ -2457,6 +2517,7 @@ fn apply_each(
                     path: None,
                     runs: Vec::new(),
                 };
+                set_runs(&mut style, runs)?;
                 style.validate()?;
                 ensure!(!text.trim().is_empty(), "The text is empty");
                 let renderer = reader.text.get_or_insert_with(TextRenderer::default);
@@ -2499,6 +2560,7 @@ fn apply_each(
                 italic,
                 underline,
                 strikethrough,
+                runs,
                 path,
                 path_options,
             } => {
@@ -2510,20 +2572,27 @@ fn apply_each(
                     .with_context(|| format!("Layer {} is not a text layer", target.name))?;
                 if let Some(text) = text {
                     ensure!(!text.trim().is_empty(), "The text is empty");
-                    style.content = text.clone();
-                }
-                if let Some(family) = family {
-                    style.family = family.clone();
+                    ensure!(
+                        text.len() <= crate::text::MAX_TEXT_BYTES,
+                        "Text is limited to 16 KiB"
+                    );
+                    style.replace_content(text.clone());
                 }
                 if let Some(size) = size {
                     style.size = *size;
                 }
-                if let Some(color) = color {
-                    style.color = color.0;
+                // As in the Text window with nothing selected: the layer's own font and
+                // colour, which every letter then takes.
+                style.set_style_all(&RunStyle {
+                    family: family.clone(),
+                    color: color.map(|c| c.0),
+                    bold: *bold,
+                    italic: *italic,
+                });
+                if let Some(runs) = runs {
+                    set_runs(&mut style, runs)?;
                 }
                 for (value, field) in [
-                    (bold, &mut style.bold),
-                    (italic, &mut style.italic),
                     (underline, &mut style.underline),
                     (strikethrough, &mut style.strikethrough),
                 ] {
@@ -4258,6 +4327,100 @@ mod tests {
                 run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
                 "{bad}"
             );
+        }
+    }
+
+    #[test]
+    fn text_runs_are_set_kept_and_described() {
+        let (mut document, _) = grey_document();
+        let added = run(
+            &mut document,
+            &[edit(
+                json!({"op": "add_text_layer", "text": "APPle", "runs": [
+                    {"start": 0, "end": 3, "family": "Menlo", "color": "#ff0000"}
+                ]}),
+            )],
+        )
+        .unwrap()[0];
+        let style = |document: &Document| {
+            let layer = document.layers.iter().find(|l| l.id == added).unwrap();
+            layer.text.clone().unwrap()
+        };
+        let menlo_red = RunStyle {
+            family: Some("Menlo".into()),
+            color: Some([255, 0, 0, 255]),
+            ..Default::default()
+        };
+        assert_eq!(
+            style(&document).runs,
+            vec![TextRun {
+                start: 0,
+                end: 3,
+                style: menlo_red.clone()
+            }]
+        );
+        let layer = document.layers.iter().find(|l| l.id == added).unwrap();
+        assert_eq!(
+            describe_layer(&document, layer)["text"]["runs"],
+            json!([{"start": 0, "end": 3, "family": "Menlo", "color": "#ff0000ff"}])
+        );
+        // New text keeps each letter's style.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "set_text", "layer": added, "text": "APPle pie"}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(style(&document).runs[0].end, 3);
+        // The layer's colour recolours every letter but keeps their fonts.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "set_text", "layer": added, "color": "#0000ff"}),
+            )],
+        )
+        .unwrap();
+        let text = style(&document);
+        assert_eq!(text.color, [0, 0, 255, 255]);
+        assert_eq!(text.runs.len(), 1);
+        assert_eq!(text.runs[0].style.color, None);
+        assert_eq!(text.runs[0].style.family.as_deref(), Some("Menlo"));
+        // Runs replace the letters' styles; an empty list clears them.
+        run(
+            &mut document,
+            &[edit(json!({"op": "set_text", "layer": added, "runs": [
+                {"start": 6, "end": 9, "bold": true, "italic": true}
+            ]}))],
+        )
+        .unwrap();
+        assert_eq!(style(&document).runs.len(), 1);
+        assert_eq!(style(&document).runs[0].start, 6);
+        run(
+            &mut document,
+            &[edit(json!({"op": "set_text", "layer": added, "runs": []}))],
+        )
+        .unwrap();
+        assert!(style(&document).runs.is_empty());
+        for bad in [
+            json!([{"start": 0, "end": 99, "bold": true}]),
+            json!([{"start": 2, "end": 2, "bold": true}]),
+            json!([{"start": 0, "end": 3, "bold": true}, {"start": 1, "end": 4, "italic": true}]),
+            json!([{"start": 0, "end": 3, "color": "red"}]),
+            json!([{"start": 0, "end": 3, "family": ""}]),
+            json!([{"start": 0, "end": 3, "size": 12}]),
+            json!([{"start": -1, "end": 3, "bold": true}]),
+        ] {
+            for op in [
+                json!({"op": "set_text", "layer": added, "runs": bad}),
+                json!({"op": "add_text_layer", "text": "APPle pie", "runs": bad}),
+            ] {
+                let parsed = serde_json::from_value::<Edit>(op.clone());
+                assert!(
+                    parsed.is_err() || run(&mut document.clone(), &[parsed.unwrap()]).is_err(),
+                    "{op}"
+                );
+            }
         }
     }
 
