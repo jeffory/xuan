@@ -47,15 +47,33 @@ fn ctrl_k_opens_it_with_the_filter_focused_and_toggles_it_closed() {
     let (_directory, mut ui) = open();
     assert!(is_open(&ui));
     assert!(filter_has_focus(&ui));
-    // Rows show the label and category.
-    assert!(ui.has("Undo, Edit"));
+    // Rows under the Edit header show the label alone.
+    assert!(ui.has("Undo"));
     // Ctrl+K closes it even though the filter has focus, and opens it again.
     ui.press(Modifiers::CTRL, Key::K);
     assert!(!is_open(&ui));
-    assert!(!ui.has("Undo, Edit"));
+    assert!(!ui.has_role(Role::Button, "Undo"));
     ui.press(Modifiers::CTRL, Key::K);
     assert!(is_open(&ui));
     assert!(filter_has_focus(&ui));
+}
+
+/// Under a category's header a row does not repeat the category ("New Canvas…  File" under
+/// "File"); Recent rows, which mix categories, still name theirs (issue 91).
+#[test]
+fn rows_under_a_category_header_leave_the_category_out() {
+    let (_directory, mut ui) = open();
+    ui.app_mut().config.recent_commands = vec!["undo".into()];
+    ui.press(Modifiers::CTRL, Key::K);
+    ui.press(Modifiers::CTRL, Key::K);
+    assert!(is_open(&ui));
+    assert!(ui.has("Recent"));
+    // The File header, beside the File menu.
+    assert!(ui.harness.query_all_by_label("File").count() >= 2);
+    assert!(ui.has("New Canvas…") && !ui.has("New Canvas…, File"));
+    // Undo moves to Recent, which names its category; Redo stays under Edit, which does not.
+    assert!(ui.has("Undo, Edit") && !ui.has("Undo"));
+    assert!(ui.has("Redo") && !ui.has("Redo, Edit"));
 }
 
 #[test]
@@ -69,10 +87,11 @@ fn it_opens_from_the_help_menu() {
 #[test]
 fn typing_filters_the_list() {
     let (_directory, mut ui) = open();
-    assert!(ui.has("Swap Colours, Tools") && ui.has("Open…, File"));
+    assert!(ui.has("Swap Colours") && ui.has("Open…"));
     ui.type_keys("swap");
+    // Search results have no headers: each names its category.
     assert!(ui.has("Swap Colours, Tools"));
-    assert!(!ui.has("Open…, File"));
+    assert!(!ui.has("Open…") && !ui.has("Open…, File"));
     assert_eq!(listed(&ui).first().map(String::as_str), Some("swap_colors"));
     ui.type_keys("zzzz");
     assert!(ui.has("No matching commands"));
@@ -220,7 +239,7 @@ fn the_toggle_is_rebindable() {
     let chord = Modifiers::CTRL | Modifiers::SHIFT;
     ui.press(chord, Key::P);
     assert!(is_open(&ui));
-    assert!(ui.has("Command Palette…, Help"));
+    assert!(ui.has("Command Palette…"));
     ui.press(chord, Key::P);
     assert!(!is_open(&ui));
 }

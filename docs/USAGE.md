@@ -219,7 +219,7 @@ Press **Ctrl+K** (or choose **Help → Command Palette…**) to search every com
 
 - **Matching** is fuzzy: the letters you type must appear in order, and word starts and consecutive letters rank higher. It looks at the command's name (the matched letters are highlighted), its category, other names such as “hsl” for Hue / Saturation, and its identifier. Several words must all match, so “layer new” works. With the interface in Chinese, the translated names and the English names and aliases both work.
 - **Order:** better matches first, then the commands you used most recently. With an empty filter the commands you ran lately come first, followed by everything grouped by category.
-- **Each row** shows the name, the category in grey and the shortcut now in effect on the right, so the palette also teaches the shortcuts.
+- **Each row** shows the name and the shortcut now in effect on the right, so the palette also teaches the shortcuts. Rows under Recent and search results also show their category in grey; under a category's own header it is left out.
 - **Keys:** **↑** / **↓** and **Page Up** / **Page Down** move the selection, **Enter** runs it and closes the palette. Hovering highlights a row and clicking runs it.
 - **Unavailable commands** (no document open, a job running, or a command of the other workspace) are greyed out and cannot run. In RAW Develop the palette lists the Develop commands and the ones that still apply.
 - The palette does not open over a dialog or while a text field has focus. The last 10 commands run from it are saved with your settings (`recent_commands`). Rebind Ctrl+K under **Settings → Keyboard Shortcuts**.
