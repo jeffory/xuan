@@ -752,6 +752,14 @@ Shapes saved without pixels that Xuan can't draw (left out)	未保存像素且 X
 Smart objects (imported as pixels)	智能对象（以像素导入）
 Fill layers (imported as pixels)	填充图层（以像素导入）
 Layers cropped to the canvas to fit the memory limit	为符合内存限制而裁切到画布的图层
+Artboards (each opened as its own document)	画板（各自作为单独的文档打开）
+Artboards (each imported as a folder)	画板（各自作为文件夹导入）
+Layers outside every artboard (left out)	不在任何画板内的图层（已省略）
+Artboards too large for the memory limit (left out)	超出内存限制的画板（已省略）
+Layers cropped to their artboard	裁切到所在画板的图层
+Artboard background colours (added as a layer)	画板背景色（已添加为图层）
+Artboard backgrounds Xuan can't read (left out)	Xuan 无法读取的画板背景（已省略）
+Artboard Background	画板背景
 Clipping masks on folders or left-out layers	文件夹或已省略图层上的剪贴蒙版
 Photoshop files are limited to {} on this computer	在这台电脑上，Photoshop 文件不能超过 {}
 The Photoshop file is damaged or incomplete	Photoshop 文件已损坏或不完整

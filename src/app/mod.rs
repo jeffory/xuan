@@ -298,6 +298,20 @@ impl Session {
         }
     }
 
+    /// A new, empty document nobody has edited or saved, whose tab an opened file may take.
+    fn is_untouched(&self) -> bool {
+        self.path.is_none()
+            && self.source.is_none()
+            && self.external.is_none()
+            && !self.history.dirty()
+            && self.history.undo_name().is_none()
+            && self
+                .document
+                .layers
+                .iter()
+                .all(|layer| layer.pixels.is_none() && layer.mask.is_none() && !layer.is_effect())
+    }
+
     fn invalidate(&mut self) {
         self.dirty_preview = true;
         self.sample_cache = None;

@@ -63,6 +63,20 @@ The file is read in memory: the header, color mode data (skipped), image resourc
 
 Before anything is applied, the app shows what will change (the same `ImportReport` as `.comp` imports, counted per kind); Cancel leaves everything as it was. Files Xuan represents completely open without asking. Imported as a layer, a file's layers arrive in a folder named after it, centered on the canvas.
 
+### Artboards
+
+As in upstream Compositor (its issue #65), a file with artboards opens as one document per artboard, in the Layers panel's order (top first). An artboard is a top-level folder whose `artb` block (or `artd`/`abdd`, the last one with a rectangle winning, as in psd-tools) holds a version-16 descriptor with `artboardRect` (`Top `, `Left`, `Btom`, `Rght`, in canvas pixels) and `artboardBackgroundType`; a folder with an empty or missing rectangle is an ordinary folder. Each document:
+
+- is named after the artboard and has the artboard's size;
+- holds the artboard's layers and folders (the artboard's own folder is the document itself), placed relative to the artboard's top-left corner and cropped to it, as the artboard shows them; each cropped layer is counted in the report. Only the part of a layer inside the artboard is decoded and counted against the pixel budget, so a background spanning a canvas too large to open does not stop its artboards opening;
+- gets the artboard's background as a pixel layer named Artboard Background at the bottom: type 1 white, 2 black, 4 the `Clr ` RGB color (the values Photoshop writes, as in ag-psd's test files); 3 is transparent and adds nothing. Another type, or a custom color that cannot be read, is left out and reported.
+
+Layers and folders outside every artboard are left out, and listed by name in the report. Each artboard is checked against the pixel budget on its own, background included; one that does not fit, even cropped, or that is larger than a Xuan document may be, is skipped and listed by name. A file none of whose artboards fit is refused. The report also lists the artboards opened. The first artboard takes the tab of an untouched new document when that is the only one open; the others open in new tabs.
+
+Imported as a layer, each artboard becomes a folder named after it, with the same layers, cropping and background, inside the folder named after the file. The artboards keep their layout on the Photoshop canvas, and the smallest area holding them all is centered on the document. Here the artboards share the budget of what the document has left, in the Layers panel's order; those that no longer fit are skipped by name.
+
+A file without artboards opens exactly as before. `io::load_with_report` (and `psd::read`) still read the whole canvas as one document, with artboards as plain folders.
+
 The file is untrusted input. Every read is bounds checked, and every section, record, block and channel length is checked against the bytes that remain before it is used, so truncated files are rejected wherever they end (only the merged image may be missing when layers exist). Nothing is allocated from a declared size before it has been checked: raw channels must hold `width × height` bytes, PackBits row tables are read and summed against the data (each row needs at least two bytes per 128 pixels) before a plane is allocated, and ZIP channels inflate row by row. Limits:
 
 - Files up to a quarter of the computer's memory, and at least 1 GiB; canvases up to 30,000 pixels per side for `.psd` (Photoshop's rule) and 65,535 for `.psb`, within the image limit of the [size limits](USAGE.md#size-limits).
