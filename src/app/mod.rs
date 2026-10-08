@@ -1131,8 +1131,8 @@ impl EditorApp {
                 document
             })
         } else {
-            io::import_image(path)
-                .and_then(|image| {
+            io::import_image_with_resolution(path)
+                .and_then(|(image, resolution)| {
                     if as_layer && !self.sessions.is_empty() {
                         let name = path
                             .file_stem()
@@ -1149,6 +1149,9 @@ impl EditorApp {
                         return Ok(None);
                     }
                     let mut document = Document::new(image.width(), image.height())?;
+                    if let Some(resolution) = resolution {
+                        document.resolution = resolution;
+                    }
                     let layer = Layer::image(
                         path.file_stem().unwrap_or_default().to_string_lossy(),
                         image,

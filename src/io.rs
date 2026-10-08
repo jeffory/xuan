@@ -33,6 +33,7 @@ mod compositor;
 mod heif;
 pub mod ora;
 pub mod psd;
+pub mod resolution;
 pub mod svg;
 
 pub use compositor::{Dropped, ImportReport, ImportSource};
@@ -98,8 +99,14 @@ fn reserve_pixels(width: u32, height: u32, used: &mut u64) -> Result<()> {
 }
 
 pub fn import_image(path: &Path) -> Result<RgbaImage> {
+    import_image_with_resolution(path).map(|(image, _)| image)
+}
+
+/// [`import_image`], with the print resolution the file states, in pixels per inch, when it
+/// states a usable one (see [`resolution::read`]). SVG and HEIC give none.
+pub fn import_image_with_resolution(path: &Path) -> Result<(RgbaImage, Option<f32>)> {
     if is_svg(path) {
-        return Ok(svg::load(path, svg::SvgSize::Natural)?.image);
+        return Ok((svg::load(path, svg::SvgSize::Natural)?.image, None));
     }
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
     // Opening a FIFO or device could block forever.
@@ -126,9 +133,10 @@ pub fn import_image(path: &Path) -> Result<RgbaImage> {
         .unwrap_or("")
         .to_ascii_lowercase();
     if matches!(extension.as_str(), "heic" | "heif" | "hif") {
-        return heif::decode(&bytes, &mut 0);
+        return Ok((heif::decode(&bytes, &mut 0)?, None));
     }
-    Ok(decode_image(bytes, &mut 0)?.to_rgba8())
+    let resolution = resolution::read(&bytes);
+    Ok((decode_image(bytes, &mut 0)?.to_rgba8(), resolution))
 }
 
 /// Persist a complete sibling temporary file, then atomically replace the destination.
@@ -577,9 +585,7 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
             }));
             encoder.write_header()?.write_image_data(image.as_raw())?;
         }
-        "tif" | "tiff" => {
-            DynamicImage::ImageRgba8(image).write_to(temporary.as_file_mut(), ImageFormat::Tiff)?
-        }
+        "tif" | "tiff" => write_tiff(temporary.as_file_mut(), &image, document.resolution)?,
         "webp" => temporary.write_all(&encode_webp(
             &image,
             options.webp_lossless,
@@ -589,6 +595,31 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
     }
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// An uncompressed RGBA TIFF, as `image` writes one, stating `ppi` as its resolution in pixels
+/// per inch (to a hundredth).
+fn write_tiff(file: &mut File, image: &RgbaImage, ppi: f32) -> Result<()> {
+    use tiff::{
+        encoder::{Rational, TiffEncoder, colortype::RGBA8},
+        tags::{ResolutionUnit, Tag},
+    };
+    let mut encoder = TiffEncoder::new(std::io::BufWriter::new(file))?;
+    let mut tiff = encoder.new_image::<RGBA8>(image.width(), image.height())?;
+    let ppi = f64::from(ppi).clamp(
+        f64::from(crate::units::MIN_RESOLUTION),
+        f64::from(crate::units::MAX_RESOLUTION),
+    );
+    let resolution = Rational {
+        n: (ppi * 100.0).round() as u32,
+        d: 100,
+    };
+    let directory = tiff.encoder();
+    directory.write_tag(Tag::ResolutionUnit, ResolutionUnit::Inch)?;
+    directory.write_tag(Tag::XResolution, resolution.clone())?;
+    directory.write_tag(Tag::YResolution, resolution)?;
+    tiff.write_data(image.as_raw())?;
     Ok(())
 }
 
@@ -652,6 +683,31 @@ mod tests {
         let density = reader.info().pixel_dims.unwrap();
         assert_eq!(density.xppu, 11811);
         assert_eq!(density.unit, png::Unit::Meter);
+        // Opening each export again gives the document's resolution back; WebP states none.
+        for (extension, expected) in [
+            ("png", Some(300.0)),
+            ("jpg", Some(300.0)),
+            ("tiff", Some(300.0)),
+            ("webp", None),
+        ] {
+            let path = temporary.path().join(format!("image.{extension}"));
+            let (_, resolution) = import_image_with_resolution(&path).unwrap();
+            assert_eq!(resolution, expected, "{extension}");
+        }
+    }
+
+    #[test]
+    fn tiff_exports_keep_fractional_and_extreme_resolutions() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut doc = Document::new(3, 2).unwrap();
+        for ppi in [1.0, 72.0, 150.0, 299.5, 9600.0] {
+            doc.resolution = ppi;
+            let path = temporary.path().join("image.tif");
+            export(&doc, &path, &ExportOptions::default()).unwrap();
+            let (image, resolution) = import_image_with_resolution(&path).unwrap();
+            assert_eq!(image.dimensions(), (3, 2));
+            assert_eq!(resolution, Some(ppi));
+        }
     }
 
     #[test]

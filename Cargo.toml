@@ -24,6 +24,8 @@ kurbo = { version = "0.11.3", default-features = false, features = ["std"] }
 # FSEvents. CC0-1.0. Only the FSEvents backend of the default features, so macOS does not poll.
 notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }
 png = "0.18"
+# TIFF export with its print resolution (src/io.rs). The version `image` already uses.
+tiff = { version = "0.11.3", default-features = false }
 # Model downloads (src/plugins/models.rs): a small blocking HTTPS client on
 # rustls with ring, so no OpenSSL; certificates are checked against the
 # system's trust store.
