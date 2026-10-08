@@ -709,6 +709,9 @@ impl SliderTrack {
     }
 }
 
+/// How strongly the selected segment is tinted with the accent.
+pub const SEGMENT_TINT: f32 = 0.18;
+
 pub fn segmented<T: Copy + PartialEq>(
     ui: &mut Ui,
     value: &mut T,
@@ -776,6 +779,16 @@ pub fn segmented<T: Copy + PartialEq>(
                     },
                     4.0,
                     false,
+                );
+                // On the light track the raised bezel alone is faint: tint it with the
+                // accent, and outline it in the accent, which reaches 3:1 on the track.
+                let face = rect.shrink(1.0);
+                painter.rect_filled(face, 4.0, p.accent.gamma_multiply(SEGMENT_TINT));
+                painter.rect_stroke(
+                    face,
+                    4.0,
+                    Stroke::new(1.0_f32, p.accent),
+                    StrokeKind::Inside,
                 );
             } else if index > 0 {
                 painter.line_segment(
