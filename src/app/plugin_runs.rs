@@ -827,6 +827,16 @@ impl EditorApp {
             let run = match self.plugin_run(&caller, &request) {
                 Ok(run) => run,
                 Err(error) => {
+                    // Its prompt goes too, so no answer is given about it.
+                    let asking = (self.plugins.run_prompt.as_ref()).is_some_and(|prompt| {
+                        prompt.caller == caller && prompt.request == request.id
+                    });
+                    if asking {
+                        self.plugins.run_prompt = None;
+                        if self.dialog == Some(Dialog::PluginRun) {
+                            self.dialog = None;
+                        }
+                    }
                     self.respond_to_plugin(&caller, request.id, Err(error));
                     continue;
                 }

@@ -6965,4 +6965,35 @@ done
         );
         app.stop_plugin("mock");
     }
+
+    #[test]
+    fn a_waiting_run_is_refused_once_the_setting_is_turned_off() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_caller_and_target(&mut app, dir.path(), other.path(), false);
+        start_caller(&context, &mut app);
+        app.set_run_other_actions("mock", true);
+        let run = run_request(1101, "target/echo", json!({}));
+        assert!(app.hold_plugin_run("mock", run).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginRun)
+        });
+        app.set_run_other_actions("mock", false);
+        run_until(&context, &mut app, |_| answer(dir.path(), 1101).is_some());
+        let message = answer(dir.path(), 1101).unwrap()["error"]["message"].clone();
+        assert!(
+            message
+                .as_str()
+                .unwrap()
+                .contains("Run other plugins' actions"),
+            "{message}"
+        );
+        // Its prompt went with it: nothing is left to answer.
+        assert!(app.plugins.run_prompt.is_none() && app.plugins.run_held.is_empty());
+        assert_eq!(app.dialog, None);
+        assert!(app.plugins.jobs.is_empty());
+        app.stop_plugin("mock");
+    }
 }
