@@ -126,11 +126,15 @@ enum Kind {
     Edit,
     /// Goes through the user: a save dialog or an open prompt.
     File,
+    /// Runs another plugin's action: the first run of each plugin in a
+    /// session asks the user, and that plugin's own prompts apply.
+    Run,
 }
 
 /// Said in the description of every tool that may wait for the user.
 const EDIT_WAITS: &str = "The first edit of a session waits until the user answers Xuan's prompt to allow edits from this session. If they do not answer in time, the call fails without changing anything: then ask the user to answer the prompt in Xuan instead of retrying.";
 const FILE_WAITS: &str = "The call waits until the user answers in Xuan. If they do not answer in time, it fails without doing anything: then ask the user instead of retrying.";
+const RUN_WAITS: &str = "The first run of each plugin in a session waits until the user answers Xuan's prompt to allow it, and a plugin that uses the network also asks before the image is sent. If they do not answer in time, the call fails without running anything: then ask the user instead of retrying.";
 
 const LAYER: &str = "A layer id from get_document";
 const MODE: &str = "How it combines with the current selection";
@@ -345,7 +349,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_edit_permission",
             title: "Check edit permission",
-            description: "Whether this session may edit: \"allowed\", \"denied\" or \"ask\" (the next edit asks the user in Xuan), and whether the user turned on auto mode.",
+            description: "Whether this session may edit: \"allowed\", \"denied\" or \"ask\" (the next edit asks the user in Xuan), whether the user turned on auto mode, and whether the user lets this server run other plugins' actions (`run_actions`) and without asking (`run_auto`).",
             properties: json!({}),
             required: &[],
             kind: Kind::Read,
@@ -1205,7 +1209,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1224,6 +1228,43 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             required: &["steps"],
             kind: Kind::Edit,
             run: Action::Run(batch),
+        },
+        // Other plugins' actions.
+        Spec {
+            name: "list_plugin_actions",
+            title: "List plugin actions",
+            description: "The actions of the other plugins installed in Xuan that run_plugin_action can start, such as generating or editing images with a cloud service: for each, `plugin` and `action` (the ids to pass), its label and description, `kind` (generate, edit or command), what it sends (`source`: the active layer, the flattened image, the selection or nothing), where its result goes (`result`; with \"ask\", run_plugin_action needs `into`), whether the plugin uses the `network` (it may send the image to a third party and cost money), whether the user has `allowed` the plugin and whether it is `available` (offline mode stops network plugins), and `inputs`, a JSON schema of the inputs to pass. Inputs that are files the user chooses are left out: they cannot be set. `plugin` keeps one plugin's actions. Needs the user to turn on \"Run other plugins' actions\" for the MCP Server in Xuan (Plugins → Manage Plugins…).",
+            properties: json!({"plugin": {"type": "string", "description": "Only this plugin's actions"}}),
+            required: &[],
+            kind: Kind::Read,
+            run: Action::Run(list_plugin_actions),
+        },
+        Spec {
+            name: "run_plugin_action",
+            title: "Run a plugin action",
+            description: "Run another plugin's action as its menu item would, without its dialog: `plugin` and `action` from list_plugin_actions, `inputs` as its schema says (left out, they take their defaults), `into` (\"layer\": a new layer in the current document, or \"document\": a new document) for actions whose result is \"ask\", and `layers` to select first, the last one active, for actions that work on the active layer. Xuan asks the user before the first run of each plugin in a session, and the plugin's own prompts apply too: its permission, sending the image to a plugin that uses the network, model downloads. The call returns as soon as the job runs, with its `job` id; the job itself can take minutes, and other edits keep working meanwhile. Follow it with get_jobs. When it finishes, its result is shown to the user as a proposal to accept or discard; it is in the document only once accepted. Needs the user to turn on \"Run other plugins' actions\" for the MCP Server in Xuan.",
+            properties: json!({
+                "plugin": {"type": "string", "description": "A plugin id from list_plugin_actions"},
+                "action": {"type": "string", "description": "The action's id from list_plugin_actions"},
+                "inputs": {"type": "object", "description": "The action's inputs, as list_plugin_actions describes them"},
+                "into": {"type": "string", "enum": ["layer", "document"], "description": "Where the result goes, for actions whose result is \"ask\""},
+                "layers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Layer ids to select first, the last one active (default: the layers selected now)"},
+            }),
+            required: &["plugin", "action"],
+            kind: Kind::Run,
+            run: Action::Run(run_plugin_action),
+        },
+        Spec {
+            name: "get_jobs",
+            title: "Follow jobs",
+            description: "What Xuan's status bar shows, to wait for a job without guessing: `running`, the running jobs (plugin actions, imports, exports, model downloads) with their progress (0–1, or null before the plugin reports any), latest message and the plugin that `started_by` them, and `status_bar`, the bar's text with its count such as \"1 of 2\"; `results_waiting`, finished results waiting for the editor; `proposal`, the result the user is asked to accept or discard now; and `finished`, what became of the jobs run_plugin_action started, newest first: waiting (finished, shown when the editor is free), proposed (shown to the user), done (nothing to accept: a new document or a message), accepted, discarded, failed (with the error) or cancelled. Cloud jobs often take 30–120 seconds: call it every 10 seconds or so. Needs \"Run other plugins' actions\", like run_plugin_action.",
+            properties: json!({}),
+            required: &[],
+            kind: Kind::Read,
+            run: Action::Run(|cx, args| {
+                pick(args, &[])?;
+                text(cx.call("jobs/list", json!({}))?)
+            }),
         },
         // Documents and files.
         Spec {
@@ -1361,11 +1402,13 @@ pub fn list() -> Vec<Tool> {
                         | "run_command"
                         | "batch"
                 ))
-                .open_world(false);
+                // Another plugin's action may reach a service on the internet.
+                .open_world(spec.kind == Kind::Run);
             let description = match spec.kind {
                 Kind::Read => spec.description.to_owned(),
                 Kind::Edit => format!("{} {EDIT_WAITS}", spec.description),
                 Kind::File => format!("{} {FILE_WAITS}", spec.description),
+                Kind::Run => format!("{} {RUN_WAITS}", spec.description),
             };
             Tool::new(spec.name, description, Arc::new(schema))
                 .with_title(spec.title)
@@ -1384,6 +1427,7 @@ pub fn waiting_message(name: &str) -> &'static str {
     {
         Some(Kind::Edit) => "Waiting for the user to allow edits in Xuan",
         Some(Kind::File) => "Waiting for the user to answer in Xuan",
+        Some(Kind::Run) => "Waiting for the user to allow the run in Xuan",
         _ => "Waiting for Xuan",
     }
 }
@@ -1400,9 +1444,38 @@ pub fn written(name: &str, result: &CallToolResult) -> Option<String> {
     if result.is_error == Some(true) {
         return None;
     }
+    let answer = answer_of(result)?;
+    let file = plain(answer.get("name")?.as_str()?);
+    Some(if answer.get("asked") == Some(&Value::Bool(false)) {
+        format!("{verb} {file} without asking")
+    } else {
+        format!("{verb} {file}")
+    })
+}
+
+/// For the pane's activity: what run_plugin_action started, such as
+/// "started Generate Image… from Comfy Cloud". The action's label and the
+/// plugin's name as Xuan answered with them, cleaned like file names.
+pub fn started(name: &str, result: &CallToolResult) -> Option<String> {
+    if name != "run_plugin_action" || result.is_error == Some(true) {
+        return None;
+    }
+    let answer = answer_of(result)?;
+    let label = plain(answer.get("label")?.as_str()?);
+    let plugin = plain(answer.get("plugin_name")?.as_str()?);
+    Some(format!("started {label} from {plugin}"))
+}
+
+/// The JSON a tool answered with.
+fn answer_of(result: &CallToolResult) -> Option<Value> {
     let text = (result.content.iter()).find_map(|content| content.as_text())?;
-    let answer: Value = serde_json::from_str(&text.text).ok()?;
-    let file: String = (answer.get("name")?.as_str()?.chars())
+    serde_json::from_str(&text.text).ok()
+}
+
+/// Text from Xuan for the pane: without control and bidi characters, at
+/// most 120 characters.
+fn plain(text: &str) -> String {
+    text.chars()
         .filter(|&c| {
             !c.is_control()
                 && !matches!(
@@ -1415,12 +1488,7 @@ pub fn written(name: &str, result: &CallToolResult) -> Option<String> {
                 )
         })
         .take(120)
-        .collect();
-    Some(if answer.get("asked") == Some(&Value::Bool(false)) {
-        format!("{verb} {file} without asking")
-    } else {
-        format!("{verb} {file}")
-    })
+        .collect()
 }
 
 /// Run a tool. Errors from Xuan or from the arguments become a tool error
@@ -1443,18 +1511,23 @@ pub fn call(cx: &Context, name: &str, args: Map<String, Value>) -> CallToolResul
 impl Context<'_> {
     /// A request, with Xuan's error turned into a message for the model.
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
-        // Refused here with a clear message rather than sent: Xuan would
-        // stop the whole plugin over a message that large.
-        let size = serde_json::to_vec(&params).map_or(0, |bytes| bytes.len());
-        if size > MAX_REQUEST_BYTES {
-            return Err(format!(
-                "The request is too large for Xuan ({} MiB of JSON; at most 16 MiB). Send less at once, for example fewer points or a shorter text",
-                size.div_ceil(1024 * 1024)
-            ));
+        if let Some(error) = too_large(&params) {
+            return Err(error);
         }
         self.editor
             .request(self.session, method, params, self.cancel)
             .map_err(|error| explain(method, &error))
+    }
+
+    /// `host/run` of another plugin's action, with Xuan's refusals
+    /// explained for a run rather than an edit.
+    fn run_action(&self, params: Value) -> Result<Value, String> {
+        if let Some(error) = too_large(&params) {
+            return Err(error);
+        }
+        self.editor
+            .request(self.session, "host/run", params, self.cancel)
+            .map_err(|error| explain_run(&error))
     }
 
     fn edit(&self, name: &str, edits: Vec<Value>) -> Result<Value, String> {
@@ -1621,6 +1694,194 @@ fn blame(error: String, owners: &[usize], plans: &[(&str, Plan)]) -> String {
         ),
         None => format!("{error}. Nothing in the batch was applied."),
     }
+}
+
+/// `list_plugin_actions`: Xuan's `plugins/actions`, each action's inputs
+/// as a JSON schema.
+fn list_plugin_actions(
+    cx: &Context,
+    args: Map<String, Value>,
+) -> Result<Vec<ContentBlock>, String> {
+    let args = pick(args, &["plugin"])?;
+    let plugin = match args.get("plugin") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(string(&args, "plugin")?),
+    };
+    let listed = cx.call("plugins/actions", json!({}))?;
+    let actions: Vec<Value> = (listed["actions"].as_array().into_iter().flatten())
+        .filter(|action| plugin.is_none_or(|plugin| action["plugin"] == plugin))
+        .map(|action| {
+            let mut entry = json!({
+                "plugin": action["plugin"],
+                "plugin_name": action["plugin_name"],
+                "action": action["id"],
+                "label": action["label"],
+                "description": action["description"],
+                "kind": action["kind"],
+                "source": action["source"],
+                "result": action["result"],
+                "surfaces": action["surfaces"],
+                "network": action["network"],
+                "allowed": action["allowed"],
+                "available": action["available"],
+                "inputs": input_schema(action["inputs"].as_array().map_or(&[], Vec::as_slice)),
+            });
+            if action["result"] == "ask" {
+                entry["into"] = json!(["layer", "document"]);
+            }
+            entry
+        })
+        .collect();
+    text(json!({"actions": actions}))
+}
+
+/// A JSON schema for an action's declared inputs, as `plugins/actions`
+/// lists them. `path` inputs are left out: only the user sets them.
+fn input_schema(inputs: &[Value]) -> Value {
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+    for input in inputs {
+        let (Some(id), Some(kind)) = (input["id"].as_str(), input["type"].as_str()) else {
+            continue;
+        };
+        let Some(mut schema) = input_type(kind, input) else {
+            continue;
+        };
+        let label = input["label"].as_str().filter(|label| !label.is_empty());
+        if let Some(label) = label {
+            schema["title"] = json!(label);
+        }
+        let mut description: Vec<String> = Vec::new();
+        if let Some(help) = input["help"].as_str().filter(|help| !help.is_empty()) {
+            description.push(help.to_owned());
+        }
+        if kind == "enum" {
+            let choices: Vec<String> = (input["values"].as_array().into_iter().flatten())
+                .filter_map(|choice| {
+                    let (id, label) = (choice["id"].as_str()?, choice["label"].as_str()?);
+                    Some(if id == label {
+                        id.to_owned()
+                    } else {
+                        format!("{id} ({label})")
+                    })
+                })
+                .collect();
+            description.push(format!("One of {}", choices.join(", ")));
+        }
+        if let Some(placeholder) = (input["placeholder"].as_str()).filter(|text| !text.is_empty()) {
+            description.push(format!("For example: {placeholder}"));
+        }
+        if !description.is_empty() {
+            schema["description"] = json!(description.join(". "));
+        }
+        if let Some(default) = input.get("default").filter(|value| !value.is_null()) {
+            schema["default"] = default.clone();
+        }
+        if kind == "regions" && input["min"].as_f64().is_some_and(|min| min >= 1.0) {
+            required.push(id.to_owned());
+        }
+        properties.insert(id.to_owned(), schema);
+    }
+    let mut schema =
+        json!({"type": "object", "properties": properties, "additionalProperties": false});
+    if !required.is_empty() {
+        schema["required"] = json!(required);
+    }
+    schema
+}
+
+/// The JSON schema of one input's type, or `None` for inputs a client
+/// cannot set.
+fn input_type(kind: &str, input: &Value) -> Option<Value> {
+    // Whole numbers as integers, so an integer input's bounds read as such.
+    let bound = |key: &str| {
+        input[key].as_f64().map(|value| {
+            if value.fract() == 0.0 && value.abs() < 9.0e15 {
+                json!(value as i64)
+            } else {
+                json!(value)
+            }
+        })
+    };
+    let bounded = |mut schema: Value| {
+        if let Some(min) = bound("min") {
+            schema["minimum"] = min;
+        }
+        if let Some(max) = bound("max") {
+            schema["maximum"] = max;
+        }
+        schema
+    };
+    Some(match kind {
+        "text" | "multiline" => json!({"type": "string"}),
+        "integer" | "seed" => bounded(json!({"type": "integer"})),
+        "number" => bounded(json!({"type": "number"})),
+        "bool" => json!({"type": "boolean"}),
+        "enum" => {
+            let ids: Vec<&Value> = (input["values"].as_array().into_iter().flatten())
+                .map(|choice| &choice["id"])
+                .collect();
+            json!({"type": "string", "enum": ids})
+        }
+        "color" => json!({"type": "string", "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"}),
+        "regions" => {
+            let fields = input_schema(input["fields"].as_array().map_or(&[], Vec::as_slice));
+            let mut schema = json!({
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "description": "A box in document pixels, with its fields",
+                    "properties": {
+                        "x": {"type": "number"}, "y": {"type": "number"},
+                        "width": {"type": "number", "exclusiveMinimum": 0},
+                        "height": {"type": "number", "exclusiveMinimum": 0},
+                        "fields": fields,
+                    },
+                    "required": ["x", "y", "width", "height"],
+                    "additionalProperties": false,
+                },
+            });
+            if let Some(min) = bound("min") {
+                schema["minItems"] = min;
+            }
+            schema["maxItems"] = bound("max").unwrap_or(json!(256));
+            schema
+        }
+        _ => return None,
+    })
+}
+
+/// `run_plugin_action`: `host/run` of `<plugin>/<action>`, answered once the
+/// job runs.
+fn run_plugin_action(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, String> {
+    let args = unquote(
+        pick(args, &["plugin", "action", "inputs", "into", "layers"])?,
+        "inputs",
+    );
+    let mut ids = Vec::new();
+    for key in ["plugin", "action"] {
+        let id = string(&args, key)?;
+        if id.is_empty() || id.contains('/') {
+            return Err(format!("`{key}` must be an id from list_plugin_actions"));
+        }
+        ids.push(id);
+    }
+    let mut params = json!({"action": format!("{}/{}", ids[0], ids[1])});
+    match args.get("inputs") {
+        None | Some(Value::Null) => {}
+        Some(inputs @ Value::Object(_)) => params["inputs"] = inputs.clone(),
+        Some(_) => return Err("`inputs` must be an object".into()),
+    }
+    for key in ["into", "layers"] {
+        if let Some(value) = args.get(key).filter(|value| !value.is_null()) {
+            params[key] = value.clone();
+        }
+    }
+    let mut answer = cx.run_action(params)?;
+    answer["note"] = json!(
+        "The job is running in Xuan. Follow it with get_jobs; when it finishes, the user accepts or discards its result."
+    );
+    text(answer)
 }
 
 /// `modify_selection`'s arguments; `layer` goes only with `layer_pixels`.
@@ -1818,6 +2079,28 @@ fn explain(method: &str, error: &EditorError) -> String {
         _ if method.ends_with("/export") => "The user did not allow sending the image to this MCP server.".into(),
         _ => format!("Xuan: {}", error.message),
     }
+}
+
+/// What the model is told when Xuan refuses a run of another plugin's
+/// action, or the user did not answer.
+fn explain_run(error: &EditorError) -> String {
+    match error.code {
+        WITHDRAWN | TIMED_OUT => "The user has not yet answered Xuan's prompt to run this action, so the request was withdrawn and nothing was run. Do not retry right away: ask the user whether they want this, and try again once they say so.".into(),
+        CANCELLED => format!("Xuan: {}. Ask the user before trying again.", error.message),
+        _ => format!("Xuan: {}", error.message),
+    }
+}
+
+/// A request Xuan would not take, refused here with a clear message rather
+/// than sent: Xuan stops a plugin that writes a message that large.
+fn too_large(params: &Value) -> Option<String> {
+    let size = serde_json::to_vec(params).map_or(0, |bytes| bytes.len());
+    (size > MAX_REQUEST_BYTES).then(|| {
+        format!(
+            "The request is too large for Xuan ({} MiB of JSON; at most 16 MiB). Send less at once, for example fewer points or a shorter text",
+            size.div_ceil(1024 * 1024)
+        )
+    })
 }
 
 /// What the model is told when the server stopped waiting for the user: the

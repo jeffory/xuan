@@ -235,7 +235,7 @@ impl Shared {
 }
 
 /// How the server explains itself to clients.
-const INSTRUCTIONS: &str = "Xuan is an image editor running on the user's computer. Start with get_document to see the layers and get_preview to see the image. Edits apply live as one undo step each; to make many edits one step, use paint_stroke with strokes or the batch tool. The first edit of a session asks the user in Xuan, who may refuse. Layer ids, coordinates and sizes are in document pixels with the origin at the top-left. Saving, exporting and opening files ask the user: saving or exporting to an absolute `path` asks in Xuan until the user chooses Always Allow, and without `path` the user picks the file in a save dialog. A call that waits for the user fails if they do not answer in time; then ask the user instead of retrying.";
+const INSTRUCTIONS: &str = "Xuan is an image editor running on the user's computer. Start with get_document to see the layers and get_preview to see the image. Edits apply live as one undo step each; to make many edits one step, use paint_stroke with strokes or the batch tool. The first edit of a session asks the user in Xuan, who may refuse. Layer ids, coordinates and sizes are in document pixels with the origin at the top-left. Saving, exporting and opening files ask the user: saving or exporting to an absolute `path` asks in Xuan until the user chooses Always Allow, and without `path` the user picks the file in a save dialog. With the user's permission, run_plugin_action runs other installed plugins' actions (list_plugin_actions lists them), such as generating or editing images; they run in the background, so follow them with get_jobs. A call that waits for the user fails if they do not answer in time; then ask the user instead of retrying.";
 
 /// The MCP side: tools and resources over the editor.
 #[derive(Clone)]
@@ -375,7 +375,10 @@ impl ServerHandler for Xuan {
                 };
                 // A save or export names the file it wrote: the pane is the
                 // user's, and writes made without asking must be visible.
-                let outcome = tools::written(&name, &result).unwrap_or_else(|| outcome.into());
+                // A run of another plugin's action names it, for the same reason.
+                let outcome = (tools::written(&name, &result))
+                    .or_else(|| tools::started(&name, &result))
+                    .unwrap_or_else(|| outcome.into());
                 this.shared.record(format!("{shown}: {outcome}"));
                 result
             })

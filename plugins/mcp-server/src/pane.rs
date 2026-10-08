@@ -91,6 +91,15 @@ pub fn tree(shared: &Shared, permissions: Option<&Value>) -> Value {
             "Clients save and export to the paths they name without asking. Turn it off in Plugins → Manage Plugins….",
         ));
     }
+    match permissions {
+        Some(status) if status["run_auto"] == true => children.push(ui::muted(
+            "Clients run other plugins' actions without asking. Turn it off in Plugins → Manage Plugins….",
+        )),
+        Some(status) if status["run_actions"] == true => children.push(ui::muted(
+            "Clients may run other plugins' actions: Xuan asks before the first run of each plugin in a session.",
+        )),
+        _ => {}
+    }
     children.push(ui::button("new_token", "New Token"));
     children.push(ui::muted(
         "A new token disconnects every client that uses the old one.",

@@ -161,8 +161,22 @@ impl Editor for FakeEditor {
                     None => Ok(json!({"ok": true, "layers": ["new-layer"]})),
                 }
             }
+            // Another plugin's action, as Xuan answers once its job runs.
+            "host/run" if params["action"].as_str().is_some_and(|a| a.contains('/')) => {
+                Ok(json!({
+                    "ok": true, "running": true, "job": "job-1", "plugin": "comfy-cloud",
+                    "plugin_name": "Comfy\u{202E} Cloud", "action": "generate", "label": "Generate Image…",
+                }))
+            }
             "host/run" => Ok(json!({
                 "ok": true, "layers": ["new-layer"], "running": params["action"] == "remove_background",
+            })),
+            "plugins/actions" => Ok(plugin_actions()),
+            "jobs/list" => Ok(json!({
+                "running": [{"job": "job-1", "kind": "action", "label": "Generate Image · Comfy Cloud",
+                             "progress": 0.5, "message": "Queued", "started_by": "mcp-server", "shown": true}],
+                "status_bar": "Generate Image · Comfy Cloud · Queued", "results_waiting": 0,
+                "proposal": null, "finished": [],
             })),
             "document/activate" => Ok(json!({"ok": true})),
             // As Xuan words a file that fails to load.
@@ -187,6 +201,46 @@ impl Editor for FakeEditor {
             }),
         }
     }
+}
+
+/// `plugins/actions` as Xuan answers it, for a plugin like Comfy Cloud.
+fn plugin_actions() -> Value {
+    json!({"actions": [
+        {
+            "plugin": "comfy-cloud", "plugin_name": "Comfy Cloud", "network": true,
+            "allowed": true, "available": true, "id": "generate",
+            "action": "comfy-cloud/generate", "label": "Generate Image…",
+            "description": "Generate an image from a description.", "kind": "generate",
+            "source": "none", "surfaces": ["document"], "result": "ask",
+            "inputs": [
+                {"id": "prompt", "type": "multiline", "label": "Prompt", "placeholder": "A lighthouse"},
+                {"id": "model", "type": "enum", "label": "Model", "default": "pro",
+                 "values": [{"id": "pro", "label": "Seedream Pro"}, {"id": "flash", "label": "flash"}]},
+                {"id": "steps", "type": "integer", "label": "", "min": 1.0, "max": 50.0, "default": 20},
+                {"id": "strength", "type": "number", "label": "Strength", "help": "How much to change", "min": 0.0, "max": 1.5},
+                {"id": "tint", "type": "color", "label": "Tint"},
+                {"id": "seed", "type": "seed", "label": "Seed"},
+                {"id": "upscale", "type": "bool", "label": "Upscale", "default": false},
+                {"id": "reference", "type": "path", "label": "Reference"},
+            ],
+        },
+        {
+            "plugin": "comfy-cloud", "plugin_name": "Comfy Cloud", "network": true,
+            "allowed": true, "available": true, "id": "fill-region",
+            "action": "comfy-cloud/fill-region", "label": "Fill Region…", "description": "",
+            "kind": "edit", "source": "composite", "surfaces": ["region"], "result": "layer",
+            "inputs": [
+                {"id": "regions", "type": "regions", "label": "Box", "min": 1.0, "max": 1.0,
+                 "fields": [{"id": "desc", "type": "text", "label": "What to paint here"}]},
+            ],
+        },
+        {
+            "plugin": "local-upscale", "plugin_name": "Local Upscale", "network": false,
+            "allowed": false, "available": true, "id": "upscale",
+            "action": "local-upscale/upscale", "label": "Upscale", "description": "",
+            "kind": "edit", "source": "layer", "surfaces": [], "result": "replace", "inputs": [],
+        },
+    ]})
 }
 
 fn app(editor: Arc<FakeEditor>) -> (axum::Router, Arc<Shared>) {
@@ -2240,4 +2294,305 @@ fn text_layers_are_set_along_paths_and_their_options_changed() {
         schema("set_layer")["properties"]["path"]["type"],
         json!(["string", "null"])
     );
+}
+
+#[test]
+fn plugin_actions_are_listed_with_a_schema_of_their_inputs() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(&editor, "list_plugin_actions", json!({}));
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let listed: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    let actions = listed["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 3);
+    let generate = &actions[0];
+    for (key, value) in [
+        ("plugin", json!("comfy-cloud")),
+        ("action", json!("generate")),
+        ("label", json!("Generate Image…")),
+        ("result", json!("ask")),
+        ("into", json!(["layer", "document"])),
+        ("network", json!(true)),
+    ] {
+        assert_eq!(generate[key], value, "{key}");
+    }
+    let inputs = &generate["inputs"];
+    assert_eq!(inputs["type"], "object");
+    assert_eq!(inputs["additionalProperties"], false);
+    let property = |id: &str| inputs["properties"][id].clone();
+    assert_eq!(
+        property("prompt"),
+        json!({"type": "string", "title": "Prompt", "description": "For example: A lighthouse"})
+    );
+    assert_eq!(
+        property("model"),
+        json!({"type": "string", "enum": ["pro", "flash"], "title": "Model",
+               "description": "One of pro (Seedream Pro), flash", "default": "pro"})
+    );
+    assert_eq!(
+        property("steps"),
+        json!({"type": "integer", "minimum": 1, "maximum": 50, "default": 20})
+    );
+    assert_eq!(
+        property("strength"),
+        json!({"type": "number", "minimum": 0, "maximum": 1.5, "title": "Strength",
+               "description": "How much to change"})
+    );
+    assert_eq!(
+        property("tint")["pattern"],
+        "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+    );
+    assert_eq!(property("seed")["type"], "integer");
+    assert_eq!(
+        property("upscale"),
+        json!({"type": "boolean", "title": "Upscale", "default": false})
+    );
+    // Files are the user's to choose.
+    assert_eq!(property("reference"), Value::Null);
+    assert!(inputs.get("required").is_none());
+    // Regions an action needs are required, each a box with its fields.
+    let fill = &actions[1];
+    assert!(fill.get("into").is_none());
+    assert_eq!(fill["inputs"]["required"], json!(["regions"]));
+    let regions = &fill["inputs"]["properties"]["regions"];
+    assert_eq!(
+        (&regions["minItems"], &regions["maxItems"]),
+        (&json!(1), &json!(1))
+    );
+    assert_eq!(
+        regions["items"]["required"],
+        json!(["x", "y", "width", "height"])
+    );
+    assert_eq!(
+        regions["items"]["properties"]["fields"]["properties"]["desc"],
+        json!({"type": "string", "title": "What to paint here"})
+    );
+    // One plugin's actions.
+    let result = call_tool(
+        &editor,
+        "list_plugin_actions",
+        json!({"plugin": "local-upscale"}),
+    );
+    let listed: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    assert_eq!(listed["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["actions"][0]["allowed"], false);
+}
+
+#[test]
+fn run_plugin_action_starts_another_plugins_action_and_get_jobs_follows_it() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "run_plugin_action",
+        json!({"plugin": "comfy-cloud", "action": "generate", "inputs": {"prompt": "a kite"},
+               "into": "document", "layers": ["a"]}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let (session, method, params) = editor.requests().last().cloned().unwrap();
+    assert_eq!(
+        (session.as_deref(), method.as_str()),
+        (Some("s"), "host/run")
+    );
+    assert_eq!(
+        params,
+        json!({"action": "comfy-cloud/generate", "inputs": {"prompt": "a kite"},
+               "into": "document", "layers": ["a"]})
+    );
+    // It returns at once, with the job to follow.
+    let answer: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    assert_eq!(
+        (&answer["running"], &answer["job"]),
+        (&json!(true), &json!("job-1"))
+    );
+    assert!(answer["note"].as_str().unwrap().contains("get_jobs"));
+    // The pane names what started, without the plugin's control characters.
+    assert_eq!(
+        tools::started("run_plugin_action", &result).as_deref(),
+        Some("started Generate Image… from Comfy Cloud")
+    );
+    assert_eq!(tools::started("run_command", &result), None);
+    // Inputs sent as JSON text are read; the rest is optional.
+    call_tool(
+        &editor,
+        "run_plugin_action",
+        json!({"plugin": "comfy-cloud", "action": "generate", "inputs": "{\"prompt\": \"a hat\"}"}),
+    );
+    assert_eq!(
+        editor.requests().last().unwrap().2,
+        json!({"action": "comfy-cloud/generate", "inputs": {"prompt": "a hat"}})
+    );
+    let sent = editor.requests().len();
+    for (arguments, says) in [
+        (
+            json!({"plugin": "comfy-cloud/x", "action": "generate"}),
+            "`plugin` must be an id",
+        ),
+        (
+            json!({"plugin": "comfy-cloud", "action": ""}),
+            "`action` must be an id",
+        ),
+        (
+            json!({"plugin": "comfy-cloud"}),
+            "`action` must be a string",
+        ),
+        (
+            json!({"plugin": "comfy-cloud", "action": "generate", "inputs": [1]}),
+            "`inputs` must be an object",
+        ),
+        (
+            json!({"plugin": "comfy-cloud", "action": "generate", "seed": 3}),
+            "Unknown argument `seed`",
+        ),
+    ] {
+        let result = call_tool(&editor, "run_plugin_action", arguments.clone());
+        assert_eq!(result.is_error, Some(true), "{arguments}");
+        assert!(
+            text_of(&result).contains(says),
+            "{arguments}: {}",
+            text_of(&result)
+        );
+    }
+    assert_eq!(editor.requests().len(), sent, "nothing was sent");
+
+    // get_jobs is the status bar, as Xuan reports it.
+    let result = call_tool(&editor, "get_jobs", json!({}));
+    let jobs: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    assert_eq!(jobs["running"][0]["message"], "Queued");
+    assert_eq!(editor.requests().last().unwrap().1, "jobs/list");
+    assert!(call_tool(&editor, "get_jobs", json!({"job": "job-1"})).is_error == Some(true));
+}
+
+#[test]
+fn plugin_action_tools_are_not_batched_and_say_what_they_wait_for() {
+    let editor = FakeEditor::new(false);
+    for tool in ["list_plugin_actions", "run_plugin_action", "get_jobs"] {
+        let result = call_tool(
+            &editor,
+            "batch",
+            json!({"steps": [{"tool": tool, "arguments": {}}]}),
+        );
+        assert_eq!(result.is_error, Some(true), "{tool}");
+        assert!(
+            text_of(&result).contains(&format!("{tool} cannot be part of a batch")),
+            "{tool}: {}",
+            text_of(&result)
+        );
+        assert!(!tools::batchable().contains(&tool), "{tool}");
+    }
+    assert!(editor.requests().is_empty());
+    let tools = tools::list();
+    let tool = |name: &str| tools.iter().find(|t| t.name == name).unwrap().clone();
+    let run = tool("run_plugin_action");
+    let annotations = run.annotations.clone().unwrap();
+    assert_eq!(annotations.read_only_hint, Some(false));
+    assert_eq!(annotations.open_world_hint, Some(true));
+    let description = run.description.clone().unwrap_or_default();
+    assert!(
+        description.contains("The first run of each plugin in a session waits")
+            && description.contains("instead of retrying"),
+        "{description}"
+    );
+    assert_eq!(run.input_schema["required"], json!(["plugin", "action"]));
+    assert_eq!(
+        tools::waiting_message("run_plugin_action"),
+        "Waiting for the user to allow the run in Xuan"
+    );
+    for name in ["list_plugin_actions", "get_jobs"] {
+        let annotations = tool(name).annotations.unwrap();
+        assert_eq!(annotations.read_only_hint, Some(true), "{name}");
+        assert_eq!(annotations.open_world_hint, Some(false), "{name}");
+        assert!(
+            tool(name)
+                .description
+                .unwrap_or_default()
+                .contains("Run other plugins' actions"),
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn refused_and_unanswered_runs_say_nothing_ran() {
+    // Refused by the user (or by Xuan's own checks): the model is told
+    // Xuan's reason, not that edits were refused.
+    let editor = FakeEditor::new(true);
+    let result = call_tool(
+        &editor,
+        "run_plugin_action",
+        json!({"plugin": "comfy-cloud", "action": "generate"}),
+    );
+    let text = text_of(&result);
+    assert!(
+        text.starts_with("Xuan: ") && text.ends_with("Ask the user before trying again."),
+        "{text}"
+    );
+    assert!(!text.contains("edits from this session"), "{text}");
+
+    // Not answered in time: withdrawn, and the pane says it failed.
+    let waits = Waits {
+        without_progress: Duration::from_millis(200),
+        ..quick()
+    };
+    let editor = FakeEditor::holding("host/run");
+    let (app, shared) = app_with(editor.clone(), waits);
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let result = client
+        .tool(
+            "run_plugin_action",
+            json!({"plugin": "comfy-cloud", "action": "generate"}),
+        )
+        .await;
+    let text = text_of(&result);
+    assert!(
+        text.contains("Xuan's prompt to run this action") && text.contains("nothing was run"),
+        "{text}"
+    );
+    assert_eq!(editor.withdrawn(), ["host/run"]);
+    let activity = shared.activity.lock().unwrap().clone();
+    assert_eq!(
+        activity.back().map(String::as_str),
+        Some("run_plugin_action: failed")
+    );
+}
+
+#[tokio::test]
+async fn a_run_the_client_starts_shows_in_the_pane() {
+    let editor = FakeEditor::new(false);
+    let (app, shared) = app(editor);
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let result = client
+        .tool(
+            "run_plugin_action",
+            json!({"plugin": "comfy-cloud", "action": "generate", "into": "layer"}),
+        )
+        .await;
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let activity = shared.activity.lock().unwrap().clone();
+    assert_eq!(
+        activity.back().map(String::as_str),
+        Some("run_plugin_action: started Generate Image… from Comfy Cloud")
+    );
+    // The pane says when clients may run other plugins' actions.
+    *shared.status.lock().unwrap() = server::Status::Listening { port: PORT };
+    let asks = crate::pane::tree(
+        &shared,
+        Some(&json!({"edit_prompt": "session", "run_actions": true, "run_auto": false})),
+    )
+    .to_string();
+    assert!(
+        asks.contains("Clients may run other plugins' actions"),
+        "{asks}"
+    );
+    let auto = crate::pane::tree(
+        &shared,
+        Some(&json!({"edit_prompt": "session", "run_actions": true, "run_auto": true})),
+    )
+    .to_string();
+    assert!(
+        auto.contains("Clients run other plugins' actions without asking"),
+        "{auto}"
+    );
+    let off = crate::pane::tree(&shared, Some(&json!({"edit_prompt": "session"}))).to_string();
+    assert!(!off.contains("other plugins' actions"), "{off}");
 }

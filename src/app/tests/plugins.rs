@@ -2652,7 +2652,7 @@ type = "path"
 
 /// The mock plugin as `target` in `dir`, allowed to edit, with the actions
 /// above; `network` makes it declare a host.
-fn target_manifest(dir: &Path, network: bool) -> Manifest {
+pub(super) fn target_manifest(dir: &Path, network: bool) -> Manifest {
     let fixture = dir.join("fixture.png");
     RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
         .save(&fixture)

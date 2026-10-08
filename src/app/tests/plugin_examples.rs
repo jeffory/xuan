@@ -562,6 +562,116 @@ mod unix {
         assert!(app.error.is_none(), "{:?}", app.error);
     }
 
+    /// The mcp-server plugin runs another plugin's action for its client:
+    /// the client lists the actions, runs one (after the user allows the
+    /// run in Xuan) and follows the job with get_jobs until the user
+    /// accepted its result. Built and skipped like the test above.
+    #[test]
+    fn the_mcp_server_runs_another_plugins_action_once_the_user_allows_it() {
+        use crate::app::plugin_runs::{RunAnswer, RunPrompt};
+        let Some(binary) = mcp_server_binary() else {
+            eprintln!("the mcp-server plugin is not built; skipping");
+            return;
+        };
+        let target = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let mut manifest = example("mcp-server");
+        manifest.plugin.command = vec![binary.display().to_string()];
+        (app.config.plugins.entry("mcp-server".into()).or_default())
+            .settings
+            .insert("port".into(), toml::Value::Integer(0));
+        let other = super::super::plugins::target_manifest(target.path(), false);
+        app.install_plugins(vec![manifest, other], vec![]);
+        app.grant_plugin("mcp-server", true);
+        app.grant_plugin("target", true);
+        app.set_run_other_actions("mcp-server", true);
+        app.dimensions = [32, 24];
+        app.new_document();
+        app.command("fill_fg");
+        app.render_pane("plugin:mcp-server/status", "open", None);
+        let data = app.plugins.data_dir("mcp-server").unwrap();
+        run_until(&context, &mut app, |_| {
+            data.join("connection.json").is_file()
+        });
+        let connection: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(data.join("connection.json")).unwrap())
+                .unwrap();
+        let port = connection["port"].as_u64().unwrap() as u16;
+        let token = std::fs::read_to_string(data.join("token")).unwrap();
+
+        let client = std::thread::spawn({
+            let token = token.trim().to_owned();
+            move || {
+                let mut client = McpClient::connect(port, &token);
+                let text = |result: &serde_json::Value| -> serde_json::Value {
+                    serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
+                };
+                let listed = text(&client.tool("list_plugin_actions", serde_json::json!({})));
+                let echo = (listed["actions"].as_array().unwrap().iter())
+                    .find(|action| action["plugin"] == "target" && action["action"] == "echo")
+                    .cloned()
+                    .unwrap();
+                // The run waits for the user, then returns with its job.
+                let started = text(&client.tool(
+                    "run_plugin_action",
+                    serde_json::json!({"plugin": "target", "action": "echo", "inputs": {"prompt": "from e2e"}}),
+                ));
+                let job = started["job"].clone();
+                // The client follows it until the user answered its result.
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let outcome = loop {
+                    assert!(Instant::now() < deadline, "the job never ended");
+                    let jobs = text(&client.tool("get_jobs", serde_json::json!({})));
+                    let finished = (jobs["finished"].as_array().unwrap().iter())
+                        .find(|run| run["job"] == job)
+                        .map(|run| run["outcome"].clone());
+                    if finished
+                        .as_ref()
+                        .is_some_and(|outcome| outcome == "accepted")
+                    {
+                        break finished.unwrap();
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                };
+                (echo, started, outcome)
+            }
+        });
+        let mut prompts: Vec<RunPrompt> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while !client.is_finished() {
+            assert!(Instant::now() < deadline, "timed out");
+            frame(&context, &mut app);
+            match app.dialog {
+                Some(Dialog::PluginRun) => {
+                    prompts.push(app.plugins.run_prompt.clone().unwrap());
+                    app.answer_plugin_run(RunAnswer::Allow);
+                }
+                Some(Dialog::PluginProposal) => app.resolve_proposal(true),
+                _ => {}
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (echo, started, outcome) = client.join().expect("the client's checks pass");
+        assert_eq!(echo["inputs"]["properties"]["prompt"]["default"], "hello");
+        assert_eq!(started["running"], true);
+        assert_eq!(outcome, "accepted");
+        // One prompt, for the client's session, naming the action.
+        assert_eq!(prompts.len(), 1, "{prompts:?}");
+        assert_eq!(prompts[0].label, "Echo Source");
+        assert_eq!(prompts[0].session, "MCP client 1");
+        // The target ran it with the client's inputs, as a layer the user accepted.
+        let received = std::fs::read_to_string(target.path().join("received.log")).unwrap();
+        assert!(received.contains("\"prompt\":\"from e2e\""), "{received}");
+        let layers = &app.session().unwrap().document.layers;
+        assert!(
+            layers.iter().any(|layer| layer.name == "Echoed"),
+            "{layers:?}"
+        );
+        app.stop_plugin("mcp-server");
+        app.stop_plugin("target");
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
+
     /// Needs `cargo build --release` in `plugins/invert-regions` first.
     #[test]
     #[ignore]
