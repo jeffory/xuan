@@ -93,7 +93,7 @@ its opacity, blending, and clipping are composited with other images.
 Mask children use `standalone_mask: true` and the existing mask PNG assets. Their
 parent distinguishes image-only coverage from standalone masks over lower
 siblings. The `filter` field stores Gaussian Blur, Motion Blur, Add Noise, or Lens
-Correction settings. Parameters, hierarchy, and cycles are validated on load.
+Correction settings (the vignette's sign changed in [version 12](#lens-correction-vignette-sign-version-12)). Parameters, hierarchy, and cycles are validated on load.
 Source pixels are retained; intermediate effect rasters are not saved. Legacy
 single image masks are promoted to child layers when opened in the editor.
 
@@ -284,3 +284,15 @@ A layer's `text` object may have a `path` object:
 The layer's PNG holds the text as drawn along the path (glyph outlines filled with 16
 sample rows per pixel), so readers that cannot lay text along a path still show it.
 Invalid path data, boxes or options fail validation on load and save.
+
+## Lens Correction vignette sign (version 12)
+
+A filter layer's `{"LensCorrection": {"distortion", "vignette"}}` uses Photoshop's sign
+from version 12: a negative `vignette` darkens the corners and a positive one brightens
+them. Versions 1-11 stored the opposite sign, so the reader negates `vignette` when it
+opens an older file, and the project looks as it did. A document with a nonzero vignette
+is written as version 12, so older builds report an unsupported version instead of
+drawing it inverted; everything else keeps the lowest version its content needs (1-11),
+and a Lens Correction with no vignette reads the same in every version. A version 12
+document may also carry anything the earlier versions can. The reader accepts versions
+1-12.

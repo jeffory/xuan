@@ -185,13 +185,22 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 11;
+const LATEST_VERSION: u32 = 12;
+
+/// The first version that stores Lens Correction's vignette with Photoshop's sign (negative
+/// darkens the corners); older files stored the opposite and are negated when loaded.
+const PHOTOSHOP_VIGNETTE: u32 = 12;
 
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    // Older readers would draw the vignette with the opposite sign.
+    if document.layers.iter().any(|l| {
+        matches!(l.filter, Some(crate::effects::Filter::LensCorrection { vignette, .. }) if vignette != 0.0)
+    }) {
+        PHOTOSHOP_VIGNETTE
     // Older readers would drop a text layer's path and set its text in a box when edited.
-    if document
+    } else if document
         .layers
         .iter()
         .any(|l| l.text.as_ref().is_some_and(|t| t.path.is_some()))
@@ -310,6 +319,14 @@ pub fn load(path: &Path) -> Result<Document> {
             .all(|id| manifest.document.layers.iter().any(|l| l.id == *id)),
         "Unreferenced pixel layer metadata"
     );
+    if manifest.version < PHOTOSHOP_VIGNETTE {
+        for layer in &mut manifest.document.layers {
+            if let Some(crate::effects::Filter::LensCorrection { vignette, .. }) = &mut layer.filter
+            {
+                *vignette = -*vignette;
+            }
+        }
+    }
     manifest.document.selected = manifest.document.active.into_iter().collect();
     manifest.document.validate()?;
     Ok(manifest.document)
@@ -932,6 +949,86 @@ mod tests {
         writer.write_all(&image).unwrap();
         writer.finish().unwrap();
         assert!(load(&broken).is_err());
+    }
+
+    /// Before version 12 a positive Lens Correction vignette darkened the corners. Such files
+    /// load with Photoshop's sign and look the same; newer files keep their sign.
+    #[test]
+    fn lens_correction_vignette_migrates_to_photoshop_sign_as_version_12() {
+        use crate::effects::Filter;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("lens.xuan");
+        let mut doc = Document::new(32, 32).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            32,
+            32,
+            Rgba([128, 128, 128, 255]),
+        )));
+        let mut lens = Layer::blank("Lens", 32, 32);
+        let darker = Filter::LensCorrection {
+            distortion: 0.0,
+            vignette: -40.0,
+        };
+        lens.filter = Some(darker.clone());
+        doc.layers.push(lens);
+        let expected = render::render(&doc);
+
+        // Saving and loading the new format does not flip the sign, however often it is done.
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 12);
+        let mut loaded = load(&path).unwrap();
+        for _ in 0..2 {
+            assert_eq!(loaded.layers[1].filter, Some(darker.clone()));
+            assert_eq!(render::render(&loaded), expected);
+            save(&loaded, &path).unwrap();
+            loaded = load(&path).unwrap();
+        }
+
+        // Version 11 and earlier stored +40 for corners that darken.
+        let old_path = directory.path().join("old.xuan");
+        for version in [4, 11] {
+            let mut old = manifest.clone();
+            old["version"] = version.into();
+            old["document"]["layers"][1]["filter"]["LensCorrection"]["vignette"] = 40.0.into();
+            let mut source = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+            let mut writer = ZipWriter::new(File::create(&old_path).unwrap());
+            writer
+                .start_file("manifest.json", SimpleFileOptions::default())
+                .unwrap();
+            writer
+                .write_all(&serde_json::to_vec(&old).unwrap())
+                .unwrap();
+            for index in 0..source.len() {
+                let file = source.by_index_raw(index).unwrap();
+                if file.name() != "manifest.json" {
+                    writer.raw_copy_file(file).unwrap();
+                }
+            }
+            writer.finish().unwrap();
+            let migrated = load(&old_path).unwrap();
+            assert_eq!(migrated.layers[1].filter, Some(darker.clone()), "{version}");
+            let image = render::render(&migrated);
+            assert_eq!(image, expected);
+            // As the old formula, 1 - vignette × r² × 0.005 with r² = 2 × (31/32)², drew it.
+            let old_corner = 128.0 * (1.0 - 40.0 * 2.0 * (31.0f32 / 32.0).powi(2) * 0.005);
+            assert!((image.get_pixel(0, 0)[0] as f32 - old_corner).abs() <= 1.5);
+            // Saved again, it is written in the new format and keeps its look.
+            save(&migrated, &old_path).unwrap();
+            assert_eq!(manifest_json(&old_path)["version"], 12);
+            assert_eq!(
+                load(&old_path).unwrap().layers[1].filter,
+                Some(darker.clone())
+            );
+        }
+
+        // Without a vignette nothing changes for older readers.
+        doc.layers[1].filter = Some(Filter::LensCorrection {
+            distortion: 10.0,
+            vignette: 0.0,
+        });
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 4);
     }
 
     fn write_manifest(path: &Path, manifest: &Value) {

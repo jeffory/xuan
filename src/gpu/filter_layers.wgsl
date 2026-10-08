@@ -72,7 +72,7 @@ fn filter_layer(@builtin(global_invocation_id) id: vec3<u32>) {
         let radius = dot(uv, uv);
         let k = 1.0 + settings.y * radius / 100.0;
         result = sample_premultiplied((uv * k + 1.0) * 0.5 * vec2<f32>(size));
-        result = vec4(result.rgb / max(result.a, 0.000001) * (1.0 - settings.z * radius * 0.005), result.a);
+        result = vec4(result.rgb / max(result.a, 0.000001) * (1.0 + settings.z * radius * 0.005), result.a);
     }
     textureStore(output, position, result);
 }
