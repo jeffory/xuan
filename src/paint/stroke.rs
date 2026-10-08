@@ -2,12 +2,14 @@ use std::sync::Arc;
 
 use super::{
     Brush, Document, Layer, PaintMode, Point, Result, StrokeOptions,
-    dynamics::{Piece, Walker},
+    dynamics::{Dynamics, Piece, Walker},
     symmetry::Reflection,
 };
 
 /// Coverage and original pixels for one pointer-down/up gesture. Overlapping
 /// segments use the strongest coverage, so event frequency cannot darken joins.
+/// With a flow below 100%, dabs instead build up toward that coverage
+/// ([`super::build_up`]), laid out by distance so frequency still cannot.
 #[derive(Default)]
 pub struct Stroke {
     bounds: [u32; 4],
@@ -45,14 +47,14 @@ impl Stroke {
         options: StrokeOptions<'_>,
     ) -> Result<()> {
         self.start(document, from_brush, options.mode);
-        if self.walker.is_some() || (dynamic(options.mode) && from_brush.dynamics.active()) {
+        if self.walker.is_some() || walks(from_brush, options.mode) {
             if self.samples.is_empty() {
                 self.samples.push((from, from_brush.clone()));
             }
             self.samples.push((to, brush.clone()));
             let walker = self
                 .walker
-                .get_or_insert_with(|| Walker::new(from_brush.dynamics, None));
+                .get_or_insert_with(|| Walker::new(walked(from_brush, options.mode), None));
             let mut pieces = Vec::new();
             walker.walk([from, to], [from_brush, brush], &mut pieces);
             return self.draw(document, pieces, &options);
@@ -95,7 +97,7 @@ impl Stroke {
             .windows(2)
             .map(|pair| (&pair[0], &pair[1]))
             .chain((samples.len() == 1).then(|| (&samples[0], &samples[0])));
-        if !(dynamic(options.mode) && first_brush.dynamics.active()) {
+        if !walks(first_brush, options.mode) {
             for ((from, from_brush), (to, brush)) in pairs {
                 self.segment(document, *from, *to, from_brush, brush, copy(&options))?;
             }
@@ -105,7 +107,7 @@ impl Stroke {
             .windows(2)
             .map(|pair| pair[0].0.distance(pair[1].0))
             .sum::<f32>();
-        let mut walker = Walker::new(first_brush.dynamics, Some(total));
+        let mut walker = Walker::new(walked(first_brush, options.mode), Some(total));
         let mut pieces = Vec::new();
         for ((from, from_brush), (to, brush)) in pairs {
             walker.walk([*from, *to], [from_brush, brush], &mut pieces);
@@ -320,6 +322,28 @@ fn dynamic(mode: PaintMode) -> bool {
         mode,
         PaintMode::Paint | PaintMode::Erase | PaintMode::Pencil
     )
+}
+
+/// Whether a mode builds up paint with the brush's flow: the Brush and
+/// the Eraser, on pixels or a mask.
+pub(super) fn flows(mode: PaintMode) -> bool {
+    matches!(mode, PaintMode::Paint | PaintMode::Erase)
+}
+
+/// Whether a stroke is laid out by a [`Walker`]: with dynamics, or as dabs
+/// for a flow below 100%.
+fn walks(brush: &Brush, mode: PaintMode) -> bool {
+    dynamic(mode) && (brush.dynamics.active() || (flows(mode) && brush.flow < 1.0))
+}
+
+/// The dynamics a [`Walker`] lays the stroke out with. Flow builds up dab
+/// by dab, so a flow below 100% paints dabs even without spacing.
+fn walked(brush: &Brush, mode: PaintMode) -> Dynamics {
+    if flows(mode) && brush.flow < 1.0 {
+        brush.dynamics.with_flow()
+    } else {
+        brush.dynamics
+    }
 }
 
 fn copy<'a>(options: &StrokeOptions<'a>) -> StrokeOptions<'a> {

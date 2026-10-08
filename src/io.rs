@@ -185,11 +185,14 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 13;
+const LATEST_VERSION: u32 = 14;
 
 /// The first version with upstream Compositor's Vignette, Bloom, Tonal Contrast and Dither
 /// filters, which older readers cannot draw.
-const COMPOSITOR_FILTERS: u32 = 13;
+const COMPOSITOR_FILTERS: u32 = 14;
+
+/// The first version that stores a layer's Fill apart from its opacity.
+const FILL_OPACITY: u32 = 13;
 
 /// The first version that stores Lens Correction's vignette with Photoshop's sign (negative
 /// darkens the corners); older files stored the opposite and are negated when loaded.
@@ -204,6 +207,9 @@ fn format_version(document: &Document) -> u32 {
         .any(|l| l.filter.as_ref().is_some_and(|f| !f.is_legacy()))
     {
         COMPOSITOR_FILTERS
+    // Older readers would drop the fill and draw the layer's pixels at full fill.
+    } else if document.layers.iter().any(|l| l.fill < 1.0) {
+        FILL_OPACITY
     // Older readers would draw the vignette with the opposite sign.
     } else if document.layers.iter().any(|l| {
         matches!(l.filter, Some(crate::effects::Filter::LensCorrection { vignette, .. }) if vignette != 0.0)
@@ -1041,10 +1047,10 @@ mod tests {
         assert_eq!(manifest_json(&path)["version"], 4);
     }
 
-    /// Upstream Compositor's filters save as version 13, as filter layers and as filters
+    /// Upstream Compositor's filters save as version 14, as filter layers and as filters
     /// attached to a layer, and come back the same; documents without them keep their version.
     #[test]
-    fn compositor_filters_round_trip_as_version_13() {
+    fn compositor_filters_round_trip_as_version_14() {
         use crate::effects::{DitherColors, DitherSettings, DitherStyle, Filter};
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("filters.xuan");
@@ -1079,7 +1085,7 @@ mod tests {
             doc.layers.insert(1, attached);
             doc.validate().unwrap();
             save(&doc, &path).unwrap();
-            assert_eq!(manifest_json(&path)["version"], 13, "{filter:?}");
+            assert_eq!(manifest_json(&path)["version"], 14, "{filter:?}");
             let loaded = load(&path).unwrap();
             assert_eq!(loaded.layers[1].filter, Some(filter.clone()));
             assert_eq!(loaded.layers[2].filter, Some(filter.clone()));
@@ -1092,6 +1098,74 @@ mod tests {
             save(&plain, &path).unwrap();
             assert_eq!(manifest_json(&path)["version"], 4);
         }
+    }
+
+    /// A layer's Fill below 100% needs version 13; at 100% the key is left out and the
+    /// project keeps the version it needed before.
+    #[test]
+    fn fill_round_trips_as_version_13() {
+        use crate::layer_effects::{EffectKind, LayerEffects};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fill.xuan");
+        let mut doc = Document::new(32, 32).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(32, 32, |x, y| {
+            Rgba([
+                (x * 8) as u8,
+                (y * 8) as u8,
+                90,
+                if x > 4 { 255 } else { 0 },
+            ])
+        })));
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 1);
+        assert!(manifest["document"]["layers"][0].get("fill").is_none());
+
+        doc.layers[0].fill = 0.25;
+        let mut effects = LayerEffects::default();
+        effects.add(EffectKind::Stroke, [255, 0, 0]);
+        doc.layers[0].effects = Some(effects);
+        let expected = render::render(&doc);
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 13);
+        assert_eq!(manifest["document"]["layers"][0]["fill"], 0.25);
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[0].fill, 0.25);
+        assert_eq!(render::render(&loaded), expected);
+
+        // With another newer feature it is still version 13.
+        let mut lens = Layer::blank("Lens", 32, 32);
+        lens.filter = Some(crate::effects::Filter::LensCorrection {
+            distortion: 0.0,
+            vignette: -10.0,
+        });
+        doc.layers.push(lens);
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 13);
+        assert_eq!(load(&path).unwrap().layers[0].fill, 0.25);
+
+        // Back at 100%, older readers open it again.
+        doc.layers.pop();
+        doc.layers[0].fill = 1.0;
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 7);
+
+        // Out of range, or on a folder, it is refused.
+        doc.layers[0].fill = 1.5;
+        assert!(save(&doc, &path).is_err());
+        doc.layers[0].fill = f32::NAN;
+        assert!(doc.validate().is_err());
+        let mut folder = Layer::blank("Folder", 32, 32);
+        folder.group = true;
+        folder.fill = 0.5;
+        doc.layers = vec![folder];
+        assert!(doc.validate().is_err());
+        let mut adjustment = Layer::blank("Invert", 32, 32);
+        adjustment.adjustment = Some(crate::document::Adjustment::Invert);
+        adjustment.fill = 0.5;
+        doc.layers = vec![adjustment];
+        assert!(doc.validate().is_err());
     }
 
     fn write_manifest(path: &Path, manifest: &Value) {

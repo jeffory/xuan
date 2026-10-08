@@ -708,7 +708,9 @@ fn legacy_names_and_fill_opacity() {
     file[at + 4] = 0x8E;
     let (document, _) = read(&file, PixelBudget::default()).unwrap();
     assert_eq!(document.layers[0].name, "Café");
-    assert!((document.layers[0].opacity - 128.0 / 255.0).abs() < 1e-6);
+    // Fill opacity is the layer's Fill; its opacity stays as Photoshop had it.
+    assert_eq!(document.layers[0].opacity, 1.0);
+    assert!((document.layers[0].fill - 128.0 / 255.0).abs() < 1e-6);
     assert_eq!(MAC_ROMAN.chars().count(), 128);
 }
 
@@ -1138,7 +1140,9 @@ fn adjustment_layers_stay_editable_or_are_left_out() {
     for v in [1.5_f32, -0.1, 1.2] {
         exposure.extend(v.to_be_bytes());
     }
-    let mut multiply = LayerSpec::blank("Invert").with(b"nvrt", Vec::new());
+    let mut multiply = LayerSpec::blank("Invert")
+        .with(b"nvrt", Vec::new())
+        .with(b"iOpa", vec![51]);
     multiply.blend = *b"mul ";
     let mut balance = Vec::new();
     for v in [10_i16, -20, 30, 0, 0, 0, -100, 100, 5] {
@@ -1236,6 +1240,11 @@ fn adjustment_layers_stay_editable_or_are_left_out() {
     ));
     assert_eq!(document.layers[3].adjustment, Some(Adjustment::Invert));
     assert_eq!(document.layers[3].blend, BlendMode::Normal);
+    // An adjustment's fill opacity folds into its opacity, as both fade it alike.
+    assert_eq!(
+        (document.layers[3].opacity, document.layers[3].fill),
+        (0.2, 1.0)
+    );
     assert!(document.layers.iter().all(|l| l.pixels.is_none()));
     assert_eq!(report.count(Dropped::PhotoshopBlendMode("Multiply")), 1);
     assert_eq!(
@@ -1731,11 +1740,12 @@ fn layer_effects_map_onto_xuans_or_are_reported() {
     assert_eq!(approximate.inner_glow.unwrap().size, 500.0);
     assert!(find("Unsupported").effects.is_none());
     assert!(find("Off").effects.is_none());
-    // Switched off, the fill opacity applies as usual.
-    assert_eq!(find("Off").opacity, 0.0);
+    // Fill opacity maps to Fill whether the effects are switched off or not.
+    assert_eq!((find("Off").opacity, find("Off").fill), (1.0, 0.0));
     assert!(find("Legacy").effects.is_none());
-    // Fill opacity cannot be separated from the effects: the layer keeps its layer opacity.
+    // Fill 0% hides the pixels but not the effects.
     assert_eq!(find("Effects only").opacity, 1.0);
+    assert_eq!(find("Effects only").fill, 0.0);
     assert!(find("Effects only").effects.is_some());
     assert!(find("Empty").effects.is_none() && find("Folder").effects.is_none());
     // Effects that are all switched off are kept, and the fill opacity applies.
@@ -1749,16 +1759,80 @@ fn layer_effects_map_onto_xuans_or_are_reported() {
             .unwrap()
             .enabled
     );
-    assert_eq!(disabled.opacity, 0.0);
+    assert_eq!((disabled.opacity, disabled.fill), (1.0, 0.0));
 
     assert_eq!(report.count(Dropped::PhotoshopEffectSettings), 1);
     // Unsupported, legacy and unreadable.
     assert_eq!(report.count(Dropped::PhotoshopEffects), 3);
-    assert_eq!(report.count(Dropped::FillOpacity), 1);
     // On a layer without pixels and on a folder.
     assert_eq!(report.count(Dropped::LayerEffect), 2);
     // Imported effects render.
     render::render(&document);
+}
+
+/// Fill opacity (`iOpa`) on a layer with an outside stroke, as Photoshop draws it: the
+/// layer's own pixels fade with the fill and the stroke does not; Opacity fades both. A folder's
+/// fill opacity is not a Fill.
+#[test]
+fn fill_opacity_fades_pixels_but_not_effects() {
+    let stroke = effects_block(
+        100.0,
+        vec![(
+            "FrFX",
+            D::Obj(
+                "FrFX",
+                vec![
+                    ("enab", D::Bool(true)),
+                    ("Styl", D::Enum("FStl", "OutF")),
+                    ("PntT", D::Enum("FrFl", "SClr")),
+                    ("Md  ", mode("Nrml")),
+                    ("Opct", D::Unit(100.0)),
+                    ("Sz  ", D::Unit(2.0)),
+                    ("Clr ", rgb_color(255.0, 0.0, 0.0)),
+                ],
+            ),
+        )],
+    );
+    let mut folder = LayerSpec::folder("Folder", b"pass").with(b"iOpa", vec![0]);
+    folder.opacity = 255;
+    let mut half_opacity = LayerSpec::solid("Opacity", (16, 4), (4, 4), [0, 0, 255, 255])
+        .with(b"lfx2", stroke.clone());
+    half_opacity.opacity = 128;
+    let spec = PsdSpec::layers(
+        22,
+        12,
+        vec![
+            LayerSpec::solid("Background", (0, 0), (22, 12), [255, 255, 255, 255]),
+            LayerSpec::solid("Fill 0", (2, 4), (4, 4), [0, 0, 255, 255])
+                .with(b"lfx2", stroke.clone())
+                .with(b"iOpa", vec![0]),
+            LayerSpec::solid("Fill 50", (10, 4), (2, 4), [0, 0, 255, 255])
+                .with(b"lfx2", stroke)
+                .with(b"iOpa", vec![128]),
+            half_opacity,
+            LayerSpec::divider(),
+            LayerSpec::solid("Inside", (0, 0), (1, 1), [0, 0, 0, 255]),
+            folder,
+        ],
+    );
+    let (document, report) = open(&spec);
+    assert!(report.is_empty(), "{:?}", report.lines());
+    let find = |name| document.layers.iter().find(|l| l.name == name).unwrap();
+    assert_eq!(find("Fill 0").fill, 0.0);
+    assert!((find("Fill 50").fill - 128.0 / 255.0).abs() < 1e-6);
+    assert_eq!(find("Folder").fill, 1.0);
+    let image = render::render(&document);
+    let pixel = |x, y| image.get_pixel(x, y).0;
+    // Fill 0%: the stroke alone, around a hole that shows the backdrop.
+    assert_eq!(pixel(1, 5), [255, 0, 0, 255]);
+    assert_eq!(pixel(3, 5), [255, 255, 255, 255]);
+    // Fill 50%: the stroke at full strength around half-faded blue.
+    assert_eq!(pixel(9, 5), [255, 0, 0, 255]);
+    let inside = pixel(10, 5);
+    assert!(inside[0].abs_diff(127) <= 1 && inside[1].abs_diff(127) <= 1 && inside[2] == 255);
+    // Opacity 50% fades the stroke as well.
+    let faded = pixel(15, 5);
+    assert!(faded[0] == 255 && faded[1].abs_diff(127) <= 1 && faded[2].abs_diff(127) <= 1);
 }
 
 #[test]

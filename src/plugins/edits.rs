@@ -123,6 +123,7 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         "visible": layer.visible,
         "locked": layer.locked,
         "opacity": layer.opacity,
+        "fill": layer.fill,
         "blend": layer.blend,
         "parent": layer.parent,
         "clip_to": layer.clip_to,
@@ -677,6 +678,9 @@ pub enum Edit {
         locked: Option<bool>,
         #[serde(default)]
         opacity: Option<f32>,
+        /// Photoshop's Fill, 0–1: fades the layer's own pixels but not its layer effects.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill: Option<f32>,
         #[serde(default)]
         blend: Option<BlendMode>,
         /// Clip to this layer below in the same parent (a layer or a folder), or with
@@ -889,6 +893,11 @@ pub enum Edit {
         hardness: f32,
         #[serde(default = "one")]
         opacity: f32,
+        /// How much paint one pass lays down, 0 to 1, building up to
+        /// `opacity` where the stroke crosses itself; 1 (the default) paints
+        /// the whole opacity at once.
+        #[serde(default = "one")]
+        flow: f32,
         #[serde(default)]
         erase: bool,
         /// Pressure (and taper) also scales the opacity.
@@ -1363,6 +1372,7 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 taper_in,
                 taper_out,
                 symmetry,
+                flow,
                 ..
             } => {
                 let reach = f64::from(size.max(1.0)) + 2.0;
@@ -1386,6 +1396,9 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                     || *size_jitter > 0.0
                     || *opacity_jitter > 0.0
                     || *hue_jitter > 0.0;
+                // A flow below 1 paints close dabs when nothing else does.
+                let flow_dabs = !dabs && *flow < 1.0;
+                let dabs = dabs || flow_dabs;
                 if dabs {
                     // Each dab touches at most the brush's square, and dabs
                     // are at least `MIN_STEP` apart along the stroke.
@@ -1396,6 +1409,8 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                         .sum();
                     let spacing = if *spacing > 0.0 {
                         f64::from(*spacing)
+                    } else if flow_dabs {
+                        f64::from(crate::paint::dynamics::FLOW_SPACING)
                     } else {
                         f64::from(crate::paint::dynamics::DEFAULT_SPACING)
                     };
@@ -1835,6 +1850,7 @@ fn apply_each(
                 visible,
                 locked,
                 opacity,
+                fill,
                 blend,
                 clip_to,
             } => {
@@ -1859,6 +1875,17 @@ fn apply_each(
                 }
                 if let Some(opacity) = opacity {
                     target.opacity = valid_opacity(*opacity)?;
+                }
+                if let Some(fill) = fill {
+                    ensure!(
+                        fill.is_finite() && (0.0..=1.0).contains(fill),
+                        "Fill must be between 0 and 1"
+                    );
+                    ensure!(
+                        *fill == 1.0 || target.can_attach_effects(),
+                        "Only pixel, text and shape layers take a fill"
+                    );
+                    target.fill = *fill;
                 }
                 if let Some(blend) = blend {
                     target.blend = *blend;
@@ -2233,6 +2260,7 @@ fn apply_each(
                 size,
                 hardness,
                 opacity,
+                flow,
                 erase,
                 pressure_opacity,
                 spacing,
@@ -2265,6 +2293,10 @@ fn apply_each(
                     "The hardness must be between 0 and 1"
                 );
                 valid_opacity(*opacity)?;
+                ensure!(
+                    flow.is_finite() && *flow > 0.0 && *flow <= 1.0,
+                    "The flow must be above 0 and at most 1"
+                );
                 let dynamics = crate::paint::Dynamics {
                     spacing: *spacing,
                     taper_in: *taper_in,
@@ -2290,6 +2322,7 @@ fn apply_each(
                     diameter: *size,
                     hardness: *hardness,
                     opacity: *opacity,
+                    flow: *flow,
                     color: color.0,
                     dynamics,
                     symmetry,
@@ -3346,6 +3379,7 @@ mod tests {
                     visible: Some(false),
                     locked: None,
                     opacity: None,
+                    fill: None,
                     blend: None,
                     clip_to: None,
                 },
@@ -3396,6 +3430,7 @@ mod tests {
                     visible: None,
                     locked: None,
                     opacity: Some(2.0),
+                    fill: None,
                     blend: None,
                     clip_to: None,
                 }]
@@ -4594,6 +4629,42 @@ mod tests {
     }
 
     #[test]
+    fn stroke_flow_defaults_to_full_and_builds_up_where_the_stroke_goes_back() {
+        let parsed: Edit =
+            serde_json::from_value(json!({"op": "stroke", "points": [[1, 1]]})).unwrap();
+        let Edit::Stroke { flow, .. } = parsed else {
+            panic!("not a stroke");
+        };
+        assert_eq!(flow, 1.0);
+        let alpha = |flow: Option<f32>, passes: usize| {
+            let mut document = clear_document();
+            let points: Vec<_> = (0..=passes)
+                .map(|i| json!([if i % 2 == 0 { 20 } else { 180 }, 30]))
+                .collect();
+            let mut stroke = json!({"op": "stroke", "size": 20, "hardness": 1, "points": points});
+            if let Some(flow) = flow {
+                stroke["flow"] = json!(flow);
+            }
+            run(&mut document, &[edit(stroke)]).unwrap();
+            crate::render::render(&document).get_pixel(100, 30)[3]
+        };
+        assert_eq!(alpha(None, 1), 255);
+        assert_eq!(alpha(Some(1.0), 1), 255);
+        let (once, often) = (alpha(Some(0.2), 1), alpha(Some(0.2), 20));
+        assert!((40..=65).contains(&once), "{once}");
+        assert!(often > 240, "{often}");
+        let mut document = clear_document();
+        for flow in [0.0, -0.5, 1.5, f32::NAN] {
+            let stroke = json!({"op": "stroke", "points": [[1, 1]], "flow": flow});
+            let parsed = serde_json::from_value::<Edit>(stroke.clone());
+            assert!(
+                parsed.is_err() || run(&mut document, &[parsed.unwrap()]).is_err(),
+                "{stroke}"
+            );
+        }
+    }
+
+    #[test]
     fn stroke_dynamics_are_checked_and_repeat_for_a_seed() {
         let mut document = clear_document();
         for (stroke, says) in [
@@ -4863,5 +4934,42 @@ mod tests {
             &[edit(json!({"op": "trim", "based_on": "top_left"}))],
         )
         .unwrap();
+    }
+
+    /// `set` takes a layer's Fill apart from its opacity, and `document/get` reports it.
+    #[test]
+    fn set_changes_fill_on_pixel_layers_only() {
+        let mut document = Document::new(8, 8).unwrap();
+        let layer = document.layers[0].id;
+        let set = |value: Value| serde_json::from_value::<Edit>(value).unwrap();
+        run(
+            &mut document,
+            &[set(json!({"op": "set", "layer": layer, "fill": 0.25}))],
+        )
+        .unwrap();
+        assert_eq!(document.layers[0].fill, 0.25);
+        assert_eq!(document.layers[0].opacity, 1.0);
+        assert_eq!(describe(&document)["layers"][0]["fill"], 0.25);
+        // Left out, it does not change.
+        run(
+            &mut document,
+            &[set(json!({"op": "set", "layer": layer, "opacity": 0.5}))],
+        )
+        .unwrap();
+        assert_eq!(document.layers[0].fill, 0.25);
+        for bad in [json!(1.5), json!(-0.1)] {
+            let edit = set(json!({"op": "set", "layer": layer, "fill": bad}));
+            assert!(run(&mut document.clone(), &[edit]).is_err(), "{bad}");
+        }
+        let mut folder = Layer::blank("Folder", 8, 8);
+        folder.group = true;
+        let folder_id = folder.id;
+        document.layers.push(folder);
+        let edit = set(json!({"op": "set", "layer": folder_id, "fill": 0.5}));
+        let error = run(&mut document.clone(), &[edit]).unwrap_err();
+        assert!(error.to_string().contains("take a fill"), "{error}");
+        // 100% is every layer's fill, so setting it anywhere is fine.
+        let edit = set(json!({"op": "set", "layer": folder_id, "fill": 1}));
+        run(&mut document, &[edit]).unwrap();
     }
 }

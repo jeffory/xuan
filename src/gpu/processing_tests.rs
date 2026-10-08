@@ -430,8 +430,13 @@ fn processing_blend_modes_match_cpu() {
         top.transform.rotation = 11.0;
         top.opacity = 0.8;
         document.layers.push(top);
-        for mode in BlendMode::ALL {
+        // Fill fades most modes as opacity does and changes the blend of the eight others.
+        for (mode, fill) in BlendMode::ALL
+            .into_iter()
+            .flat_map(|mode| [(mode, 1.0), (mode, 0.45)])
+        {
             document.layers[1].blend = mode;
+            document.layers[1].fill = fill;
             let cpu = crate::render::render(&document);
             let actual = gpu.compose(&document, 96, 80).unwrap();
             let allowed = match mode {
@@ -444,7 +449,7 @@ fn processing_blend_modes_match_cpu() {
             let mismatches = premultiplied_mismatches(&actual, &cpu, 3);
             assert!(
                 mismatches <= allowed,
-                "{} (opaque backdrop {opaque}): {mismatches} pixels differ",
+                "{} at fill {fill} (opaque backdrop {opaque}): {mismatches} pixels differ",
                 mode.name()
             );
         }
@@ -484,9 +489,12 @@ fn processing_layer_effects_match_cpu() {
     cases.push(sharp);
     for effects in cases {
         let padded = pad(&source, crate::layer_effects::margin(&effects));
-        let expected = render_cpu(&padded, &effects);
-        let actual = gpu.layer_effects(&padded, &effects).unwrap();
-        compare(&actual, &expected, 2);
+        // Fill fades the pixels under the effects on both.
+        for fill in [1.0, 0.4, 0.0] {
+            let expected = render_cpu(&padded, &effects, fill);
+            let actual = gpu.layer_effects(&padded, &effects, fill).unwrap();
+            compare(&actual, &expected, 2);
+        }
     }
 }
 
@@ -504,11 +512,11 @@ fn processing_color_overlay_keeps_alpha_like_cpu() {
         let mut effects = LayerEffects::default();
         effects.add(EffectKind::ColorOverlay, [255, 255, 255]);
         effects.color_overlay.as_mut().unwrap().opacity = opacity;
-        let expected = render_cpu(&source, &effects);
+        let expected = render_cpu(&source, &effects, 1.0);
         for (a, b) in source.pixels().zip(expected.pixels()) {
             assert_eq!(a[3], b[3], "the CPU render changed the alpha");
         }
-        let actual = gpu.layer_effects(&source, &effects).unwrap();
+        let actual = gpu.layer_effects(&source, &effects, 1.0).unwrap();
         compare(&actual, &expected, 2);
     }
 }
@@ -1003,6 +1011,75 @@ fn processing_low_opacity_stroke_coverage_matches_cpu() {
                     previous = point;
                     previous_brush = current;
                 }
+                document
+            };
+            let expected = apply(None);
+            let actual = apply(Some(gpu.clone()));
+            if mask {
+                let a = &actual.active().unwrap().mask.as_ref().unwrap().pixels;
+                let b = &expected.active().unwrap().mask.as_ref().unwrap().pixels;
+                assert!(
+                    a.as_raw()
+                        .iter()
+                        .zip(b.as_raw())
+                        .all(|(a, b)| a.abs_diff(*b) <= 1)
+                );
+            } else {
+                compare(
+                    actual.active().unwrap().pixels.as_ref().unwrap(),
+                    expected.active().unwrap().pixels.as_ref().unwrap(),
+                    1,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_low_flow_stroke_builds_up_as_on_the_cpu() {
+    use crate::paint::{Brush, PaintMode, Stroke, StrokeOptions};
+    let gpu = processor();
+    let mut base = Document::new(560, 400).unwrap();
+    base.insert(Layer::image("Pixels", fixture(560, 400)));
+    base.selection = Some(Arc::new(image::GrayImage::from_fn(560, 400, |x, y| {
+        image::Luma([(x * 19 + y * 11) as u8])
+    })));
+    // Dabs of 300 px are large enough for the GPU path; the stroke goes
+    // back over itself, so the flow builds up.
+    let brush = Brush {
+        diameter: 300.0,
+        hardness: 0.6,
+        opacity: 0.9,
+        flow: 0.3,
+        color: [31, 57, 93, 173],
+        ..Default::default()
+    };
+    let points = [
+        Point::new(150.0, 160.0),
+        Point::new(400.0, 230.0),
+        Point::new(160.0, 200.0),
+        Point::new(380.0, 170.0),
+    ];
+    for mask in [false, true] {
+        for mode in [PaintMode::Paint, PaintMode::Erase] {
+            let apply = |device: Option<Arc<Processor>>| {
+                let mut document = base.clone();
+                let mut stroke = Stroke::default();
+                let options = || StrokeOptions {
+                    mode,
+                    mask_target: mask,
+                    source: None,
+                    clone_offset: Point::default(),
+                };
+                scope(device, || {
+                    for pair in points.windows(2) {
+                        stroke
+                            .segment(&mut document, pair[0], pair[1], &brush, &brush, options())
+                            .unwrap();
+                    }
+                    stroke.finish(&mut document, options()).unwrap();
+                });
                 document
             };
             let expected = apply(None);

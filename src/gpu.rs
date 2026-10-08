@@ -630,6 +630,8 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
     ];
     p.flags[0] = layer.blend.code();
     p.appearance[0] = layer.opacity;
+    // Pixel layers leave `second` unused; adjustments below take it over.
+    p.second[0] = layer.fill;
     if let Some(inverse) = t
         .warp
         .and_then(crate::geometry::Homography::from_quad)
@@ -1423,11 +1425,15 @@ mod tests {
             Point::new(0.0, 1.0),
         ]);
         document.layers[1].opacity = 0.73;
-        for mode in BlendMode::ALL {
-            document.layers[1].blend = mode;
-            compositor.render(&document, [12, 10]);
-            compare(&document, &readback(&compositor), mode.name());
+        for fill in [1.0, 0.4] {
+            document.layers[1].fill = fill;
+            for mode in BlendMode::ALL {
+                document.layers[1].blend = mode;
+                compositor.render(&document, [12, 10]);
+                compare(&document, &readback(&compositor), mode.name());
+            }
         }
+        document.layers[1].fill = 1.0;
         document.layers[1].mask = Some(crate::document::Mask {
             pixels: Arc::new(image::GrayImage::from_pixel(1, 1, image::Luma([137]))),
             ..crate::document::Mask::white()

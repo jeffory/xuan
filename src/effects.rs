@@ -403,7 +403,7 @@ pub fn apply_adjustment(
 /// As in Photoshop, a negative Lens Correction `vignette` darkens the corners and a positive
 /// one brightens them. Format 11 and earlier stored the opposite sign; `io::load` negates it.
 /// Vignette, Bloom, Tonal Contrast and Dither are upstream Compositor's filters, with its
-/// settings, ranges and defaults (`Document/Filters.swift`); they need format 13.
+/// settings, ranges and defaults (`Document/Filters.swift`); they need format 14.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
     GaussianBlur {

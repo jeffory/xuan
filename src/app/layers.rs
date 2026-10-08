@@ -61,7 +61,7 @@ struct Actions {
     collapse: Option<Uuid>,
     reorder: Option<(LayerDrag, Uuid, DropPosition, bool)>,
     drop_indicator: Option<egui::Shape>,
-    appearance: Option<(BlendMode, f32, bool)>,
+    appearance: Option<(BlendMode, f32, f32, bool)>,
     rename: Option<Uuid>,
     finish_rename: Option<bool>,
     edit_adjustment: Option<Uuid>,
@@ -222,6 +222,7 @@ impl EditorApp {
                 ui.add_enabled_ui(active.is_some(), |ui| {
                     let mut blend = active.map_or(BlendMode::Normal, |l| l.blend);
                     let mut opacity = active.map_or(1.0, |l| l.opacity);
+                    let mut fill = active.map_or(1.0, |l| l.fill);
                     let mut locked = active.is_some_and(|l| l.locked);
                     let mut changed = false;
                     let folder = active.is_some_and(|l| l.group);
@@ -270,8 +271,27 @@ impl EditorApp {
                             )
                             .changed();
                     });
+                    // Photoshop's Fill: fades the layer's own pixels but not its effects. Only
+                    // pixel, text and shape layers have one.
+                    ui.add_enabled_ui(active.is_some_and(|l| l.can_attach_effects()), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(tr("Fill")).size(11.0))
+                                .on_hover_text(tr(
+                                    "Fades the layer's own pixels but not its layer effects",
+                                ));
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 50.0 - widgets::SLIDER_SPACING).max(40.0);
+                            changed |= ui
+                                .add(
+                                    widgets::Slider::new(&mut fill, 0.0..=1.0)
+                                        .value_width(50.0)
+                                        .percentage(),
+                                )
+                                .changed();
+                        });
+                    });
                     if changed {
-                        actions.appearance = Some((blend, opacity, locked));
+                        actions.appearance = Some((blend, opacity, fill, locked));
                     }
                 });
                 if let Some(active) = active.filter(|l| l.generated.is_some()) {
@@ -634,6 +654,7 @@ impl EditorApp {
                 let mut thumbnail_layer = layer.clone();
                 thumbnail_layer.visible = true;
                 thumbnail_layer.opacity = 1.0;
+                thumbnail_layer.fill = 1.0;
                 thumbnail_layer.blend = BlendMode::Normal;
                 thumbnail_layer.parent = None;
                 thumbnail_layer.clip_to = None;
@@ -833,11 +854,14 @@ impl EditorApp {
         {
             session.collapsed.insert(id);
         }
-        if let Some((blend, opacity, locked)) = actions.appearance {
+        if let Some((blend, opacity, fill, locked)) = actions.appearance {
             self.edit_continuous(tr("Layer Appearance"), |doc| {
                 if let Some(layer) = doc.active_mut() {
                     layer.blend = blend;
                     layer.opacity = opacity;
+                    if layer.can_attach_effects() {
+                        layer.fill = fill;
+                    }
                     layer.locked = locked;
                 }
                 Ok(())

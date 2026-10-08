@@ -156,9 +156,16 @@ fn stroke_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
     if (config[14].x != 0.0) {
         let offset = bitcast<u32>(config[14].y) + i * 2u;
         let previous = bitcast<f32>(auxiliary[offset + 1u]);
-        result[size.x * size.y + i] = bitcast<u32>(max(previous, amount));
-        if (amount > previous) {
+        // Flow below 1 builds up towards the dab's coverage (paint::build_up).
+        let flow = config[14].z;
+        var built = max(previous, amount);
+        if (flow < 1.0) {
+            built = previous + max(amount - previous, 0.0) * max(flow, 0.0);
+        }
+        result[size.x * size.y + i] = bitcast<u32>(built);
+        if (built > previous) {
             p = unpack4x8unorm(auxiliary[offset]);
+            amount = built;
         } else {
             amount = 0.0;
         }

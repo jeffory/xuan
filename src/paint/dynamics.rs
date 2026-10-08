@@ -60,6 +60,9 @@ impl Default for Dynamics {
 
 /// Spacing used for dabs when only scatter or jitter asks for them.
 pub const DEFAULT_SPACING: f32 = 0.25;
+/// Spacing used for dabs when only a flow below 100% asks for them; close,
+/// so the build-up is smooth.
+pub const FLOW_SPACING: f32 = 0.1;
 /// The shortest distance between dabs, in document pixels.
 pub const MIN_STEP: f32 = 1.0;
 /// The most dabs at one spacing step.
@@ -79,6 +82,15 @@ impl Dynamics {
             || self.size_jitter > 0.0
             || self.opacity_jitter > 0.0
             || self.hue_jitter > 0.0
+    }
+
+    /// These dynamics for a stroke whose flow builds up: as dabs, at
+    /// [`FLOW_SPACING`] unless something else already asks for dabs.
+    pub fn with_flow(mut self) -> Self {
+        if !self.dabs() {
+            self.spacing = FLOW_SPACING;
+        }
+        self
     }
 
     pub fn tapered(&self) -> bool {
@@ -180,6 +192,7 @@ impl Walker {
         let mut brush = to.clone();
         brush.diameter = from.diameter + (to.diameter - from.diameter) * t;
         brush.opacity = from.opacity + (to.opacity - from.opacity) * t;
+        brush.flow = from.flow + (to.flow - from.flow) * t;
         brush.tilt = [0, 1].map(|axis| from.tilt[axis] + (to.tilt[axis] - from.tilt[axis]) * t);
         if self.dynamics.tapered() {
             let factor = self.taper(distance);
@@ -215,13 +228,15 @@ impl Walker {
             while self.next <= end {
                 let distance = self.next;
                 let t = t_of(distance);
-                let base = self.brush_at([from_brush, brush], t, distance);
+                let mut base = self.brush_at([from_brush, brush], t, distance);
+                let step = self.dynamics.step(base.diameter);
+                base.flow = dab_flow(base.flow, step / base.diameter.max(MIN_STEP));
                 let centre = at(t);
                 for k in 0..self.dynamics.count.clamp(1, MAX_COUNT) {
                     pieces.push(self.dab(centre, &base, k));
                 }
                 self.index += 1;
-                self.next = distance + self.dynamics.step(base.diameter);
+                self.next = distance + step;
             }
         } else {
             // Continuous: cut at the taper's edges and into short pieces inside it.
@@ -286,6 +301,18 @@ impl Walker {
         }
         Piece::Dab(point, brush)
     }
+}
+
+/// The flow of each of the dabs `step` (a fraction of the diameter) apart
+/// that together lay down `flow` in one pass. A pixel on the path is under
+/// about `1 / step` dabs, each moving it `flow` of the rest of the way, so
+/// the stroke's flow does not depend on the spacing. Dabs a diameter or
+/// more apart each take the whole flow.
+pub(crate) fn dab_flow(flow: f32, step: f32) -> f32 {
+    if flow >= 1.0 || step >= 1.0 {
+        return flow;
+    }
+    1.0 - (1.0 - flow.max(0.0)).powf(step.max(0.0))
 }
 
 /// A small deterministic random sequence (SplitMix64).
