@@ -1,4 +1,5 @@
 //! Nondestructive camera RAW assets and a floating-point Develop pipeline.
+mod filter;
 mod negative;
 mod process;
 mod settings;
@@ -23,6 +24,7 @@ use rawler::{
 use serde::{Deserialize, Serialize};
 
 use crate::document::validate_size;
+pub use filter::{apply_filter, can_filter, filter_source, render_filter, within_selection};
 pub use negative::{NegativeSettings, analyze_negative, sample_film_base};
 pub(crate) use process::SourceMap;
 pub(crate) use process::white_balance;

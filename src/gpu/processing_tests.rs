@@ -687,6 +687,60 @@ fn processing_raw_matches_cpu_at_both_depths() {
             "16-bit RAW error {error}, outliers {outliers}"
         );
     }
+
+    // The Camera Raw Filter: an 8-bit layer through the same pipeline. Large enough for the
+    // GPU path, which leaves the layer exactly as it was at the filter's defaults.
+    let layer = fixture(160, 120);
+    let source = filter_source(&layer).unwrap();
+    let identity = DevelopSettings::camera_raw_filter();
+    let adjusted = DevelopSettings {
+        white_balance: WhiteBalance::Temperature,
+        temperature: 4200.0,
+        tint: 12.0,
+        exposure: 0.6,
+        contrast: 21.0,
+        highlights: -35.0,
+        shadows: 28.0,
+        vibrance: 17.0,
+        clarity: 15.0,
+        luminance_noise: 20.0,
+        sharpen: 40.0,
+        chromatic_red: 9.0,
+        defringe: 12.0,
+        vignette: -25.0,
+        shadow_tone: [210.0, 14.0],
+        ..identity.clone()
+    };
+    for s in [&identity, &adjusted] {
+        let cpu = super::scope(None, || render_filter(&source, &layer, s, &cancel).unwrap());
+        let filtered = super::scope(Some(gpu.clone()), || {
+            render_filter(&source, &layer, s, &cancel).unwrap()
+        });
+        compare(&filtered, &cpu, 1);
+        let developed = RgbaImage::from_raw(
+            160,
+            120,
+            gpu.develop(&source, s, white_balance(&source, s), 8, &cancel)
+                .unwrap(),
+        )
+        .unwrap();
+        let reference = super::scope(None, || crate::raw::render(&source, s, &cancel).unwrap());
+        compare(&developed, &reference, 1);
+    }
+    let developed = RgbaImage::from_raw(
+        160,
+        120,
+        gpu.develop(&source, &identity, [1.0; 3], 8, &cancel)
+            .unwrap(),
+    )
+    .unwrap();
+    for (out, original) in developed.pixels().zip(layer.pixels()) {
+        assert_eq!(
+            out.0[..3],
+            original.0[..3],
+            "the GPU filter at its defaults"
+        );
+    }
 }
 
 #[test]

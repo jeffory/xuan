@@ -1268,3 +1268,248 @@ fn sensor_validation_accepts_only_single_plane_rgb_bayer_and_xtrans() {
         .to_string();
     assert!(message.contains("sRAW/mRAW"));
 }
+
+/// A layer with every 8-bit level in each channel, varied alpha and fully transparent pixels.
+fn filter_fixture() -> RgbaImage {
+    RgbaImage::from_fn(64, 24, |x, y| {
+        let level = (y * 64 + x) as u8;
+        image::Rgba([
+            level,
+            level.wrapping_mul(7),
+            level.wrapping_mul(13).wrapping_add(5),
+            if x % 9 == 0 { 0 } else { 255 - (y as u8 * 3) },
+        ])
+    })
+}
+
+/// The Camera Raw Filter on the CPU reference path.
+fn filter_cpu(original: &RgbaImage, settings: &DevelopSettings) -> Result<RgbaImage> {
+    crate::gpu::scope(None, || {
+        render_filter(
+            &filter_source(original)?,
+            original,
+            settings,
+            &AtomicBool::new(false),
+        )
+    })
+}
+
+#[test]
+fn camera_raw_filter_defaults_leave_every_level_and_alpha_unchanged() {
+    let original = filter_fixture();
+    let source = filter_source(&original).unwrap();
+    assert_eq!(source.camera.dimensions(), original.dimensions());
+    assert_eq!(source.camera.get_pixel(0, 0).0, [0.0, 0.0, linear_of(5)]);
+    assert_eq!(
+        source.camera_to_rgb,
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    );
+    assert_eq!(source.metadata.width, 64);
+    let settings = DevelopSettings::camera_raw_filter();
+    assert!(settings.keeps_geometry());
+    assert_eq!(settings.sharpen, 0.0);
+    assert_eq!(settings.color_noise, 0.0);
+    assert_eq!(filter_cpu(&original, &settings).unwrap(), original);
+}
+
+/// The linear value the filter gives an 8-bit sRGB level, read back through the source.
+fn linear_of(level: u8) -> f32 {
+    let pixels = RgbaImage::from_pixel(1, 1, image::Rgba([level, level, level, 255]));
+    filter_source(&pixels).unwrap().camera.get_pixel(0, 0)[0]
+}
+
+#[test]
+fn camera_raw_filter_linearizes_srgb_and_exposure_doubles_the_light() {
+    assert_eq!(linear_of(0), 0.0);
+    assert_eq!(linear_of(255), 1.0);
+    assert!((linear_of(128) - 0.215_860_5).abs() < 1e-6);
+    assert!((linear_of(10) - 10.0 / 255.0 / 12.92).abs() < 1e-7);
+    let original = RgbaImage::from_fn(2, 1, |x, _| {
+        let level = if x == 0 { 128 } else { 64 };
+        image::Rgba([level, level, level, 200])
+    });
+    let settings = DevelopSettings {
+        exposure: 1.0,
+        ..DevelopSettings::camera_raw_filter()
+    };
+    // sRGB(2 × linear(128)) = 175.56 and sRGB(2 × linear(64)) = 90.13 of 255.
+    let result = filter_cpu(&original, &settings).unwrap();
+    assert_eq!(result.get_pixel(0, 0).0, [176, 176, 176, 200]);
+    assert_eq!(result.get_pixel(1, 0).0, [90, 90, 90, 200]);
+}
+
+#[test]
+fn camera_raw_filter_temperature_is_relative_to_daylight() {
+    let original = RgbaImage::from_pixel(4, 4, image::Rgba([128, 128, 128, 255]));
+    let at = |temperature: f32| {
+        let settings = DevelopSettings {
+            white_balance: WhiteBalance::Temperature,
+            temperature,
+            ..DevelopSettings::camera_raw_filter()
+        };
+        filter_cpu(&original, &settings).unwrap().get_pixel(1, 1).0
+    };
+    let daylight = at(6500.0);
+    for c in 0..3 {
+        assert!(
+            daylight[c].abs_diff(128) <= 1,
+            "6500 K is neutral: {daylight:?}"
+        );
+    }
+    // As in RAW Develop, a lower temperature corrects for warmer light: the image cools.
+    let tungsten = at(3000.0);
+    assert!(tungsten[2] > tungsten[0] + 40, "{tungsten:?}");
+    let shade = at(10_000.0);
+    assert!(shade[0] > shade[2] + 10, "{shade:?}");
+}
+
+#[test]
+fn camera_raw_filter_refuses_geometry_and_strips_it_from_loaded_settings() {
+    let original = filter_fixture();
+    for settings in [
+        DevelopSettings {
+            crop: [0.1, 0.0, 1.0, 1.0],
+            ..DevelopSettings::camera_raw_filter()
+        },
+        DevelopSettings {
+            quarter_turns: 1,
+            ..DevelopSettings::camera_raw_filter()
+        },
+        DevelopSettings {
+            rotation: 3.0,
+            ..DevelopSettings::camera_raw_filter()
+        },
+        DevelopSettings {
+            distortion: 10.0,
+            ..DevelopSettings::camera_raw_filter()
+        },
+        DevelopSettings {
+            perspective: [0.0, 5.0],
+            ..DevelopSettings::camera_raw_filter()
+        },
+        DevelopSettings {
+            negative: NegativeSettings {
+                enabled: true,
+                ..Default::default()
+            },
+            ..DevelopSettings::camera_raw_filter()
+        },
+    ] {
+        assert!(!settings.keeps_geometry());
+        assert!(filter_cpu(&original, &settings).is_err());
+        let stripped = settings.without_geometry();
+        assert!(stripped.keeps_geometry());
+        assert_eq!(stripped, DevelopSettings::camera_raw_filter());
+    }
+    let kept = DevelopSettings {
+        exposure: 0.5,
+        vignette: -20.0,
+        rotation: 2.0,
+        ..DevelopSettings::default()
+    }
+    .without_geometry();
+    assert_eq!(
+        (kept.exposure, kept.vignette, kept.rotation),
+        (0.5, -20.0, 0.0)
+    );
+    // Out-of-range settings and empty layers are errors, not panics.
+    let invalid = DevelopSettings {
+        exposure: f32::NAN,
+        ..DevelopSettings::camera_raw_filter()
+    };
+    assert!(filter_cpu(&original, &invalid).is_err());
+    assert!(filter_source(&RgbaImage::new(0, 4)).is_err());
+    let other = filter_source(&RgbaImage::new(4, 4)).unwrap();
+    assert!(
+        render_filter(
+            &other,
+            &original,
+            &DevelopSettings::camera_raw_filter(),
+            &AtomicBool::new(false)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn camera_raw_filter_applies_within_the_selection_and_only_to_the_unchanged_layer() {
+    use crate::document::Layer;
+    let original = Arc::new(RgbaImage::from_pixel(
+        8,
+        4,
+        image::Rgba([100, 120, 140, 255]),
+    ));
+    let settings = DevelopSettings {
+        exposure: 1.0,
+        ..DevelopSettings::camera_raw_filter()
+    };
+    let result = filter_cpu(&original, &settings).unwrap();
+    let cancel = AtomicBool::new(false);
+    let mut layer = Layer::image("Photo", (*original).clone());
+    layer.pixels = Some(original.clone());
+    layer.transform.x = 2.0;
+    let transform = layer.transform;
+    // The left half of the layer, in document coordinates (the layer starts at x = 2).
+    let selection =
+        crate::selection::rectangle(16, 8, Point::new(2.0, 0.0), Point::new(6.0, 4.0), false);
+    let mut selected = result.clone();
+    crate::gpu::scope(None, || {
+        within_selection(&mut selected, &original, transform, &selection, &cancel)
+    })
+    .unwrap();
+    assert_eq!(selected.get_pixel(1, 1), result.get_pixel(1, 1));
+    assert_ne!(selected.get_pixel(1, 1), original.get_pixel(1, 1));
+    assert_eq!(selected.get_pixel(6, 1), original.get_pixel(6, 1));
+    assert!(
+        within_selection(
+            &mut RgbaImage::new(2, 2),
+            &original,
+            transform,
+            &selection,
+            &cancel
+        )
+        .is_err()
+    );
+
+    apply_filter(&mut layer, &original, transform, selected.clone()).unwrap();
+    let pixels = layer.pixels.clone().unwrap();
+    assert_eq!(*pixels, selected);
+
+    // The layer has changed since the filter opened: nothing is replaced.
+    assert!(apply_filter(&mut layer, &original, transform, result.clone()).is_err());
+    assert!(Arc::ptr_eq(layer.pixels.as_ref().unwrap(), &pixels));
+    let mut moved = Layer::image("Photo", (*original).clone());
+    moved.pixels = Some(original.clone());
+    assert!(apply_filter(&mut moved, &original, transform, result.clone()).is_err());
+    assert!(Arc::ptr_eq(moved.pixels.as_ref().unwrap(), &original));
+
+    for refuse in [
+        |l: &mut Layer| l.locked = true,
+        |l: &mut Layer| l.pixels = None,
+        |l: &mut Layer| l.filter = Some(crate::effects::Filter::BLOOM),
+        |l: &mut Layer| l.group = true,
+    ] {
+        let mut layer = Layer::image("Photo", (*original).clone());
+        layer.pixels = Some(original.clone());
+        let transform = layer.transform;
+        refuse(&mut layer);
+        assert!(!can_filter(&layer));
+        assert!(apply_filter(&mut layer, &original, transform, result.clone()).is_err());
+        assert!(layer.pixels.is_none() || Arc::ptr_eq(layer.pixels.as_ref().unwrap(), &original));
+    }
+    // Text is rasterized, as other filters do.
+    let mut text = Layer::image("Title", (*original).clone());
+    text.pixels = Some(original.clone());
+    text.text = Some(Default::default());
+    assert!(can_filter(&text));
+    let transform = text.transform;
+    apply_filter(&mut text, &original, transform, result.clone()).unwrap();
+    assert!(text.text.is_none());
+    let mut whole = Layer::image("Photo", (*original).clone());
+    whole.pixels = Some(original.clone());
+    assert!(can_filter(&whole));
+    let transform = whole.transform;
+    assert!(apply_filter(&mut whole, &original, transform, RgbaImage::new(4, 4)).is_err());
+    apply_filter(&mut whole, &original, transform, result.clone()).unwrap();
+    assert_eq!(**whole.pixels.as_ref().unwrap(), result);
+}

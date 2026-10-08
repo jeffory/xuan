@@ -952,43 +952,8 @@ fn apply_filter_impl(
         }
     };
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-    let blended = selection.as_deref().and_then(|selection| {
-        crate::gpu::filter_selection(crate::gpu::FilterSelection {
-            image: result.as_raw(),
-            original: original.as_raw(),
-            size: [w, h],
-            original_size: [original.width(), original.height()],
-            transform,
-            selection,
-            padding,
-            mask: false,
-        })
-    });
-    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-    if let Some(bytes) = blended {
-        result = RgbaImage::from_raw(w, h, bytes).unwrap();
-    } else if selection.is_some() {
-        for (x, y, pixel) in result.enumerate_pixels_mut() {
-            if x == 0 {
-                ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-            }
-            let point = transform.point(Point::new(
-                (x as f32 + 0.5) / w as f32,
-                (y as f32 + 0.5) / h as f32,
-            ));
-            let amount = selection::coverage(selection.as_deref(), point);
-            let old = if (padding..padding + original.width()).contains(&x)
-                && (padding..padding + original.height()).contains(&y)
-            {
-                original.get_pixel(x - padding, y - padding).0
-            } else {
-                [0; 4]
-            };
-            for i in 0..4 {
-                pixel[i] =
-                    (old[i] as f32 * (1.0 - amount) + pixel[i] as f32 * amount).round() as u8;
-            }
-        }
+    if let Some(selection) = selection.as_deref() {
+        blend_selection(&mut result, original, transform, selection, padding, cancel)?;
     }
     let mut transform = transform;
     // Growth per side (left, top, right, bottom). Sides that reach the canvas
@@ -1026,6 +991,56 @@ fn apply_filter_impl(
     }
     layer.transform = transform;
     layer.pixels = Some(Arc::new(result));
+    Ok(())
+}
+
+/// Keep the filtered `result` only where `selection` covers it, and `original` elsewhere,
+/// blending by the selection's coverage. `result` is `original` grown by `padding` pixels on
+/// each side, and `transform` places `result` in the document.
+pub(crate) fn blend_selection(
+    result: &mut RgbaImage,
+    original: &RgbaImage,
+    transform: Transform,
+    selection: &image::GrayImage,
+    padding: u32,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let (w, h) = result.dimensions();
+    let blended = crate::gpu::filter_selection(crate::gpu::FilterSelection {
+        image: result.as_raw(),
+        original: original.as_raw(),
+        size: [w, h],
+        original_size: [original.width(), original.height()],
+        transform,
+        selection,
+        padding,
+        mask: false,
+    });
+    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+    if let Some(bytes) = blended {
+        *result = RgbaImage::from_raw(w, h, bytes).unwrap();
+        return Ok(());
+    }
+    for (x, y, pixel) in result.enumerate_pixels_mut() {
+        if x == 0 {
+            ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+        }
+        let point = transform.point(Point::new(
+            (x as f32 + 0.5) / w as f32,
+            (y as f32 + 0.5) / h as f32,
+        ));
+        let amount = selection::coverage(Some(selection), point);
+        let old = if (padding..padding + original.width()).contains(&x)
+            && (padding..padding + original.height()).contains(&y)
+        {
+            original.get_pixel(x - padding, y - padding).0
+        } else {
+            [0; 4]
+        };
+        for i in 0..4 {
+            pixel[i] = (old[i] as f32 * (1.0 - amount) + pixel[i] as f32 * amount).round() as u8;
+        }
+    }
     Ok(())
 }
 
