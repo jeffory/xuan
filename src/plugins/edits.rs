@@ -2677,14 +2677,23 @@ fn activate(document: &mut Document, layer: Option<Uuid>) -> Result<()> {
     Ok(())
 }
 
-/// Insert a new layer above `above`, or above the active layer.
+/// Insert a new layer directly above `above`, in that layer's group as `move_layer` places
+/// it; or above the active layer, inside it when it is a group, as the Layers panel does.
 fn insert_above(document: &mut Document, layer: Layer, above: Option<Uuid>) -> Result<Uuid> {
+    let mut parent = None;
     if let Some(above) = above {
-        find(document, above)?;
+        let target = find(document, above)?;
+        // `insert` puts a new layer inside a selected group; `above` asks for next to it.
+        if target.group {
+            parent = Some(document.sibling_parent(target));
+        }
         document.select(above, false);
     }
     let id = layer.id;
     document.insert(layer);
+    if let Some(parent) = parent {
+        find_mut(document, id)?.parent = parent;
+    }
     Ok(id)
 }
 
@@ -4106,6 +4115,57 @@ mod tests {
         // New layers count against the batch's layer limit.
         let empty = edit(json!({"op": "add_empty_layer"}));
         assert!(run(&mut document.clone(), &vec![empty; MAX_LAYERS + 1]).is_err());
+    }
+
+    #[test]
+    fn new_layers_above_a_group_go_next_to_it() {
+        let (mut document, base) = grey_document();
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [base]}))],
+        )
+        .unwrap()[0];
+        let layer = |document: &Document, id: Uuid| {
+            document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .cloned()
+                .unwrap()
+        };
+        let index = |document: &Document, id: Uuid| {
+            document.layers.iter().position(|l| l.id == id).unwrap()
+        };
+        for op in [
+            json!({"op": "add_empty_layer", "above": group}),
+            json!({"op": "add_mask_layer", "above": group}),
+            json!({"op": "add_text_layer", "text": "A", "above": group}),
+            json!({"op": "add_shape_layer", "shape": "Rectangle", "x": 0, "y": 0, "width": 4, "height": 4, "color": "#ff0000", "above": group}),
+            json!({"op": "add_adjustment_layer", "adjustment": "Invert", "above": group}),
+        ] {
+            let mut document = document.clone();
+            let id = run(&mut document, &[edit(op.clone())]).unwrap()[0];
+            assert_eq!(layer(&document, id).parent, None, "{op}");
+            assert_eq!(index(&document, id), index(&document, group) + 1, "{op}");
+            document.validate().unwrap();
+        }
+        // In a nested group, it lands in the outer group.
+        let outer = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [group]}))],
+        )
+        .unwrap()[0];
+        let id = run(
+            &mut document,
+            &[edit(json!({"op": "add_empty_layer", "above": group}))],
+        )
+        .unwrap()[0];
+        assert_eq!(layer(&document, id).parent, Some(outer));
+        assert_eq!(index(&document, id), index(&document, group) + 1);
+        // Without `above`, a selected group still takes it, as in the Layers panel.
+        document.select(group, false);
+        let id = run(&mut document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0];
+        assert_eq!(layer(&document, id).parent, Some(group));
     }
 
     #[test]
