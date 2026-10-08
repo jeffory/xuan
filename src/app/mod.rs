@@ -717,6 +717,10 @@ pub struct EditorApp {
     new_image_generate: bool,
     new_image_exact: bool,
     new_image_action: Option<(String, String)>,
+    /// File → New: what the canvas is filled with, and the size of the image on the clipboard
+    /// when it opened, offered as a preset.
+    new_canvas_background: xuan::config::CanvasBackground,
+    new_canvas_clipboard: Option<[u32; 2]>,
     anchor: [f32; 2],
     /// The size dialogs' units, Resample and Relative.
     size_units: size_units::SizeUnits,
@@ -953,6 +957,8 @@ impl EditorApp {
             new_image_generate: false,
             new_image_exact: false,
             new_image_action: None,
+            new_canvas_background: Default::default(),
+            new_canvas_clipboard: None,
             anchor: [0.5, 0.5],
             size_units: Default::default(),
             effect: None,
@@ -1104,12 +1110,21 @@ impl EditorApp {
         match Document::new(self.dimensions[0], self.dimensions[1]) {
             Ok(mut document) => {
                 document.resolution = self.resolution;
+                if let Some(color) = self.new_canvas_background.pixel() {
+                    document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+                        document.width,
+                        document.height,
+                        image::Rgba(color),
+                    )));
+                }
                 let resolution = Some(self.resolution);
                 if self.config.new_canvas_size != Some(self.dimensions)
                     || self.config.units.new_canvas_resolution != resolution
+                    || self.config.new_canvas_background != self.new_canvas_background
                 {
                     self.config.new_canvas_size = Some(self.dimensions);
                     self.config.units.new_canvas_resolution = resolution;
+                    self.config.new_canvas_background = self.new_canvas_background;
                     self.save_config();
                 }
                 self.sessions
@@ -1722,6 +1737,8 @@ impl EditorApp {
                     self.dimensions = size;
                 }
                 self.resolution = self.config.units.new_canvas_resolution();
+                self.new_canvas_background = self.config.new_canvas_background;
+                self.new_canvas_clipboard = self.clipboard_image_size();
                 // Percent needs a document to be a percentage of.
                 let unit = Some(self.config.units.size)
                     .filter(|unit| *unit != xuan::units::Unit::Percent)

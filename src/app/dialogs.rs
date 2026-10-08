@@ -355,30 +355,18 @@ impl EditorApp {
                         }
                     }
                     ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        ui.label(tr("Resolution"));
-                        let unit = self.size_units.resolution_unit;
-                        let mut shown = unit.from_ppi(f64::from(self.resolution));
-                        let range = unit.from_ppi(f64::from(units::MIN_RESOLUTION))
-                            ..=unit.from_ppi(f64::from(units::MAX_RESOLUTION));
-                        let changed = ui
-                            .add(
-                                widgets::Number::new(&mut shown)
-                                    .range(range)
-                                    .max_decimals(2)
-                                    .suffix(format!(" {}", unit.suffix()))
-                                    .parser(move |text| unit.parse(text)),
-                            )
-                            .changed();
-                        let ppi = unit.to_ppi(shown);
-                        if changed && units::valid_resolution(ppi) {
-                            self.resolution = ppi as f32;
-                        }
-                        if size_units::resolution_unit_menu(
-                            ui,
-                            &mut self.size_units.resolution_unit,
-                        ) {
-                            self.remember_units();
+                    // Labels sit above their fields, as Width and Height's do.
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(tr("Resolution"));
+                            ui.horizontal(|ui| self.resolution_field(ui));
+                        });
+                        if dialog == Dialog::New && !generating {
+                            ui.add_space(15.0);
+                            ui.vertical(|ui| {
+                                ui.label(tr("Background"));
+                                self.background_menu(ui);
+                            });
                         }
                     });
                     let keeps_print_size = dialog == Dialog::New
@@ -491,7 +479,7 @@ impl EditorApp {
                         );
                         if dialog == Dialog::New && !generating {
                             ui.label(
-                                RichText::new(tr("Transparent canvas · sRGB"))
+                                RichText::new(canvas_summary(self.new_canvas_background))
                                     .color(ui.palette().muted),
                             );
                         }
@@ -609,6 +597,69 @@ impl EditorApp {
             }
         }
         response
+    }
+
+    /// The size dialogs' Resolution field and its unit.
+    fn resolution_field(&mut self, ui: &mut egui::Ui) {
+        let unit = self.size_units.resolution_unit;
+        let mut shown = unit.from_ppi(f64::from(self.resolution));
+        let range = unit.from_ppi(f64::from(units::MIN_RESOLUTION))
+            ..=unit.from_ppi(f64::from(units::MAX_RESOLUTION));
+        let changed = ui
+            .add(
+                widgets::Number::new(&mut shown)
+                    .range(range)
+                    .max_decimals(2)
+                    .suffix(format!(" {}", unit.suffix()))
+                    .parser(move |text| unit.parse(text)),
+            )
+            .changed();
+        let ppi = unit.to_ppi(shown);
+        if changed && units::valid_resolution(ppi) {
+            self.resolution = ppi as f32;
+        }
+        if size_units::resolution_unit_menu(ui, &mut self.size_units.resolution_unit) {
+            self.remember_units();
+        }
+    }
+
+    /// New canvas: White, Black, Transparent or a custom colour, which starts as the
+    /// background colour swatch and is changed in the well beside the menu.
+    fn background_menu(&mut self, ui: &mut egui::Ui) {
+        use xuan::config::CanvasBackground as Background;
+        let custom = match self.new_canvas_background {
+            Background::Custom(rgb) => Background::Custom(rgb),
+            _ => {
+                let [r, g, b, _] = self.background;
+                Background::Custom([r, g, b])
+            }
+        };
+        ui.horizontal(|ui| {
+            widgets::PopUp::from_id_salt("new_canvas_background")
+                .selected_text(background_name(self.new_canvas_background))
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for choice in [
+                        Background::White,
+                        Background::Black,
+                        Background::Transparent,
+                        custom,
+                    ] {
+                        widgets::menu_choice(
+                            ui,
+                            &mut self.new_canvas_background,
+                            choice,
+                            background_name(choice),
+                        );
+                    }
+                });
+            if let Background::Custom([r, g, b]) = self.new_canvas_background {
+                let mut color = [r, g, b, 255];
+                if widgets::color_well(ui, &mut color).changed() {
+                    self.new_canvas_background = Background::Custom([color[0], color[1], color[2]]);
+                }
+            }
+        });
     }
 
     /// Saves the size and resolution units chosen in a size dialog for next time.
@@ -1601,6 +1652,28 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
         }
     }
     changed
+}
+
+/// A New canvas background as its menu names it.
+fn background_name(background: xuan::config::CanvasBackground) -> &'static str {
+    use xuan::config::CanvasBackground as Background;
+    match background {
+        Background::White => tr("White"),
+        Background::Black => tr("Black"),
+        Background::Transparent => tr("Transparent"),
+        Background::Custom(_) => tr("Custom colour"),
+    }
+}
+
+/// The line under New canvas's size, and on the welcome screen: what Create canvas makes.
+pub(super) fn canvas_summary(background: xuan::config::CanvasBackground) -> &'static str {
+    use xuan::config::CanvasBackground as Background;
+    match background {
+        Background::Transparent => tr("Transparent canvas · sRGB"),
+        Background::White => tr("White canvas · sRGB"),
+        Background::Black => tr("Black canvas · sRGB"),
+        Background::Custom(_) => tr("Coloured canvas · sRGB"),
+    }
 }
 
 /// What the error dialog's Copy details puts on the clipboard: the message, then the version

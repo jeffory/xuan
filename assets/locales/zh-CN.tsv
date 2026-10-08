@@ -269,6 +269,12 @@ Create canvas	创建画布
 Resolution	分辨率
 Anchor	锚点
 Transparent canvas · sRGB	透明画布 · sRGB
+White canvas · sRGB	白色画布 · sRGB
+Black canvas · sRGB	黑色画布 · sRGB
+Coloured canvas · sRGB	彩色画布 · sRGB
+White	白色
+Transparent	透明
+Custom colour	自定义颜色
 Change the canvas bounds and anchor your composition.	更改画布边界和内容锚点。
 Scale the composition while preserving source pixels.	缩放合成图像并保留源像素。
 Cancel	取消

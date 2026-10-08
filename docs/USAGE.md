@@ -140,6 +140,12 @@ The **+** button after the last tab starts a new canvas. Hover a tab for its ful
   landscape), and **Keep aspect ratio** makes the other side follow the one you type, in the
   proportion it had when you ticked the box or picked a preset. Sizes obey the same limits as
   every canvas. The size and resolution of the last canvas you created are offered next time.
+  When the clipboard holds an image, the menu also offers its size under **Clipboard**
+  (**Clipboard image (640 × 427)**), in pixels whatever the unit.
+- **New canvas background:** **Background** fills the new canvas with **White**, **Black** or a
+  **Custom colour** (it starts as the background colour swatch; change it in the well beside the
+  menu), or leaves it **Transparent**, the default. The line under the size says which, and the
+  choice is remembered for the next canvas, also the one the welcome screen creates.
 - **Your own canvas presets:** the bottom of the **Preset** menu has **Save current size as
   preset…**, **Delete preset** (for the preset shown) and **Manage presets…**. Manage presets
   shows the **Pixel sizes** and **Print sizes** lists: select a preset to **Move up** or **Move

@@ -271,6 +271,12 @@ Create canvas
 Resolution
 Anchor
 Transparent canvas · sRGB
+White canvas · sRGB
+Black canvas · sRGB
+Coloured canvas · sRGB
+White
+Transparent
+Custom colour
 Change the canvas bounds and anchor your composition.
 Scale the composition while preserving source pixels.
 Cancel
