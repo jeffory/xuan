@@ -649,6 +649,10 @@ mod tests {
         image
     }
 
+    /// The pixels of the 300 × 200 scene that may switch on Dissolve's threshold: one in 200,
+    /// as `gpu::processing_tests::processing_blend_modes_match_cpu` allows.
+    const DISSOLVE_SWITCHES: usize = 300 * 200 / 200;
+
     #[test]
     #[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]
     fn tiles_match_one_pass_and_the_cpu_without_seams() {
@@ -670,10 +674,11 @@ mod tests {
         assert_eq!(differences(&tiled, &whole, 1), 0);
         let expected = render::render(&document);
         // Against the CPU, faint pixels' colours compare premultiplied, as in `gpu::tests`.
-        assert_eq!(
-            differences(&premultiplied(&tiled), &premultiplied(&expected), 4),
-            0
-        );
+        // Dissolve switches between two results, so a pixel on its threshold may switch
+        // differently in the GPU's 16-bit float canvas (Metal does on a few hundred);
+        // `processing_blend_modes_match_cpu` allows the same share.
+        let cpu = differences(&premultiplied(&tiled), &premultiplied(&expected), 4);
+        assert!(cpu <= DISSOLVE_SWITCHES, "{cpu} pixels differ from the CPU");
         // Folders with mask layers composite through the group buffers in each tile too.
         let mut grouped = document.clone();
         let mut folder = Layer::blank("Folder", width, height);
@@ -697,7 +702,11 @@ mod tests {
         });
         assert_eq!(differences(&tiled, &whole, 1), 0);
         let expected = premultiplied(&render::render(&grouped));
-        assert_eq!(differences(&premultiplied(&tiled), &expected, 4), 0);
+        let cpu = differences(&premultiplied(&tiled), &expected, 4);
+        assert!(
+            cpu <= DISSOLVE_SWITCHES,
+            "{cpu} pixels differ from the CPU in a folder"
+        );
         // The windows' cropped layers do not stay on the GPU.
         let compositor = gpu.compositor.lock().unwrap();
         let sources = &compositor.as_ref().unwrap().sources;
