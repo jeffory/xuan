@@ -2455,6 +2455,7 @@ fn apply_each(
                     underline: *underline,
                     strikethrough: *strikethrough,
                     path: None,
+                    runs: Vec::new(),
                 };
                 style.validate()?;
                 ensure!(!text.trim().is_empty(), "The text is empty");

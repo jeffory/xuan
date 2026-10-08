@@ -1520,6 +1520,7 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
         underline: flag("Underline"),
         strikethrough: flag("Strikethrough"),
         path: None,
+        runs: Vec::new(),
     };
     style.validate().ok()?;
     if runs.iter().skip(1).any(|run| style_of(run) != Some(first)) {

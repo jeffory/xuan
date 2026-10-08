@@ -4,7 +4,7 @@ A `.xuan` file is a ZIP archive containing `manifest.json` and lossless PNG asse
 
 The document records canvas dimensions, DPI, layer order, IDs, parent groups, clipping references, opacity, blending, visibility, locks, transforms, adjustment parameters, and optional live shape styles. Layers are stored bottom to top; each folder's subtree is composited together in hierarchy order. A folder's `opacity` multiplies into every layer inside it (nested folders multiply too); folders are pass-through, so their `blend` is not used. Every version stores and renders folder opacity, so setting it needs no newer version. Masks have enabled/linked flags and an optional independent placement transform.
 
-Text layers also record an optional `text` object with UTF-8 content, font family, pixel size, RGBA color, and bold, italic, underline, and strikethrough flags. Their PNG assets preserve the rendered appearance when fonts are unavailable on another machine. Fonts are discovered from the system and are not embedded in the project; editing unavailable fonts uses the bundled Inter Variable fallback. Text is limited to 16 KiB and font sizes to 1–1024 pixels. Older version 1 files without text metadata remain supported. Text can also follow a path ([version 11](#text-on-a-path-version-11)).
+Text layers also record an optional `text` object with UTF-8 content, font family, pixel size, RGBA color, and bold, italic, underline, and strikethrough flags. Their PNG assets preserve the rendered appearance when fonts are unavailable on another machine. Fonts are discovered from the system and are not embedded in the project; editing unavailable fonts uses the bundled Inter Variable fallback. Text is limited to 16 KiB and font sizes to 1–1024 pixels. Older version 1 files without text metadata remain supported. Text can also follow a path ([version 11](#text-on-a-path-version-11)). Letters can have their own font family, colour, bold and italic ([version 17](#text-style-runs-version-17)).
 
 Transforms retain original source pixels. Optional perspective corners are normalized coordinates before affine scale/rotation/flip. Channel adjustments retain separate RGB curves/levels and seven hue ranges. Selections, current multi-selection, clipboard contents, and undo/redo snapshots are not serialized.
 
@@ -438,4 +438,41 @@ A document with a collage record is written as version 16, so older builds repor
 unsupported version instead of silently dropping the layout; everything else keeps the lowest
 version its content needs (1-15). A version 16 document may also carry anything the earlier
 versions can. The reader accepts versions 1-16; older files have no record and need no
+migration.
+
+## Text style runs (version 17)
+
+A layer's `text` object may have `runs`: letters drawn with another font family, colour,
+weight or slant than the layer's own, as when a selection in the Text window is given its own
+font or colour.
+
+```json
+"runs": [
+  {"start": 0, "end": 3, "family": "Helvetica", "color": [255, 0, 0, 255]},
+  {"start": 5, "end": 9, "bold": true, "italic": false}
+]
+```
+
+- `start` and `end` count Unicode scalar values (Rust `char`s, not bytes or UTF-16 units)
+  from the start of `content`; a run covers `start` up to but not including `end`.
+- `family` (a font family name, as the layer's own), `color` (RGBA, 0-255), `bold` and
+  `italic` are each optional; a missing one keeps the layer's. Letters outside every run use
+  the layer's style. Size, underline and strikethrough belong to the whole layer.
+- Runs are sorted, do not overlap, are not empty and end inside the text; there are at most
+  4,096 of them. Runs that break these rules, or a blank or over-long `family`, fail
+  validation on load and save. Xuan writes runs in normal form: each changes something the
+  layer's own style does not have, and neighbouring runs that change the same things are
+  merged.
+
+Each run is shaped with its own face, so kerning and ligatures do not join letters across
+a run boundary. Underline and strikethrough take the colour of the letters above them. When
+runs have different alpha, the text is drawn at the most opaque one and each letter faded in
+proportion, so letters of one colour that overlap do not darken each other, as for text of a
+single colour.
+
+A document with any text style run is written as version 17, so older builds report an
+unsupported version instead of dropping each letter's font and colour the next time the text
+is edited; everything else keeps the lowest version its content needs (1-16), and text without
+runs is written and drawn exactly as before. A version 17 document may also carry anything the
+earlier versions can. The reader accepts versions 1-17; older files have no runs and need no
 migration.
