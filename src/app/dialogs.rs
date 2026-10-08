@@ -1270,6 +1270,11 @@ impl EditorApp {
         let scalable = ["png", "jpg", "tiff", "webp"].contains(&self.export_format.as_str());
         let estimated = scalable.then(|| self.export_preview.bytes(&settings));
         let document = &self.sessions[self.current].document;
+        let preview_size = super::export_preview::shown_size(if scalable {
+            (width, height)
+        } else {
+            (document.width, document.height)
+        });
         // A Scale past what an image may be is refused before choosing a file.
         let too_large = (scalable && (width, height) != (document.width, document.height))
             .then(|| xuan::document::validate_size(width, height).err())
@@ -1293,13 +1298,18 @@ impl EditorApp {
             .show_with_footer(
                 ctx,
                 |ui| {
-                    if let Some(texture) = &self.export_texture {
-                        let size = texture.size_vec2();
-                        let factor = (600.0 / size.x).min(350.0 / size.y).min(1.0);
-                        ui.vertical_centered(|ui| {
-                            ui.image((texture.id(), size * factor));
-                        });
-                    }
+                    // The preview arrives from a worker, after the dialog has shown: its
+                    // place is kept from the settings, so nothing moves when it lands.
+                    ui.vertical_centered(|ui| match &self.export_texture {
+                        Some(texture) => {
+                            ui.image((texture.id(), preview_size));
+                        }
+                        None => {
+                            let (rect, _) =
+                                ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 4.0, ui.palette().faint);
+                        }
+                    });
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         ui.label(tr("Format"));

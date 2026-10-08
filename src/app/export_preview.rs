@@ -43,6 +43,19 @@ pub(super) struct Settings {
     pub options: io::ExportOptions,
 }
 
+/// The size the Export dialog shows the preview of a `width` × `height` image at, in points:
+/// the preview's pixels (at most [`PREVIEW_SIDE`] a side), fitted into 600 × 350 without
+/// enlarging. It follows from the settings alone, so the dialog keeps the place before the
+/// preview arrives.
+pub(super) fn shown_size((width, height): (u32, u32)) -> egui::Vec2 {
+    let fit = (PREVIEW_SIDE / f64::from(width.max(height))).min(1.0);
+    let pixels = egui::vec2(
+        (f64::from(width) * fit).round().max(1.0) as f32,
+        (f64::from(height) * fit).round().max(1.0) as f32,
+    );
+    pixels * (600.0 / pixels.x).min(350.0 / pixels.y).min(1.0)
+}
+
 /// The rendered pixels a preview and an estimate come from, for one document revision and
 /// scale.
 pub(super) struct Sample {
@@ -393,6 +406,21 @@ mod tests {
                 "{format}: estimated {estimated}, wrote {actual}"
             );
         }
+    }
+
+    #[test]
+    fn the_preview_keeps_its_place_whatever_its_pixels() {
+        // Its pixels' size, at most 350 points tall and 600 wide, never enlarged.
+        assert_eq!(shown_size((32, 24)), egui::vec2(32.0, 24.0));
+        assert!((shown_size((2000, 1500)) - egui::vec2(466.667, 350.0)).length() < 0.01);
+        assert_eq!(shown_size((4000, 1000)), egui::vec2(600.0, 150.0));
+        // The same as the preview a sample makes.
+        let document = document(2000, 1500);
+        let sample = Sample::new(&document, 0, 100);
+        let (w, h) = sample.preview.dimensions();
+        let pixels = egui::vec2(w as f32, h as f32);
+        let shown = pixels * (600.0 / pixels.x).min(350.0 / pixels.y);
+        assert!((shown_size((2000, 1500)) - shown).length() < 0.01);
     }
 
     #[test]

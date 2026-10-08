@@ -603,7 +603,18 @@ fn webp_export_lossless_checkbox_shows_and_hides_quality() {
     assert!(ui.has_role(Role::CheckBox, "Lossless"));
     assert!(ui.app().export_options.webp_lossless, "lossless by default");
     assert!(!ui.has("Quality"));
+    // The preview arrives from a worker; the controls must not move when it does, or a click
+    // aimed before it lands hits whatever moved under the pointer.
+    let checkbox =
+        |ui: &UiTest| (ui.harness.get_by_role_and_label(Role::CheckBox, "Lossless")).rect();
+    let before = (checkbox(&ui), ui.app().export_texture.is_none());
     wait_for_estimate(&mut ui);
+    assert!(ui.app().export_texture.is_some());
+    assert_eq!(
+        checkbox(&ui),
+        before.0,
+        "moved when the preview arrived: {before:?}"
+    );
 
     ui.click_role(Role::CheckBox, "Lossless");
     assert!(!ui.app().export_options.webp_lossless);
