@@ -934,6 +934,9 @@ impl EditorApp {
     /// end of its log so the user can see why.
     fn plugin_failed_to_start(&mut self, plugin: &str, error: &str) {
         let name = self.plugins.source(plugin);
+        if let Some(process) = self.plugins.processes.get_mut(plugin) {
+            process.settle_log(Duration::from_millis(250));
+        }
         let log = self.plugins.log(plugin);
         let tail = log[log.len().saturating_sub(5)..].join("\n");
         let message = format!("{name} {}: {error}\n{tail}", tr("did not start"))
