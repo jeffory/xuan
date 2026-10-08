@@ -72,6 +72,12 @@ impl History {
                 {
                     bytes += mask.pixels.as_raw().len();
                 }
+                if let Some(crate::document::Adjustment::ColorLookup { table, .. }) =
+                    &layer.adjustment
+                    && seen.insert(std::sync::Arc::as_ptr(table) as usize)
+                {
+                    bytes += table.bytes();
+                }
             }
             if let Some(selection) = &entry.document.selection
                 && seen.insert(std::sync::Arc::as_ptr(selection) as usize)

@@ -1287,7 +1287,9 @@ brightens them), and upstream Compositor's `{"Vignette": {"amount", "color": [r,
 "roughness", "seed"}}`, `{"BlackWhite": {"weights": [6 numbers], "tint",
 "tint_hue", "tint_saturation"}}`, `{"ColorBalance": {"shadows": [3 numbers],
 "midtones", "highlights", "preserve_luminosity"}}`, and the per-channel
-`{"LevelsChannels": …}`, `{"CurvesChannels": …}` and `{"HueRanges": …}`. Every
+`{"LevelsChannels": …}`, `{"CurvesChannels": …}` and `{"HueRanges": …}`. A Color Lookup needs a
+`.cube` file, so plugins cannot add or apply one; its layers are still described like any
+adjustment layer. Every
 field must be given; values outside the ranges the dialogs allow are refused.
 Colours are `"#rrggbb"` or `"#rrggbbaa"` (default black).
 

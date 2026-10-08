@@ -4,6 +4,8 @@
 @group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(4) var<uniform> params: Parameters;
 @group(0) @binding(5) var display: texture_storage_2d<rgba8unorm, write>;
+// A Color Lookup layer's table, one entry per element (`GpuCompositor::lut`).
+@group(0) @binding(6) var<storage, read> lut: array<vec4<f32>>;
 
 fn source_pixel(pixel: vec2<i32>) -> vec4<f32> {
     let size = vec2<i32>(textureDimensions(source));
@@ -86,6 +88,10 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
         textureStore(output, position, vec4(color, alpha));
         return;
     }
+    if params.flags.y == 16u {
+        textureStore(output, position, vec4(mix(dst.rgb, clamp(color_lookup(dst.rgb), vec3(0.0), vec3(1.0)), amount), dst.a));
+        return;
+    }
     if params.flags.y != 0u {
         textureStore(output, position, vec4(mix(dst.rgb, clamp(adjust(dst.rgb, point), vec3(0.0), vec3(1.0)), amount), dst.a));
         return;
@@ -143,4 +149,52 @@ fn blend_filled(d: vec3<f32>, s: vec3<f32>, mode: u32, fill: f32) -> vec3<f32> {
         case 23u: { return clamp((d - fill * (1.0 - s)) / (1.0 - fill), vec3(0.0), vec3(1.0)); }
         default: { return blend(d, s * fill, mode); }
     }
+}
+
+fn lut_entry(index: u32) -> vec3<f32> { return lut[index].rgb; }
+
+// `Lut::apply`: the domain and size in `params.first`, the domain's top and the mode (0 a 1D
+// table, 1 trilinear, 2 tetrahedral) in `params.second`.
+fn color_lookup(rgb: vec3<f32>) -> vec3<f32> {
+    let size = u32(params.first.w);
+    let last = f32(size - 1u);
+    let unit = (rgb - params.first.xyz) / (params.second.xyz - params.first.xyz);
+    let position = select(vec3(0.0), min(unit, vec3(1.0)) * last, unit >= vec3(0.0));
+    let base = min(vec3<u32>(floor(position)), vec3(size - 2u));
+    let f = position - vec3<f32>(base);
+    let mode = params.second.w;
+    if mode < 0.5 {
+        let low = vec3(lut_entry(base.x).r, lut_entry(base.y).g, lut_entry(base.z).b);
+        let high = vec3(lut_entry(base.x + 1u).r, lut_entry(base.y + 1u).g, lut_entry(base.z + 1u).b);
+        return low + (high - low) * f;
+    }
+    let n = size;
+    let origin = base.x + base.y * n + base.z * n * n;
+    let c000 = lut_entry(origin);
+    let c100 = lut_entry(origin + 1u);
+    let c010 = lut_entry(origin + n);
+    let c110 = lut_entry(origin + 1u + n);
+    let c001 = lut_entry(origin + n * n);
+    let c101 = lut_entry(origin + 1u + n * n);
+    let c011 = lut_entry(origin + n + n * n);
+    let c111 = lut_entry(origin + 1u + n + n * n);
+    if mode < 1.5 {
+        let c00 = c000 + (c100 - c000) * f.x;
+        let c10 = c010 + (c110 - c010) * f.x;
+        let c01 = c001 + (c101 - c001) * f.x;
+        let c11 = c011 + (c111 - c011) * f.x;
+        let c0 = c00 + (c10 - c00) * f.y;
+        let c1 = c01 + (c11 - c01) * f.y;
+        return c0 + (c1 - c0) * f.z;
+    }
+    var first = c010;
+    var second = c110;
+    var t = vec3(f.y, f.x, f.z);
+    if f.x > f.y {
+        if f.y > f.z { first = c100; second = c110; t = f; }
+        else if f.x > f.z { first = c100; second = c101; t = vec3(f.x, f.z, f.y); }
+        else { first = c001; second = c101; t = vec3(f.z, f.x, f.y); }
+    } else if f.z > f.y { first = c001; second = c011; t = vec3(f.z, f.y, f.x); }
+    else if f.z > f.x { first = c010; second = c011; t = vec3(f.y, f.z, f.x); }
+    return c000 * (1.0 - t.x) + first * (t.x - t.y) + second * (t.y - t.z) + c111 * t.z;
 }

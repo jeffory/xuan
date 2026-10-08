@@ -194,7 +194,14 @@ pub(super) fn filter_menu(ui: &mut egui::Ui) -> Option<Filter> {
     result
 }
 
-pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
+/// What an adjustment menu chose: an adjustment to set up, or a Color Lookup, whose table
+/// is chosen first.
+pub(super) enum AdjustmentChoice {
+    Settings(Adjustment),
+    ColorLookup,
+}
+
+pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<AdjustmentChoice> {
     let mut result = None;
     for adjustment in [
         Adjustment::HueRanges {
@@ -225,9 +232,13 @@ pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
         Adjustment::COLOR_BALANCE,
     ] {
         if ui.button(tr(adjustment.name())).clicked() {
-            result = Some(adjustment);
+            result = Some(AdjustmentChoice::Settings(adjustment));
             ui.close();
         }
+    }
+    if ui.button(tr("Colour Lookup…")).clicked() {
+        result = Some(AdjustmentChoice::ColorLookup);
+        ui.close();
     }
     result
 }
@@ -439,6 +450,7 @@ impl EditorApp {
                                         filter = filter_menu(ui);
                                         filter_layer = true;
                                     });
+                                    item(ui, &items, "adjustment_presets", &mut action);
                                     ui.menu_button(tr("Layer Mask"), |ui| {
                                         item(ui, &items, "new_mask_layer", &mut action);
                                         item(ui, &items, "mask", &mut action);
@@ -720,8 +732,8 @@ impl EditorApp {
         if let Some(action) = action {
             self.run_command(action);
         }
-        if let Some(adjustment) = adjustment {
-            self.start_adjustment(adjustment, adjustment_layer);
+        if let Some(choice) = adjustment {
+            self.choose_adjustment(choice, adjustment_layer);
         }
         if let Some(filter) = filter {
             if filter_layer {

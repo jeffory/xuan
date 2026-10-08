@@ -95,6 +95,7 @@ impl EditorApp {
                 self.error = Some(format!("{}\n\n{error:#}", tr("Could not load settings")))
             }
         }
+        self.load_adjustment_presets();
         self.apply_move_options();
         i18n::set_language(self.config.language);
         for note in super::commands::override_problems(&self.config.keybindings) {

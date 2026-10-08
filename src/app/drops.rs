@@ -14,6 +14,14 @@ fn is_project(path: &Path) -> bool {
     path.is_dir() || path.extension().is_some_and(|e| e == "xuan")
 }
 
+/// A `.cube` file, which adds a Color Lookup adjustment layer rather than opening.
+fn is_lookup_table(path: &Path) -> bool {
+    !path.is_dir()
+        && path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("cube"))
+}
+
 impl EditorApp {
     /// True while something else owns the window and keyboard shortcuts and drops must wait.
     pub(super) fn drops_blocked(&self) -> bool {
@@ -54,7 +62,20 @@ impl EditorApp {
         }
     }
 
-    fn handle_drop(&mut self, paths: Vec<PathBuf>) {
+    fn handle_drop(&mut self, mut paths: Vec<PathBuf>) {
+        // A lookup table opens the adjustment dialog; the rest of the drop waits for it.
+        if let Some(index) = paths.iter().position(|p| is_lookup_table(p)) {
+            let table = paths.remove(index);
+            if !paths.is_empty() {
+                self.pending_drops.push_front(paths);
+            }
+            if self.sessions.is_empty() {
+                self.error = Some(tr("Open an image before adding a colour lookup table").into());
+            } else {
+                self.load_color_lookup(&table, true);
+            }
+            return;
+        }
         let (projects, images): (Vec<_>, Vec<_>) = paths.into_iter().partition(|p| is_project(p));
         if images.is_empty() || self.sessions.is_empty() {
             for path in projects.into_iter().chain(images) {

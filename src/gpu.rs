@@ -46,6 +46,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     document::{Adjustment, Document, Layer, Point},
+    lut::Lut,
     render,
 };
 
@@ -106,12 +107,21 @@ struct Source {
     texture: wgpu::Texture,
 }
 
+/// A Color Lookup table uploaded for the compositor, kept while a layer still uses it.
+struct LutBuffer {
+    table: Weak<Lut>,
+    buffer: wgpu::Buffer,
+}
+
 pub struct GpuCompositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     mipmap_pipeline: wgpu::ComputePipeline,
     sources: HashMap<(usize, [u32; 2]), Source>,
+    luts: HashMap<usize, LutBuffer>,
+    /// Bound for every layer that is not a Color Lookup.
+    blank_lut: wgpu::Buffer,
     size: [u32; 2],
     buffers: [wgpu::Texture; 2],
     group_buffers: Vec<[wgpu::Texture; 2]>,
@@ -158,12 +168,19 @@ impl GpuCompositor {
         let display = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
         let blank = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
         let motion_blur = GpuMotionBlur::new(device.clone(), queue.clone());
+        let blank_lut = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("xuan no colour lookup"),
+            contents: &[0; 16],
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         Self {
             device,
             queue,
             pipeline,
             mipmap_pipeline,
             sources: HashMap::new(),
+            luts: HashMap::new(),
+            blank_lut,
             size: [1, 1],
             buffers,
             group_buffers: Vec::new(),
@@ -234,6 +251,7 @@ impl GpuCompositor {
             );
         }
         let mut retained = HashSet::new();
+        let mut retained_luts = HashSet::new();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -250,7 +268,15 @@ impl GpuCompositor {
         params.flags[1] = 102;
         // Clear through storage writes too: older Mesa drivers can retain stale
         // pixels when a render-pass clear follows compute writes to this texture.
-        self.dispatch(&mut encoder, &buffers, 1, &self.blank, &self.blank, &params);
+        self.dispatch(
+            &mut encoder,
+            &buffers,
+            1,
+            &self.blank,
+            &self.blank,
+            &self.blank_lut,
+            &params,
+        );
         let mut current = 0;
         let mut groups = Vec::new();
         let mut group_depth = 0;
@@ -331,6 +357,13 @@ impl GpuCompositor {
                 });
             }
             let mut params = parameters(document, layer, size);
+            let lut = match &layer.adjustment {
+                Some(Adjustment::ColorLookup { table, .. }) => {
+                    retained_luts.insert(Arc::as_ptr(table) as usize);
+                    Some(self.lut(table).clone())
+                }
+                _ => None,
+            };
             if layer.standalone_mask {
                 params.flags[1] = 12;
                 params.flags[3] = u32::from(!groups.is_empty());
@@ -457,6 +490,7 @@ impl GpuCompositor {
                 current,
                 source,
                 coverage.as_ref().unwrap_or(&self.blank),
+                lut.as_ref().unwrap_or(&self.blank_lut),
                 &params,
             );
             current = 1 - current;
@@ -468,6 +502,7 @@ impl GpuCompositor {
             current,
             &self.blank,
             &self.blank,
+            &self.blank_lut,
             &params,
         );
         if !straight_output {
@@ -477,6 +512,42 @@ impl GpuCompositor {
         self.group_buffers.truncate(group_depth);
         self.sources
             .retain(|key, source| retained.contains(key) && source.pixels.strong_count() > 0);
+        self.luts
+            .retain(|key, lut| retained_luts.contains(key) && lut.table.strong_count() > 0);
+    }
+
+    /// The storage buffer holding `table`, uploaded the first time a frame needs it: one
+    /// `vec4` per entry, in the table's order.
+    fn lut(&mut self, table: &Arc<Lut>) -> &wgpu::Buffer {
+        let key = Arc::as_ptr(table) as usize;
+        if self
+            .luts
+            .get(&key)
+            .is_some_and(|lut| lut.table.strong_count() == 0)
+        {
+            self.luts.remove(&key);
+        }
+        &self
+            .luts
+            .entry(key)
+            .or_insert_with(|| {
+                let entries: Vec<[f32; 4]> = table
+                    .table
+                    .iter()
+                    .map(|&[r, g, b]| [r, g, b, 0.0])
+                    .collect();
+                LutBuffer {
+                    table: Arc::downgrade(table),
+                    buffer: self
+                        .device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("xuan colour lookup table"),
+                            contents: bytemuck::cast_slice(&entries),
+                            usage: wgpu::BufferUsages::STORAGE,
+                        }),
+                }
+            })
+            .buffer
     }
 
     fn generate_mipmaps(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -516,6 +587,8 @@ impl GpuCompositor {
         }
     }
 
+    // One argument per binding of `composite.wgsl`.
+    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -523,6 +596,7 @@ impl GpuCompositor {
         current: usize,
         source: &wgpu::Texture,
         coverage: &wgpu::Texture,
+        lut: &wgpu::Buffer,
         params: &Parameters,
     ) {
         let uniform = self
@@ -572,6 +646,10 @@ impl GpuCompositor {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(&views[4]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: lut.as_entire_binding(),
                 },
             ],
         });
@@ -780,6 +858,23 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
                 ];
                 p.second = [midtones[0], midtones[1], midtones[2], 0.0];
                 p.points[0] = [highlights[0], highlights[1], highlights[2], 0.0];
+            }
+            // The table itself is bound as a storage buffer; see `GpuCompositor::lut`.
+            Adjustment::ColorLookup {
+                interpolation,
+                table,
+                ..
+            } => {
+                p.flags[1] = 16;
+                let [r, g, b] = table.domain_min;
+                p.first = [r, g, b, table.size as f32];
+                let [r, g, b] = table.domain_max;
+                let mode = match (table.dimension, interpolation) {
+                    (crate::lut::Dimension::One, _) => 0.0,
+                    (_, crate::lut::Interpolation::Trilinear) => 1.0,
+                    (_, crate::lut::Interpolation::Tetrahedral) => 2.0,
+                };
+                p.second = [r, g, b, mode];
             }
         }
     }
@@ -1532,6 +1627,32 @@ mod tests {
             compositor.render(&document, [12, 10]);
             compare(&document, &readback(&compositor), name);
         }
+        // Color Lookup reads its table from a storage buffer, in every mode, with a domain.
+        use crate::lut::{Dimension, Interpolation, Lut};
+        let mut cube = Lut::identity(Dimension::Three, 5);
+        for entry in &mut cube.table {
+            let [r, g, b] = *entry;
+            *entry = [g * g, b.sqrt() * 1.2 - 0.1, 1.0 - r * g];
+        }
+        cube.domain_max = [1.0, 0.8, 1.0];
+        let mut curve = Lut::identity(Dimension::One, 7);
+        for entry in &mut curve.table {
+            *entry = [entry[0].powf(2.2), 1.0 - entry[1], entry[2].sqrt()];
+        }
+        for (table, interpolation, context) in [
+            (&cube, Interpolation::Trilinear, "trilinear lookup"),
+            (&cube, Interpolation::Tetrahedral, "tetrahedral lookup"),
+            (&curve, Interpolation::Tetrahedral, "1D lookup"),
+        ] {
+            document.layers[2].adjustment = Some(Adjustment::ColorLookup {
+                name: "test.cube".into(),
+                interpolation,
+                table: Arc::new(table.clone()),
+            });
+            compositor.render(&document, [12, 10]);
+            compare(&document, &readback(&compositor), context);
+        }
+        assert_eq!(compositor.luts.len(), 1, "unused tables are released");
     }
 
     pub(super) fn compare(document: &Document, gpu: &[u8], context: &str) {

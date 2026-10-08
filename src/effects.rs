@@ -320,6 +320,11 @@ pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4
             highlights,
             preserve_luminosity,
         } => color_balance(rgb, [shadows, midtones, highlights], *preserve_luminosity),
+        Adjustment::ColorLookup {
+            interpolation,
+            table,
+            ..
+        } => table.apply(rgb, *interpolation),
     };
     [
         rgb[0].clamp(0.0, 1.0),
@@ -1258,6 +1263,13 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
             within("BlackWhite.tint_hue", *tint_hue, 0.0, 360.0)?;
             within("BlackWhite.tint_saturation", *tint_saturation, 0.0, 100.0)?;
         }
+        Adjustment::ColorLookup { name, table, .. } => {
+            ensure!(
+                name.len() <= 1024 && !name.contains(['\n', '\r']),
+                "`ColorLookup.name` must be one line of at most 1024 bytes"
+            );
+            table.validate()?;
+        }
         Adjustment::ColorBalance {
             shadows,
             midtones,
@@ -1369,6 +1381,78 @@ mod tests {
 
     /// Upstream's adjust_color_balance: a midtone shift moves mid gray by 70% of it, and
     /// Preserve Luminosity scales the result back to the original brightness.
+    /// The issue's acceptance check: a Color Lookup layer at 50% gives half the look, its mask
+    /// limits it, and deleting it restores the original pixels.
+    #[test]
+    fn color_lookup_layers_fade_with_opacity_and_masks_and_leave_no_trace() {
+        use crate::lut::{Dimension, Lut};
+        let mut document = Document::new(16, 8).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(16, 8, |x, y| {
+            Rgba([(x * 16) as u8, (y * 32) as u8, 200, 255])
+        })));
+        let original = render::render(&document);
+        let mut table = Lut::identity(Dimension::Three, 17);
+        for entry in &mut table.table {
+            *entry = [1.0 - entry[0], entry[2], entry[1]];
+        }
+        let mut layer = crate::document::Layer::blank("Color Lookup", 16, 8);
+        layer.adjustment = Some(Adjustment::color_lookup("swap.cube", table));
+        document.layers.push(layer);
+        let full = render::render(&document);
+        assert_ne!(full, original);
+        document.layers[1].opacity = 0.5;
+        let half = render::render(&document);
+        for ((a, b), mixed) in original.pixels().zip(full.pixels()).zip(half.pixels()) {
+            for c in 0..3 {
+                let expected = (a[c] as f32 + b[c] as f32) / 2.0;
+                assert!(
+                    (mixed[c] as f32 - expected).abs() <= 1.0,
+                    "{a:?} {b:?} {mixed:?}"
+                );
+            }
+        }
+        // A black mask hides the look.
+        document.layers[1].opacity = 1.0;
+        document.layers[1].mask = Some(crate::document::Mask {
+            pixels: Arc::new(image::GrayImage::from_pixel(1, 1, image::Luma([0]))),
+            ..crate::document::Mask::white()
+        });
+        assert_eq!(render::render(&document), original);
+        document.layers.pop();
+        assert_eq!(render::render(&document), original);
+    }
+
+    #[test]
+    fn color_lookup_tables_are_validated_with_the_document() {
+        use crate::lut::{Dimension, Lut};
+        let good = Adjustment::color_lookup("ok.cube", Lut::identity(Dimension::One, 4));
+        assert!(validate_adjustment(&good).is_ok());
+        let mut table = Lut::identity(Dimension::Three, 3);
+        table.table.truncate(5);
+        assert!(validate_adjustment(&Adjustment::color_lookup("short.cube", table)).is_err());
+        let long = Adjustment::color_lookup("x".repeat(2000), Lut::default());
+        assert!(validate_adjustment(&long).is_err());
+        // The destructive path applies it too, on the CPU.
+        let mut document = Document::new(4, 4).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            4,
+            4,
+            Rgba([10, 128, 250, 255]),
+        )));
+        let mut invert = Lut::identity(Dimension::One, 2);
+        invert.table = vec![[1.0; 3], [0.0; 3]];
+        apply_adjustment(
+            &mut document,
+            &Adjustment::color_lookup("invert.cube", invert),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            document.layers[0].pixels.as_ref().unwrap().get_pixel(1, 1),
+            &Rgba([245, 127, 5, 255])
+        );
+    }
+
     #[test]
     fn color_balance_shifts_tones_and_can_preserve_luminosity() {
         let red_mids = [&[0.0; 3], &[100.0, 0.0, 0.0], &[0.0; 3]];

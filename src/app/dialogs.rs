@@ -117,6 +117,7 @@ impl EditorApp {
                 Dialog::Trim => self.trim_dialog(ctx),
                 Dialog::Stroke => self.stroke_dialog(ctx),
                 Dialog::Paths => self.paths_dialog(ctx),
+                Dialog::AdjustmentPresets => self.presets_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {
                     let mut open = true;
@@ -798,6 +799,14 @@ impl EditorApp {
                                     .changed();
                             }
                             Adjustment::Invert => {}
+                            Adjustment::ColorLookup {
+                                name,
+                                interpolation,
+                                table,
+                            } => {
+                                changed |=
+                                    super::color_lookup::controls(ui, name, interpolation, table);
+                            }
                             Adjustment::BlackWhite {
                                 weights,
                                 tint,

@@ -75,6 +75,9 @@ mod perspective_crop;
 #[path = "tests/compositor_filters.rs"]
 mod compositor_filters;
 
+#[path = "tests/adjustment_presets.rs"]
+mod adjustment_presets;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

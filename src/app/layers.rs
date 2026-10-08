@@ -6,7 +6,7 @@ use egui::{Color32, RichText, Sense, Stroke, StrokeKind, TextureOptions, vec2};
 use uuid::Uuid;
 use xuan::{
     blend::BlendMode,
-    document::{Adjustment, Document, Layer},
+    document::{Document, Layer},
 };
 
 use super::{EditorApp, LayerDrag, commands::ctrl_or_cmd, icons, menus, theme::PaletteExt};
@@ -53,7 +53,7 @@ impl LayerThumbnail {
 #[derive(Default)]
 struct Actions {
     command: Option<&'static str>,
-    adjustment: Option<Adjustment>,
+    adjustment: Option<menus::AdjustmentChoice>,
     filter: Option<xuan::effects::Filter>,
     visibility: Option<Uuid>,
     select: Option<(Uuid, bool)>,
@@ -896,8 +896,8 @@ impl EditorApp {
         if let Some(command) = actions.command {
             self.command(command);
         }
-        if let Some(adjustment) = actions.adjustment {
-            self.start_adjustment(adjustment, true);
+        if let Some(choice) = actions.adjustment {
+            self.choose_adjustment(choice, true);
         }
         if let Some(filter) = actions.filter {
             self.start_filter_layer(filter);

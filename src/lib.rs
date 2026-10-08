@@ -1,3 +1,4 @@
+pub mod adjustment_presets;
 pub mod blend;
 pub mod buildinfo;
 pub mod canvas_presets;
@@ -18,6 +19,7 @@ pub mod io;
 pub mod layer_effects;
 pub mod layout;
 pub mod limits;
+pub mod lut;
 pub mod operations;
 pub mod paint;
 pub mod panes;

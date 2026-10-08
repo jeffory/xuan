@@ -31,6 +31,7 @@ fn british(text: &str) -> &str {
         "Darker Color" => "Darker Colour",
         "Lighter Color" => "Lighter Colour",
         "Color Balance" => "Colour Balance",
+        "Color Lookup" => "Colour Lookup",
         "Color Overlay" => "Colour Overlay",
         _ => text,
     }

@@ -82,6 +82,11 @@ pub(crate) fn adjust_mask(
 ) -> Option<GrayImage> {
     let size = [image.width(), image.height()];
     attempt(u64::from(size[0]) * u64::from(size[1]), 65_536, |gpu| {
+        // The raster shader has no table binding; `effects::adjust` applies it on the CPU.
+        anyhow::ensure!(
+            !matches!(adjustment, Adjustment::ColorLookup { .. }),
+            "Color Lookup is applied on the CPU"
+        );
         let mut layer = Layer::blank("Adjustment", size[0], size[1]);
         layer.adjustment = Some(adjustment.clone());
         let params = super::parameters(&Document::new(size[0], size[1])?, &layer, size);

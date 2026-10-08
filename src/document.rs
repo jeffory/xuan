@@ -290,6 +290,17 @@ pub enum Adjustment {
         highlights: [f32; 3],
         preserve_luminosity: bool,
     },
+    /// Photoshop's Color Lookup: colours mapped through a table read from a `.cube` file.
+    /// Format 15 keeps the table in the project as `luts/<layer UUID>.cube`, not in the
+    /// manifest, so the project does not depend on the original file.
+    ColorLookup {
+        /// The file's name, to show which table this is.
+        name: String,
+        #[serde(default)]
+        interpolation: crate::lut::Interpolation,
+        #[serde(skip)]
+        table: Arc<crate::lut::Lut>,
+    },
 }
 
 impl Adjustment {
@@ -310,7 +321,19 @@ impl Adjustment {
 
     /// Whether .xuan format 6 and earlier can store this adjustment.
     pub fn is_legacy(&self) -> bool {
-        !matches!(self, Self::BlackWhite { .. } | Self::ColorBalance { .. })
+        !matches!(
+            self,
+            Self::BlackWhite { .. } | Self::ColorBalance { .. } | Self::ColorLookup { .. }
+        )
+    }
+
+    /// A Color Lookup adjustment for a table read from the file `name`.
+    pub fn color_lookup(name: impl Into<String>, table: crate::lut::Lut) -> Self {
+        Self::ColorLookup {
+            name: name.into(),
+            interpolation: crate::lut::Interpolation::default(),
+            table: Arc::new(table),
+        }
     }
 
     pub fn name(&self) -> &'static str {
@@ -327,6 +350,7 @@ impl Adjustment {
             Self::Invert => "Invert",
             Self::BlackWhite { .. } => "Black & White",
             Self::ColorBalance { .. } => "Color Balance",
+            Self::ColorLookup { .. } => "Color Lookup",
         }
     }
 }

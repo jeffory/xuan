@@ -387,3 +387,28 @@ carry anything the earlier versions can, such as a layer's Fill. The reader acce
 versions 1-14. Upstream's
 packages (`.comp` version 11 and earlier) keep these filters only as edits to pixels, not as
 adjustment records, so an import has none to bring across as filter layers.
+
+## Color Lookup (version 15)
+
+An adjustment layer may map colours through a lookup table read from a `.cube` file, as
+Photoshop's Color Lookup does. Its adjustment is stored as `{"ColorLookup": {"name",
+"interpolation"}}`: `name` is the file name it came from (one line, at most 1,024 bytes) and
+`interpolation` is `Tetrahedral` (the default when missing) or `Trilinear`. The table itself is
+not in the manifest: it is stored in the archive as `luts/<layer UUID>.cube`, written in
+Adobe's Cube LUT 1.0 text format with `LUT_1D_SIZE` (2-65,536 entries) or `LUT_3D_SIZE` (2-65
+points a side), `DOMAIN_MIN` and `DOMAIN_MAX`, so the project does not depend on the original
+file. The table is read with the same checks as an imported `.cube` file (at most 32 MiB, every
+value finite and within ±1,000,000, exactly the number of entries the size gives); a missing,
+truncated or malformed table fails the load. Tables add up to at most 64 of the largest size
+(about 201 MiB) in a project being opened.
+
+The table applies to the layer's backdrop as stored (sRGB-encoded values from 0 to 1), each
+channel's domain mapped onto the table and inputs outside it taking the nearest edge; the
+result is clamped to 0-1 and faded by the layer's opacity and mask like any adjustment. A 1D
+table interpolates each channel linearly; a 3D table blends the lattice points around the
+colour, tetrahedrally or trilinearly.
+
+A document in which any layer uses a Color Lookup is written as version 15, so older builds
+report an unsupported version instead of failing on an adjustment they do not know; everything
+else keeps the lowest version its content needs (1-14). A version 15 document may also carry
+anything the earlier versions can. The reader accepts versions 1-15.

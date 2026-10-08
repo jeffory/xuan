@@ -794,6 +794,8 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl(Key::E)])
         .host(Edit),
     cmd("flatten", "Flatten Image", C::Layer).host(Edit),
+    cmd("adjustment_presets", "Adjustment Presets…", C::Layer)
+        .aliases(&["preset", "look", "grade", "lut"]),
     cmd("new_mask_layer", "New Mask Layer", C::Layer).host(Edit),
     cmd("mask", "Add Mask from Selection", C::Layer).host(Edit),
     cmd("disable_mask", "Enable / Disable Mask", C::Layer).host(Edit),

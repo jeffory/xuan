@@ -1256,3 +1256,25 @@ Edit Red Channel	编辑红色通道
 Edit Green Channel	编辑绿色通道
 Edit Blue Channel	编辑蓝色通道
 Edit Alpha Channel	编辑 Alpha 通道
+Colour Lookup	颜色查找
+Colour Lookup…	颜色查找…
+Colour lookup tables	颜色查找表
+Could not load the colour lookup table	无法载入颜色查找表
+Open an image before adding a colour lookup table	请先打开图像，再添加颜色查找表
+1D table, {} entries	1D 查找表，{} 个条目
+3D table, {} points a side	3D 查找表，每边 {} 个点
+Interpolation	插值
+Tetrahedral	四面体
+Trilinear	三线性
+Load Table…	载入查找表…
+Adjustment Presets…	调整预设…
+Adjustment Presets	调整预设
+Apply Adjustment Preset	应用调整预设
+Preset saved	预设已保存
+No presets yet. Select adjustment layers and save them below.	还没有预设。请选择调整图层，然后在下方保存。
+{} adjustment layers	{} 个调整图层
+Select adjustment layers to save them as a preset.	选择调整图层以将其保存为预设。
+Save the {} selected adjustment layers as a preset.	将所选的 {} 个调整图层保存为预设。
+Replaces the preset of this name.	将替换同名预设。
+Save Preset	保存预设
+Save the selected adjustment layer as a preset.	将所选的调整图层保存为预设。

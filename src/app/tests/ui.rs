@@ -60,6 +60,12 @@ mod perspective_crop;
 #[path = "ui_channels.rs"]
 mod channels;
 
+#[path = "ui_color_lookup.rs"]
+mod color_lookup;
+
+#[path = "ui_adjustment_presets.rs"]
+mod adjustment_presets;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;
