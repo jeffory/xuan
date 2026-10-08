@@ -554,6 +554,9 @@ pub struct EditorApp {
     grid_edit: Option<grid_settings::GridEdit>,
     dialog: Option<Dialog>,
     dimensions: [u32; 2],
+    /// File → New: Keep aspect ratio, and the width and height it keeps in proportion.
+    keep_ratio: bool,
+    ratio: [u32; 2],
     resolution: f32,
     /// New Image: the Generate tab instead of a blank canvas, its Exact
     /// size option and the document action it runs (plugin, action).
@@ -770,6 +773,8 @@ impl EditorApp {
             grid_edit: None,
             dialog: None,
             dimensions: [1920, 1080],
+            keep_ratio: false,
+            ratio: [1920, 1080],
             resolution: 72.0,
             new_image_generate: false,
             new_image_exact: false,
@@ -921,6 +926,10 @@ impl EditorApp {
         match Document::new(self.dimensions[0], self.dimensions[1]) {
             Ok(mut document) => {
                 document.resolution = self.resolution;
+                if self.config.new_canvas_size != Some(self.dimensions) {
+                    self.config.new_canvas_size = Some(self.dimensions);
+                    self.save_config();
+                }
                 self.sessions
                     .push(Session::new(document, tr("Untitled").into(), None));
                 self.current = self.sessions.len() - 1;
@@ -1425,7 +1434,12 @@ impl EditorApp {
                     Ok(())
                 })
             }
-            "new" => self.dialog = Some(Dialog::New),
+            "new" => {
+                if let Some(size) = xuan::canvas_presets::usable(self.config.new_canvas_size) {
+                    self.dimensions = size;
+                }
+                self.dialog = Some(Dialog::New);
+            }
             "open" => self.open_dialog(false),
             "open_clipboard" => self.open_clipboard(),
             "import" => self.open_dialog(true),

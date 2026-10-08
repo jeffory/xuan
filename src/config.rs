@@ -164,6 +164,9 @@ pub struct Config {
     /// Files opened or saved, newest first: File → Open Recent. At most
     /// [`MAX_RECENT_FILES`]; see [`push_recent_file`].
     pub recent_files: Vec<PathBuf>,
+    /// File → New: the size of the last canvas created, in pixels. Absent until one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_canvas_size: Option<[u32; 2]>,
     /// Move tool options: Auto Select.
     pub auto_select: bool,
     /// Move tool options: Ignore Transparent Pixels.
@@ -272,6 +275,7 @@ impl Default for Config {
             keybindings: toml::Table::new(),
             recent_commands: Vec::new(),
             recent_files: Vec::new(),
+            new_canvas_size: None,
             auto_select: true,
             ignore_transparent_pixels: true,
             show_controls: true,
@@ -526,6 +530,14 @@ impl Config {
         } else {
             table.insert("providers".into(), toml::Value::try_from(&self.providers)?);
         }
+        match self.new_canvas_size {
+            Some(size) => {
+                table.insert("new_canvas_size".into(), toml::Value::try_from(size)?);
+            }
+            None => {
+                table.remove("new_canvas_size");
+            }
+        }
         table.insert("auto_select".into(), toml::Value::Boolean(self.auto_select));
         table.insert(
             "ignore_transparent_pixels".into(),
@@ -598,6 +610,34 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("option = 42"));
         assert_eq!(Config::load(&path).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn the_last_new_canvas_size_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            new_canvas_size: Some([1080, 1920]),
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_size")
+        );
+        assert_eq!(
+            Config::load(&path).unwrap().new_canvas_size,
+            Some([1080, 1920])
+        );
+        // Releases before it wrote none; clearing it removes the key.
+        Config::default().save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_size")
+        );
+        assert_eq!(Config::load(&path).unwrap().new_canvas_size, None);
     }
 
     #[test]

@@ -384,3 +384,131 @@ fn new_canvas_opens_with_width_focused_and_selected() {
     let document = &ui.app().session().expect("a new document").document;
     assert_eq!((document.width, document.height), (800, 600));
 }
+
+fn new_canvas(dimensions: [u32; 2]) -> (tempfile::TempDir, UiTest) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::new();
+    ui.isolate_config(directory.path());
+    ui.app_mut().dimensions = dimensions;
+    ui.app_mut().command("new");
+    ui.settle();
+    (directory, ui)
+}
+
+/// The dialog's commit button (the label is also on the window's accessibility tree twice).
+fn create_canvas(ui: &mut UiTest) {
+    let create = ui
+        .harness
+        .query_all_by_role_and_label(Role::Button, "Create canvas")
+        .last()
+        .unwrap();
+    create.click();
+    ui.settle();
+}
+
+/// Focuses the dialog's `index`th number field (Width, Height) from the left, as a click
+/// would: it edits with its text selected. The empty-state screen behind has its own pair.
+fn focus_number(ui: &mut UiTest, index: usize) {
+    // The screen's fields are 36 points tall, the dialog's 22. A field being edited is a text
+    // input, not a spin button. Width and Height share a row, above Resolution.
+    let mut fields: Vec<_> = (ui.harness.query_all_by_role(Role::SpinButton))
+        .chain(ui.harness.query_all_by_role(Role::TextInput))
+        .filter(|node| node.rect().height() < 30.0)
+        .collect();
+    fields.sort_by(|a, b| {
+        (a.rect().top().round(), a.rect().left())
+            .partial_cmp(&(b.rect().top().round(), b.rect().left()))
+            .unwrap()
+    });
+    fields[index].focus();
+    ui.settle();
+}
+
+/// Opens the Preset menu, which shows `current`.
+fn open_presets(ui: &mut UiTest, current: &str) {
+    ui.harness
+        .get_by_role_and_label(Role::ComboBox, current)
+        .click();
+    ui.settle();
+}
+
+#[test]
+fn new_canvas_preset_fills_the_fields_and_editing_returns_to_custom() {
+    let (_directory, mut ui) = new_canvas([1000, 700]);
+    assert!(ui.has_role(Role::ComboBox, "Custom"));
+    open_presets(&mut ui, "Custom");
+    ui.click("Story / Reel  (1080 × 1920)");
+    assert_eq!(ui.app().dimensions, [1080, 1920]);
+    assert!(ui.has_role(Role::ComboBox, "Story / Reel"));
+    // A preset in the other orientation shows under the same name.
+    ui.app_mut().dimensions = [1920, 1080];
+    ui.settle();
+    assert!(ui.has_role(Role::ComboBox, "1080p"));
+    // Editing a field leaves the preset.
+    ui.app_mut().dimensions = [1921, 1080];
+    ui.settle();
+    assert!(ui.has_role(Role::ComboBox, "Custom"));
+    // The menu shows each group.
+    open_presets(&mut ui, "Custom");
+    assert!(ui.has("Screens") && ui.has("Social"));
+    ui.click("4K  (3840 × 2160)");
+    assert_eq!(ui.app().dimensions, [3840, 2160]);
+    create_canvas(&mut ui);
+    let document = &ui.app().session().unwrap().document;
+    assert_eq!((document.width, document.height), (3840, 2160));
+}
+
+#[test]
+fn new_canvas_typing_a_width_switches_the_menu_to_custom() {
+    let (_directory, mut ui) = new_canvas([1920, 1080]);
+    assert!(ui.has_role(Role::ComboBox, "1080p"));
+    ui.type_keys("1000");
+    assert_eq!(ui.app().dimensions, [1000, 1080]);
+    assert!(ui.has_role(Role::ComboBox, "Custom"));
+}
+
+#[test]
+fn new_canvas_swap_turns_portrait_into_landscape() {
+    let (_directory, mut ui) = new_canvas([1080, 1920]);
+    ui.click("Swap");
+    assert_eq!(ui.app().dimensions, [1920, 1080]);
+    assert!(ui.has_role(Role::ComboBox, "1080p"));
+    ui.click("Swap");
+    assert_eq!(ui.app().dimensions, [1080, 1920]);
+}
+
+#[test]
+fn new_canvas_keep_aspect_ratio_follows_the_edited_side() {
+    let (_directory, mut ui) = new_canvas([1920, 1080]);
+    ui.click("Keep aspect ratio");
+    assert!(ui.app().keep_ratio);
+    // Clicking a number field edits it with its text selected; each keystroke keeps 16:9
+    // against the ratio the box was ticked at.
+    focus_number(&mut ui, 0);
+    ui.type_keys("960");
+    assert_eq!(ui.app().dimensions, [960, 540]);
+    focus_number(&mut ui, 1);
+    ui.type_keys("270");
+    assert_eq!(ui.app().dimensions, [480, 270]);
+    // Swap keeps the proportion in the new orientation.
+    ui.click("Swap");
+    assert_eq!(ui.app().ratio, [1080, 1920]);
+    // Off again, the fields are independent.
+    ui.click("Keep aspect ratio");
+    assert!(!ui.app().keep_ratio);
+}
+
+#[test]
+fn new_canvas_remembers_the_last_size_for_next_time() {
+    let (directory, mut ui) = new_canvas([1080, 1350]);
+    create_canvas(&mut ui);
+    let path = directory.path().join("config.toml");
+    let saved = xuan::config::Config::load(&path).unwrap();
+    assert_eq!(saved.new_canvas_size, Some([1080, 1350]));
+    // Another size was left behind by Canvas Size; File → New shows the remembered one.
+    ui.app_mut().dimensions = [10, 10];
+    ui.app_mut().command("new");
+    ui.settle();
+    assert_eq!(ui.app().dimensions, [1080, 1350]);
+    assert!(ui.has_role(Role::ComboBox, "Portrait post"));
+}

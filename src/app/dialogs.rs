@@ -1,5 +1,6 @@
 use super::widgets;
 use std::{io::Cursor, sync::Arc};
+use xuan::canvas_presets as presets;
 use xuan::i18n::tr;
 
 use egui::{RichText, Stroke, vec2};
@@ -260,6 +261,11 @@ impl EditorApp {
                         .color(ui.palette().muted),
                     );
                     ui.add_space(16.0);
+                    if dialog == Dialog::New {
+                        self.preset_menu(ui);
+                        ui.add_space(12.0);
+                    }
+                    let before = self.dimensions;
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.label(tr("Width"));
@@ -302,6 +308,11 @@ impl EditorApp {
                             );
                         });
                     });
+                    if dialog == Dialog::New {
+                        self.keep_ratio_edit(before);
+                        ui.add_space(8.0);
+                        self.swap_and_link(ui);
+                    }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         ui.label(tr("Resolution"));
@@ -454,6 +465,72 @@ impl EditorApp {
         if self.dialog != Some(dialog) {
             ctx.data_mut(|d| d.remove_temp::<Option<(Dialog, bool)>>(focused));
         }
+    }
+
+    /// New canvas: the Preset menu. It shows the preset the fields match, or Custom.
+    fn preset_menu(&mut self, ui: &mut egui::Ui) {
+        let current = presets::find(self.dimensions[0], self.dimensions[1]);
+        let label = |p: &presets::Preset| format!("{}  ({} × {})", tr(p.name), p.width, p.height);
+        ui.horizontal(|ui| {
+            ui.label(tr("Preset"));
+            let mut picked = None;
+            widgets::PopUp::from_id_salt("new_canvas_preset")
+                .selected_text(current.map_or(tr("Custom"), |p| tr(p.name)))
+                .width(210.0)
+                .show_ui(ui, |ui| {
+                    // Custom keeps the fields as they are.
+                    widgets::menu_choice(ui, &mut current.is_none(), true, tr("Custom"));
+                    for group in presets::GROUPS {
+                        ui.label(
+                            RichText::new(tr(group.name))
+                                .small()
+                                .color(ui.palette().muted),
+                        );
+                        for p in group.presets {
+                            let mut selected = current == Some(p);
+                            if widgets::menu_choice(ui, &mut selected, true, label(p)).clicked() {
+                                picked = Some(p);
+                            }
+                        }
+                    }
+                });
+            if let Some(p) = picked {
+                self.dimensions = [p.width, p.height];
+                self.ratio = self.dimensions;
+            }
+        });
+    }
+
+    /// With Keep aspect ratio, the side not edited follows the one that was.
+    fn keep_ratio_edit(&mut self, before: [u32; 2]) {
+        let [width, height] = self.dimensions;
+        let [ratio_width, ratio_height] = self.ratio;
+        if !self.keep_ratio || self.dimensions == before {
+            return;
+        }
+        if width != before[0] {
+            self.dimensions[1] = presets::linked_side(ratio_width, ratio_height, width, height);
+        } else {
+            self.dimensions[0] = presets::linked_side(ratio_height, ratio_width, height, width);
+        }
+    }
+
+    /// New canvas: Swap turns portrait into landscape; Keep aspect ratio ties Width to Height.
+    fn swap_and_link(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if widgets::button(ui, tr("Swap"))
+                .on_hover_text(tr("Swap width and height (portrait / landscape)"))
+                .clicked()
+            {
+                self.dimensions = presets::swapped(self.dimensions);
+                self.ratio = presets::swapped(self.ratio);
+            }
+            let was = self.keep_ratio;
+            widgets::checkbox(ui, &mut self.keep_ratio, tr("Keep aspect ratio"));
+            if self.keep_ratio && !was {
+                self.ratio = self.dimensions;
+            }
+        });
     }
 
     fn effect_dialog(&mut self, ctx: &egui::Context) {

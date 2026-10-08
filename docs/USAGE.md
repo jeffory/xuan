@@ -95,6 +95,14 @@ The **+** button after the last tab starts a new canvas. Hover a tab for its ful
   it asks first.
 - **Reorder** document tabs by dragging them; a line shows where the tab will land.
 - **Double-click** the empty part of the bar, or click **+**, for a new canvas.
+- **New canvas size:** **File → New…** (Ctrl+N) takes a Width, Height and Resolution. The
+  **Preset** menu fills Width and Height from **Screens** (4K, 1440p, 1080p, 720p) or **Social**
+  (square, portrait and landscape posts, story / reel, video thumbnail, link preview, banner);
+  it shows the preset the fields match, in either orientation, or **Custom** once you type
+  another size. **Swap** exchanges Width and Height (portrait / landscape), and **Keep aspect
+  ratio** makes the other side follow the one you type, in the proportion it had when you ticked
+  the box or picked a preset. Sizes obey the same limits as every canvas. The size of the last
+  canvas you created is offered next time (paper sizes wait on physical units).
 - **Right-click** a tab for **Close Tab**, **Close Other Tabs**, **Close Tabs to the
   Right**, **Reopen Closed Tab**, **Copy Path** and **Show in Folder** (which selects the
   file in the file manager on Windows, macOS and Linux desktops that support it, and
