@@ -1469,13 +1469,18 @@ mod tests {
         assert_eq!(stored["name"], "bleach.cube");
         assert_eq!(stored["interpolation"], "Trilinear");
         assert!(stored.get("table").is_none(), "{stored}");
-        let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
-        let mut cube = String::new();
-        archive
-            .by_name(&format!("luts/{id}.cube"))
-            .unwrap()
-            .read_to_string(&mut cube)
-            .unwrap();
+        // The archive is closed before the file is saved over again, which Windows refuses
+        // while it is open.
+        let cube = {
+            let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+            let mut cube = String::new();
+            archive
+                .by_name(&format!("luts/{id}.cube"))
+                .unwrap()
+                .read_to_string(&mut cube)
+                .unwrap();
+            cube
+        };
         assert_eq!(Lut::parse(&cube).unwrap(), table);
 
         let loaded = load(&path).unwrap();
