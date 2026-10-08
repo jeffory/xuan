@@ -37,7 +37,9 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use image::{GrayImage, Luma, RgbaImage};
 use uuid::Uuid;
 
-use super::compositor::{Dropped, ImportReport, ImportSource, font_from_postscript};
+use super::compositor::{
+    Dropped, ImportReport, ImportSource, font_from_postscript, units_to_letters,
+};
 use crate::{
     blend::BlendMode,
     document::{
@@ -46,7 +48,7 @@ use crate::{
     i18n::tr,
     layer_effects::LayerEffects,
     paint::ShapeKind,
-    text::{MAX_TEXT_BYTES, TextStyle},
+    text::{MAX_TEXT_BYTES, RunStyle, TextRun, TextStyle},
 };
 
 mod descriptor;
@@ -1472,7 +1474,8 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
     {
         return None;
     }
-    let content = text.text("Txt ")?.replace("\r\n", "\n").replace('\r', "\n");
+    let raw = text.text("Txt ")?;
+    let content = raw.replace("\r\n", "\n").replace('\r', "\n");
     let content = content.trim_end_matches('\n');
     if content.is_empty() || content.len() > MAX_TEXT_BYTES {
         return None;
@@ -1498,15 +1501,9 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
         .unwrap_or("Arial")
         .trim_end_matches('\0');
     let (family, bold, italic) = font_from_postscript(font);
-    let mut color = [0, 0, 0, 255];
-    if let Some(values) = first.walk(&["FillColor", "Values"]).map(Engine::array) {
-        let values: Vec<f64> = values.iter().filter_map(Engine::number).collect();
-        if let [_, r, g, b] = values[..] {
-            color = [r, g, b, 1.0].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-        }
-    }
+    let color = text_fill(first).unwrap_or([0, 0, 0, 255]);
     let flag = |key| first.get(key).and_then(Engine::boolean).unwrap_or(false);
-    let style = TextStyle {
+    let mut style = TextStyle {
         content: content.into(),
         family: if family.trim().is_empty() {
             TextStyle::default().family
@@ -1523,7 +1520,66 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
         runs: Vec::new(),
     };
     style.validate().ok()?;
-    if runs.iter().skip(1).any(|run| style_of(run) != Some(first)) {
+    // Letters whose font or colour differ from the first style become style runs; other
+    // differences (size, underline, tracking…) are not represented.
+    let lengths = engine
+        .walk(&["EngineDict", "StyleRun", "RunLengthArray"])
+        .map_or(&[][..], Engine::array);
+    let mut letter_runs = Vec::new();
+    let mut other_styles = false;
+    if lengths.len() == runs.len() {
+        let to_letters = units_to_letters(letter_units(raw));
+        let mut unit = 0_usize;
+        for (run, length) in runs.iter().zip(lengths) {
+            let length = length.number().filter(|l| *l >= 0.0 && *l <= 1e7)? as usize;
+            let range = unit..unit + length;
+            unit += length;
+            let Some(sheet) = style_of(run) else {
+                other_styles = true;
+                continue;
+            };
+            if sheet == first {
+                continue;
+            }
+            other_styles |= without_letter_keys(sheet) != without_letter_keys(first);
+            let font = sheet
+                .get("Font")
+                .and_then(Engine::number)
+                .and_then(|i| fonts.get(i as usize))
+                .and_then(|f| f.get("Name"))
+                .and_then(Engine::string)
+                .map(|name| font_from_postscript(name.trim_end_matches('\0')));
+            let faux = |key| sheet.get(key).and_then(Engine::boolean).unwrap_or(false);
+            let letters = to_letters(range);
+            if letters.is_empty() {
+                continue;
+            }
+            letter_runs.push(TextRun {
+                start: letters.start,
+                end: letters.end,
+                style: RunStyle {
+                    family: font
+                        .as_ref()
+                        .map(|(family, _, _)| family.clone())
+                        .filter(|family| !family.trim().is_empty()),
+                    color: text_fill(sheet),
+                    bold: font.as_ref().map(|(_, bold, _)| *bold || faux("FauxBold")),
+                    italic: font
+                        .as_ref()
+                        .map(|(_, _, italic)| *italic || faux("FauxItalic")),
+                },
+            });
+        }
+    } else {
+        other_styles = runs.iter().skip(1).any(|run| style_of(run) != Some(first));
+    }
+    style.runs = letter_runs;
+    style.normalize_runs();
+    if style.validate().is_err() {
+        style.runs.clear();
+        other_styles = true;
+    }
+    if other_styles {
         report.add(Dropped::PhotoshopTextStyles);
     }
     let justification = engine
@@ -1550,6 +1606,50 @@ fn text_style(data: &[u8], report: &mut ImportReport) -> Option<TextStyle> {
         report.add(Dropped::TextLayout);
     }
     Some(style)
+}
+
+/// A style sheet's `FillColor` (ARGB, 0–1) as RGBA.
+fn text_fill(sheet: &Engine) -> Option<[u8; 4]> {
+    let values = sheet.walk(&["FillColor", "Values"]).map(Engine::array)?;
+    let values: Vec<f64> = values.iter().filter_map(Engine::number).collect();
+    let [_, r, g, b] = values[..] else {
+        return None;
+    };
+    Some([r, g, b, 1.0].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+}
+
+/// A style sheet without what style runs can hold: the font, the faux bold and italic, and
+/// the fill colour.
+fn without_letter_keys(sheet: &Engine) -> Engine {
+    match sheet {
+        Engine::Dict(items) => Engine::Dict(
+            items
+                .iter()
+                .filter(|(key, _)| {
+                    !["Font", "FauxBold", "FauxItalic", "FillColor"].contains(&key.as_str())
+                })
+                .cloned()
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// The UTF-16 unit each letter of Photoshop's text starts at, once a "\r\n" line break is
+/// read as one letter, as the editable text has it.
+fn letter_units(raw: &str) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(raw.len());
+    let mut unit = 0;
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        starts.push(unit);
+        unit += c.len_utf16();
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            chars.next();
+            unit += 1;
+        }
+    }
+    starts
 }
 
 /// A layer's effects as Xuan draws them, and what of Photoshop's could not come along.

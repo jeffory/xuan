@@ -651,6 +651,12 @@ fn letter_ranges(content: &str) -> impl Fn(Range<usize>) -> Range<usize> {
         starts.push(unit);
         unit += c.len_utf16();
     }
+    units_to_letters(starts)
+}
+
+/// A function from a range of UTF-16 units to the letters it touches, given the unit each
+/// letter starts at (in order).
+pub(super) fn units_to_letters(starts: Vec<usize>) -> impl Fn(Range<usize>) -> Range<usize> {
     move |units: Range<usize>| {
         let start = starts
             .partition_point(|&s| s <= units.start)
