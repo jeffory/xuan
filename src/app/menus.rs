@@ -390,6 +390,7 @@ impl EditorApp {
                                     item(ui, &items, "fill_fg", &mut action);
                                     item(ui, &items, "fill_bg", &mut action);
                                     item(ui, &items, "clear", &mut action);
+                                    item(ui, &items, "stroke", &mut action);
                                     item(ui, &items, "content_fill", &mut action);
                                 });
                             });

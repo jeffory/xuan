@@ -50,6 +50,7 @@ mod selection_dialogs;
 mod settings;
 mod shortcuts;
 mod snap;
+mod stroke_dialog;
 mod stroke_smoothing;
 mod surfaces;
 mod system_theme;
@@ -381,6 +382,8 @@ enum Dialog {
     Trim,
     /// Select → Paths….
     Paths,
+    /// Edit → Stroke….
+    Stroke,
 }
 
 struct EffectEdit {
@@ -510,6 +513,9 @@ pub struct EditorApp {
     selection_amount: Option<selection_dialogs::AmountEdit>,
     /// Image → Trim…: the choices it remembers.
     trim_settings: trim_dialog::TrimSettings,
+    /// Edit → Stroke…, while it is open, and the choices it remembers.
+    stroke: Option<stroke_dialog::StrokeEdit>,
+    stroke_settings: stroke_dialog::StrokeSettings,
     /// Select → Paths…, while it is open.
     paths_edit: Option<paths_dialog::PathsEdit>,
     /// The Pen tool's path being drawn and the path shown for editing.
@@ -734,6 +740,8 @@ impl EditorApp {
             tolerance: 32,
             selection_amount: None,
             trim_settings: Default::default(),
+            stroke: None,
+            stroke_settings: Default::default(),
             paths_edit: None,
             pen: Default::default(),
             expand_amount: 2,
@@ -1768,6 +1776,7 @@ impl EditorApp {
                 }
             }
             "trim" => self.open_trim(),
+            "stroke" => self.open_stroke(),
             "canvas_size" | "image_size" => {
                 if let Some(session) = self.session() {
                     let dimensions = [session.document.width, session.document.height];
@@ -1981,6 +1990,7 @@ impl EditorApp {
             && self.effect.is_none()
             && self.color_range.is_none()
             && self.layer_effects.is_none()
+            && self.stroke.is_none()
             && self.text_edit.is_none()
             && self.job.is_none()
             && self.plugins.proposal.is_none()

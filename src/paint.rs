@@ -30,8 +30,13 @@ mod dynamics_tests;
 #[path = "paint/symmetry_tests.rs"]
 mod symmetry_tests;
 
+#[cfg(test)]
+#[path = "paint/outline_tests.rs"]
+mod outline_tests;
+
 pub mod dynamics;
 pub use dynamics::Dynamics;
+pub mod outline;
 mod pencil;
 pub use pencil::tip_offsets;
 mod stroke;

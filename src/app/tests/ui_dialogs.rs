@@ -384,3 +384,81 @@ fn new_canvas_opens_with_width_focused_and_selected() {
     let document = &ui.app().session().expect("a new document").document;
     assert_eq!((document.width, document.height), (800, 600));
 }
+
+/// Runs frames until Edit → Stroke… shows its line on the canvas.
+fn wait_for_stroke(ui: &mut UiTest) {
+    for _ in 0..500 {
+        if !ui.app().stroke.as_ref().is_some_and(|edit| edit.busy()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ui.settle();
+    }
+    ui.settle();
+    assert!(!ui.app().stroke.as_ref().is_some_and(|edit| edit.busy()));
+}
+
+/// Edit → Stroke… from the menu (issue 103): unavailable without a selection; with one, the
+/// dialog shows the line live, takes the standard footer, and Apply makes one undo step.
+#[test]
+fn edit_stroke_dialog_previews_and_applies_from_the_menu() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::with_document();
+    ui.isolate_config(directory.path());
+    let pixels = |ui: &UiTest| {
+        let document = &ui.app().session().unwrap().document;
+        document.active().unwrap().pixels.as_deref().cloned()
+    };
+    ui.open_menu("Edit");
+    assert!(!ui.enabled("Stroke…"));
+    ui.key(egui::Key::Escape);
+
+    ui.app_mut().edit_selection("Rect", |doc| {
+        let mask = GrayImage::from_fn(20, 16, |x, y| {
+            image::Luma([if (6..14).contains(&x) && (4..12).contains(&y) {
+                255
+            } else {
+                0
+            }])
+        });
+        doc.selection = Some(Arc::new(mask));
+    });
+    ui.settle();
+    let before = pixels(&ui);
+    let start = ui.app().session().unwrap().history.revision;
+    ui.open_menu("Edit");
+    ui.click("Stroke…");
+    assert_eq!(ui.app().dialog, Some(Dialog::Stroke));
+    wait_for_stroke(&mut ui);
+    assert_footer_order(&ui, "stroke", footer("Apply"));
+    for label in ["Location", "Centre", "Preserve transparency"] {
+        assert!(ui.has(label), "{label}");
+    }
+    // The default outside line shows before anything is applied.
+    let outside = pixels(&ui).unwrap();
+    assert_eq!(outside.get_pixel(5, 8)[3], 255);
+    assert_eq!(outside.get_pixel(6, 8)[3], 0);
+
+    ui.click("Inside");
+    wait_for_stroke(&mut ui);
+    let inside = pixels(&ui).unwrap();
+    assert_eq!(inside.get_pixel(5, 8)[3], 0);
+    assert_eq!(inside.get_pixel(6, 8)[3], 255);
+    assert_eq!(ui.app().session().unwrap().history.revision, start);
+
+    ui.click("Apply");
+    assert_eq!(ui.app().dialog, None);
+    assert_eq!(ui.app().session().unwrap().history.revision, start + 1);
+    assert_eq!(pixels(&ui).unwrap(), inside);
+    ui.press(egui::Modifiers::CTRL, egui::Key::Z);
+    assert_eq!(pixels(&ui), before);
+
+    // Cancel puts the layer back.
+    ui.open_menu("Edit");
+    ui.click("Stroke…");
+    wait_for_stroke(&mut ui);
+    assert_ne!(pixels(&ui), before);
+    ui.click("Cancel");
+    assert_eq!(ui.app().dialog, None);
+    assert_eq!(pixels(&ui), before);
+}
