@@ -1174,3 +1174,6 @@ Drag to lighten, darken or change saturation · [ ] size · Shift-click straight
 Dodge, Burn and Sponge work on layer pixels, not masks	减淡、加深和海绵只作用于图层像素，不作用于蒙版
 The tones that change most. The effect fades out smoothly into the other tones.	变化最大的色调。效果会平滑地过渡到其他色调。
 How strong the effect is. Going over the same spot in one stroke does not add to it; start a new stroke to go further.	效果的强度。在同一笔画中反复涂抹同一处不会叠加；要加强效果，请开始新的笔画。
+Imported with changes. Xuan does not draw these parts of the SVG file:	已导入，但有改动。Xuan 不绘制 SVG 文件的以下部分：
+Text (convert it to outlines first)	文字（请先转换为轮廓）
+Bitmaps and linked images	位图和链接的图像
