@@ -5928,16 +5928,6 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
             "Missing {label}: {text:?}"
         );
     }
-    context.fonts_mut(|fonts| {
-        for (tag, source) in xuan::i18n::bundled_sources() {
-            for translated in xuan::i18n::catalog::Catalog::parse(source).0.texts() {
-                assert!(
-                    fonts.has_glyphs(&egui::FontId::proportional(12.0), translated),
-                    "Missing font glyph in {tag}: {translated}"
-                );
-            }
-        }
-    });
     keyboard_frame(
         &context,
         &mut app,
@@ -5948,6 +5938,58 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
     app.config.language = xuan::config::Language::english();
     frame(&context, &mut app);
     assert_eq!(Tool::Brush.label(), "Brush");
+}
+
+/// Every translation can be drawn, and the bundled fonts cover what `docs/TRANSLATING.md` says.
+#[test]
+fn bundled_fonts_draw_every_locale_and_the_scripts_the_guide_lists() {
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    context.fonts_mut(|fonts| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let font = egui::FontId::new(12.0, family);
+            for (tag, source) in xuan::i18n::bundled_sources() {
+                for translated in xuan::i18n::catalog::Catalog::parse(source).0.texts() {
+                    assert!(
+                        fonts.has_glyphs(&font, translated),
+                        "Missing font glyph in {tag}: {translated}"
+                    );
+                }
+            }
+        }
+        // Names of languages, in their scripts. Monospace text, such as plugin logs, is drawn with
+        // Hack, which lacks Vietnamese's stacked accents.
+        let proportional = egui::FontId::proportional(12.0);
+        let monospace = egui::FontId::monospace(12.0);
+        for (covered, fonts_for) in [
+            ("Tiếng Việt", &[&proportional][..]),
+            (
+                "Čeština, Polski, Türkçe, Ελληνικά",
+                &[&proportional, &monospace],
+            ),
+            (
+                "Українська ґєії, Русский ёъыэ, Беларуская ў, Српски ђћџ, Қазақ ғқңөұүһі",
+                &[&proportional, &monospace],
+            ),
+            (
+                "简体中文, 繁體中文, 日本語 ひらがな カタカナ",
+                &[&proportional, &monospace],
+            ),
+        ] {
+            for font in fonts_for {
+                assert!(fonts.has_glyphs(font, covered), "{font:?}: {covered}");
+            }
+        }
+        for missing in ["한국어", "العربية", "עברית", "हिन्दी", "বাংলা", "ไทย"]
+        {
+            for font in [&proportional, &monospace] {
+                assert!(
+                    !fonts.has_glyphs(font, missing),
+                    "{missing} can be drawn now: update the table in docs/TRANSLATING.md"
+                );
+            }
+        }
+    });
 }
 
 /// Command labels and category names reach `tr` through variables, so the source scan in
