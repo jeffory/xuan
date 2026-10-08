@@ -19,6 +19,10 @@ use crate::{
 
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
 
+/// Entries a project or OpenRaster archive may hold: a manifest and an image and mask for
+/// every layer, with room to spare.
+const MAX_ARCHIVE_ENTRIES: usize = 30_001;
+
 /// Largest image file or project asset read whole; see [`crate::limits::Limits::file_bytes`].
 pub(crate) fn max_asset() -> u64 {
     crate::limits::get().file_bytes()
@@ -26,10 +30,12 @@ pub(crate) fn max_asset() -> u64 {
 
 mod compositor;
 mod heif;
+pub mod ora;
 pub mod psd;
 pub mod svg;
 
 pub use compositor::{Dropped, ImportReport, ImportSource};
+pub use ora::is_openraster;
 pub use psd::is_photoshop;
 pub use svg::is_svg;
 
@@ -272,7 +278,11 @@ fn format_version(document: &Document) -> u32 {
     }
 }
 
-fn zip_read(archive: &mut ZipArchive<File>, name: &str, limit: u64) -> Result<Vec<u8>> {
+fn zip_read<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    limit: u64,
+) -> Result<Vec<u8>> {
     let file = archive
         .by_name(name)
         .with_context(|| format!("Missing project asset: {name}"))?;
@@ -291,7 +301,10 @@ pub fn load(path: &Path) -> Result<Document> {
         return load_compositor(path);
     }
     let mut archive = ZipArchive::new(File::open(path)?)?;
-    ensure!(archive.len() <= 30_001, "Too many project assets");
+    ensure!(
+        archive.len() <= MAX_ARCHIVE_ENTRIES,
+        "Too many project assets"
+    );
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
@@ -379,13 +392,15 @@ pub fn load_compositor(path: &Path) -> Result<Document> {
     compositor::load(path).map(|(document, _)| document)
 }
 
-/// Open a project like [`load`], also returning what a Compositor or Photoshop import left out
-/// or changed. `.xuan` projects always load completely, so their report is empty.
+/// Open a project like [`load`], also returning what a Compositor, Photoshop or OpenRaster
+/// import left out or changed. `.xuan` projects always load completely, so their report is empty.
 pub fn load_with_report(path: &Path) -> Result<(Document, ImportReport)> {
     if path.is_dir() {
         compositor::load(path)
     } else if is_photoshop(path) {
         psd::load(path, psd::PixelBudget::default())
+    } else if is_openraster(path) {
+        ora::load(path, psd::PixelBudget::default())
     } else {
         Ok((load(path)?, ImportReport::default()))
     }
@@ -462,6 +477,10 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
         .and_then(|e| e.to_str())
         .unwrap_or("png")
         .to_lowercase();
+    // Layered: what it flattens is reported by `ora::export` itself.
+    if extension == "ora" {
+        return ora::export(document, path).map(drop);
+    }
     check_export_size(&extension, document.width, document.height)?;
     let image = render::render(document);
     let parent = path
@@ -503,7 +522,7 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
             options.webp_lossless,
             options.webp_quality,
         )?)?,
-        _ => bail!("Export as PNG, JPEG, TIFF or WebP"),
+        _ => bail!("Export as PNG, JPEG, TIFF, WebP or OpenRaster"),
     }
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|e| e.error)?;

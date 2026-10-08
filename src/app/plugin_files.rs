@@ -40,8 +40,9 @@ const UNPLAIN_NAME: &str = "The file name in `path` must be a plain name: no con
 pub(super) const FILE_METHODS: [&str; 4] =
     ["file/save_as", "file/export", "file/save", "file/open"];
 
-/// Image formats `file/export` writes, by the extension Xuan gives them.
-const EXPORT_FORMATS: [&str; 4] = ["png", "jpg", "tiff", "webp"];
+/// Image formats `file/export` writes, by the extension Xuan gives them (`ora` is layered
+/// OpenRaster).
+const EXPORT_FORMATS: [&str; 5] = ["png", "jpg", "tiff", "webp", "ora"];
 
 /// What a plugin asked for.
 #[derive(Clone, Debug, PartialEq)]
@@ -234,7 +235,7 @@ fn plain_file_name(name: &str) -> Option<String> {
 }
 
 /// Image extensions `file/export` accepts in the name the user chose.
-const EXPORT_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "tif", "tiff", "webp"];
+const EXPORT_EXTENSIONS: [&str; 7] = ["png", "jpg", "jpeg", "tif", "tiff", "webp", "ora"];
 
 /// Whether a path the user chose names the kind of file being written: a
 /// `.xuan` project, or an image with an extension Xuan exports.
@@ -285,6 +286,7 @@ fn export_format(extension: &str) -> Option<&'static str> {
         "jpg" | "jpeg" => Some("jpg"),
         "tif" | "tiff" => Some("tiff"),
         "webp" => Some("webp"),
+        "ora" => Some("ora"),
         _ => None,
     }
 }
@@ -353,7 +355,7 @@ fn write_target(
         Some(format) => {
             let Some(found) = export_format(extension) else {
                 return Err(invalid(format!(
-                    "Cannot export as {name}; the name must end in .png, .jpg, .jpeg, .tif, .tiff or .webp. Nothing was written"
+                    "Cannot export as {name}; the name must end in .png, .jpg, .jpeg, .tif, .tiff, .webp or .ora. Nothing was written"
                 )));
             };
             if let Some(format) = format
@@ -705,7 +707,7 @@ impl EditorApp {
                 let name = again.file_name().unwrap_or_default().to_string_lossy();
                 return Err(RpcError::invalid_params(match export {
                     Some(_) => format!(
-                        "Cannot export as {name}; choose a name ending in .png, .jpg, .tiff or .webp. Nothing was written"
+                        "Cannot export as {name}; choose a name ending in .png, .jpg, .tiff, .webp or .ora. Nothing was written"
                     ),
                     None => format!(
                         "Cannot save the project as {name}; choose a name ending in .xuan. Nothing was written"

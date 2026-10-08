@@ -388,6 +388,78 @@ fn photoshop_files_import_as_a_centered_folder_and_drop_like_images() {
     assert_eq!(app.session().unwrap().document.layers.len(), 3);
 }
 
+/// An OpenRaster file with one 2 × 1 layer at (1, 1) drawn with `op`.
+fn openraster_file(op: &str) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut png = std::io::Cursor::new(Vec::new());
+    RgbaImage::from_pixel(2, 1, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let xml = format!(
+        "<image w=\"4\" h=\"3\"><stack><layer name=\"Art\" src=\"data/a.png\" x=\"1\" y=\"1\" composite-op=\"{op}\"/></stack></image>"
+    );
+    for (name, bytes) in [
+        ("mimetype", b"image/openraster".to_vec()),
+        ("stack.xml", xml.into_bytes()),
+        ("data/a.png", png.into_inner()),
+    ] {
+        archive.start_file(name, stored).unwrap();
+        archive.write_all(&bytes).unwrap();
+    }
+    archive.finish().unwrap().into_inner()
+}
+
+#[test]
+fn openraster_files_open_import_and_export_like_photoshop_files() {
+    let (context, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Sketch.ora");
+    assert!(builtin_extension(&path));
+
+    // A conversion is listed first, under OpenRaster's name.
+    std::fs::write(&path, openraster_file("svg:dst-out")).unwrap();
+    app.open_path(&path, false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.sessions.is_empty());
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(lines.iter().any(|l| l.contains("svg:dst-out")), "{lines:?}");
+    let enter = text_key(egui::Key::Enter, egui::Modifiers::NONE);
+    keyboard_frame(&context, &mut app, vec![enter], egui::Modifiers::NONE);
+    assert_eq!(app.sessions.len(), 1);
+    let session = app.session().unwrap();
+    assert_eq!(session.title, "Sketch");
+    assert!(session.path.is_none(), "saving must not overwrite the ORA");
+    assert_eq!(session.document.layers[0].name, "Art");
+
+    // A file Xuan represents completely opens at once, and imports as a folder.
+    std::fs::write(&path, openraster_file("svg:multiply")).unwrap();
+    app.open_path(&path, true);
+    assert!(app.pending_photoshop_lines().is_none());
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 3);
+    let folder = document.active().unwrap();
+    assert!(folder.group && folder.name == "Sketch");
+    assert_eq!(document.layers[1].blend, xuan::blend::BlendMode::Multiply);
+
+    // Exporting reports what was flattened.
+    let exported = directory.path().join("out.ora");
+    assert_eq!(app.export_to(&exported).unwrap(), None);
+    app.session_mut().unwrap().document.layers[1].fill = 0.5;
+    let notice = app.export_to(&exported).unwrap().unwrap();
+    assert!(notice.contains("Fill below 100%"), "{notice}");
+    let (back, _) = io::ora::load(&exported, io::psd::PixelBudget::default()).unwrap();
+    assert_eq!(back.layers.len(), 3);
+
+    // Damaged files are refused with the reason.
+    std::fs::write(&path, b"not a zip").unwrap();
+    app.open_path(&path, false);
+    let error = app.error.take().unwrap();
+    assert!(error.contains("not an OpenRaster file"), "{error}");
+}
+
 #[test]
 fn text_tool_creates_edits_and_undoes_one_transaction() {
     let (context, mut app) = app();

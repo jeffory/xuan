@@ -32,6 +32,9 @@ rawler = "=0.8.0"
 rayon = "1.11"
 raw-window-handle = "0.6"
 rfd = "0.15.4"
+# OpenRaster's stack.xml (src/io/ora.rs): the version usvg already uses, with its node limit and
+# no DTDs.
+roxmltree = "0.20"
 semver = "1.0.28"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"

@@ -227,10 +227,12 @@ impl EditorApp {
             }
             ClipboardContent::Files(paths) => {
                 self.clipboard = None;
-                if paths
-                    .iter()
-                    .any(|p| xuan::raw::is_raw(p) || io::is_photoshop(p) || io::is_svg(p))
-                {
+                if paths.iter().any(|p| {
+                    xuan::raw::is_raw(p)
+                        || io::is_photoshop(p)
+                        || io::is_openraster(p)
+                        || io::is_svg(p)
+                }) {
                     for path in paths {
                         self.open_path(&path, true);
                     }

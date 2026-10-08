@@ -1300,8 +1300,8 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             name: "export_document",
             title: "Export an image",
             description: concat!(
-                "Export a document (the current one by default) as png (default), jpg, tiff or webp. ",
-                "With an absolute `path` (ending in .png, .jpg, .jpeg, .tif, .tiff or .webp, which picks the format, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
+                "Export a document (the current one by default) as png (default), jpg, tiff, webp or ora (layered OpenRaster, which Krita, GIMP and MyPaint open). ",
+                "With an absolute `path` (ending in .png, .jpg, .jpeg, .tif, .tiff, .webp or .ora, which picks the format, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
                 "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
                 "Without `path`, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
                 "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
@@ -1310,7 +1310,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             ),
             properties: json!({
                 "document": {"type": "string"},
-                "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]},
+                "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp", "ora"]},
                 "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
                 "path": {"type": "string", "description": "Where to export, an absolute path with an image extension"},
                 "overwrite": {"type": "boolean", "description": "Allow replacing an existing file at `path`"},

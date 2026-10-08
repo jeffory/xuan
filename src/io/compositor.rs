@@ -98,6 +98,15 @@ pub enum Dropped {
     CroppedToCanvas,
     /// A clipped folder, or a clipping mask whose base was left out, released.
     ClippingBase,
+    // OpenRaster imports (`super::ora`).
+    /// An OpenRaster layer whose composite operation Xuan does not have, drawn as Normal.
+    OpenRasterBlendMode(&'static str),
+    /// An isolated OpenRaster stack whose layers blend: Xuan's folder passes through, so they
+    /// blend with what is below the folder too.
+    IsolatedFolder,
+    /// OpenRaster content Xuan cannot read (Krita's filter layers, layers that are not PNG
+    /// images, unknown elements), left out.
+    OpenRasterLeftOut,
 }
 
 impl Dropped {
@@ -152,6 +161,15 @@ impl Dropped {
                 tr("Layers cropped to the canvas to fit the memory limit").into()
             }
             Self::ClippingBase => tr("Clipping masks on folders or left-out layers").into(),
+            Self::OpenRasterBlendMode(name) => {
+                format!("{} “{name}” ({})", tr("Blend mode"), tr("drawn as Normal"))
+            }
+            Self::IsolatedFolder => {
+                tr("Isolated folders whose layers blend (now pass through)").into()
+            }
+            Self::OpenRasterLeftOut => {
+                tr("Filter layers and other content Xuan can't read (left out)").into()
+            }
         }
     }
 }
@@ -162,10 +180,11 @@ pub enum ImportSource {
     #[default]
     Compositor,
     Photoshop,
+    OpenRaster,
 }
 
-/// What a Compositor or Photoshop import left out or changed. Empty for `.xuan` projects and
-/// for files Xuan represents completely.
+/// What a Compositor, Photoshop or OpenRaster import left out or changed. Empty for `.xuan`
+/// projects and for files Xuan represents completely.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportReport {
     source: ImportSource,
@@ -217,6 +236,9 @@ impl ImportReport {
             }
             ImportSource::Photoshop => {
                 "Imported with changes. These parts of the Photoshop file aren't supported yet:"
+            }
+            ImportSource::OpenRaster => {
+                "Imported with changes. These parts of the OpenRaster file aren't supported yet:"
             }
         })
         .to_owned();

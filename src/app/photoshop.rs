@@ -1,7 +1,7 @@
-//! Photoshop imports. Like upstream Compositor's conversion sheet (`UI/PSDConversionSheet.swift`,
-//! `EditorSession.finishPSDReading`), what the import changes is shown before anything is
-//! applied, and Cancel leaves the open documents untouched. Files Xuan represents completely
-//! open without asking.
+//! Photoshop and OpenRaster imports. Like upstream Compositor's conversion sheet
+//! (`UI/PSDConversionSheet.swift`, `EditorSession.finishPSDReading`), what the import changes is
+//! shown before anything is applied, and Cancel leaves the open documents untouched. Files Xuan
+//! represents completely open without asking.
 use super::theme::PaletteExt as _;
 use std::{
     collections::VecDeque,
@@ -13,14 +13,14 @@ use xuan::{
     document::{Document, Layer, MAX_LAYERS},
     i18n::tr,
     io::{
-        ImportReport,
+        ImportReport, ImportSource, ora,
         psd::{self, PixelBudget},
     },
 };
 
 use super::{EditorApp, Session, widgets};
 
-/// A read Photoshop file waiting for the user to accept its conversion report.
+/// A read Photoshop or OpenRaster file waiting for the user to accept its conversion report.
 pub(super) struct PendingImport {
     path: PathBuf,
     document: Document,
@@ -28,7 +28,7 @@ pub(super) struct PendingImport {
     as_layer: bool,
 }
 
-/// Photoshop files read but not applied yet, first in line shown first.
+/// Photoshop and OpenRaster files read but not applied yet, first in line shown first.
 pub(super) type PendingImports = VecDeque<PendingImport>;
 
 fn file_stem(path: &Path) -> String {
@@ -39,7 +39,8 @@ fn file_stem(path: &Path) -> String {
 }
 
 impl EditorApp {
-    /// Read a `.psd` or `.psb` file, then apply it at once or after the conversion report.
+    /// Read a `.psd`, `.psb` or `.ora` file, then apply it at once or after the conversion
+    /// report.
     pub(super) fn open_photoshop(&mut self, path: &Path, as_layer: bool) {
         let as_layer = as_layer && !self.sessions.is_empty();
         // Layers added to a document share its pixel budget; beyond it they are cropped.
@@ -47,7 +48,12 @@ impl EditorApp {
             Some(session) => PixelBudget::remaining(&session.document),
             None => PixelBudget::default(),
         };
-        match psd::load(path, budget) {
+        let read = if ora::is_openraster(path) {
+            ora::load(path, budget)
+        } else {
+            psd::load(path, budget)
+        };
+        match read {
             Ok((document, report)) => {
                 let pending = PendingImport {
                     path: path.to_path_buf(),
@@ -76,7 +82,11 @@ impl EditorApp {
         let changed = !pending.report.is_empty();
         if pending.as_layer && !self.sessions.is_empty() {
             let imported = pending.document;
-            self.edit(tr("Import Photoshop File"), |document| {
+            let action = match pending.report.source() {
+                ImportSource::OpenRaster => tr("Import OpenRaster File"),
+                _ => tr("Import Photoshop File"),
+            };
+            self.edit(action, |document| {
                 insert_as_folder(document, imported, name)
             });
         } else {
@@ -110,9 +120,14 @@ impl EditorApp {
         .id(egui::Id::new("photoshop_import"))
         .default_width(480.0)
         .show_with_footer(ctx, |ui| {
-            ui.label(tr(
-                "Xuan will convert these Photoshop features. Nothing is applied until you continue.",
-            ));
+            ui.label(tr(match pending.report.source() {
+                ImportSource::OpenRaster => {
+                    "Xuan will convert these OpenRaster features. Nothing is applied until you continue."
+                }
+                _ => {
+                    "Xuan will convert these Photoshop features. Nothing is applied until you continue."
+                }
+            }));
             ui.add_space(8.0);
             egui::ScrollArea::vertical()
                 .max_height(260.0)
@@ -152,7 +167,7 @@ impl EditorApp {
     }
 }
 
-/// Add a Photoshop document's layers to `document` inside a new folder named after the file,
+/// Add a Photoshop or OpenRaster document's layers to `document` inside a new folder named after the file,
 /// centered on the canvas and placed like any new layer.
 fn insert_as_folder(
     document: &mut Document,

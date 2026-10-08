@@ -1177,3 +1177,35 @@ How strong the effect is. Going over the same spot in one stroke does not add to
 Imported with changes. Xuan does not draw these parts of the SVG file:	已导入，但有改动。Xuan 不绘制 SVG 文件的以下部分：
 Text (convert it to outlines first)	文字（请先转换为轮廓）
 Bitmaps and linked images	位图和链接的图像
+This is not an OpenRaster file	这不是 OpenRaster 文件
+The OpenRaster file is damaged or incomplete	OpenRaster 文件已损坏或不完整
+The OpenRaster file's layers don't fit within {} megapixels, the most this computer opens	OpenRaster 文件的图层超出这台电脑可打开的上限（{} 百万像素）
+The OpenRaster file names an unsafe layer path: {}	OpenRaster 文件包含不安全的图层路径：{}
+The OpenRaster file has too many entries	OpenRaster 文件包含的条目过多
+This is not an OpenRaster file: its mimetype entry is missing	这不是 OpenRaster 文件：缺少 mimetype 条目
+The OpenRaster file has too many layers	OpenRaster 文件的图层过多
+The OpenRaster file's stacks are nested too deeply	OpenRaster 文件的图层组嵌套过深
+The OpenRaster file is missing the layer image {}	OpenRaster 文件缺少图层图像 {}
+An OpenRaster layer image is too large	OpenRaster 图层图像过大
+Text layers (flattened to pixels)	文字图层（已栅格化为像素）
+Shape layers (flattened to pixels)	形状图层（已栅格化为像素）
+Layer effects (drawn into their layers)	图层效果（已绘制到所在图层）
+Layer masks (applied to the layer's pixels)	图层蒙版（已应用到图层像素）
+Fill below 100% (applied to the layer's pixels)	低于 100% 的填充（已应用到图层像素）
+Scaled, rotated or warped layers (resampled to pixels)	缩放、旋转或变形的图层（已转为像素）
+Adjustments, filters and masks on a layer (applied to its pixels)	图层上的调整、滤镜和蒙版（已应用到其像素）
+Clipping masks (merged into their base layer)	剪贴蒙版（已合并到基底图层）
+Adjustment layers (merged with the layers below them)	调整图层（已与下方图层合并）
+Filter layers (merged with the layers below them)	滤镜图层（已与下方图层合并）
+Mask layers (merged with the layers below them)	蒙版图层（已与下方图层合并）
+Folders with a mask (flattened to one layer)	带蒙版的文件夹（已合并为一个图层）
+Hidden adjustment, filter or mask layers (left out)	隐藏的调整、滤镜或蒙版图层（已省略）
+RAW layers (written as their developed pixels)	RAW 图层（以冲洗后的像素写入）
+Exported with changes. OpenRaster can't hold these, so Xuan flattened them:	已导出，但有改动。OpenRaster 无法保存以下内容，Xuan 已将其合并：
+Isolated folders whose layers blend (now pass through)	内部图层使用混合模式的隔离文件夹（现按“穿透”处理）
+Filter layers and other content Xuan can't read (left out)	Xuan 无法读取的滤镜图层和其他内容（已省略）
+Imported with changes. These parts of the OpenRaster file aren't supported yet:	已导入，但有改动。OpenRaster 文件的以下部分暂不支持：
+Import OpenRaster File	导入 OpenRaster 文件
+Xuan will convert these OpenRaster features. Nothing is applied until you continue.	Xuan 将转换以下 OpenRaster 功能。继续之前不会应用任何更改。
+OpenRaster keeps layers, folders, blend modes and opacity	OpenRaster 保留图层、文件夹、混合模式和不透明度
+These are flattened:	以下内容将被合并：
