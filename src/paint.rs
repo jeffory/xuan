@@ -54,6 +54,12 @@ mod stroke;
 pub use stroke::Stroke;
 pub mod symmetry;
 pub use symmetry::{Symmetry, SymmetryMode};
+pub mod tone;
+pub use tone::{Tone, ToneRange};
+
+#[cfg(test)]
+#[path = "paint/tone_tests.rs"]
+mod tone_tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintMode {
@@ -65,6 +71,11 @@ pub enum PaintMode {
     Smudge,
     /// Hard-edged, non-antialiased dabs on whole pixels.
     Pencil,
+    /// Dodge lightens, Burn darkens and Sponge (de)saturates the pixels
+    /// under the brush, by [`Brush::tone`]; see [`tone::apply`]. Not on masks.
+    Dodge,
+    Burn,
+    Sponge,
 }
 
 #[derive(Clone, Debug)]
@@ -88,6 +99,9 @@ pub struct Brush {
     /// Mirror or radial copies of the stroke, for the same tools as the
     /// dynamics. Off by default.
     pub symmetry: Symmetry,
+    /// Range, exposure and Sponge direction for Dodge, Burn and Sponge.
+    /// Other tools ignore it.
+    pub tone: Tone,
 }
 
 impl Default for Brush {
@@ -102,6 +116,7 @@ impl Default for Brush {
             square: false,
             dynamics: Dynamics::default(),
             symmetry: Symmetry::default(),
+            tone: Tone::default(),
         }
     }
 }
@@ -274,6 +289,10 @@ fn stroke_segment(
     let Some(layer) = document.active_mut() else {
         bail!("Select a layer first");
     };
+    if mask_target && tone::is_tone(mode) {
+        // As upstream: a mask has no tones or colours to change.
+        bail!("Dodge, Burn and Sponge work on layer pixels, not masks");
+    }
     if mask_target {
         prepare_mask(layer)?;
     } else {
@@ -319,7 +338,8 @@ fn stroke_segment(
     let bottom = (local.iter().map(|p| p.y).fold(f32::MIN, f32::max) * height as f32)
         .ceil()
         .min(height as f32) as u32;
-    if right <= left || bottom <= top {
+    // Nothing to change: leave the pixels (and their buffer) alone.
+    if right <= left || bottom <= top || (tone::is_tone(mode) && brush.tone.exposure <= 0.0) {
         return Ok(());
     }
     if let Some(stroke) = &mut stroke {
@@ -434,6 +454,11 @@ fn stroke_segment(
             let old = original.unwrap_or(pixel.0).map(|v| v as f32 / 255.0);
             let mut color = brush.color.map(|v| v as f32 / 255.0);
             match mode {
+                PaintMode::Dodge | PaintMode::Burn | PaintMode::Sponge => {
+                    pixel.0 = tone::apply(old, mode, brush.tone, amount)
+                        .map(|v| (v * 255.0).round() as u8);
+                    continue;
+                }
                 PaintMode::Erase => {
                     pixel[3] = (old[3] * (1.0 - amount) * 255.0).round() as u8;
                     continue;

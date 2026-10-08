@@ -1426,6 +1426,11 @@ impl EditorApp {
             self.status = tr("Spot Healing works on layer pixels, not masks").into();
             return;
         }
+        if tool == Tool::Dodge && self.editing_mask() {
+            // As upstream: a mask has no tones or colours to change.
+            self.status = tr("Dodge, Burn and Sponge work on layer pixels, not masks").into();
+            return;
+        }
         if tool == Tool::Clone && self.clone_source.is_none() {
             self.status = tr("Alt-click on the canvas to set a clone source").into();
             return;
@@ -1708,7 +1713,7 @@ impl EditorApp {
                     Ok(())
                 }
                 tool if tool.is_brush() => {
-                    let mode = Self::paint_mode(tool, self.blur_mode);
+                    let mode = Self::paint_mode(tool, self.blur_mode, self.tone_mode);
                     let offset = if mode == PaintMode::Smudge {
                         Point::new(gesture.last.x - point.x, gesture.last.y - point.y)
                     } else {
@@ -1876,13 +1881,14 @@ impl EditorApp {
     }
 
     /// How a painting tool paints.
-    fn paint_mode(tool: Tool, blur_mode: PaintMode) -> PaintMode {
+    fn paint_mode(tool: Tool, blur_mode: PaintMode, tone_mode: PaintMode) -> PaintMode {
         match tool {
             Tool::Erase => PaintMode::Erase,
             Tool::Pencil => PaintMode::Pencil,
             Tool::Clone => PaintMode::Clone,
             Tool::Heal => PaintMode::Heal,
             Tool::Blur => blur_mode,
+            Tool::Dodge => tone_mode,
             _ => PaintMode::Paint,
         }
     }
@@ -1947,7 +1953,7 @@ impl EditorApp {
         }
         let mode = self.selection_mode(modifiers);
         let mask_target = self.editing_mask();
-        let paint_mode = Self::paint_mode(tool, self.blur_mode);
+        let paint_mode = Self::paint_mode(tool, self.blur_mode, self.tone_mode);
         let session = &mut self.sessions[self.current];
         let start = gesture.start;
         let end = gesture.last;
@@ -2036,6 +2042,17 @@ impl EditorApp {
             session.history.commit();
             return;
         }
+        // A Dodge, Burn or Sponge stroke that changed no pixel (0% exposure,
+        // or only over transparent pixels) leaves no undo step.
+        if tool == Tool::Dodge
+            && result.is_ok()
+            && same_pixels(&gesture.original, &session.document)
+        {
+            session.history.cancel(&mut session.document);
+            session.invalidate();
+            self.last_brush = Some(end);
+            return;
+        }
         match result {
             Ok(()) => match paint::refresh_shapes(&mut session.document) {
                 Ok(()) => session.history.commit(),
@@ -2054,6 +2071,24 @@ impl EditorApp {
         if tool.is_brush() {
             self.last_brush = Some(end);
         }
+    }
+}
+
+/// Whether the active layer's pixels are as they were in `original`. A layer
+/// that only gained an empty pixel buffer counts as unchanged.
+fn same_pixels(original: &xuan::document::Document, document: &xuan::document::Document) -> bool {
+    let Some(layer) = document.active() else {
+        return true;
+    };
+    let before = original
+        .layers
+        .iter()
+        .find(|l| l.id == layer.id)
+        .and_then(|l| l.pixels.as_ref());
+    match (before, &layer.pixels) {
+        (Some(before), Some(after)) => Arc::ptr_eq(before, after) || before == after,
+        (None, Some(after)) => after.as_raw().iter().all(|v| *v == 0),
+        (_, None) => before.is_none(),
     }
 }
 

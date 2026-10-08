@@ -288,6 +288,8 @@ fn dispatch_matches_modifiers_exactly() {
     assert_eq!(id(Modifiers::SHIFT, Key::B), Some("switch_brush"));
     assert_eq!(id(Modifiers::NONE, Key::G), Some("tool_gradient"));
     assert_eq!(id(Modifiers::SHIFT, Key::G), Some("switch_gradient"));
+    assert_eq!(id(Modifiers::NONE, Key::O), Some("tool_dodge"));
+    assert_eq!(id(Modifiers::SHIFT, Key::O), Some("switch_tone"));
     // `+` and `'` need Shift on many layouts.
     assert_eq!(id(CTRL_SHIFT, Key::Plus), Some("zoom_in"));
     assert_eq!(id(CTRL_SHIFT, Key::Quote), Some("toggle_grid"));

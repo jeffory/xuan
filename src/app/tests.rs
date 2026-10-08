@@ -56,6 +56,10 @@ mod canvas_commands;
 
 #[path = "tests/paint_bucket.rs"]
 mod paint_bucket;
+
+#[path = "tests/dodge_burn.rs"]
+mod dodge_burn;
+
 #[path = "tests/stroke.rs"]
 mod stroke;
 

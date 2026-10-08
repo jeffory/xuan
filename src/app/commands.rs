@@ -494,6 +494,19 @@ fn switch_brush(app: &mut EditorApp) {
     };
     app.set_tool(tool);
 }
+/// Shift+O: with the Dodge / Burn tool, the next of Dodge, Burn and Sponge;
+/// from another tool, the Dodge / Burn tool as it was last used.
+fn switch_tone(app: &mut EditorApp) {
+    use xuan::paint::PaintMode;
+    if app.tool == Tool::Dodge {
+        app.tone_mode = match app.tone_mode {
+            PaintMode::Dodge => PaintMode::Burn,
+            PaintMode::Burn => PaintMode::Sponge,
+            _ => PaintMode::Dodge,
+        };
+    }
+    app.set_tool(Tool::Dodge);
+}
 fn gradient_tool(app: &mut EditorApp) {
     app.set_tool(app.gradient_variant);
 }
@@ -989,6 +1002,19 @@ pub(super) const COMMANDS: &[Command] = &[
         &[bare(Key::R)],
         Run::Tool(Tool::Blur),
     ),
+    tool(
+        "tool_dodge",
+        "Dodge / Burn",
+        &[bare(Key::O)],
+        Run::Tool(Tool::Dodge),
+    )
+    .aliases(&["dodge", "burn", "sponge", "lighten", "darken", "saturate"]),
+    tool(
+        "switch_tone",
+        "Switch Dodge / Burn / Sponge",
+        &[shift(Key::O)],
+        Run::App(switch_tone),
+    ),
     // G selects whichever of Gradient and Paint Bucket was used last.
     tool(
         "tool_gradient",
@@ -1153,6 +1179,7 @@ pub(super) fn tool_command(tool: Tool) -> Option<&'static str> {
         Tool::Heal => "tool_heal",
         Tool::Clone => "tool_clone",
         Tool::Blur => "tool_blur",
+        Tool::Dodge => "tool_dodge",
         Tool::Gradient => "tool_gradient",
         Tool::Bucket => "switch_gradient",
         Tool::Shape => "tool_shape",

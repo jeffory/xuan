@@ -103,6 +103,8 @@ pub enum Tool {
     Heal,
     Clone,
     Blur,
+    /// Dodge, Burn or Sponge, by `EditorApp::tone_mode`; O selects it and Shift+O cycles the mode.
+    Dodge,
     Gradient,
     /// Fills the area around a click with the foreground colour; shares G with Gradient.
     Bucket,
@@ -118,7 +120,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 20] = [
+    const ALL: [Self; 21] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
@@ -130,6 +132,7 @@ impl Tool {
         Self::Heal,
         Self::Clone,
         Self::Blur,
+        Self::Dodge,
         Self::Gradient,
         Self::Bucket,
         Self::Shape,
@@ -154,6 +157,7 @@ impl Tool {
             Self::Heal => tr("Spot Healing"),
             Self::Clone => tr("Clone Stamp"),
             Self::Blur => tr("Blur / Smudge"),
+            Self::Dodge => tr("Dodge / Burn"),
             Self::Gradient => tr("Gradient"),
             Self::Bucket => tr("Paint Bucket"),
             Self::Shape => tr("Shape"),
@@ -168,7 +172,13 @@ impl Tool {
     fn is_brush(self) -> bool {
         matches!(
             self,
-            Self::Brush | Self::Pencil | Self::Erase | Self::Heal | Self::Clone | Self::Blur
+            Self::Brush
+                | Self::Pencil
+                | Self::Erase
+                | Self::Heal
+                | Self::Clone
+                | Self::Blur
+                | Self::Dodge
         )
     }
     fn is_selection(self) -> bool {
@@ -200,6 +210,9 @@ impl Tool {
             Self::Heal => tr("Paint over blemishes · [ ] size · Space to pan"),
             Self::Clone => tr("Alt-click to set source · Drag to clone · [ ] size · Space to pan"),
             Self::Blur => tr("Drag to retouch · [ ] size · 1–0 strength · Space to pan"),
+            Self::Dodge => tr(
+                "Drag to lighten, darken or change saturation · [ ] size · Shift-click straight line · 1–0 exposure · Shift+O switches Dodge / Burn / Sponge",
+            ),
             Self::Gradient => tr("Drag to draw gradient · Shift locks angle · Escape cancels"),
             Self::Bucket => tr(
                 "Click to fill similar colours with the foreground colour · 1–0 opacity · Shift+G switches to Gradient",
@@ -481,6 +494,7 @@ impl Gesture {
                         | Tool::Erase
                         | Tool::Clone
                         | Tool::Blur
+                        | Tool::Dodge
                         | Tool::Gradient
                         | Tool::Shape
                 ))
@@ -575,6 +589,8 @@ pub struct EditorApp {
     text_renderer: Option<xuan::text::TextRenderer>,
     text_edit: Option<text_controls::TextEdit>,
     blur_mode: PaintMode,
+    /// What the Dodge / Burn tool does: Dodge, Burn or Sponge.
+    tone_mode: PaintMode,
     heal_mode: xuan::retouch::HealMode,
     auto_select: bool,
     ignore_transparent_pixels: bool,
@@ -806,6 +822,7 @@ impl EditorApp {
             text_renderer: None,
             text_edit: None,
             blur_mode: PaintMode::Blur,
+            tone_mode: PaintMode::Dodge,
             heal_mode: xuan::retouch::HealMode::ContentAware,
             auto_select: true,
             ignore_transparent_pixels: true,

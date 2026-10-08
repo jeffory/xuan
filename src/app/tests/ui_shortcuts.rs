@@ -81,6 +81,13 @@ fn app_effect(id: &str) -> Option<Effect> {
             |app| app.tool = Tool::Gradient,
             |app| app.tool == Tool::Bucket,
         ),
+        "switch_tone" => State(
+            |app| {
+                app.tool = Tool::Dodge;
+                app.tone_mode = PaintMode::Burn;
+            },
+            |app| app.tool == Tool::Dodge && app.tone_mode == PaintMode::Sponge,
+        ),
         "marquee_shape" => State(
             |app| app.ellipse = false,
             |app| app.tool == Tool::Marquee && app.ellipse,
