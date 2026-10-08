@@ -105,6 +105,8 @@ npx --yes changelogithub@15.0.5 --dry --to HEAD --github silverling/xuan
 
 The first release uses the available commit history; subsequent notes start after the preceding release tag. To retry a failed release, rerun its workflow in GitHub Actions.
 
+Help → Check for Updates… and the daily update check (`src/update.rs`, `src/app/updates.rs`) read the latest release of `jeffory/xuan`, the repository these builds are published from: its tag must be the version (`v0.6.0`), and its notes are shown in the update dialog. A fork that publishes its own builds sets `XUAN_UPDATE_REPOSITORY=owner/name` when building so they check its releases instead. The update tests use a fake GitHub (`src/app/tests/update_check.rs`) and never reach the network; tests that do not set one get a transport that always fails.
+
 ## Application icons
 
 Application and desktop icons are generated from [`assets/Xuan.png`](../assets/Xuan.png). After changing the logo, run:

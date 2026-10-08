@@ -716,6 +716,8 @@ impl EditorApp {
                             menu_bar_button(ui, tr("Help"), |ui| {
                                 item(ui, &items, "command_palette", &mut action);
                                 item(ui, &items, "shortcuts", &mut action);
+                                ui.separator();
+                                item(ui, &items, "check_updates", &mut action);
                                 item(ui, &items, "about", &mut action);
                             });
                         });

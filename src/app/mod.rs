@@ -69,6 +69,7 @@ mod tests;
 mod text_controls;
 mod theme;
 mod trim_dialog;
+mod updates;
 mod widgets;
 #[cfg(target_os = "linux")]
 mod window_theme;
@@ -500,6 +501,8 @@ enum Dialog {
     Stroke,
     /// File → New Collage… and Image → Collage Layout….
     Collage,
+    /// Help → Check for Updates…, and a newer release the daily check found.
+    Update,
 }
 
 struct EffectEdit {
@@ -591,6 +594,8 @@ pub struct EditorApp {
     key_editor: keybindings::KeyEditor,
     pane_drag: Option<panes::PaneDrag>,
     plugins: plugins::PluginState,
+    /// Checks for a newer release and the update dialog.
+    updates: updates::Updates,
     tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
@@ -794,6 +799,7 @@ impl EditorApp {
         });
         app.load_config();
         app.load_plugins();
+        app.start_daily_update_check();
         app.button_layout = chrome::ButtonLayout::from_desktop();
         app.watch_system_theme(system_theme::detect(), Some(cc.egui_ctx.clone()));
         app.processor = processor;
@@ -853,6 +859,7 @@ impl EditorApp {
             key_editor: Default::default(),
             pane_drag: None,
             plugins: Default::default(),
+            updates: Default::default(),
             tablet: None,
             context: ctx.clone(),
             window_title: String::new(),
@@ -1600,8 +1607,8 @@ impl EditorApp {
         if let Some(develop) = &mut self.develop {
             match command {
                 "new" | "open" | "open_clipboard" | "open_comp" => self.suspend_develop(),
-                "about" | "shortcuts" | "settings" | "reset_panels" | "plugins"
-                | "install_plugin" => {}
+                "about" | "check_updates" | "shortcuts" | "settings" | "reset_panels"
+                | "plugins" | "install_plugin" => {}
                 "close" => {
                     self.request_develop_close(develop::DevelopClose::Tab);
                     return;
@@ -2136,6 +2143,7 @@ impl EditorApp {
             "settings" => self.dialog = Some(Dialog::Settings),
             "shortcuts" => self.dialog = Some(Dialog::Shortcuts),
             "about" => self.dialog = Some(Dialog::About),
+            "check_updates" => self.check_for_updates(),
             _ => {}
         }
     }
@@ -2269,6 +2277,7 @@ impl EditorApp {
         self.publish_dialog_chrome(ctx);
         self.window_resize(ctx);
         self.poll_plugins();
+        self.poll_updates();
         self.menus(ctx);
         if self.develop.is_some() {
             // The Develop workspace has its own toolbar; RAW tabs stay reachable above it.

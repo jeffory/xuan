@@ -1346,3 +1346,19 @@ Optics	光学
 The Camera Raw Filter changes a layer's pixels, not its mask	Camera Raw 滤镜修改图层的像素，而不是蒙版
 Select an unlocked layer with pixels. RAW layers open in Develop.	请选择未锁定且有像素的图层。RAW 图层请在冲洗中打开。
 The layer is no longer available	该图层已不存在
+Check for Updates…	检查更新…
+Check for updates	检查更新
+Once a day, ask GitHub whether a newer release of Xuan is out, and show its release notes. Only that request is sent, and nothing is downloaded or installed. Help → Check for Updates… checks now.	每天询问一次 GitHub 是否发布了更新版本的 Xuan，并显示其发行说明。只发送这一个请求，也不会自动下载或安装任何内容。“帮助 → 检查更新…”可立即检查。
+Software update	软件更新
+Checking for updates…	正在检查更新…
+Xuan is up to date.	Xuan 已是最新版本。
+Couldn't check for updates.	无法检查更新。
+Check your connection and try again later.	请检查网络连接，稍后再试。
+A new version of Xuan is available.	有新版本的 Xuan 可用。
+New version	新版本
+Installed version	当前版本
+Download opens the release page in your browser. Nothing is downloaded or installed until you choose a file there.	“下载”会在浏览器中打开发布页面。在你选择文件之前，不会下载或安装任何内容。
+Later	稍后
+Skip This Version	跳过此版本
+This release has no notes.	此版本没有发行说明。
+The update check stopped unexpectedly.	更新检查意外停止。

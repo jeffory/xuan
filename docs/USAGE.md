@@ -75,6 +75,34 @@ xuan photograph.png composition.xuan
 
 To compile the application or produce a release archive, see the [development guide](DEVELOPMENT.md). Linux archives built on newer distributions may require a newer glibc; build from source on your target distribution if needed.
 
+### Updates
+
+Xuan does not check for updates unless you ask it to. **Help → Check for Updates…** asks
+GitHub now for the latest release of Xuan, and turning on **Check for updates** in
+**Edit → Settings… → General** (off by default) asks once a day, at startup or when you
+turn it on. Either way the check is one HTTPS request for the latest release of
+[jeffory/xuan](https://github.com/jeffory/xuan/releases) on GitHub's API, sent with Xuan's
+name and version as the user agent and nothing about you or your files. It runs in the
+background, so startup never waits for it, and it gives up after 20 seconds.
+
+When a newer release is out, a dialog shows its version and release notes:
+
+- **Download** opens the release page in your browser. Nothing is downloaded or installed
+  until you pick a file there; install it as described above.
+- **Skip This Version** stops the daily check from offering that version again. A later
+  release is offered as usual, and **Check for Updates…** still shows the skipped one.
+- **Later** closes the dialog; the next day's check offers it again.
+
+The daily check stays quiet when Xuan is up to date and when it cannot reach GitHub
+(offline, or GitHub limiting requests); **Check for Updates…** says which. Only stable
+releases are offered, never pre-releases, and versions are compared by
+[semantic versioning](https://semver.org), so a pre-release build is offered its final
+release. The settings are kept in an `[updates]` table of the configuration file: `check`,
+`last_check` (when the last check started, in seconds since 1970) and `skipped`.
+
+`.deb` and `.rpm` installations can also be updated by installing the newer package with
+APT or DNF.
+
 ## Workspace
 
 Xuan has charcoal and light themes (Settings → Appearance → Theme), contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
@@ -652,6 +680,9 @@ computer's memory. No limit is ever below 100 megapixels, what Xuan allowed befo
 Open **Edit → Settings…** (Ctrl+,). The sidebar's **General** category contains the
 language selector: **English** or **简体中文**. Changes apply immediately and are
 saved automatically. Chinese glyphs are bundled with the application.
+
+**General** also has **Check for updates** (off by default), which asks GitHub once a day
+whether a newer release is out; see [Updates](#updates).
 
 The **Appearance** category's **Theme** chooses the interface colours:
 
