@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     fs::{self, File},
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
     path::Path,
     sync::Arc,
 };
@@ -15,6 +15,7 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 use crate::{
     document::{Document, MAX_SIDE, validate_size},
     render,
+    watch::ContentHash,
 };
 
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
@@ -126,6 +127,17 @@ pub fn import_image(path: &Path) -> Result<RgbaImage> {
 
 /// Persist a complete sibling temporary file, then atomically replace the destination.
 pub fn save(document: &Document, path: &Path) -> Result<()> {
+    save_hashed(document, path, |_| {})
+}
+
+/// [`save`], telling `before_replace` the hash of the bytes about to replace the destination
+/// just before they do, so a watcher of the file can tell Xuan's own save from another
+/// program's write (see [`crate::watch`]).
+pub fn save_hashed(
+    document: &Document,
+    path: &Path,
+    before_replace: impl FnOnce(ContentHash),
+) -> Result<()> {
     document.validate()?;
     let parent = path
         .parent()
@@ -181,6 +193,9 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
         archive.finish()?;
     }
     temporary.as_file().sync_all()?;
+    let file = temporary.as_file_mut();
+    file.seek(SeekFrom::Start(0))?;
+    before_replace(ContentHash::read(file)?);
     temporary.persist(path).map_err(|error| error.error)?;
 
     // Sync the rename on Unix; Windows cannot open directories with File::open.
@@ -272,7 +287,11 @@ fn format_version(document: &Document) -> u32 {
     }
 }
 
-fn zip_read(archive: &mut ZipArchive<File>, name: &str, limit: u64) -> Result<Vec<u8>> {
+fn zip_read<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    limit: u64,
+) -> Result<Vec<u8>> {
     let file = archive
         .by_name(name)
         .with_context(|| format!("Missing project asset: {name}"))?;
@@ -290,7 +309,16 @@ pub fn load(path: &Path) -> Result<Document> {
     if path.is_dir() {
         return load_compositor(path);
     }
-    let mut archive = ZipArchive::new(File::open(path)?)?;
+    load_archive(File::open(path)?)
+}
+
+/// A `.xuan` project already read into memory, as [`load`] reads a file.
+pub fn load_bytes(bytes: &[u8]) -> Result<Document> {
+    load_archive(Cursor::new(bytes))
+}
+
+fn load_archive<R: Read + Seek>(reader: R) -> Result<Document> {
+    let mut archive = ZipArchive::new(reader)?;
     ensure!(archive.len() <= 30_001, "Too many project assets");
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
