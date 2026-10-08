@@ -15,7 +15,7 @@ This project is inspired by [Compositor](https://github.com/robbietilton/Composi
 - Smooth mouse and pen strokes with adjustable brush stroke smoothing.
 - Develop Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW files and return to their RAW settings at any time.
 - Open HEIC/HEIF photos directly on Linux and Windows, without installing a converter.
-- Save editable `.xuan` projects, import Compositor projects and 8-bit RGB Photoshop PSD/PSB files, and export PNG, JPEG, TIFF, or WebP.
+- Save editable `.xuan` projects, import Compositor projects and 8-bit RGB Photoshop PSD/PSB files, open and export layered OpenRaster (`.ora`) files for Krita, GIMP and MyPaint, and export PNG, JPEG, TIFF, or WebP.
 - Extend the editor with plugins in any language: menu actions that edit or generate images (with on-canvas regions and an accept/discard proposal), sidebar panes, file formats and settings. Examples include a Comfy Cloud client; see [docs/PLUGINS.md](docs/PLUGINS.md).
 - Let LLM agents such as Claude Code see and edit your images through the optional MCP server plugin, on this computer only, asking before each session's first edit; see [docs/AGENTS-GUIDE.md](docs/AGENTS-GUIDE.md).
 

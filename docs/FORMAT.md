@@ -74,6 +74,36 @@ The file is untrusted input. Every read is bounds checked, and every section, re
 - Descriptors nest at most 32 levels and 100,000 values; text engine data nests at most 64 levels and 1,000,000 values; vector paths up to 10,000 knots.
 - PackBits runs that would write past a row or read past its bytes, unknown compression methods, invalid ZIP data and out-of-range bounds reject the file. Unreadable descriptors only turn a layer into pixels.
 
+## OpenRaster import and export
+
+Xuan reads and writes OpenRaster (`.ora`), the layered format Krita, GIMP and MyPaint share, following the OpenRaster 0.0.6 specification and Krita's reader and writer (`plugins/impex/ora/`) for the blend modes OpenRaster has no name for. An `.ora` file is a ZIP archive: `mimetype` (first and stored, `image/openraster`), `stack.xml` (an `image` with `w`, `h`, `xres`, `yres` and one root `stack`), one PNG per layer under `data/`, `mergedimage.png` and `Thumbnails/thumbnail.png`. Opening one is one-way like a Photoshop file: Save creates a `.xuan` file.
+
+| OpenRaster | In Xuan |
+| --- | --- |
+| `stack` | A folder, with its name, opacity, visibility and `edit-locked`. Xuan's folders pass through, so a stack's own `composite-op` is reported (`isolation="auto"`, Krita's pass-through, needs nothing); an isolated stack, the default, whose layers blend is reported too, since those layers now also blend with what is below the folder. Stack `x` and `y` are ignored, as 0.0.6 says |
+| `layer` with a PNG `src` | A pixel layer at its `x`, `y` (negative offsets included), with its name, opacity, visibility, `edit-locked`, and `selected` (the active layer) |
+| `composite-op` | One table (`BLEND_MODES` in `src/io/ora.rs`) below, plus Krita's own names for the same modes and the names older Krita versions wrote. `svg:src-atop`, `svg:dst-atop`, `svg:dst-in`, `svg:dst-out`, Krita's `alpha-preserve` and unknown operations are drawn as Normal and reported |
+| Krita's `filter` (adjustment) layers, non-PNG sources, layers without `src`, unknown elements | Left out and reported |
+| `mergedimage.png`, thumbnail | Not read: Xuan draws the layers itself |
+
+| Xuan blend mode | `composite-op` written (and read) |
+| --- | --- |
+| Normal, Multiply, Screen, Overlay, Darken, Lighten, Color Dodge, Color Burn, Hard Light, Soft Light, Difference, Color, Luminosity, Hue, Saturation | `svg:src-over`, `svg:multiply`, `svg:screen`, `svg:overlay`, `svg:darken`, `svg:lighten`, `svg:color-dodge`, `svg:color-burn`, `svg:hard-light`, `svg:soft-light`, `svg:difference`, `svg:color`, `svg:luminosity`, `svg:hue`, `svg:saturation` |
+| Linear Dodge (Add) | `svg:plus` |
+| Dissolve, Linear Burn, Darker Color, Lighter Color, Vivid Light, Linear Light, Pin Light, Hard Mix, Exclusion, Subtract, Divide | Krita's `krita:dissolve`, `krita:linear_burn`, `krita:darker color`, `krita:lighter color`, `krita:vivid_light`, `krita:linear light`, `krita:pin_light`, `krita:hard mix`, `krita:exclusion`, `krita:subtract`, `krita:divide` (other programs draw these as Normal) |
+
+As with Photoshop files, what changes is listed before anything is applied, and a file imported as a layer arrives in a folder named after it.
+
+**Export** (**File → Export Image…**, format ORA, and plugins' `file/export` with `ora`) writes the archive the specification describes: `mimetype` first, stored, with no extra field; `stack.xml` (version 0.0.6, the document's resolution as `xres`/`yres`, and a root stack without attributes); `data/layerN.png`; `mergedimage.png` at the canvas size; and a thumbnail at most 256 pixels a side keeping the aspect ratio. Folders become stacks with `isolation="auto"` (Xuan's folders pass through) and pixel layers are written as their own pixels at their offsets, so exporting and opening again gives the same layers, names, offsets, opacity, visibility, locks, blend modes and pixels. What OpenRaster cannot hold is drawn, alone on a transparent canvas and cropped to what it covers, and listed after the export (the dialog lists it beforehand):
+
+- Text and shape layers, layer effects, layer masks (applied to the pixels), Fill below 100%, layers moved by a fraction of a pixel, scaled, rotated, flipped or warped, and adjustments, filters and masks attached to a layer: the layer is drawn with them, and its opacity, blend mode and visibility stay on the element.
+- Clipped layers are drawn into their base.
+- Adjustment, filter and mask layers in a folder are merged with the visible layers below them in that folder; hidden ones are left out. Hidden layers below stay as they are.
+- A folder with its own mask is drawn as one layer.
+- RAW layers are written as their developed pixels.
+
+The archive is untrusted input, under the same rules as `.xuan` projects: at most 30,001 entries; `stack.xml` up to 4 MiB, without DTDs (so no entity expansion) and at most 100,000 XML nodes; a `mimetype` entry reading `image/openraster` is required; layer paths must be relative paths inside the archive (no leading `/`, drive letters or other `:`, backslashes, or empty, `.` or `..` parts) and are refused otherwise; at most 10,000 layers and 64 nested stacks; canvases and layers within the image limit of the [size limits](USAGE.md#size-limits) and offsets within ±1,000,000 pixels. Each layer PNG's size is read from its header before the rest is inflated: its pixels must fit what opening a file may add (less what the open document holds when importing as a layer), and the entry may hold at most its largest possible pixel data plus 16 MiB, so a small archive cannot inflate into gigabytes. Assets are decoded in memory, never extracted.
+
 ## Embedded RAW (version 2)
 
 Documents containing RAW layers are written as version 2, preventing older readers from silently dropping the source. Ordinary documents continue to use version 1, and the reader supports both versions.

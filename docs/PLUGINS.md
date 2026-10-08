@@ -1075,7 +1075,7 @@ wait for the user's answer (see [Network](#network)).
 | `host/run` | `{action, inputs?, layers?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
 | `file/save_as` | `{document?, suggested_name?}` or `{document?, path, overwrite?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; with `path`, `{name, asked}` once it was saved there after Xuan's prompt (`asked: true`) or without asking (`asked: false`); see [Files the user chooses](#files-the-user-chooses) |
-| `file/export` | `{document?, format?, suggested_name?, quality?, lossless?}` or `{document?, format?, path, overwrite?, quality?, lossless?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`); with `path`, `{name, asked}` as for `file/save_as` |
+| `file/export` | `{document?, format?, suggested_name?, quality?, lossless?}` or `{document?, format?, path, overwrite?, quality?, lossless?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff`, `webp` or layered OpenRaster `ora`); with `path`, `{name, asked}` as for `file/save_as` |
 | `file/save` | `{document?}` | `{name, asked}` once the document was saved back to its own `.xuan` file, as **File → Save**, after Xuan's prompt or without asking |
 | `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
 
@@ -1431,10 +1431,11 @@ for the answer:
   the dialog opens again in that folder with the extension added, and if the
   second answer lacks it too nothing is written (`-32602`). The project is
   saved there and from then on lives there, as with **File → Save As…**.
-- `file/export` does the same for an image in `format` (`png`, `jpg`, `tiff`
-  or `webp`); the document itself is not changed. The name the user confirms
-  must end in `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff` or `.webp` (which picks
-  the format written), with the same second dialog otherwise. `quality` (a
+- `file/export` does the same for an image in `format` (`png`, `jpg`, `tiff`,
+  `webp` or `ora`, layered OpenRaster as **File → Export Image…** writes it);
+  the document itself is not changed. The name the user confirms must end in
+  `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.webp` or `.ora` (which picks the
+  format written), with the same second dialog otherwise. `quality` (a
   whole number from 1 to 100) sets JPEG and lossy WebP quality; `lossless`
   (`true` or `false`) chooses lossless or lossy WebP, and other formats ignore
   it. WebP is lossy when `quality` is given without `lossless`. What a request
