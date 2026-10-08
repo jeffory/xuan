@@ -51,6 +51,7 @@ pub(super) enum FileAction {
     Save {
         document: Uuid,
         export: Option<String>,
+        encoding: Encoding,
         name: String,
     },
     /// Write a document to a path the plugin named, after Xuan's own
@@ -78,6 +79,54 @@ pub(super) struct Write {
     pub path: PathBuf,
     /// Whether a file was there when the request was checked.
     pub replaces: bool,
+    /// How an exported image is encoded.
+    pub encoding: Encoding,
+}
+
+/// The `quality` and `lossless` a plugin gave `file/export`. What it leaves
+/// out follows the Export dialog, and the dialog keeps the user's choices.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Encoding {
+    /// JPEG and lossy WebP quality, 1–100. Given for WebP without
+    /// `lossless`, it means lossy.
+    pub quality: Option<u8>,
+    /// Lossless WebP; other formats ignore it.
+    pub lossless: Option<bool>,
+}
+
+impl Encoding {
+    /// Read `quality` and `lossless` from a request's params.
+    fn parse(params: &Value) -> Result<Self, RpcError> {
+        let quality = match params.get("quality") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                (value.as_u64())
+                    .and_then(|quality| u8::try_from(quality).ok())
+                    .filter(|quality| io::EXPORT_QUALITY.contains(quality))
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("`quality` must be a whole number from 1 to 100")
+                    })?,
+            ),
+        };
+        let lossless = match params.get("lossless") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(lossless)) => Some(*lossless),
+            Some(_) => {
+                return Err(RpcError::invalid_params("`lossless` must be true or false"));
+            }
+        };
+        Ok(Self { quality, lossless })
+    }
+
+    /// The Export dialog's options with this request's choices on top.
+    pub(super) fn options(self, dialog: io::ExportOptions) -> io::ExportOptions {
+        let quality = self.quality;
+        io::ExportOptions {
+            jpeg_quality: quality.unwrap_or(dialog.jpeg_quality),
+            webp_quality: quality.unwrap_or(dialog.webp_quality),
+            webp_lossless: (self.lossless).unwrap_or(quality.is_none() && dialog.webp_lossless),
+        }
+    }
 }
 
 /// The user's answer to Xuan's own file prompt.
@@ -430,9 +479,16 @@ impl EditorApp {
                 let document = session.document.id;
                 let given = |key: &str| params.get(key).is_some_and(|value| !value.is_null());
                 if method == "file/save" {
-                    if let Some(key) = ["path", "suggested_name", "format", "overwrite"]
-                        .into_iter()
-                        .find(|key| given(key))
+                    if let Some(key) = [
+                        "path",
+                        "suggested_name",
+                        "format",
+                        "overwrite",
+                        "quality",
+                        "lossless",
+                    ]
+                    .into_iter()
+                    .find(|key| given(key))
                     {
                         return Err(RpcError::invalid_params(format!(
                             "`file/save` takes no `{key}`: it saves to the document's own file; use `file/save_as` for another file"
@@ -450,9 +506,20 @@ impl EditorApp {
                         in_place: true,
                         path,
                         replaces: true,
+                        encoding: Encoding::default(),
                     }));
                 }
                 let format = string("format").map(requested_format).transpose()?;
+                let encoding = if method == "file/export" {
+                    Encoding::parse(params)?
+                } else if let Some(key) = ["quality", "lossless"].into_iter().find(|key| given(key))
+                {
+                    return Err(RpcError::invalid_params(format!(
+                        "`{method}` takes no `{key}`: it saves a project; use `file/export` for an image"
+                    )));
+                } else {
+                    Encoding::default()
+                };
                 if given("path") {
                     let path = string("path")
                         .ok_or_else(|| RpcError::invalid_params("`path` must be a string"))?;
@@ -474,6 +541,7 @@ impl EditorApp {
                         in_place: false,
                         path,
                         replaces,
+                        encoding,
                     }));
                 }
                 let export =
@@ -481,6 +549,7 @@ impl EditorApp {
                 Ok(FileAction::Save {
                     document,
                     export,
+                    encoding,
                     name: suggested_name(string("suggested_name"), &session.title),
                 })
             }
@@ -567,10 +636,16 @@ impl EditorApp {
             FileAction::Save {
                 document,
                 export,
+                encoding,
                 name,
             } => {
-                let result =
-                    self.save_for_plugin(&request.plugin, *document, export.as_deref(), name);
+                let result = self.save_for_plugin(
+                    &request.plugin,
+                    *document,
+                    export.as_deref(),
+                    *encoding,
+                    name,
+                );
                 self.respond_to_plugin(&request.plugin, request.id, result);
             }
         }
@@ -583,6 +658,7 @@ impl EditorApp {
         plugin: &str,
         document: Uuid,
         export: Option<&str>,
+        encoding: Encoding,
         name: &str,
     ) -> Result<Value, RpcError> {
         let Some(index) = self.sessions.iter().position(|s| s.document.id == document) else {
@@ -647,7 +723,8 @@ impl EditorApp {
         let session = &mut self.sessions[index];
         match export {
             Some(_) => {
-                io::export(&session.document, &path, self.jpeg_quality).map_err(failed)?;
+                let options = encoding.options(self.export_options);
+                io::export(&session.document, &path, &options).map_err(failed)?;
                 self.status = format!("{} {} · {source}", tr("Exported"), path.display());
             }
             None => {
@@ -745,7 +822,8 @@ impl EditorApp {
         let session = &mut self.sessions[index];
         let done = match write.export {
             Some(_) => {
-                io::export(&session.document, path, self.jpeg_quality).map_err(failed)?;
+                let options = write.encoding.options(self.export_options);
+                io::export(&session.document, path, &options).map_err(failed)?;
                 if asked {
                     tr("Exported")
                 } else {
@@ -1123,5 +1201,78 @@ mod tests {
         }
         assert!(!saves_as(Path::new("/a/b.bmp"), Some("png")));
         assert!(!saves_as(Path::new("/a/b"), Some("png")));
+    }
+
+    #[test]
+    fn export_quality_and_lossless_are_checked_and_default_to_the_dialog() {
+        use super::Encoding;
+        use serde_json::json;
+        use xuan::io::ExportOptions;
+        let parse = |params| Encoding::parse(&params);
+        assert_eq!(parse(json!({})).unwrap(), Encoding::default());
+        let nulls = json!({"quality": null, "lossless": null});
+        assert_eq!(parse(nulls).unwrap(), Encoding::default());
+        assert_eq!(
+            parse(json!({"quality": 80, "lossless": false})).unwrap(),
+            Encoding {
+                quality: Some(80),
+                lossless: Some(false)
+            }
+        );
+        for quality in [json!(1), json!(100)] {
+            assert!(parse(json!({ "quality": quality })).is_ok(), "{quality}");
+        }
+        for quality in [
+            json!(0),
+            json!(101),
+            json!(256),
+            json!(-5),
+            json!(80.5),
+            json!("80"),
+            json!(true),
+        ] {
+            let error = parse(json!({ "quality": quality })).unwrap_err();
+            assert!(error.message.contains("1 to 100"), "{quality}: {error:?}");
+        }
+        for lossless in [json!(1), json!("true")] {
+            let error = parse(json!({ "lossless": lossless })).unwrap_err();
+            assert!(error.message.contains("true or false"), "{error:?}");
+        }
+
+        // What a request leaves out follows the dialog.
+        let dialog = ExportOptions {
+            jpeg_quality: 70,
+            webp_quality: 60,
+            webp_lossless: true,
+        };
+        assert_eq!(Encoding::default().options(dialog), dialog);
+        let lossy_dialog = ExportOptions {
+            webp_lossless: false,
+            ..dialog
+        };
+        assert_eq!(Encoding::default().options(lossy_dialog), lossy_dialog);
+        // A quality means lossy WebP, unless `lossless` says otherwise.
+        let quality = Encoding {
+            quality: Some(80),
+            lossless: None,
+        };
+        assert_eq!(
+            quality.options(dialog),
+            ExportOptions {
+                jpeg_quality: 80,
+                webp_quality: 80,
+                webp_lossless: false
+            }
+        );
+        let exact = Encoding {
+            lossless: Some(true),
+            ..quality
+        };
+        assert!(exact.options(lossy_dialog).webp_lossless);
+        let lossy = Encoding {
+            quality: None,
+            lossless: Some(false),
+        };
+        assert_eq!(lossy.options(dialog), lossy_dialog);
     }
 }

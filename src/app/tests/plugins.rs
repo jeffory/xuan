@@ -5992,6 +5992,110 @@ done
     }
 
     #[test]
+    fn plugin_exports_take_quality_and_lossless_or_follow_the_dialog() {
+        use crate::app::plugin_files::{Encoding, FileAnswer};
+        use serde_json::json;
+        use xuan::plugins::protocol::INVALID_PARAMS;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, dialogs) = path_save_mock(dir.path(), config.path());
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        // Lossy WebP holds a `VP8 ` chunk, lossless a `VP8L` one.
+        let chunk = |name: &str| {
+            let bytes = std::fs::read(out.path().join(name)).unwrap();
+            assert_eq!(&bytes[..4], b"RIFF", "{name}");
+            String::from_utf8_lossy(&bytes[12..16]).into_owned()
+        };
+        let export = |app: &mut EditorApp, id: i64, params: serde_json::Value| {
+            app.queue_file_request("mock", file_request(id, "file/export", params));
+            run_until(&context, app, |app| {
+                app.dialog == Some(Dialog::PluginFile) || answer(dir.path(), id).is_some()
+            });
+            let encoding = prompted_write(app).map(|write| write.encoding);
+            app.answer_file(FileAnswer::Accept);
+            let answer = wait(&context, app, id);
+            assert!(answer.get("result").is_some(), "{answer}");
+            encoding
+        };
+
+        // A quality alone means lossy WebP; the dialog keeps its own choices.
+        let before = app.export_options;
+        let encoding = export(
+            &mut app,
+            801,
+            json!({"path": out.path().join("lossy.webp"), "quality": 80}),
+        );
+        assert_eq!(
+            encoding,
+            Some(Encoding {
+                quality: Some(80),
+                lossless: None
+            })
+        );
+        assert_eq!(chunk("lossy.webp"), "VP8 ");
+        assert_eq!(app.export_options, before);
+        // Left out, the dialog decides: lossless until the user turns it off.
+        export(
+            &mut app,
+            802,
+            json!({"path": out.path().join("plain.webp")}),
+        );
+        assert_eq!(chunk("plain.webp"), "VP8L");
+        app.export_options.webp_lossless = false;
+        export(
+            &mut app,
+            803,
+            json!({"path": out.path().join("dialog.webp")}),
+        );
+        assert_eq!(chunk("dialog.webp"), "VP8 ");
+        export(
+            &mut app,
+            804,
+            json!({"path": out.path().join("exact.webp"), "quality": 50, "lossless": true}),
+        );
+        assert_eq!(chunk("exact.webp"), "VP8L");
+        let image = xuan::io::import_image(&out.path().join("lossy.webp")).unwrap();
+        assert_eq!(image.dimensions(), (16, 12));
+
+        // Bad values, and options on a project save, fail before any prompt.
+        for (id, method, params, message) in [
+            (
+                811,
+                "file/export",
+                json!({"path": out.path().join("a.jpg"), "quality": 0}),
+                "1 to 100",
+            ),
+            (812, "file/export", json!({"quality": "high"}), "1 to 100"),
+            (
+                813,
+                "file/export",
+                json!({"lossless": "yes"}),
+                "true or false",
+            ),
+            (
+                814,
+                "file/save_as",
+                json!({"path": out.path().join("a.xuan"), "quality": 80}),
+                "`quality`",
+            ),
+            (815, "file/save", json!({"lossless": true}), "`lossless`"),
+        ] {
+            app.queue_file_request("mock", file_request(id, method, params));
+            let error = &wait(&context, &mut app, id)["error"];
+            assert_eq!(error["code"], INVALID_PARAMS, "{id}: {error}");
+            let text = error["message"].as_str().unwrap();
+            assert!(text.contains(message), "{id}: {text}");
+            assert_eq!(app.dialog, None);
+        }
+        assert!(!out.path().join("a.jpg").exists());
+        assert_eq!(*dialogs.lock().unwrap(), 0, "no system dialog");
+    }
+
+    #[test]
     fn bad_save_paths_are_refused_before_any_prompt_and_name_no_folders() {
         use serde_json::json;
         use xuan::plugins::protocol::INVALID_PARAMS;

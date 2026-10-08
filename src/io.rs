@@ -405,7 +405,53 @@ fn check_export_size(extension: &str, width: u32, height: u32) -> Result<()> {
     Ok(())
 }
 
-pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
+/// How [`export`] encodes the formats that offer a choice: the Export dialog's
+/// settings, which plugins may override for one export.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExportOptions {
+    /// JPEG quality, 1–100.
+    pub jpeg_quality: u8,
+    /// Lossy WebP quality, 1–100, used when `webp_lossless` is off.
+    pub webp_quality: u8,
+    /// WebP without loss, as Xuan always wrote it before lossy WebP.
+    pub webp_lossless: bool,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            jpeg_quality: 90,
+            webp_quality: 85,
+            webp_lossless: true,
+        }
+    }
+}
+
+/// The quality range of lossy JPEG and WebP exports; values outside it are clamped.
+pub const EXPORT_QUALITY: std::ops::RangeInclusive<u8> = 1..=100;
+
+/// Encode an image as WebP, keeping its alpha. Lossless uses `image`'s
+/// encoder; lossy uses libwebp at `quality` (clamped to [`EXPORT_QUALITY`]).
+pub fn encode_webp(image: &RgbaImage, lossless: bool, quality: u8) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    if lossless {
+        image::codecs::webp::WebPEncoder::new_lossless(&mut bytes).encode(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+        )?;
+    } else {
+        let quality = quality.clamp(*EXPORT_QUALITY.start(), *EXPORT_QUALITY.end());
+        let encoded = webp::Encoder::from_rgba(image.as_raw(), image.width(), image.height())
+            .encode_simple(false, f32::from(quality))
+            .map_err(|error| anyhow::anyhow!("Cannot encode WebP: {error:?}"))?;
+        bytes.extend_from_slice(&encoded);
+    }
+    Ok(bytes)
+}
+
+pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Result<()> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -422,7 +468,9 @@ pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
         "jpg" | "jpeg" => {
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                 temporary.as_file_mut(),
-                quality.clamp(1, 100),
+                options
+                    .jpeg_quality
+                    .clamp(*EXPORT_QUALITY.start(), *EXPORT_QUALITY.end()),
             );
             encoder.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(
                 document.resolution.round() as u16,
@@ -445,9 +493,11 @@ pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
         "tif" | "tiff" => {
             DynamicImage::ImageRgba8(image).write_to(temporary.as_file_mut(), ImageFormat::Tiff)?
         }
-        "webp" => {
-            DynamicImage::ImageRgba8(image).write_to(temporary.as_file_mut(), ImageFormat::WebP)?
-        }
+        "webp" => temporary.write_all(&encode_webp(
+            &image,
+            options.webp_lossless,
+            options.webp_quality,
+        )?)?,
         _ => bail!("Export as PNG, JPEG, TIFF or WebP"),
     }
     temporary.as_file().sync_all()?;
@@ -491,7 +541,15 @@ mod tests {
         )));
         for extension in ["png", "jpg", "tiff", "webp"] {
             let path = temporary.path().join(format!("image.{extension}"));
-            export(&doc, &path, 95).unwrap();
+            export(
+                &doc,
+                &path,
+                &ExportOptions {
+                    jpeg_quality: 95,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap();
             let image = import_image(&path).unwrap();
             assert_eq!(image.dimensions(), (12, 8));
             if extension == "jpg" {
@@ -507,6 +565,122 @@ mod tests {
         let density = reader.info().pixel_dims.unwrap();
         assert_eq!(density.xppu, 11811);
         assert_eq!(density.unit, png::Unit::Meter);
+    }
+
+    /// A photo-like test image: smooth gradients, a soft disc and grain,
+    /// transparent on the left, fading in, then opaque.
+    fn photo_like(width: u32, height: u32) -> RgbaImage {
+        let mut seed = 0x2545_f491_u32;
+        RgbaImage::from_fn(width, height, |x, y| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let grain = (seed % 25) as f32 - 12.0;
+            let (u, v) = (x as f32 / width as f32, y as f32 / height as f32);
+            let disc = (1.0 - ((u - 0.6).powi(2) + (v - 0.45).powi(2)).sqrt() * 3.0).max(0.0);
+            let channel = |base: f32| (base + grain).clamp(0.0, 255.0) as u8;
+            let alpha = (u * 4.0 - 1.0).clamp(0.0, 1.0);
+            Rgba([
+                channel(40.0 + 160.0 * u + 50.0 * disc),
+                channel(70.0 + 120.0 * v + 30.0 * disc),
+                channel(150.0 - 90.0 * u * v + 80.0 * disc),
+                (alpha * 255.0).round() as u8,
+            ])
+        })
+    }
+
+    #[test]
+    fn lossy_webp_is_much_smaller_and_keeps_transparency() {
+        let image = photo_like(256, 256);
+        let lossless = encode_webp(&image, true, 80).unwrap();
+        let lossy = encode_webp(&image, false, 80).unwrap();
+        assert!(
+            lossy.len() * 3 < lossless.len(),
+            "lossy {} bytes, lossless {} bytes",
+            lossy.len(),
+            lossless.len()
+        );
+        let decoded = image::load_from_memory(&lossy).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), image.dimensions());
+        let mut colour_error = 0u64;
+        let mut opaque = 0u64;
+        for (original, decoded) in image.pixels().zip(decoded.pixels()) {
+            assert!(
+                original[3].abs_diff(decoded[3]) <= 2,
+                "alpha {} became {}",
+                original[3],
+                decoded[3]
+            );
+            if original[3] == 255 {
+                opaque += 1;
+                colour_error += (0..3)
+                    .map(|c| u64::from(original[c].abs_diff(decoded[c])))
+                    .sum::<u64>();
+            }
+        }
+        assert_eq!(decoded.get_pixel(0, 0)[3], 0);
+        let mean = colour_error as f64 / (opaque * 3) as f64;
+        assert!(mean < 10.0, "mean colour error {mean}");
+        // Lower quality, smaller file.
+        assert!(encode_webp(&image, false, 20).unwrap().len() < lossy.len());
+    }
+
+    #[test]
+    fn lossless_webp_is_the_image_encoder_byte_for_byte() {
+        let image = photo_like(64, 48);
+        let mut before = Vec::new();
+        DynamicImage::ImageRgba8(image.clone())
+            .write_to(&mut Cursor::new(&mut before), ImageFormat::WebP)
+            .unwrap();
+        // Quality does not matter without loss.
+        assert_eq!(encode_webp(&image, true, 1).unwrap(), before);
+        assert_eq!(encode_webp(&image, true, 100).unwrap(), before);
+        assert_eq!(image::load_from_memory(&before).unwrap().to_rgba8(), image);
+
+        let temporary = tempfile::tempdir().unwrap();
+        let mut doc = Document::new(64, 48).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(image));
+        let path = temporary.path().join("image.webp");
+        export(&doc, &path, &ExportOptions::default()).unwrap();
+        let mut expected = Vec::new();
+        DynamicImage::ImageRgba8(render::render(&doc))
+            .write_to(&mut Cursor::new(&mut expected), ImageFormat::WebP)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), expected);
+    }
+
+    #[test]
+    fn webp_and_jpeg_quality_is_clamped_to_its_range() {
+        let image = photo_like(32, 32);
+        assert_eq!(EXPORT_QUALITY, 1..=100);
+        let webp = |quality| encode_webp(&image, false, quality).unwrap();
+        assert_eq!(webp(0), webp(1));
+        assert_eq!(webp(255), webp(100));
+        assert_ne!(webp(1), webp(100));
+
+        let temporary = tempfile::tempdir().unwrap();
+        let mut doc = Document::new(32, 32).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(image));
+        let size = |extension: &str, options: ExportOptions| {
+            let path = temporary.path().join(format!("image.{extension}"));
+            export(&doc, &path, &options).unwrap();
+            let image = import_image(&path).unwrap();
+            assert_eq!(image.dimensions(), (32, 32));
+            fs::metadata(&path).unwrap().len()
+        };
+        let lossy = |webp_quality| ExportOptions {
+            webp_quality,
+            webp_lossless: false,
+            ..ExportOptions::default()
+        };
+        assert_eq!(size("webp", lossy(0)), size("webp", lossy(1)));
+        assert!(size("webp", lossy(1)) < size("webp", lossy(100)));
+        let jpeg = |jpeg_quality| ExportOptions {
+            jpeg_quality,
+            ..ExportOptions::default()
+        };
+        assert_eq!(size("jpg", jpeg(0)), size("jpg", jpeg(1)));
+        assert_eq!(size("jpg", jpeg(255)), size("jpg", jpeg(100)));
     }
 
     #[test]

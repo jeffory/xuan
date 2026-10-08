@@ -2168,6 +2168,60 @@ async fn save_and_export_forward_a_path_and_overwrite_and_name_the_file_in_the_p
     }
 }
 
+#[tokio::test]
+async fn export_forwards_quality_and_lossless_only_when_given() {
+    let editor = FakeEditor::new(false);
+    let (app, _shared) = app(editor.clone());
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let last = |editor: &FakeEditor| {
+        let (_, method, params) = editor.requests().last().cloned().unwrap();
+        (method, params)
+    };
+
+    // Left out, Xuan's Export dialog settings apply: nothing is added.
+    let plain = client
+        .tool("export_document", json!({"format": "webp"}))
+        .await;
+    assert_ne!(plain.is_error, Some(true), "{}", text_of(&plain));
+    assert_eq!(
+        last(&editor),
+        ("file/export".to_owned(), json!({"format": "webp"}))
+    );
+    let lossy = client
+        .tool(
+            "export_document",
+            json!({"format": "webp", "quality": 80, "lossless": false}),
+        )
+        .await;
+    assert_ne!(lossy.is_error, Some(true), "{}", text_of(&lossy));
+    assert_eq!(
+        last(&editor),
+        (
+            "file/export".to_owned(),
+            json!({"format": "webp", "quality": 80, "lossless": false})
+        )
+    );
+
+    let listed: ListToolsResult =
+        serde_json::from_value(client.call("tools/list", json!({})).await["result"].clone())
+            .unwrap();
+    let tool = (listed.tools.iter())
+        .find(|t| t.name == "export_document")
+        .unwrap();
+    let properties = &tool.input_schema["properties"];
+    assert_eq!(
+        properties["quality"],
+        json!({
+            "type": "integer", "minimum": 1, "maximum": 100,
+            "description": properties["quality"]["description"],
+        })
+    );
+    assert_eq!(properties["lossless"]["type"], "boolean");
+    let description = tool.description.as_deref().unwrap_or_default();
+    assert!(description.contains("`quality`"), "{description}");
+}
+
 #[test]
 fn text_layers_are_set_along_paths_and_their_options_changed() {
     let editor = FakeEditor::new(false);

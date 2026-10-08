@@ -224,7 +224,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `run_command` | Flatten, duplicate, flip, rotate canvas, crop to selection, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
 | `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
-| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/export` |
+| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file; `quality` (1–100) for JPEG and lossy WebP, `lossless` for WebP | `file/export` |
 | `open_document` | Open an image or project, after the user agrees | `file/open` |
 
 Filters and adjustments use the shapes `.xuan` files store, for example

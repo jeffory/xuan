@@ -22,6 +22,7 @@ LOCAL_LINKS = {
     "licenses/heic-rs-MIT.txt": "../../licenses/xuan/heic-rs-MIT.txt",
     "licenses/seccompiler-BSD-3-Clause.txt": "../../licenses/xuan/seccompiler-BSD-3-Clause.txt",
     "licenses/kurbo-MIT.txt": "../../licenses/xuan/kurbo-MIT.txt",
+    "licenses/libwebp-BSD-3-Clause.txt": "../../licenses/xuan/libwebp-BSD-3-Clause.txt",
     "licenses/Hack-LICENSE.txt": "../../licenses/xuan/Hack-LICENSE.txt",
     "licenses/tabler-icons-MIT.txt": "../../licenses/xuan/tabler-icons-MIT.txt",
     "assets/fonts/Inter-LICENSE.txt": "../../licenses/xuan/Inter-LICENSE.txt",

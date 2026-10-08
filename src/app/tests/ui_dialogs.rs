@@ -590,3 +590,61 @@ fn edit_stroke_dialog_previews_and_applies_from_the_menu() {
     assert_eq!(ui.app().dialog, None);
     assert_eq!(pixels(&ui), before);
 }
+
+/// WebP export: Lossless hides the Quality slider, turning it off shows the
+/// slider with a lossy preview and size, and the choice stays for the next
+/// export (issue 115).
+#[test]
+fn webp_export_lossless_checkbox_shows_and_hides_quality() {
+    let (_directory, mut ui) = small_with_document();
+    let estimated = |ui: &UiTest| {
+        (ui.harness)
+            .query_by_label_contains("Estimated size:")
+            .is_some()
+    };
+    ui.app_mut().export_format = "webp".into();
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(ui.has_role(Role::CheckBox, "Lossless"));
+    assert!(ui.app().export_options.webp_lossless, "lossless by default");
+    assert!(!ui.has("Quality") && !estimated(&ui));
+
+    ui.click_role(Role::CheckBox, "Lossless");
+    assert!(!ui.app().export_options.webp_lossless);
+    assert!(ui.has("Quality") && estimated(&ui));
+    assert!(
+        (ui.harness)
+            .query_by_label_contains("WebP preview · transparency is kept")
+            .is_some()
+    );
+    assert_eq!(ui.app().export_options.webp_quality, 85);
+    assert_commit_visible(&ui, "Export image", "Export…");
+    ui.click("Cancel");
+
+    // Remembered while Xuan runs.
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(ui.has("Quality") && !ui.app().export_options.webp_lossless);
+    ui.click_role(Role::CheckBox, "Lossless");
+    assert!(!ui.has("Quality") && !estimated(&ui));
+    ui.click("Cancel");
+
+    // JPEG has its quality and size, and no Lossless.
+    ui.app_mut().export_format = "jpg".into();
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(ui.has("Quality") && estimated(&ui));
+    assert!(!ui.has_role(Role::CheckBox, "Lossless"));
+}
+
+#[test]
+fn export_sizes_read_in_kib_then_mib() {
+    use crate::app::dialogs::estimated_size;
+    assert_eq!(estimated_size(0), "1 KiB");
+    assert_eq!(estimated_size(1), "1 KiB");
+    assert_eq!(estimated_size(1024), "1 KiB");
+    assert_eq!(estimated_size(1025), "2 KiB");
+    assert_eq!(estimated_size(340 * 1024), "340 KiB");
+    assert_eq!(estimated_size(1024 * 1024), "1.0 MiB");
+    assert_eq!(estimated_size(1_500_000), "1.4 MiB");
+}

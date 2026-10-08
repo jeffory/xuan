@@ -324,6 +324,10 @@ decision: ask the user the first time, and offer to always allow.
 - **`path`.** `file/save_as` and `file/export` take an optional absolute
   `path` (and `overwrite`); `file/save` saves a document back to its own
   `.xuan` file, as Ctrl+S. Without `path`, the save dialog is unchanged.
+- **Encoding (#115).** `export_document` and `file/export` also take
+  `quality` (1–100, JPEG and lossy WebP) and `lossless` (WebP). WebP is lossy
+  when `quality` is given without `lossless`; what is left out follows the
+  user's **Export image** dialog, which a request never changes.
 - **Xuan's own prompt.** In place of the system dialog Xuan shows **Save a
   file?** (or **Export an image?**, **Save the project?**), naming the plugin,
   the document, the file name, its folder (resolved), and whether it writes a
