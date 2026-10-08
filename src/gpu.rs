@@ -13,6 +13,7 @@ mod processor;
 mod raster;
 mod raw;
 mod raw_preview;
+mod tiles;
 pub(crate) use paint::{
     FilterSelection, Paint, Stroke, adjust_mask, filter_selection, match_colors, paint,
     project_selection, shape, stroke,
@@ -99,6 +100,8 @@ struct Parameters {
     first: [f32; 4],
     second: [f32; 4],
     points: [[f32; 4]; 128],
+    /// Where the output's first pixel is on the canvas, for noise; only tiles move it.
+    origin: [f32; 4],
 }
 
 struct Source {
@@ -224,15 +227,18 @@ impl GpuCompositor {
         size: [u32; 2],
         motion_blur: Option<[f32; 2]>,
     ) {
-        self.render_internal(document, size, motion_blur, false);
+        self.render_internal(document, size, motion_blur, false, [0, 0]);
     }
 
+    /// `origin` is where `document` lies on a larger canvas, when it is one tile's window
+    /// (`tiles::window_document`): noise and Dissolve follow the canvas, not the window.
     fn render_internal(
         &mut self,
         document: &Document,
         size: [u32; 2],
         motion_blur: Option<[f32; 2]>,
         straight_output: bool,
+        origin: [u32; 2],
     ) {
         let prepared = render::prepare_attachments(document);
         let document = prepared.as_ref();
@@ -357,6 +363,7 @@ impl GpuCompositor {
                 });
             }
             let mut params = parameters(document, layer, size);
+            params.origin = [origin[0] as f32, origin[1] as f32, 0.0, 0.0];
             let lut = match &layer.adjustment {
                 Some(Adjustment::ColorLookup { table, .. }) => {
                     retained_luts.insert(Arc::as_ptr(table) as usize);
@@ -890,28 +897,97 @@ pub(crate) fn compose(document: &Document, width: u32, height: u32) -> Option<Rg
 
 impl Processor {
     fn compose(&self, document: &Document, width: u32, height: u32) -> anyhow::Result<RgbaImage> {
-        let limits = self.device.limits();
+        let tiling = tiles::Tiling::for_limits(&self.device.limits());
+        self.compose_within(document, width, height, tiling)
+    }
+
+    /// `compose` within `tiling`'s limits: in one pass when the canvas and every layer fit,
+    /// otherwise in tiles (at the document's own size only).
+    fn compose_within(
+        &self,
+        document: &Document,
+        width: u32,
+        height: u32,
+        tiling: tiles::Tiling,
+    ) -> anyhow::Result<RgbaImage> {
+        anyhow::ensure!(width > 0 && height > 0, "Composition is empty");
+        let layers_fit = document
+            .layers
+            .iter()
+            .filter_map(|l| l.pixels.as_ref())
+            .all(|p| p.width().max(p.height()) <= tiling.texture);
+        if tiling.fits([width, height]) && layers_fit {
+            return self.compose_whole(document, width, height);
+        }
         anyhow::ensure!(
-            width > 0 && height > 0 && width.max(height) <= limits.max_texture_dimension_2d,
+            [width, height] == [document.width, document.height],
             "Composition exceeds GPU texture limits"
         );
-        anyhow::ensure!(
-            document
-                .layers
-                .iter()
-                .filter_map(|l| l.pixels.as_ref())
-                .all(|p| p.width().max(p.height()) <= limits.max_texture_dimension_2d),
-            "Layer exceeds GPU texture limits"
-        );
-        let stride = (u64::from(width) * 4).div_ceil(256) * 256;
-        anyhow::ensure!(
-            stride * u64::from(height) <= limits.max_buffer_size,
-            "Composition exceeds GPU readback limits"
-        );
+        self.compose_tiles(document, tiling)
+    }
+
+    fn compose_whole(
+        &self,
+        document: &Document,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<RgbaImage> {
         let mut compositor = self.compositor.lock().unwrap_or_else(|p| p.into_inner());
         let compositor = compositor
             .get_or_insert_with(|| GpuCompositor::new(self.device.clone(), self.queue.clone()));
-        compositor.render_internal(document, [width, height], None, true);
+        compositor.render_internal(document, [width, height], None, true, [0, 0]);
+        let (bytes, stride) = self.read_display(compositor, [width, height])?;
+        let mut image = RgbaImage::new(width, height);
+        for (source, target) in bytes
+            .chunks_exact(stride)
+            .zip(image.as_mut().chunks_exact_mut(width as usize * 4))
+        {
+            target.copy_from_slice(&source[..width as usize * 4]);
+        }
+        Ok(image)
+    }
+
+    /// Composites each tile's window on its own and keeps its core. Filter layers that read
+    /// the whole canvas, and devices that can't hold one tile with its margins, leave the
+    /// document to the CPU.
+    fn compose_tiles(
+        &self,
+        document: &Document,
+        tiling: tiles::Tiling,
+    ) -> anyhow::Result<RgbaImage> {
+        use anyhow::Context;
+        let prepared = render::prepare_attachments(document);
+        let document = prepared.as_ref();
+        let margin = tiles::margin(document).context("A filter layer needs the whole canvas")?;
+        let core = tiling
+            .core(margin)
+            .context("Not even one tile fits GPU texture limits")?;
+        let mut output = RgbaImage::new(document.width, document.height);
+        let mut compositor = self.compositor.lock().unwrap_or_else(|p| p.into_inner());
+        let compositor = compositor
+            .get_or_insert_with(|| GpuCompositor::new(self.device.clone(), self.queue.clone()));
+        for tile in tiles::grid([document.width, document.height], core, margin) {
+            anyhow::ensure!(!processor::cancelled(), "Processing cancelled");
+            let window = tiles::window_document(document, tile.window, tiling.texture)?;
+            let size = [tile.window.width, tile.window.height];
+            compositor.render_internal(&window, size, None, true, [tile.window.x, tile.window.y]);
+            let (bytes, stride) = self.read_display(compositor, size)?;
+            tiles::stitch(&mut output, &tile, &bytes, stride)?;
+        }
+        // The last window's cropped layers are gone; so are their textures.
+        compositor
+            .sources
+            .retain(|_, source| source.pixels.strong_count() > 0);
+        Ok(output)
+    }
+
+    /// The compositor's display texture, `size` of it, with rows the returned stride apart.
+    fn read_display(
+        &self,
+        compositor: &GpuCompositor,
+        [width, height]: [u32; 2],
+    ) -> anyhow::Result<(Vec<u8>, usize)> {
+        let stride = (u64::from(width) * 4).div_ceil(256) * 256;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("composition readback"),
             size: stride * u64::from(height),
@@ -936,15 +1012,7 @@ impl Processor {
             },
         );
         self.queue.submit([encoder.finish()]);
-        let bytes = self.map(&staging)?;
-        let mut image = RgbaImage::new(width, height);
-        for (source, target) in bytes
-            .chunks_exact(stride as usize)
-            .zip(image.as_mut().chunks_exact_mut(width as usize * 4))
-        {
-            target.copy_from_slice(&source[..width as usize * 4]);
-        }
-        Ok(image)
+        Ok((self.map(&staging)?, stride as usize))
     }
 }
 

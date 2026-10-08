@@ -7,6 +7,7 @@ struct Parameters {
     first: vec4<f32>,
     second: vec4<f32>,
     points: array<vec4<f32>, 128>,
+    origin: vec4<f32>, // Where the output's first pixel is on the canvas, for noise.
 }
 
 fn lum(c: vec3<f32>) -> f32 { return dot(c, vec3(0.3, 0.59, 0.11)); }
