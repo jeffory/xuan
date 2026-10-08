@@ -52,8 +52,11 @@ jobs:
           if-no-files-found: ignore
       - name: Native clipboard test
         run: cargo test --locked --bin xuan system_clipboard_images_and_files_paste_from_another_process -- --ignored --test-threads=1
-      - name: Build
-        run: cargo build --release --locked
+      - name: Package the unsigned app
+        # Xuan.app in a DMG, ad-hoc signed only: no Developer ID or notarization yet.
+        run: python3 scripts/package-macos.py
+      - name: Check the package
+        run: python3 scripts/check-packages.py --macos
       - name: Native Metal smoke test
         timeout-minutes: 5
         run: |
@@ -63,18 +66,18 @@ jobs:
           height=$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ { print $2 }')
           echo "Screenshot: ${width}x${height}"
           test "$width" -ge 850 && test "$height" -ge 560
-          mkdir -p dist
-          cp "$screenshot" dist/xuan-macos-demo.png
-      - name: Archive the unsigned build
-        # Not a release package: no app bundle, signature or notarization yet. Extract it
-        # and run `xattr -d com.apple.quarantine xuan` before starting it from a terminal.
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          tar -czf "dist/xuan-$version-macos-arm64-unsigned.tar.gz" -C target/release xuan
+          mkdir -p "$RUNNER_TEMP/demo"
+          cp "$screenshot" "$RUNNER_TEMP/demo/xuan-macos-demo.png"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: xuan-macos-arm64-unsigned
-          path: dist/*
+          name: xuan-macos-arm64
+          # The Linux job supplies the shared source archive for releases.
+          path: dist/xuan-*-macos-arm64.dmg*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: xuan-macos-demo
+          path: ${{ runner.temp }}/demo/xuan-macos-demo.png
           if-no-files-found: error
   mcp-server:
     # The MCP server plugin is its own Cargo workspace (its dependencies stay
