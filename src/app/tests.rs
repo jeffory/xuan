@@ -24,6 +24,9 @@ mod plugins;
 #[path = "tests/plugin_examples.rs"]
 mod plugin_examples;
 
+#[path = "tests/plugin_pocs.rs"]
+mod plugin_pocs;
+
 #[path = "tests/plugin_models.rs"]
 mod plugin_models;
 

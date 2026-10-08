@@ -1,0 +1,12 @@
+[package]
+name = "lut-loader"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "Proof of concept: apply .cube LUTs in Xuan"
+license = "MIT"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1.0"
+xuan-plugin = { path = "../../../sdk/xuan-plugin" }

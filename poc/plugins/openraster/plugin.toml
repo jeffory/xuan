@@ -1,0 +1,14 @@
+[plugin]
+id = "openraster"
+name = "OpenRaster (POC)"
+version = "0.0.1"
+description = "Proof of concept: opens OpenRaster (.ora) files from Krita, MyPaint and GIMP as layers."
+command = ["python3", "main.py"]
+protocol = 1
+
+[[formats]]
+id = "ora"
+label = "OpenRaster"
+extensions = ["ora"]
+import = true
+export = true

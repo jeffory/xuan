@@ -1,0 +1,19 @@
+[plugin]
+id = "timeline"
+name = "Timeline (POC)"
+version = "0.0.1"
+description = "Proof of concept: a frame-by-frame animation pane, with each top-level layer as a frame."
+command = ["python3", "main.py"]
+protocol = 1
+
+# Scrubbing and onion skinning change layer visibility and opacity, which
+# only document/edit can do.
+[permissions]
+document = "edit"
+
+# The only place a pane can go is the right sidebar (or the settings page).
+# There is no bottom dock for a timeline.
+[[panes]]
+id = "timeline"
+title = "Timeline"
+refresh = "document"

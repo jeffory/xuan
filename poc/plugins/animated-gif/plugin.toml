@@ -1,0 +1,45 @@
+[plugin]
+id = "animated-gif"
+name = "Animated GIF (POC)"
+version = "0.0.1"
+description = "Proof of concept: saves the top-level layers as the frames of an animated GIF."
+command = ["target/release/animated-gif"]
+protocol = 1
+
+# "edit" only for the `composite` frame mode, which has to toggle layer
+# visibility through document/edit to render each frame.
+[permissions]
+document = "edit"
+
+[[settings]]
+id = "frames"
+type = "enum"
+label = "Frames from"
+values = [
+  { id = "pixels", label = "Each top-level layer's own pixels" },
+  { id = "composite", label = "The composite with one top-level layer shown at a time" },
+]
+default = "pixels"
+
+[[settings]]
+id = "delay"
+type = "integer"
+label = "Default frame delay (ms); a layer named \"… (120ms)\" overrides it"
+default = 100
+min = 10
+max = 10000
+
+[[settings]]
+id = "loop"
+type = "bool"
+label = "Loop forever"
+default = true
+
+# import = true is declared on purpose: GIF is a built-in format, so Xuan never
+# routes .gif files to this importer (see README.md).
+[[formats]]
+id = "gif"
+label = "Animated GIF"
+extensions = ["gif"]
+import = true
+export = true

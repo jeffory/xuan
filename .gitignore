@@ -9,3 +9,4 @@
 __pycache__/
 
 /testdata/raw/cache/
+/poc/plugins/*/target/

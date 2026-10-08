@@ -1,0 +1,41 @@
+[plugin]
+id = "lut-loader"
+name = "LUT Loader (POC)"
+version = "0.0.1"
+description = "Proof of concept: applies .cube colour lookup tables."
+# Build with `cargo build --release` in this folder first.
+command = ["target/release/lut-loader"]
+protocol = 1
+
+[permissions]
+document = "edit"
+
+# What works today: bake a 1D or 3D LUT into a new layer above the source.
+# Lower the layer's opacity for strength. Destructive, 8-bit, no live preview.
+[[actions]]
+id = "apply"
+label = "Apply LUT…"
+menu = "Filter"
+kind = "edit"
+description = "Bake a .cube LUT into a new layer above the active layer."
+source = { from = "layer" }
+result = { into = "layer" }
+
+[[actions.inputs]]
+id = "file"
+type = "path"
+label = "LUT file (.cube)"
+
+# The only non-destructive route: a 1D LUT becomes a Curves adjustment layer
+# (at most 32 points per channel). 3D LUTs have nowhere to go.
+[[actions]]
+id = "curves"
+label = "LUT as Curves Adjustment Layer…"
+menu = "Layer"
+kind = "generate"
+description = "Turn a 1D .cube LUT into an editable Curves adjustment layer."
+
+[[actions.inputs]]
+id = "file"
+type = "path"
+label = "1D LUT file (.cube)"
