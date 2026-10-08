@@ -12,10 +12,10 @@ use xuan::i18n::tr;
 
 use anyhow::{Context, Result, ensure};
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, emath::GuiRounding, pos2, vec2};
-use image::RgbaImage;
+use image::{GrayImage, RgbaImage};
 use uuid::Uuid;
 use xuan::{
-    document::{Document, Layer, Point},
+    document::{Document, Layer, Point, Transform},
     raw::{self, DecodedRaw, DevelopSettings, OverlayKind, RawAsset, WhiteBalance},
 };
 
@@ -29,7 +29,19 @@ const PREVIEW_SETTLE: Duration = Duration::from_millis(150);
 pub(super) enum DevelopTarget {
     New,
     Insert(Uuid),
-    Existing { document: Uuid, layer: Uuid },
+    Existing {
+        document: Uuid,
+        layer: Uuid,
+    },
+    /// Filter → Camera Raw Filter… on a pixel layer: its pixels and placement, and the
+    /// selection, as they were when the filter opened.
+    Filter {
+        document: Uuid,
+        layer: Uuid,
+        source: Arc<RgbaImage>,
+        transform: Transform,
+        selection: Option<Arc<GrayImage>>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -243,9 +255,33 @@ impl Develop {
     pub fn targets_document(&self, id: Uuid) -> bool {
         match self.target {
             DevelopTarget::New => false,
-            DevelopTarget::Insert(document) | DevelopTarget::Existing { document, .. } => {
-                document == id
-            }
+            DevelopTarget::Insert(document)
+            | DevelopTarget::Existing { document, .. }
+            | DevelopTarget::Filter { document, .. } => document == id,
+        }
+    }
+
+    /// Whether this is the Camera Raw Filter on a pixel layer rather than a RAW file.
+    pub fn is_filter(&self) -> bool {
+        matches!(self.target, DevelopTarget::Filter { .. })
+    }
+
+    /// The workspace's name, for window titles.
+    pub fn workspace_name(&self) -> &'static str {
+        if self.is_filter() {
+            tr("Camera Raw Filter")
+        } else {
+            tr("Develop")
+        }
+    }
+
+    /// The settings that leave the image as it is: Reset returns to them and the original
+    /// view shows them.
+    pub fn baseline(&self) -> DevelopSettings {
+        if self.is_filter() {
+            DevelopSettings::camera_raw_filter()
+        } else {
+            DevelopSettings::default()
         }
     }
 
@@ -262,6 +298,10 @@ impl Develop {
     }
 
     pub fn rotate(&mut self, clockwise: bool) {
+        // The Camera Raw Filter keeps the layer's size and placement.
+        if self.is_filter() {
+            return;
+        }
         self.settings.quarter_turns =
             (self.settings.quarter_turns + if clockwise { 1 } else { 3 }) % 4;
         self.pan = Vec2::ZERO;
@@ -272,6 +312,9 @@ impl Develop {
     /// Rotates as one undo step, for a key binding: the toolbar's undo tracking only
     /// sees changes made while it is drawn.
     pub fn rotate_with_undo(&mut self, clockwise: bool) {
+        if self.is_filter() {
+            return;
+        }
         let previous = self.settings.clone();
         self.rotate(clockwise);
         self.pending_undo.get_or_insert(previous);
@@ -547,6 +590,7 @@ impl EditorApp {
             loaded(
                 asset,
                 decoded,
+                &DevelopSettings::default(),
                 &mut worker.lock().unwrap_or_else(|p| p.into_inner()),
                 native,
                 cancel,
@@ -554,6 +598,80 @@ impl EditorApp {
         });
         self.develop = Some(develop);
         self.mask_target = false;
+    }
+
+    /// Filter → Camera Raw Filter…: Develop's controls on the active pixel layer, in a
+    /// Develop tab. Apply changes the layer's pixels (within the selection, if any) as one
+    /// undo step; Cancel leaves it untouched.
+    pub(super) fn start_camera_raw_filter(&mut self) {
+        if self.develop.is_some() || self.job.is_some() || self.dialog.is_some() {
+            return;
+        }
+        if self.editing_mask() {
+            self.error =
+                Some(tr("The Camera Raw Filter changes a layer's pixels, not its mask").into());
+            return;
+        }
+        self.cancel_gesture();
+        let Some(session) = self.session() else {
+            return;
+        };
+        let document = session.document.id;
+        let selection = session.document.selection.clone();
+        let Some(layer) = session.document.active() else {
+            return;
+        };
+        if let Some(pending) = self.inactive_develop.iter().find(|d| {
+            matches!(d.target, DevelopTarget::Filter { document: open, layer: id, .. } if open == document && id == layer.id)
+        }) {
+            let pending = pending.id;
+            self.activate_develop(pending);
+            return;
+        }
+        if !raw::can_filter(layer) {
+            self.error = Some(
+                tr("Select an unlocked layer with pixels. RAW layers open in Develop.").into(),
+            );
+            return;
+        }
+        let source = layer.pixels.clone().unwrap();
+        let settings = DevelopSettings::camera_raw_filter();
+        let asset = RawAsset {
+            filename: layer.name.clone(),
+            metadata: raw::RawMetadata {
+                width: source.width(),
+                height: source.height(),
+                bits: 8,
+                ..Default::default()
+            },
+            settings: settings.clone(),
+            bytes: Arc::default(),
+        };
+        let mut develop = Develop::loading(
+            DevelopTarget::Filter {
+                document,
+                layer: layer.id,
+                source: source.clone(),
+                transform: layer.transform,
+                selection,
+            },
+            layer.name.clone(),
+            settings,
+        );
+        let worker = develop.worker.clone();
+        let native = self.gpu_state.is_some();
+        develop.spawn(&self.context, move |cancel| {
+            let decoded = raw::filter_source(&source)?;
+            loaded(
+                asset,
+                decoded,
+                &DevelopSettings::camera_raw_filter(),
+                &mut worker.lock().unwrap_or_else(|p| p.into_inner()),
+                native,
+                cancel,
+            )
+        });
+        self.develop = Some(develop);
     }
 
     fn start_next_raw(&mut self, ctx: &egui::Context) {
@@ -580,6 +698,7 @@ impl EditorApp {
                 loaded(
                     asset,
                     decoded,
+                    &DevelopSettings::default(),
                     &mut worker.lock().unwrap_or_else(|p| p.into_inner()),
                     native,
                     cancel,
@@ -679,9 +798,12 @@ impl EditorApp {
                             develop.error = Some(format!("{error:#}"));
                             develop.applying = false;
                         } else {
-                            self.status =
+                            self.status = if develop.is_filter() {
+                                tr("Camera Raw Filter applied")
+                            } else {
                                 tr("RAW developed · Double-click the RAW layer to edit it again")
-                                    .into();
+                            }
+                            .into();
                             ctx.request_repaint();
                             return;
                         }
@@ -732,8 +854,31 @@ impl EditorApp {
                 });
             } else if develop.applying {
                 let settings = develop.settings.clone();
+                let filter = match &develop.target {
+                    DevelopTarget::Filter {
+                        source,
+                        transform,
+                        selection,
+                        ..
+                    } => Some((source.clone(), *transform, selection.clone())),
+                    _ => None,
+                };
                 develop.spawn(ctx, move |cancel| {
-                    let pixels = raw::render(&full, &settings, cancel)?;
+                    let pixels = if let Some((source, transform, selection)) = filter {
+                        let mut pixels = raw::render_filter(&full, &source, &settings, cancel)?;
+                        if let Some(selection) = selection {
+                            raw::within_selection(
+                                &mut pixels,
+                                &source,
+                                transform,
+                                &selection,
+                                cancel,
+                            )?;
+                        }
+                        pixels
+                    } else {
+                        raw::render(&full, &settings, cancel)?
+                    };
                     Ok(WorkerResult::Applied { settings, pixels })
                 });
             } else {
@@ -750,12 +895,13 @@ impl EditorApp {
                     let warnings = develop.show_clipping;
                     let native = self.gpu_state.is_some();
                     let worker = develop.worker.clone();
+                    let baseline = develop.baseline();
                     develop.spawn(ctx, move |cancel| {
                         let mut worker = worker.lock().unwrap_or_else(|p| p.into_inner());
                         let input = worker.input(&full, &proxy, side, cancel)?;
                         ensure!(!cancel.load(Ordering::Relaxed), "RAW preview cancelled");
                         let before = compare
-                            .then(|| worker.original(&input, native, cancel))
+                            .then(|| worker.original(&input, &baseline, native, cancel))
                             .transpose()?;
                         let preview = worker.render(&input, &settings, warnings, native, cancel)?;
                         Ok(WorkerResult::Preview {
@@ -804,6 +950,36 @@ impl EditorApp {
                 self.sessions.push(session);
                 self.current = self.sessions.len() - 1;
             }
+            DevelopTarget::Filter {
+                document: id,
+                layer,
+                source,
+                transform,
+                ..
+            } => {
+                let index = self
+                    .sessions
+                    .iter()
+                    .position(|s| s.document.id == *id)
+                    .context(tr("The target project is no longer open"))?;
+                let session = &mut self.sessions[index];
+                let mut document = session.document.clone();
+                let target = document
+                    .layers
+                    .iter_mut()
+                    .find(|l| l.id == *layer)
+                    .context(tr("The layer is no longer available"))?;
+                raw::apply_filter(target, source, *transform, pixels)?;
+                document.validate()?;
+                session
+                    .history
+                    .begin(tr("Camera Raw Filter"), &session.document);
+                session.document = document;
+                session.commit();
+                session.invalidate();
+                self.current = index;
+                return Ok(());
+            }
             DevelopTarget::Insert(id) | DevelopTarget::Existing { document: id, .. } => {
                 let index = self
                     .sessions
@@ -834,7 +1010,7 @@ impl EditorApp {
                             .context(tr("The RAW layer is no longer available"))?;
                         raw::update_layer(target, asset, pixels)?;
                     }
-                    DevelopTarget::New => unreachable!(),
+                    DevelopTarget::New | DevelopTarget::Filter { .. } => unreachable!(),
                 }
                 document.validate()?;
                 session.history.begin(tr("Develop RAW"), &session.document);
@@ -850,11 +1026,18 @@ impl EditorApp {
     }
 
     pub(super) fn cancel_develop(&mut self) {
+        let mut filter = false;
         if let Some(develop) = self.develop.take() {
             develop.cancel.store(true, Ordering::Relaxed);
+            filter = develop.is_filter();
         }
         self.develop_close_requested = None;
-        self.status = "RAW development cancelled".into();
+        self.status = if filter {
+            tr("Camera Raw Filter cancelled")
+        } else {
+            tr("RAW development cancelled")
+        }
+        .into();
         self.context.request_repaint();
     }
 
@@ -873,6 +1056,7 @@ impl EditorApp {
             .then(|| self.config.pixel_grid_percent());
         let interactive =
             d.ready() && self.develop_close_requested.is_none() && self.dialog.is_none();
+        let filter = d.is_filter();
         egui::TopBottomPanel::top("develop_toolbar")
             .exact_height(44.0)
             .frame(
@@ -883,7 +1067,11 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(interactive, |ui| {
-                        apply = widgets::primary_button(ui, tr("Develop")).clicked();
+                        apply = widgets::primary_button(
+                            ui,
+                            if filter { tr("Apply") } else { tr("Develop") },
+                        )
+                        .clicked();
                     });
                     ui.add_enabled_ui(
                         self.develop_close_requested.is_none() && self.dialog.is_none(),
@@ -891,15 +1079,18 @@ impl EditorApp {
                             cancel = widgets::button(ui, tr("Cancel")).clicked();
                         },
                     );
-                    ui.add_enabled_ui(interactive, |ui| {
-                        export = widgets::button(ui, "16-bit TIFF…").clicked();
-                        if super::icons::rotate_button(ui, false).clicked() {
-                            d.rotate(false);
-                        }
-                        if super::icons::rotate_button(ui, true).clicked() {
-                            d.rotate(true);
-                        }
-                    });
+                    // The Camera Raw Filter changes a layer in place, at its size.
+                    if !filter {
+                        ui.add_enabled_ui(interactive, |ui| {
+                            export = widgets::button(ui, "16-bit TIFF…").clicked();
+                            if super::icons::rotate_button(ui, false).clicked() {
+                                d.rotate(false);
+                            }
+                            if super::icons::rotate_button(ui, true).clicked() {
+                                d.rotate(true);
+                            }
+                        });
+                    }
                     ui.separator();
                     ui.add_enabled_ui(interactive, |ui| {
                         widgets::segmented(
@@ -928,8 +1119,12 @@ impl EditorApp {
                 }
                 ui.label(if d.exporting.is_some() {
                     tr("Exporting 16-bit TIFF…")
+                } else if d.applying && filter {
+                    tr("Applying the Camera Raw Filter…")
                 } else if d.applying {
                     tr("Developing full-resolution image…")
+                } else if d.full.is_none() && d.error.is_none() && filter {
+                    tr("Reading the layer…")
                 } else if d.full.is_none() && d.error.is_none() {
                     tr("Decoding RAW sensor data…")
                 } else if d.receiver.is_some() || d.needs_preview(d.preview_side) {
@@ -943,9 +1138,11 @@ impl EditorApp {
                             tr("Click a neutral gray area to set white balance")
                         }
                         CanvasTool::DrawMask => tr("Drag on the image to place the selected mask"),
-                        CanvasTool::None => d.notice.as_deref().unwrap_or(tr(
-                            "RAW embedded · 32-bit float processing · sRGB photo layer",
-                        )),
+                        CanvasTool::None => d.notice.as_deref().unwrap_or(if filter {
+                            tr("Camera Raw Filter · 32-bit float processing · Apply changes this layer")
+                        } else {
+                            tr("RAW embedded · 32-bit float processing · sRGB photo layer")
+                        }),
                     }
                 });
                 if let Some(asset) = &d.asset {
@@ -1002,10 +1199,11 @@ impl EditorApp {
                     draw_canvas(ui, &mut d, texture, interactive, grid_percent);
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label(if d.error.is_some() {
-                            tr("Unable to develop this RAW file")
-                        } else {
-                            tr("Opening RAW…")
+                        ui.label(match (d.error.is_some(), filter) {
+                            (true, true) => tr("Unable to filter this layer"),
+                            (true, false) => tr("Unable to develop this RAW file"),
+                            (false, true) => tr("Opening the layer…"),
+                            (false, false) => tr("Opening RAW…"),
                         });
                     });
                 }
@@ -1061,6 +1259,8 @@ impl EditorApp {
             widgets::Window::new(tr("Finish developing?")).show_with_footer(ctx, |ui| {
                 ui.label(if several {
                     tr("Develop the images to keep your RAW adjustments in projects, or discard all open Develop sessions.")
+                } else if filter {
+                    tr("Apply the Camera Raw Filter to keep your adjustments, or discard them and leave the layer as it was.")
                 } else {
                     tr("Develop the image to keep your RAW adjustments in a project, or discard this Develop session.")
                 });
@@ -1104,9 +1304,12 @@ impl EditorApp {
     }
 }
 
+/// `asset.settings` are where the session starts; when they are `baseline` (see
+/// [`Develop::baseline`]), the first preview is also the original view.
 fn loaded(
     asset: RawAsset,
     decoded: DecodedRaw,
+    baseline: &DevelopSettings,
     worker: &mut PreviewWorker,
     native: bool,
     cancel: &AtomicBool,
@@ -1115,7 +1318,7 @@ fn loaded(
     let full = Arc::new(decoded);
     let proxy = Arc::new(full.preview_cancellable(1600, cancel)?);
     let preview = worker.render(&proxy, &asset.settings, false, native, cancel)?;
-    let before = if asset.settings == DevelopSettings::default() {
+    let before = if asset.settings == *baseline {
         let before = preview.image.clone();
         worker.remember_original(
             proxy.camera.width().max(proxy.camera.height()),
@@ -2513,6 +2716,110 @@ pub(in crate::app) mod tests {
         assert!(app.sessions[1].document.layers[0].raw.is_none());
     }
 
+    /// An editor with a 16 × 12 document whose layer is filled, for the Camera Raw Filter.
+    fn filter_app(ctx: &egui::Context) -> EditorApp {
+        let mut app = EditorApp::with_context(ctx, vec![], false, None);
+        app.dimensions = [16, 12];
+        app.new_document();
+        app.brush.color = [200, 100, 50, 255];
+        app.command("fill_fg");
+        app
+    }
+
+    /// Polls the filter's worker until `done`.
+    fn wait_for(ctx: &egui::Context, app: &mut EditorApp, done: impl Fn(&EditorApp) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !done(app) {
+            assert!(Instant::now() < deadline, "the Camera Raw Filter timed out");
+            std::thread::sleep(Duration::from_millis(5));
+            app.poll_develop(ctx);
+        }
+    }
+
+    #[test]
+    fn camera_raw_filter_refuses_a_layer_changed_while_it_was_open() {
+        let ctx = egui::Context::default();
+        let mut app = filter_app(&ctx);
+        app.start_camera_raw_filter();
+        let d = app.develop.as_ref().unwrap();
+        assert!(d.is_filter());
+        assert_eq!(d.workspace_name(), "Camera Raw Filter");
+        assert!(d.targets_document(app.session().unwrap().document.id));
+        wait_for(&ctx, &mut app, |app| app.develop.as_ref().unwrap().ready());
+        let d = app.develop.as_ref().unwrap();
+        assert!(d.before.is_some(), "the first preview is also the original");
+        assert_eq!(d.asset.as_ref().unwrap().settings, d.settings);
+
+        // The layer is painted on in its own tab while the filter is open.
+        let edited = Arc::new(RgbaImage::new(16, 12));
+        let session = app.session_mut().unwrap();
+        session.document.active_mut().unwrap().pixels = Some(edited.clone());
+        let revision = session.history.revision;
+        app.develop.as_mut().unwrap().settings.exposure = 1.0;
+        app.develop.as_mut().unwrap().applying = true;
+        wait_for(&ctx, &mut app, |app| {
+            app.develop.as_ref().is_none_or(|d| d.error.is_some())
+        });
+        let d = app.develop.as_ref().expect("the filter stays open");
+        assert!(
+            d.error.as_ref().unwrap().contains("changed"),
+            "{:?}",
+            d.error
+        );
+        assert!(!d.applying);
+        let session = app.session().unwrap();
+        assert!(Arc::ptr_eq(
+            session.document.active().unwrap().pixels.as_ref().unwrap(),
+            &edited
+        ));
+        assert_eq!(session.history.revision, revision);
+    }
+
+    #[test]
+    fn camera_raw_filter_reopens_its_tab_and_refuses_masks_locked_and_raw_layers() {
+        let ctx = egui::Context::default();
+        let mut app = filter_app(&ctx);
+        app.start_camera_raw_filter();
+        let id = app.develop.as_ref().unwrap().id;
+        app.suspend_develop();
+        assert!(app.develop.is_none());
+        app.start_camera_raw_filter();
+        assert_eq!(
+            app.develop.as_ref().unwrap().id,
+            id,
+            "the open filter comes back"
+        );
+        assert_eq!(app.inactive_develop.len(), 0);
+        app.cancel_develop();
+
+        let layer = app.session_mut().unwrap().document.active_mut().unwrap();
+        layer.mask = Some(xuan::document::Mask::white());
+        app.mask_target = true;
+        app.start_camera_raw_filter();
+        assert!(app.develop.is_none());
+        assert!(app.error.take().unwrap().contains("mask"));
+        app.mask_target = false;
+
+        for refuse in [
+            |l: &mut Layer| l.group = true,
+            |l: &mut Layer| l.locked = true,
+            |l: &mut Layer| {
+                l.raw = Some(RawAsset {
+                    filename: "photo.NEF".into(),
+                    metadata: Default::default(),
+                    settings: DevelopSettings::default(),
+                    bytes: Arc::new(vec![1]),
+                })
+            },
+        ] {
+            let mut app = filter_app(&ctx);
+            refuse(app.session_mut().unwrap().document.active_mut().unwrap());
+            app.start_camera_raw_filter();
+            assert!(app.develop.is_none());
+            assert!(app.error.is_some());
+        }
+    }
+
     #[test]
     fn cancel_ignores_late_worker_results_and_stale_previews() {
         let ctx = egui::Context::default();
@@ -2666,7 +2973,9 @@ pub(in crate::app) mod tests {
                         assert_ne!(import, "open");
                         assert_eq!(id, document);
                     }
-                    DevelopTarget::Existing { .. } => panic!("Expected a new RAW session"),
+                    DevelopTarget::Existing { .. } | DevelopTarget::Filter { .. } => {
+                        panic!("Expected a new RAW session")
+                    }
                 }
                 assert_eq!(app.sessions.len(), 1);
                 assert_eq!(app.session().unwrap().document.layers.len(), layer_count);

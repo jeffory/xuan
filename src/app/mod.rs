@@ -1621,6 +1621,7 @@ impl EditorApp {
                     self.start_develop_layer(id);
                 }
             }
+            "camera_raw_filter" => self.start_camera_raw_filter(),
             "rasterize_raw" => self.edit(tr("Rasterize RAW Layer"), |doc| {
                 let layer = doc
                     .active_mut()
@@ -2284,7 +2285,7 @@ impl EditorApp {
             session.commit();
         }
         let title = if let Some(develop) = &self.develop {
-            format!("{} — {} — Xuan", develop.title, tr("Develop"))
+            format!("{} — {} — Xuan", develop.title, develop.workspace_name())
         } else {
             self.session().map_or("Xuan".to_owned(), |s| {
                 format!(

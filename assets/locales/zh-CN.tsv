@@ -1311,3 +1311,19 @@ Photos follow their cells. Cells the new layout does not have are removed with t
 Place in Cell	放入单元格
 New Collage…	新建拼图…
 Collage Layout…	拼图布局…
+Camera Raw Filter…	Camera Raw 滤镜…
+Camera Raw Filter	Camera Raw 滤镜
+Camera Raw	Camera Raw
+Camera Raw Filter applied	已应用 Camera Raw 滤镜
+Camera Raw Filter cancelled	已取消 Camera Raw 滤镜
+RAW development cancelled	已取消 RAW 冲洗
+Applying the Camera Raw Filter…	正在应用 Camera Raw 滤镜…
+Reading the layer…	正在读取图层…
+Camera Raw Filter · 32-bit float processing · Apply changes this layer	Camera Raw 滤镜 · 32 位浮点处理 · 应用后修改此图层
+Unable to filter this layer	无法对此图层应用滤镜
+Opening the layer…	正在打开图层…
+Apply the Camera Raw Filter to keep your adjustments, or discard them and leave the layer as it was.	应用 Camera Raw 滤镜以保留调整，或放弃调整并保持图层不变。
+Optics	光学
+The Camera Raw Filter changes a layer's pixels, not its mask	Camera Raw 滤镜修改图层的像素，而不是蒙版
+Select an unlocked layer with pixels. RAW layers open in Develop.	请选择未锁定且有像素的图层。RAW 图层请在冲洗中打开。
+The layer is no longer available	该图层已不存在

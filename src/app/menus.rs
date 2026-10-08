@@ -552,6 +552,8 @@ impl EditorApp {
                                     item(ui, &items, "remove_background", &mut action);
                                     item(ui, &items, "remove_flat_background", &mut action);
                                     ui.separator();
+                                    item(ui, &items, "camera_raw_filter", &mut action);
+                                    ui.separator();
                                     for f in Filter::defaults() {
                                         if ui.button(format!("{}…", tr(f.name()))).clicked() {
                                             filter = Some(f);

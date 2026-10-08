@@ -429,6 +429,16 @@ fn raw_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|l| l.raw.is_some() && !l.locked)
 }
+/// Filter → Camera Raw Filter… needs an unlocked pixel layer whose pixels (not its mask) are
+/// being edited.
+fn camera_raw_target(app: &EditorApp) -> bool {
+    editing(app)
+        && !app.editing_mask()
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(xuan::raw::can_filter)
+}
 fn effects_layer(app: &EditorApp) -> bool {
     editing(app)
         && app
@@ -883,6 +893,17 @@ pub(super) const COMMANDS: &[Command] = &[
     .when(image_layer)
     .host(Edit)
     .aliases(&["cutout", "transparent", "white background"]),
+    cmd("camera_raw_filter", "Camera Raw Filter…", C::Filter)
+        .keys(&[ctrl_shift(Key::A)])
+        .when(camera_raw_target)
+        .aliases(&[
+            "develop",
+            "acr",
+            "white balance",
+            "exposure",
+            "tone curve",
+            "hsl",
+        ]),
     // View
     cmd("fit", "Fit Canvas", C::View)
         .keys(&[ctrl(Key::Num0)])
