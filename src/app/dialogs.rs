@@ -952,6 +952,7 @@ impl EditorApp {
                                     )
                                     .changed();
                             }
+                            other => changed |= super::filter_controls::show(ui, other),
                         });
                     }
                     if edit.as_layer {

@@ -1338,10 +1338,13 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 let area = layer_area(layer, canvas);
                 let side = (area as f64).sqrt();
                 let (pad, factor) = match *filter {
-                    Filter::GaussianBlur { radius } => ((radius * 6.0) as f64, 4.0),
+                    Filter::GaussianBlur { radius } | Filter::Bloom { radius, .. } => {
+                        ((radius * 6.0) as f64, 4.0)
+                    }
                     Filter::MotionBlur { distance, .. } => {
                         (distance as f64, 1.0 + distance.max(0.0) as f64 / 4.0)
                     }
+                    Filter::TonalContrast { .. } | Filter::Dither(_) => (0.0, 4.0),
                     _ => (0.0, 2.0),
                 };
                 let padded = (side + pad).powi(2);
@@ -3740,6 +3743,78 @@ mod tests {
         ] {
             let error = run(&mut document.clone(), &[edit(locked.clone())]).unwrap_err();
             assert!(error.to_string().contains("lock"), "{locked}: {error}");
+        }
+    }
+
+    /// Upstream Compositor's filters as plugins and MCP's `apply_filter` send them: the same
+    /// JSON as `.xuan` files, Dither's settings with upstream's defaults for what is left out.
+    #[test]
+    fn compositor_filters_apply_from_json_and_check_their_ranges() {
+        for filter in [
+            json!({"Vignette": {"amount": 35, "color": [0, 0, 0], "midpoint": 50, "roundness": 100, "feather": 60, "highlights": 25}}),
+            json!({"Bloom": {"amount": 40, "radius": 24}}),
+            json!({"TonalContrast": {"amount": 50, "radius": 16, "shadows": 40, "midtones": 60, "highlights": 30}}),
+            json!({"Dither": {}}),
+            json!({"Dither": {"style": "Bayer4", "levels": 3, "colors": "TwoColors", "dark": [0, 0, 64]}}),
+        ] {
+            let (mut document, _) = grey_document();
+            document.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(40, 30, |x, y| {
+                image::Rgba([(x * 6) as u8, (y * 8) as u8, 90, 255])
+            })));
+            let before = crate::render::render(&document);
+            let parsed: Filter = serde_json::from_value(filter.clone()).unwrap();
+            run(
+                &mut document,
+                &[edit(
+                    json!({"op": "apply_filter", "filter": filter.clone()}),
+                )],
+            )
+            .unwrap();
+            assert_ne!(crate::render::render(&document), before, "{filter}");
+            // As a filter layer, it changes the composite and keeps the source pixels.
+            let (mut layered, base) = grey_document();
+            layered.layers[0].pixels = document.layers[0].pixels.clone();
+            let source = layered.layers[0].pixels.clone();
+            let added = run(
+                &mut layered,
+                &[edit(
+                    json!({"op": "add_adjustment_layer", "filter": filter.clone()}),
+                )],
+            )
+            .unwrap();
+            let layer = layered.layers.iter().find(|l| l.id == added[0]).unwrap();
+            assert_eq!(layer.filter.as_ref(), Some(&parsed));
+            assert_eq!(layer.name, parsed.name());
+            assert_eq!(
+                layered.layers.iter().find(|l| l.id == base).unwrap().pixels,
+                source
+            );
+        }
+        let parsed: Filter = serde_json::from_value(json!({"Dither": {"style": "Ascii"}})).unwrap();
+        let Filter::Dither(settings) = parsed else {
+            panic!("{parsed:?}")
+        };
+        assert_eq!(settings.style, crate::effects::DitherStyle::Ascii);
+        assert_eq!(
+            settings.characters,
+            crate::effects::dither::DEFAULT_CHARACTERS
+        );
+        let (document, _) = grey_document();
+        for bad in [
+            json!({"Bloom": {"amount": 40, "radius": 0}}),
+            json!({"Bloom": {"amount": 140, "radius": 4}}),
+            json!({"Vignette": {"amount": 35, "color": [0, 0, 0], "midpoint": 50, "roundness": 101, "feather": 60, "highlights": 25}}),
+            json!({"TonalContrast": {"amount": 50, "radius": 16, "shadows": -140, "midtones": 60, "highlights": 30}}),
+            json!({"Dither": {"levels": 9}}),
+            json!({"Dither": {"style": "Sepia"}}),
+            json!({"Dither": {"pixel_size": 0}}),
+        ] {
+            let parsed =
+                serde_json::from_value::<Edit>(json!({"op": "apply_filter", "filter": bad}));
+            assert!(
+                parsed.is_err() || run(&mut document.clone(), &[parsed.unwrap()]).is_err(),
+                "{bad}"
+            );
         }
     }
 

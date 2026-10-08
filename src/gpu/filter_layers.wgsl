@@ -1,6 +1,8 @@
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var output: texture_storage_2d<OUTPUT_FORMAT, write>;
 @group(0) @binding(2) var<storage, read> config: array<vec4<f32>>;
+// Bloom's and Tonal Contrast's blurred copy (straight); the source again for other filters.
+@group(0) @binding(3) var second: texture_2d<f32>;
 
 // Match the CPU filter boundary: a straight-alpha, eight-bit backdrop.
 fn pixel(position: vec2<i32>) -> vec4<f32> {
@@ -8,6 +10,10 @@ fn pixel(position: vec2<i32>) -> vec4<f32> {
     return floor(clamp(textureLoad(source, clamp(position, vec2(0), size - 1), 0),
         vec4(0.0), vec4(1.0)) * 255.0 + 0.5) / 255.0;
 }
+
+fn dither_source(position: vec2<i32>) -> vec4<f32> { return pixel(position); }
+fn dither_size() -> vec2<i32> { return vec2<i32>(textureDimensions(source)); }
+fn dither_param(index: u32) -> vec4<f32> { return config[1u + index]; }
 
 fn premultiplied(position: vec2<i32>) -> vec4<f32> {
     let p = pixel(position);
@@ -67,12 +73,28 @@ fn filter_layer(@builtin(global_invocation_id) id: vec3<u32>) {
         for (var c = 0u; c < 3u; c++) {
             result[c] += noise(id.xy, 3187u + select(c * 12345u, 0u, settings.z != 0.0)) * settings.y;
         }
-    } else {
+    } else if mode == 4u {
         let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(size) * 2.0 - 1.0;
         let radius = dot(uv, uv);
         let k = 1.0 + settings.y * radius / 100.0;
         result = sample_premultiplied((uv * k + 1.0) * 0.5 * vec2<f32>(size));
         result = vec4(result.rgb / max(result.a, 0.000001) * (1.0 + settings.z * radius * 0.005), result.a);
+    } else if mode == 5u {
+        let mask = vignette_mask(vec2<f32>(id.xy) + 0.5, vec2<f32>(size), config[1].xyz);
+        result = vignette_pixel(pixel(position), mask, settings.y, settings.z, config[2].rgb, settings.w != 0.0);
+    } else if mode == 6u {
+        let glow = floor(textureLoad(second, position, 0) * 255.0 + 0.5) / 255.0;
+        let s = premultiplied(position);
+        result = bloom_pixel(s, vec4(glow.rgb * glow.a, glow.a), settings.y);
+        result = vec4(result.rgb / max(result.a, 0.000001), result.a);
+    } else if mode == 7u {
+        let base = floor(textureLoad(second, position, 0) * 255.0 + 0.5) / 255.0;
+        result = tonal_contrast_pixel(pixel(position), base, settings.y, config[1].xyz);
+    } else if mode == 8u {
+        result = dither_pixel(position);
+    } else {
+        // A copy to read back for the filters the CPU draws.
+        result = pixel(position);
     }
     textureStore(output, position, result);
 }

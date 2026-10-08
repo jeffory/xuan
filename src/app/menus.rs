@@ -185,21 +185,7 @@ fn check_item(
 
 pub(super) fn filter_menu(ui: &mut egui::Ui) -> Option<Filter> {
     let mut result = None;
-    for filter in [
-        Filter::GaussianBlur { radius: 4.0 },
-        Filter::MotionBlur {
-            distance: 15.0,
-            angle: 0.0,
-        },
-        Filter::Noise {
-            amount: 10.0,
-            monochrome: true,
-        },
-        Filter::LensCorrection {
-            distortion: 0.0,
-            vignette: 0.0,
-        },
-    ] {
+    for filter in Filter::defaults() {
         if ui.button(tr(filter.name())).clicked() {
             result = Some(filter);
             ui.close();
@@ -548,21 +534,7 @@ impl EditorApp {
                                     item(ui, &items, "remove_background", &mut action);
                                     item(ui, &items, "remove_flat_background", &mut action);
                                     ui.separator();
-                                    for f in [
-                                        Filter::GaussianBlur { radius: 4.0 },
-                                        Filter::MotionBlur {
-                                            distance: 15.0,
-                                            angle: 0.0,
-                                        },
-                                        Filter::Noise {
-                                            amount: 10.0,
-                                            monochrome: true,
-                                        },
-                                        Filter::LensCorrection {
-                                            distortion: 0.0,
-                                            vignette: 0.0,
-                                        },
-                                    ] {
+                                    for f in Filter::defaults() {
                                         if ui.button(format!("{}…", tr(f.name()))).clicked() {
                                             filter = Some(f);
                                             ui.close();

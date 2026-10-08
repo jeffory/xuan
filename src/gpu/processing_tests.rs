@@ -105,6 +105,147 @@ fn processing_filters_and_resampling_match_cpu() {
     }
 }
 
+/// Upstream Compositor's filters on the GPU, as the Filter menu applies them, against the
+/// CPU. Dither compares thresholds, so a value one ulp apart may land on the other side of
+/// one: a few pixels may differ by a whole tone, nearly all match.
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_compositor_filters_match_cpu() {
+    use crate::effects::{DitherColors, DitherPixelShape, DitherSettings, DitherStyle, Filter};
+    let gpu = processor();
+    // Large enough that the GPU is used (16,384 pixels).
+    let source = fixture(163, 121);
+    let opaque = RgbaImage::from_fn(163, 121, |x, y| {
+        Rgba([(x * 2) as u8, (y * 2) as u8, ((x + y) % 256) as u8, 255])
+    });
+    for filter in [
+        Filter::VIGNETTE,
+        Filter::Vignette {
+            amount: 100.0,
+            color: [200, 30, 90],
+            midpoint: 10.0,
+            roundness: -100.0,
+            feather: 0.0,
+            highlights: 100.0,
+        },
+        Filter::BLOOM,
+        Filter::Bloom {
+            amount: 100.0,
+            radius: 3.0,
+        },
+        Filter::TONAL_CONTRAST,
+        Filter::TonalContrast {
+            amount: 100.0,
+            radius: 40.0,
+            shadows: -100.0,
+            midtones: 100.0,
+            highlights: -30.0,
+        },
+    ] {
+        for image in [&source, &opaque] {
+            let actual = scope(Some(gpu.clone()), || super::filter(image, &filter).unwrap());
+            compare(&actual, &crate::effects::filtered(image, &filter), 2);
+        }
+        // As a filter layer's backdrop: Vignette paints clear pixels too.
+        let actual = scope(Some(gpu.clone()), || {
+            super::filter_with(&source, &filter, true).unwrap()
+        });
+        compare(
+            &actual,
+            &crate::effects::filtered_backdrop(&source, &filter),
+            2,
+        );
+    }
+    let gpu_styles = [
+        DitherSettings {
+            style: DitherStyle::Bayer2,
+            pixel_size: 1.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Bayer8,
+            levels: 4.0,
+            colors: DitherColors::Original,
+            density: 30.0,
+            contrast: -20.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Bayer4,
+            pixel_size: 4.0,
+            pixel_shape: DitherPixelShape::Dot,
+            colors: DitherColors::TwoColors,
+            dark: [20, 40, 90],
+            light: [250, 240, 200],
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDots,
+            pixel_size: 1.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneLines,
+            angle: -30.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDiamonds,
+            light_on_dark: false,
+            contrast: 60.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::MacPatterns,
+            pixel_size: 1.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            glow: 0.0,
+            dots: 70.0,
+            wobble: 5.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            glow: 0.0,
+            line_spacing: 7.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+    ];
+    for settings in gpu_styles {
+        assert!(settings.runs_on_gpu());
+        let filter = Filter::Dither(Box::new(settings));
+        for image in [&source, &opaque] {
+            let actual = scope(Some(gpu.clone()), || super::filter(image, &filter).unwrap());
+            let expected = crate::effects::filtered(image, &filter);
+            let differing = differing_pixels(&actual, &expected, 2);
+            assert!(
+                differing * 200 <= image.len() / 4,
+                "{filter:?}: {differing} pixels differ"
+            );
+        }
+    }
+    // Diffusion, ASCII and glowing scanlines stay on the CPU.
+    for settings in [
+        DitherSettings::default(),
+        DitherSettings {
+            style: DitherStyle::Ascii,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            ..Default::default()
+        },
+    ] {
+        let filter = Filter::Dither(Box::new(settings));
+        assert!(scope(Some(gpu.clone()), || super::filter(&source, &filter)).is_none());
+    }
+}
+
 #[test]
 #[ignore = "requires native compute adapter"]
 fn processing_adjustments_and_composition_match_cpu() {
@@ -1338,6 +1479,12 @@ fn processing_filter_apply_preserves_selections_bounds_masks_and_history_pixels(
             distortion: 19.0,
             vignette: 13.0,
         },
+        crate::effects::Filter::VIGNETTE,
+        crate::effects::Filter::Bloom {
+            amount: 70.0,
+            radius: 5.0,
+        },
+        crate::effects::Filter::TONAL_CONTRAST,
     ] {
         let mut expected = original.clone();
         crate::effects::apply_filter(&mut expected, &filter, false).unwrap();

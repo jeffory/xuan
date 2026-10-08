@@ -185,7 +185,11 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 12;
+const LATEST_VERSION: u32 = 13;
+
+/// The first version with upstream Compositor's Vignette, Bloom, Tonal Contrast and Dither
+/// filters, which older readers cannot draw.
+const COMPOSITOR_FILTERS: u32 = 13;
 
 /// The first version that stores Lens Correction's vignette with Photoshop's sign (negative
 /// darkens the corners); older files stored the opposite and are negated when loaded.
@@ -194,8 +198,14 @@ const PHOTOSHOP_VIGNETTE: u32 = 12;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    if document
+        .layers
+        .iter()
+        .any(|l| l.filter.as_ref().is_some_and(|f| !f.is_legacy()))
+    {
+        COMPOSITOR_FILTERS
     // Older readers would draw the vignette with the opposite sign.
-    if document.layers.iter().any(|l| {
+    } else if document.layers.iter().any(|l| {
         matches!(l.filter, Some(crate::effects::Filter::LensCorrection { vignette, .. }) if vignette != 0.0)
     }) {
         PHOTOSHOP_VIGNETTE
@@ -1029,6 +1039,59 @@ mod tests {
         });
         save(&doc, &path).unwrap();
         assert_eq!(manifest_json(&path)["version"], 4);
+    }
+
+    /// Upstream Compositor's filters save as version 13, as filter layers and as filters
+    /// attached to a layer, and come back the same; documents without them keep their version.
+    #[test]
+    fn compositor_filters_round_trip_as_version_13() {
+        use crate::effects::{DitherColors, DitherSettings, DitherStyle, Filter};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("filters.xuan");
+        let dither = Filter::Dither(Box::new(DitherSettings {
+            style: DitherStyle::HalftoneDots,
+            colors: DitherColors::TwoColors,
+            dark: [10, 20, 30],
+            light: [240, 230, 220],
+            characters: "#@".into(),
+            ..Default::default()
+        }));
+        let vignette = Filter::Vignette {
+            amount: 60.0,
+            color: [40, 0, 80],
+            midpoint: 30.0,
+            roundness: -20.0,
+            feather: 70.0,
+            highlights: 10.0,
+        };
+        for filter in [vignette, Filter::BLOOM, Filter::TONAL_CONTRAST, dither] {
+            let mut doc = Document::new(32, 32).unwrap();
+            doc.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(32, 32, |x, y| {
+                Rgba([(x * 8) as u8, (y * 8) as u8, 128, 255])
+            })));
+            let mut layer = Layer::blank(filter.name(), 32, 32);
+            layer.filter = Some(filter.clone());
+            doc.layers.push(layer);
+            // The same filter attached to the image.
+            let mut attached = Layer::blank(filter.name(), 32, 32);
+            attached.filter = Some(filter.clone());
+            attached.parent = Some(doc.layers[0].id);
+            doc.layers.insert(1, attached);
+            doc.validate().unwrap();
+            save(&doc, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 13, "{filter:?}");
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.layers[1].filter, Some(filter.clone()));
+            assert_eq!(loaded.layers[2].filter, Some(filter.clone()));
+            assert_eq!(render::render(&loaded), render::render(&doc), "{filter:?}");
+            // Without the new filters the document goes back to the version it needs.
+            let mut plain = loaded.clone();
+            for layer in &mut plain.layers[1..] {
+                layer.filter = Some(Filter::GaussianBlur { radius: 1.0 });
+            }
+            save(&plain, &path).unwrap();
+            assert_eq!(manifest_json(&path)["version"], 4);
+        }
     }
 
     fn write_manifest(path: &Path, manifest: &Value) {

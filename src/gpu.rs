@@ -28,8 +28,10 @@ mod processing_tests;
 pub use motion_blur::GpuMotionBlur;
 pub(crate) use processor::cancelled;
 pub use processor::{Processor, cancellation, current, scope, spawn};
+#[cfg(test)]
+pub(crate) use raster::filter;
 pub(crate) use raster::resize_rgb_cancellable;
-pub(crate) use raster::{adjustment, filter, resize_rgba};
+pub(crate) use raster::{adjustment, filter_with, resize_rgba};
 pub use raster::{blur_gray, resize_gray, resize_rgb};
 
 use std::{
@@ -398,10 +400,18 @@ impl GpuCompositor {
             let filtered = layer.filter.as_ref().map(|filter| {
                 params.flags[1] = 13;
                 let filter = filter.scaled(size[0] as f32 / document.width as f32);
-                self.filter_layers
-                    .get_or_insert_with(|| filter_layers::FilterLayers::new(&self.device, size))
-                    .render(&self.device, &mut encoder, &buffers[current], &filter)
-                    .clone()
+                let layers = self
+                    .filter_layers
+                    .get_or_insert_with(|| filter_layers::FilterLayers::new(&self.device, size));
+                if filter_layers::FilterLayers::runs_on_gpu(&filter) {
+                    return layers
+                        .render(&self.device, &mut encoder, &buffers[current], &filter)
+                        .clone();
+                }
+                let backdrop =
+                    layers.read(&self.device, &self.queue, &mut encoder, &buffers[current]);
+                let result = crate::effects::filtered_backdrop(&backdrop, &filter);
+                layers.upload(&self.queue, &result).clone()
             });
             let source = filtered.as_ref().unwrap_or_else(|| {
                 layer

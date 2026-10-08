@@ -3,7 +3,13 @@ use crate::document::{Adjustment, Document, Layer, Transform};
 use anyhow::{Result, ensure};
 use image::{GrayImage, Rgb32FImage, RgbaImage};
 
-pub(super) const RASTER: &str = concat!(include_str!("buffers.wgsl"), include_str!("raster.wgsl"));
+pub(super) const RASTER: &str = concat!(
+    include_str!("buffers.wgsl"),
+    include_str!("raster.wgsl"),
+    include_str!("raster_filters.wgsl"),
+    include_str!("stylize.wgsl"),
+    include_str!("dither.wgsl")
+);
 const NEIGHBORHOOD_MIN: u64 = 16_384;
 const POINTWISE_MIN: u64 = 65_536;
 
@@ -11,9 +17,55 @@ fn count(size: [u32; 2]) -> u64 {
     u64::from(size[0]) * u64::from(size[1])
 }
 
+/// `dither.wgsl`'s settings for `settings` (see the comment at its top).
+pub(super) fn dither_params(settings: &crate::effects::DitherSettings) -> [[f32; 4]; 5] {
+    use crate::effects::{DitherColors, DitherPixelShape};
+    let (gamma, contrast) = settings.tone_curve();
+    let (dark, light) = settings.palette();
+    let flag = |value: bool| if value { 1.0 } else { 0.0 };
+    [
+        [
+            settings.style.code() as f32,
+            settings.levels.round().clamp(2.0, 16.0),
+            gamma,
+            contrast,
+        ],
+        [
+            settings.cell_size.max(2.0),
+            settings.angle.to_radians(),
+            flag(settings.light_on_dark),
+            flag(settings.colors == DitherColors::Original),
+        ],
+        [
+            settings.block() as f32,
+            flag(settings.pixel_shape == DitherPixelShape::Dot),
+            settings.dots / 100.0,
+            settings.wobble,
+        ],
+        [dark[0], dark[1], dark[2], settings.line_spacing.round()],
+        [light[0], light[1], light[2], 0.0],
+    ]
+}
+
+#[cfg(test)]
 pub fn filter(image: &RgbaImage, filter: &crate::effects::Filter) -> Option<RgbaImage> {
+    filter_with(image, filter, false)
+}
+
+/// `fills_clear`: a Vignette filter layer, which paints transparent pixels too.
+pub fn filter_with(
+    image: &RgbaImage,
+    filter: &crate::effects::Filter,
+    fills_clear: bool,
+) -> Option<RgbaImage> {
     use crate::effects::Filter;
     let size = [image.width(), image.height()];
+    // Error diffusion, ASCII and glowing scanlines are CPU only.
+    if let Filter::Dither(settings) = filter
+        && !settings.runs_on_gpu()
+    {
+        return None;
+    }
     attempt(count(size), NEIGHBORHOOD_MIN, |gpu| {
         let bytes = match filter {
             Filter::GaussianBlur { radius } => {
@@ -58,6 +110,68 @@ pub fn filter(image: &RgbaImage, filter: &crate::effects::Filter) -> Option<Rgba
                         &std::sync::atomic::AtomicBool::new(false),
                     )?
                     .ok_or_else(|| anyhow::anyhow!("Image exceeds GPU texture limits"));
+            }
+            &Filter::Vignette {
+                amount,
+                color,
+                midpoint,
+                roundness,
+                feather,
+                highlights,
+            } => {
+                let [r, g, b] = color.map(|v| v as f32 / 255.0);
+                gpu.simple(
+                    "vignette",
+                    RASTER,
+                    image.as_raw(),
+                    &[],
+                    &[
+                        [size[0] as f32, size[1] as f32, 0.0, 0.0],
+                        [midpoint, roundness, feather, 0.0],
+                        [amount, highlights, if fills_clear { 1.0 } else { 0.0 }, 0.0],
+                        [r, g, b, 0.0],
+                    ],
+                    size,
+                )?
+            }
+            &Filter::Bloom { amount, radius } => {
+                let blurred = gpu.separable(image.as_raw(), size, size, 0, Some(radius))?;
+                gpu.simple(
+                    "bloom",
+                    RASTER,
+                    image.as_raw(),
+                    &blurred,
+                    &[
+                        [size[0] as f32, size[1] as f32, 0.0, 0.0],
+                        [amount / 50.0, 0.0, 0.0, 0.0],
+                    ],
+                    size,
+                )?
+            }
+            &Filter::TonalContrast {
+                amount,
+                radius,
+                shadows,
+                midtones,
+                highlights,
+            } => {
+                let blurred = gpu.separable(image.as_raw(), size, size, 0, Some(radius))?;
+                gpu.simple(
+                    "tonal_contrast",
+                    RASTER,
+                    image.as_raw(),
+                    &blurred,
+                    &[
+                        [size[0] as f32, size[1] as f32, 0.0, 0.0],
+                        [amount, shadows, midtones, highlights],
+                    ],
+                    size,
+                )?
+            }
+            Filter::Dither(settings) => {
+                let mut config = vec![[size[0] as f32, size[1] as f32, 0.0, 0.0]];
+                config.extend(dither_params(settings));
+                gpu.simple("dither", RASTER, image.as_raw(), &[], &config, size)?
             }
         };
         Ok(RgbaImage::from_raw(size[0], size[1], bytes).unwrap())
