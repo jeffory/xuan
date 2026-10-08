@@ -124,13 +124,64 @@ The **+** button after the last tab starts a new canvas. Hover a tab for its ful
 - **Reorder** document tabs by dragging them; a line shows where the tab will land.
 - **Double-click** the empty part of the bar, or click **+**, for a new canvas.
 - **New canvas size:** **File → New…** (Ctrl+N) takes a Width, Height and Resolution. The
-  **Preset** menu fills Width and Height from **Screens** (4K, 1440p, 1080p, 720p) or **Social**
-  (square, portrait and landscape posts, story / reel, video thumbnail, link preview, banner);
-  it shows the preset the fields match, in either orientation, or **Custom** once you type
-  another size. **Swap** exchanges Width and Height (portrait / landscape), and **Keep aspect
-  ratio** makes the other side follow the one you type, in the proportion it had when you ticked
-  the box or picked a preset. Sizes obey the same limits as every canvas. The size and resolution
-  of the last canvas you created are offered next time (paper size presets are not offered yet).
+  **Preset** menu fills them from a list of sizes, each shown with its size, such as
+  **Full High Definition (1920 × 1080)** or **A4 (210 × 297 mm)**. While the fields are in
+  pixels it offers **Screens** (8K Ultra HD, 4K Ultra HD, Quad HD, Full High Definition, High
+  Definition) and **Social** (square, portrait and landscape posts, story / reel, video
+  thumbnail, link preview, banner). While they are in a print unit (millimetres, centimetres,
+  inches, points or picas) it offers paper sizes instead: **ISO A** (A1–A6), **ISO B** (B4,
+  B5), **US** (Letter, Legal, Tabloid / Ledger, Half Letter, Executive) and **Photo** (4 × 6,
+  5 × 7, 8 × 10 in), all at 300 ppi. Picking a paper size switches the fields to its unit and
+  sets its resolution, so A4 makes 2480 × 3508 px and Letter 2550 × 3300 px; changing the
+  resolution afterwards keeps the paper size (A4 at 150 ppi is 1240 × 1754 px). A0 is left out
+  because at 300 ppi it is larger than Xuan allows on most computers. The menu shows the preset
+  the fields match, in either orientation (a paper size at the current resolution), or
+  **Custom** once you type another size. **Swap** exchanges Width and Height (portrait /
+  landscape), and **Keep aspect ratio** makes the other side follow the one you type, in the
+  proportion it had when you ticked the box or picked a preset. Sizes obey the same limits as
+  every canvas. The size and resolution of the last canvas you created are offered next time.
+- **Your own canvas presets:** the bottom of the **Preset** menu has **Save current size as
+  preset…**, **Delete preset** (for the preset shown) and **Manage presets…**. Manage presets
+  shows the **Pixel sizes** and **Print sizes** lists: select a preset to **Move up** or **Move
+  down** within its group, **Delete** it, or give it a new **Name** and **Group** and press
+  **Rename**; type a name and group and press **Save current size** to add the size in the
+  fields (a print size is kept in the fields' unit, with the resolution). Saving a name already
+  in the list replaces that preset, and a new group is added at the end of the menu. **Restore
+  Defaults** brings back the built-in lists, and **Open presets file** shows the file in your
+  file manager. **Done** (or Esc) returns to File → New as you left it.
+
+  The lists are kept in `canvas-presets.toml` beside the configuration file
+  (`~/.config/xuan/` on Linux and macOS, `%APPDATA%\xuan\` on Windows). It is written only
+  when you change a list in Xuan (or ask to open it), so until then new releases' built-in
+  presets reach you; **Restore Defaults** deletes it. You can edit it by hand, and File → New
+  reads it each time it opens:
+
+  ```toml
+  version = 1
+
+  [[pixel]]
+  group = "Screens"
+  name = "Full High Definition"
+  width = 1920
+  height = 1080
+
+  [[physical]]
+  group = "ISO A"
+  name = "A4"
+  width = 210
+  height = 297
+  unit = "mm"        # mm, cm, in, pt or pica
+  resolution = 300   # optional, pixels per inch; without it the dialog's resolution stays
+  ```
+
+  A list the file leaves out is the built-in one, and `pixel = []` empties it. Each list holds
+  up to 200 presets, and names and groups up to 64 characters. An entry that cannot be used (no
+  name, a zero, negative or fractional pixel size, an unknown unit, a size larger than Xuan
+  allows) is skipped, and File → New says so under the menu; hover the note for the details. A
+  file that cannot be read at all is reported there and left untouched, and the built-in lists
+  are offered until you fix or delete it. Xuan does not keep your comments when it next saves
+  the lists, and skipped entries are left out then. Built-in names are translated; names you
+  type are shown as typed.
 - **Units and print size:** File → New, **Image → Canvas Size…** and **Image → Image Size…**
   show Width and Height in the unit chosen from the **Units** menu beside them: pixels, inches,
   centimetres, millimetres, points (1/72 in) or picas (1/6 in), and in Canvas Size and Image

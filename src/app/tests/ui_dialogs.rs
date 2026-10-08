@@ -437,13 +437,13 @@ fn new_canvas_preset_fills_the_fields_and_editing_returns_to_custom() {
     let (_directory, mut ui) = new_canvas([1000, 700]);
     assert!(ui.has_role(Role::ComboBox, "Custom"));
     open_presets(&mut ui, "Custom");
-    ui.click("Story / Reel  (1080 × 1920)");
+    ui.click("Story / Reel (1080 × 1920)");
     assert_eq!(ui.app().dimensions, [1080, 1920]);
-    assert!(ui.has_role(Role::ComboBox, "Story / Reel"));
+    assert!(ui.has_role(Role::ComboBox, "Story / Reel (1080 × 1920)"));
     // A preset in the other orientation shows under the same name.
     ui.app_mut().dimensions = [1920, 1080];
     ui.settle();
-    assert!(ui.has_role(Role::ComboBox, "1080p"));
+    assert!(ui.has_role(Role::ComboBox, "Full High Definition (1920 × 1080)"));
     // Editing a field leaves the preset.
     ui.app_mut().dimensions = [1921, 1080];
     ui.settle();
@@ -451,7 +451,7 @@ fn new_canvas_preset_fills_the_fields_and_editing_returns_to_custom() {
     // The menu shows each group.
     open_presets(&mut ui, "Custom");
     assert!(ui.has("Screens") && ui.has("Social"));
-    ui.click("4K  (3840 × 2160)");
+    ui.click("4K Ultra HD (3840 × 2160)");
     assert_eq!(ui.app().dimensions, [3840, 2160]);
     create_canvas(&mut ui);
     let document = &ui.app().session().unwrap().document;
@@ -461,7 +461,7 @@ fn new_canvas_preset_fills_the_fields_and_editing_returns_to_custom() {
 #[test]
 fn new_canvas_typing_a_width_switches_the_menu_to_custom() {
     let (_directory, mut ui) = new_canvas([1920, 1080]);
-    assert!(ui.has_role(Role::ComboBox, "1080p"));
+    assert!(ui.has_role(Role::ComboBox, "Full High Definition (1920 × 1080)"));
     ui.type_keys("1000");
     assert_eq!(ui.app().dimensions, [1000, 1080]);
     assert!(ui.has_role(Role::ComboBox, "Custom"));
@@ -472,7 +472,7 @@ fn new_canvas_swap_turns_portrait_into_landscape() {
     let (_directory, mut ui) = new_canvas([1080, 1920]);
     ui.click("Swap");
     assert_eq!(ui.app().dimensions, [1920, 1080]);
-    assert!(ui.has_role(Role::ComboBox, "1080p"));
+    assert!(ui.has_role(Role::ComboBox, "Full High Definition (1920 × 1080)"));
     ui.click("Swap");
     assert_eq!(ui.app().dimensions, [1080, 1920]);
 }
@@ -510,7 +510,7 @@ fn new_canvas_remembers_the_last_size_for_next_time() {
     ui.app_mut().command("new");
     ui.settle();
     assert_eq!(ui.app().dimensions, [1080, 1350]);
-    assert!(ui.has_role(Role::ComboBox, "Portrait post"));
+    assert!(ui.has_role(Role::ComboBox, "Portrait post (1080 × 1350)"));
 }
 
 /// Runs frames until Edit → Stroke… shows its line on the canvas.

@@ -45,6 +45,9 @@ mod dialogs;
 #[path = "ui_units.rs"]
 mod units;
 
+#[path = "ui_canvas_presets.rs"]
+mod canvas_presets;
+
 #[path = "ui_updates.rs"]
 mod updates;
 
