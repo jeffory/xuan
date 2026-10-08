@@ -518,6 +518,15 @@ fn switch_gradient(app: &mut EditorApp) {
     };
     app.set_tool(tool);
 }
+/// Shift+C: with the Crop tool, the other of its box and perspective modes; from another tool,
+/// the Crop tool in the mode used last.
+fn crop_mode(app: &mut EditorApp) {
+    if app.tool == Tool::Crop {
+        app.set_crop_mode(!app.crop.perspective);
+    } else {
+        app.set_tool(Tool::Crop);
+    }
+}
 fn marquee_shape(app: &mut EditorApp) {
     app.ellipse = !app.ellipse;
     app.set_tool(Tool::Marquee);
@@ -969,7 +978,15 @@ pub(super) const COMMANDS: &[Command] = &[
         &[bare(Key::W)],
         Run::Tool(Tool::Wand),
     ),
+    // C selects the Crop tool in the mode used last.
     tool("tool_crop", "Crop", &[bare(Key::C)], Run::Tool(Tool::Crop)),
+    tool(
+        "crop_mode",
+        "Switch Crop Box / Perspective Crop",
+        &[shift(Key::C)],
+        Run::App(crop_mode),
+    )
+    .aliases(&["perspective crop", "straighten", "rectify", "keystone"]),
     // B selects whichever of Brush and Pencil was used last.
     tool("tool_brush", "Brush", &[bare(Key::B)], Run::App(brush_tool)),
     tool(

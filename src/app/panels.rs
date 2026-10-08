@@ -492,6 +492,8 @@ impl EditorApp {
                     }
                     let hint = if !has_document {
                         self.empty_hint()
+                    } else if self.tool == Tool::Crop && self.crop.perspective {
+                        tr("Drag the corners onto the edges of a page, screen or sign · Drag inside to move them · Enter straightens · Escape cancels · Shift+C switches to the box").to_owned()
                     } else if self.tool == Tool::Region && self.plugins.action.is_none() {
                         tr("Drag a box and say what to do there · Click a box to change it · Delete removes it").to_owned()
                     } else {

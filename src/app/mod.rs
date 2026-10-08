@@ -1375,8 +1375,11 @@ impl EditorApp {
         self.polygon.clear();
         self.crop.rect = None;
         self.crop.drag = None;
+        self.crop.quad = None;
+        self.crop.placing.clear();
+        self.crop.size = None;
         if tool == Tool::Crop {
-            self.crop_from_selection();
+            self.start_crop();
         }
     }
 

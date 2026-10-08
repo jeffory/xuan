@@ -54,6 +54,9 @@ mod focus;
 #[path = "ui_crop.rs"]
 mod crop;
 
+#[path = "ui_perspective_crop.rs"]
+mod perspective_crop;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

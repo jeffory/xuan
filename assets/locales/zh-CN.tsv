@@ -1221,3 +1221,21 @@ This file was changed by another program.	此文件已被其他程序更改。
 Reload	重新载入
 Keep mine	保留我的版本
 Reloaded	已重新载入
+Box	裁剪框
+Perspective	透视
+Perspective Crop	透视裁剪
+Switch Crop Box / Perspective Crop	切换裁剪框 / 透视裁剪
+Switch between a crop box and perspective corners (Shift+C)	在裁剪框和透视角点之间切换 (Shift+C)
+Width of the straightened canvas	校正后画布的宽度
+Height of the straightened canvas	校正后画布的高度
+Work the size out from the corners: the average of opposite sides	根据角点计算尺寸：取对边长度的平均值
+Click four corners, or press Reset to start from the canvas	点击四个角点，或按“重置”从画布开始
+{} of 4 corners placed	已放置 {} / 4 个角点
+Drag the corners onto the edges, then press Enter to apply	将角点拖到边缘上，然后按 Enter 应用
+Put the corners back at the selection's bounds, or inset from the canvas edges	将角点放回选区边界，或画布边缘内侧
+Perspective Crop removed {} paths that reached the vanishing line	透视裁剪移除了 {} 条到达消失线的路径
+Drag the corners onto the edges of a page, screen or sign · Drag inside to move them · Enter straightens · Escape cancels · Shift+C switches to the box	将角点拖到页面、屏幕或标牌的边缘 · 在内部拖动以移动 · Enter 校正 · Escape 取消 · Shift+C 切换到裁剪框
+The crop's sides cross. Drag the corners so they go round the shape in order.	裁剪的边相互交叉。请拖动角点，使其按顺序环绕形状。
+The crop's corners must make a convex shape, with no corner pointing inwards or lying on a straight side.	裁剪的角点必须构成凸形，不能有角点向内凹或位于直边上。
+The crop's corners are too close together to straighten.	裁剪的角点彼此太近，无法校正。
+“{}” reaches the vanishing line of the crop's perspective, so it cannot be straightened. Move the corners closer together, or make the layer smaller first.	“{}”到达了裁剪透视的消失线，因此无法校正。请将角点移近，或先缩小该图层。

@@ -6,6 +6,8 @@
 //! own. The box never leaves the canvas.
 use crate::document::Point;
 
+pub mod perspective;
+
 /// Ratios whose larger term is at most this are kept exactly. Larger ones (the canvas's own ratio
 /// on an odd size such as 1001 × 997) would leave only the full canvas, so they round each side
 /// to the nearest pixel instead.
