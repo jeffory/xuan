@@ -839,7 +839,7 @@ impl EditorApp {
                 document.validate()?;
                 session.history.begin(tr("Develop RAW"), &session.document);
                 session.document = document;
-                session.history.commit();
+                session.commit();
                 session.invalidate();
                 self.current = index;
             }

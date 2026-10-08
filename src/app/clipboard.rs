@@ -290,6 +290,26 @@ impl EditorApp {
             ];
             self.new_document();
         }
+        // One image pasted while one channel is targeted goes into that channel.
+        let channel = self
+            .session()
+            .filter(|s| s.document.active().is_some_and(xuan::channels::editable))
+            .and_then(|s| s.channel_targets.single())
+            .filter(|_| images.len() == 1 && !self.mask_target);
+        if let Some(channel) = channel {
+            let (_, pixels, point) = images.into_iter().next().expect("one image");
+            self.edit(tr("Paste into Channel"), |doc| {
+                let point = point.unwrap_or_else(|| {
+                    // Centred on whole pixels, so each pixel lands on one.
+                    Point::new(
+                        ((doc.width as f32 - pixels.width() as f32) * 0.5).floor(),
+                        ((doc.height as f32 - pixels.height() as f32) * 0.5).floor(),
+                    )
+                });
+                xuan::channels::paste(doc, channel, &pixels, point)
+            });
+            return;
+        }
         self.edit(tr("Paste"), |doc| {
             for (name, pixels, point) in images {
                 let mut layer = Layer::image(name, pixels);

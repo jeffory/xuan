@@ -258,7 +258,7 @@ impl EditorApp {
                 preserve_transparency: outline.preserve_transparency,
             };
             if let Some(session) = self.session_mut() {
-                session.history.commit();
+                session.commit();
             }
             self.status = tr("Stroke").into();
             self.dialog = None;

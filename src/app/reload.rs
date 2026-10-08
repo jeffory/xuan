@@ -388,7 +388,7 @@ mod tests {
         session.document.selection = Some(std::sync::Arc::new(image::GrayImage::new(20, 16)));
         session.collapsed.extend([b, c]);
         session.history.begin("Edit", &session.document);
-        session.history.commit();
+        session.commit();
         session.history.mark_saved();
         session.external = Some(Box::new(original.clone()));
 

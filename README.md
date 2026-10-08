@@ -10,6 +10,7 @@ This project is inspired by [Compositor](https://github.com/robbietilton/Composi
 
 - Compose with layers, groups, masks, blend modes, editable text, and shapes.
 - Use standalone mask layers to mask everything below them, limited to their group when grouped. Click the empty area of the Layers panel to deselect, then click Add layer mask; or choose Layer Mask → New Mask Layer.
+- View and edit a layer's red, green, blue and alpha channels on their own in the Channels pane: paint, fill, filter or paste into one channel, or load it as a selection.
 - Retouch with selections, brushes, clone stamp, healing, filters, and adjustment layers.
 - Draw with Wacom, Parblo, and other system-supported tablets on Linux and Windows, with pressure, tilt, and eraser-tip support.
 - Smooth mouse and pen strokes with adjustable brush stroke smoothing.

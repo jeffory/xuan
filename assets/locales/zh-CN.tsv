@@ -1239,3 +1239,20 @@ The crop's sides cross. Drag the corners so they go round the shape in order.	�
 The crop's corners must make a convex shape, with no corner pointing inwards or lying on a straight side.	裁剪的角点必须构成凸形，不能有角点向内凹或位于直边上。
 The crop's corners are too close together to straighten.	裁剪的角点彼此太近，无法校正。
 “{}” reaches the vanishing line of the crop's perspective, so it cannot be straightened. Move the corners closer together, or make the layer smaller first.	“{}”到达了裁剪透视的消失线，因此无法校正。请将角点移近，或先缩小该图层。
+Composite	复合
+Alpha	Alpha
+Channels	通道
+Select a pixel layer to see its channels	选择像素图层以查看其通道
+Click to edit every channel	单击以编辑所有通道
+Click to edit only this channel · Shift-click adds it · Ctrl-click loads it as a selection	单击仅编辑此通道 · Shift 单击添加 · Ctrl 单击载入为选区
+Editing every channel	正在编辑所有通道
+Editing channels:	正在编辑通道：
+Select a pixel layer to load its channel	选择像素图层以载入其通道
+Load Channel Selection	载入通道选区
+Paste into Channel	粘贴到通道
+Load Channel as Selection	将通道载入为选区
+Edit All Channels	编辑所有通道
+Edit Red Channel	编辑红色通道
+Edit Green Channel	编辑绿色通道
+Edit Blue Channel	编辑蓝色通道
+Edit Alpha Channel	编辑 Alpha 通道

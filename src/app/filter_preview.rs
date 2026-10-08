@@ -119,7 +119,7 @@ impl EditorApp {
 
         if preview.ready.as_ref() == Some(filter) && preview.applying {
             if let Some(session) = self.session_mut() {
-                session.history.commit();
+                session.commit();
             }
             self.dialog = None;
             return true;

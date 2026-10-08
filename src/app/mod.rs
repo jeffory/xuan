@@ -2,6 +2,7 @@ use theme::PaletteExt as _;
 use xuan::i18n::tr;
 mod ai_regions;
 mod canvas;
+mod channel_pane;
 mod chrome;
 mod clipboard;
 mod color_range;
@@ -81,6 +82,7 @@ use egui::{Pos2, TextureHandle, Vec2};
 use image::{GrayImage, RgbaImage};
 use uuid::Uuid;
 use xuan::{
+    channels::{self, Channels},
     document::{Adjustment, Document, Layer, Mask, Point, Transform},
     effects::Filter,
     history::History,
@@ -266,6 +268,14 @@ struct Session {
     /// The file's new content, loaded after another program changed it, waiting to replace the
     /// document (see `reload.rs`).
     external: Option<Box<Document>>,
+    /// The active layer's channels that edits may change; see [`channels::protect`].
+    channel_targets: Channels,
+    /// The channels the canvas shows; the colour composite unless the Channels pane changes it.
+    channel_view: Channels,
+    /// The pixels of the last channel view drawn, kept until the next one so the preview's
+    /// texture cache never sees a new image at a freed image's address.
+    channel_view_pixels: Option<Arc<RgbaImage>>,
+    channel_thumbnails: channel_pane::ThumbnailCache,
 }
 
 impl Session {
@@ -295,7 +305,31 @@ impl Session {
             ai_boxes: Vec::new(),
             ai_selected: None,
             external: None,
+            channel_targets: Channels::ALL,
+            channel_view: Channels::COLOR,
+            channel_view_pixels: None,
+            channel_thumbnails: channel_pane::ThumbnailCache::default(),
         }
+    }
+
+    /// Put back the channels the open edit may not change ([`Session::channel_targets`]).
+    /// Returns whether any were.
+    fn protect_channels(&mut self) -> bool {
+        if self.channel_targets == Channels::ALL {
+            return false;
+        }
+        let Some(original) = self.history.pending_document() else {
+            return false;
+        };
+        xuan::channels::protect(&mut self.document, original, self.channel_targets)
+    }
+
+    /// Finish the open edit as one undo step, limited to the targeted channels.
+    fn commit(&mut self) {
+        if self.protect_channels() {
+            self.invalidate();
+        }
+        self.history.commit();
     }
 
     /// A new, empty document nobody has edited or saved, whose tab an opened file may take.
@@ -318,6 +352,10 @@ impl Session {
     }
 
     fn refresh(&mut self, ctx: &egui::Context, state: Option<&eframe::egui_wgpu::RenderState>) {
+        if self.dirty_preview {
+            // An edit in progress (a stroke, a filter preview) shows only its targeted channels.
+            self.protect_channels();
+        }
         let texture_limit = state.map_or_else(
             || ctx.input(|i| i.max_texture_side as u32),
             |s| s.device.limits().max_texture_dimension_2d,
@@ -348,10 +386,13 @@ impl Session {
                 .any(|layer| layer.id == *id && (!mask || layer.mask.is_some()))
         });
         self.preview_size = size;
+        // A single channel or another channel view stands in for the composite.
+        let shown = channels::view_document(&self.document, self.channel_view);
+        let document = shown.as_ref().unwrap_or(&self.document);
         if let Some(state) = state.filter(|s| {
             s.adapter.get_info().device_type != wgpu::DeviceType::Cpu
                 && s.device.limits().max_compute_workgroups_per_dimension > 0
-                && self.document.layers.iter().all(|l| {
+                && document.layers.iter().all(|l| {
                     l.pixels.as_ref().is_none_or(|p| {
                         p.width().max(p.height()) <= s.device.limits().max_texture_dimension_2d
                     })
@@ -361,17 +402,19 @@ impl Session {
                 .gpu
                 .get_or_insert_with(|| gpu_preview::GpuPreview::new(state));
             if let Some(settings) = self.motion_blur_preview {
-                preview.render_with_motion_blur(&self.document, size, Some(settings));
+                preview.render_with_motion_blur(document, size, Some(settings));
             } else {
-                preview.render(&self.document, size);
+                preview.render(document, size);
             }
             self.texture = None;
             self.composite = None;
             self.dirty_preview = false;
+            self.channel_view_pixels = shown.and_then(|d| d.layers[0].pixels.clone());
             return;
         }
         self.gpu = None;
-        let image = render::render_scaled(&self.document, size[0], size[1]);
+        let image = render::render_scaled(document, size[0], size[1]);
+        self.channel_view_pixels = shown.and_then(|d| d.layers[0].pixels.clone());
         let color = egui::ColorImage::from_rgba_unmultiplied(
             [image.width() as usize, image.height() as usize],
             image.as_raw(),
@@ -979,7 +1022,7 @@ impl EditorApp {
             Ok(()) => {
                 session.document.promote_image_masks();
                 session.document.release_clipping_cycles();
-                session.history.commit();
+                session.commit();
                 session.invalidate();
                 self.status = name.into();
             }
@@ -997,7 +1040,7 @@ impl EditorApp {
         };
         session.history.begin(name, &session.document);
         operation(&mut session.document);
-        session.history.commit();
+        session.commit();
         self.status = name.into();
     }
 
@@ -1634,6 +1677,7 @@ impl EditorApp {
             "undo" | "redo" => {
                 if let Some(session) = self.session_mut() {
                     if command == "undo" {
+                        session.commit();
                         session.history.undo(&mut session.document);
                     } else {
                         session.history.redo(&mut session.document);
@@ -1815,6 +1859,17 @@ impl EditorApp {
             "select_mask_black" => self.edit_selection(tr("Load Mask Selection"), |doc| {
                 operations::selection_from_mask_black(doc);
             }),
+            "load_channel_selection" => {
+                if let Some(channel) = self.session().and_then(|s| s.channel_targets.single()) {
+                    self.load_channel_selection(channel);
+                }
+            }
+            "channel_composite" | "channel_red" | "channel_green" | "channel_blue"
+            | "channel_alpha" => {
+                if let Some(row) = channel_pane::row(command) {
+                    self.target_channel(row, false);
+                }
+            }
             "color_range" => self.open_color_range(),
             "paths" => self.open_paths(),
             "expand_selection" => {
@@ -2177,7 +2232,7 @@ impl EditorApp {
             && !ctx.input(|i| i.pointer.any_down())
             && let Some(session) = self.session_mut()
         {
-            session.history.commit();
+            session.commit();
         }
         let title = if let Some(develop) = &self.develop {
             format!("{} — {} — Xuan", develop.title, tr("Develop"))

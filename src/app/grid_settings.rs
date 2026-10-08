@@ -50,12 +50,12 @@ impl EditorApp {
         if let Some(session) = self.session_mut()
             && session.document.grid != Some(grid)
         {
-            session.history.commit();
+            session.commit();
             session
                 .history
                 .begin(tr("Grid Settings"), &session.document);
             session.document.grid = Some(grid);
-            session.history.commit();
+            session.commit();
         }
         if self.config.grid != grid {
             self.set_view_option(|config| config.grid = grid);

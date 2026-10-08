@@ -1331,7 +1331,7 @@ impl EditorApp {
             .and_then(|filled| paint::refresh_shapes(&mut session.document).map(|()| filled))
         {
             Ok(true) => {
-                session.history.commit();
+                session.commit();
                 session.invalidate();
                 self.status = tr("Paint Bucket").into();
             }
@@ -2050,7 +2050,7 @@ impl EditorApp {
             }
         };
         if !changes_composition && result.is_ok() {
-            session.history.commit();
+            session.commit();
             return;
         }
         // A Dodge, Burn or Sponge stroke that changed no pixel (0% exposure,
@@ -2066,7 +2066,7 @@ impl EditorApp {
         }
         match result {
             Ok(()) => match paint::refresh_shapes(&mut session.document) {
-                Ok(()) => session.history.commit(),
+                Ok(()) => session.commit(),
                 Err(error) => {
                     session.history.cancel(&mut session.document);
                     self.error = Some(error.to_string());

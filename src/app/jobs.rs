@@ -104,7 +104,7 @@ impl EditorApp {
                 Ok(document) if !job.cancel.load(Ordering::Relaxed) => {
                     session.document = document;
                     session.document.promote_image_masks();
-                    session.history.commit();
+                    session.commit();
                     self.status = match self.provider_notice.take() {
                         Some(notice) => format!("{} · {notice}", job.name),
                         None => job.name,

@@ -1155,7 +1155,7 @@ impl EditorApp {
                     != (session.document.width, session.document.height);
                 session.document = document;
                 session.document.promote_image_masks();
-                session.history.commit();
+                session.commit();
                 session.invalidate();
                 // As clicking a layer's thumbnail does: commands then act on
                 // its pixels, not its mask.
@@ -2511,7 +2511,7 @@ impl EditorApp {
                 if let Some(selection) = proposal.selection {
                     session.document.selection = selection.after;
                 }
-                session.history.commit();
+                session.commit();
                 self.status = format!("{} {}", proposal.name, tr("applied"));
             } else {
                 let size = (session.document.width, session.document.height);
