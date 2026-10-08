@@ -395,6 +395,8 @@ pub fn apply_adjustment(
     Ok(())
 }
 
+/// As in Photoshop, a negative Lens Correction `vignette` darkens the corners and a positive
+/// one brightens them. Format 11 and earlier stored the opposite sign; `io::load` negates it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
     GaussianBlur { radius: f32 },
@@ -504,7 +506,7 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
             let k = 1.0 + distortion * radius / 100.0;
             let mut p = render::sample(image, Point::new((u * k + 1.0) * 0.5, (v * k + 1.0) * 0.5));
             for value in &mut p[..3] {
-                *value *= 1.0 - vignette * radius * 0.005;
+                *value *= 1.0 + vignette * radius * 0.005;
             }
             Rgba(p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
         }),
@@ -1372,6 +1374,37 @@ mod tests {
         assert_eq!(image.get_pixel(7, 9)[0], 255);
         assert!(image.get_pixel(9, 9)[3] < 255);
         doc.validate().unwrap();
+    }
+
+    /// Photoshop's sign: a positive vignette brightens the corners, a negative one darkens
+    /// them, and the center is unchanged.
+    #[test]
+    fn lens_correction_vignette_follows_photoshop() {
+        let image = RgbaImage::from_pixel(32, 32, Rgba([128, 128, 128, 255]));
+        let lens = |vignette| {
+            filtered(
+                &image,
+                &Filter::LensCorrection {
+                    distortion: 0.0,
+                    vignette,
+                },
+            )
+        };
+        let (brighter, darker) = (lens(50.0), lens(-50.0));
+        assert!(
+            brighter.get_pixel(0, 0)[0] > 128,
+            "{:?}",
+            brighter.get_pixel(0, 0)
+        );
+        assert!(
+            darker.get_pixel(0, 0)[0] < 128,
+            "{:?}",
+            darker.get_pixel(0, 0)
+        );
+        assert_eq!(brighter.get_pixel(0, 0)[3], 255);
+        for result in [&brighter, &darker] {
+            assert!(result.get_pixel(16, 16)[0].abs_diff(128) <= 1);
+        }
     }
 
     fn edge_filters() -> [Filter; 3] {

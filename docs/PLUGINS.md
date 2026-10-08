@@ -1263,7 +1263,8 @@ Filters and adjustments are written as `.xuan` files store them on filter and
 adjustment layers. Filters: `{"GaussianBlur": {"radius"}}` (0–100),
 `{"MotionBlur": {"distance", "angle"}}` (0–200, ±180°), `{"Noise": {"amount",
 "monochrome"}}` (0–100) and `{"LensCorrection": {"distortion", "vignette"}}`
-(±50, ±100). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",
+(±50, ±100; as in Photoshop, a negative vignette darkens the corners and a positive one
+brightens them). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",
 "lightness", "colorize"}}`, `{"Levels": {"black", "gamma", "white",
 "output_black", "output_white"}}` (levels 0–255), `{"Curves": {"points": [{"x",
 "y"}, …]}}` (0–1), `{"Exposure": {"exposure", "offset", "gamma"}}`,
