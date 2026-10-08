@@ -299,6 +299,90 @@ loaded. Leave `result` out for an action that returns only masks, or use
 `"document"`. Because a grant is bound to the permissions it was given for,
 changing `document` in a manifest asks the user to review the plugin again.
 
+### Running other plugins' actions
+
+A plugin starts only its own actions. A plugin that works for someone else,
+such as the MCP server for its clients, may also list and run other plugins'
+actions once the user turns on **Run other plugins' actions** for it in
+**Plugins → Manage Plugins…** (offered to plugins that ask before edits, and
+shown for any plugin while it is on). It is stored as `run_other_actions =
+true` in the plugin's grant and, like auto mode, goes away when the plugin's
+folder, command or permissions change. Without it, `plugins/actions` and a
+`host/run` of another plugin's action fail with `-32600` and a message that
+names the setting.
+
+`plugins/actions` lists the actions of the installed, enabled plugins other
+than the one asking: for each, `plugin` and `plugin_name`, whether the plugin
+uses the `network`, whether the user has `allowed` it to run and whether it
+is `available` (not held back by offline mode), and the action's `id`, its
+`action` (`<plugin>/<id>`, for `host/run`), `label`, `description`, `kind`,
+`source` (what it sends: `layer`, `composite`, `selection` or `none`),
+`surfaces`, `result` (`layer`, `replace`, `document` or `ask`) and `inputs`,
+as the manifest declares them (type, label, help, default, `min`, `max`,
+`values`, region `fields`).
+
+`host/run` with `{action: "<plugin>/<action>", inputs?, into?, layers?}`
+starts one. It is checked before anything waits, and refused with an error
+that says why:
+
+- The plugin must be installed and enabled, not held back by offline mode,
+  and have the action.
+- `inputs` are checked against the action's inputs as given, not adjusted:
+  an unknown input, a value of the wrong type, an `enum` value not among its
+  `values`, a number outside `min`/`max` or not whole for an `integer` or
+  `seed`, a colour that is not `#rrggbb` or `#rrggbbaa`, a text over 64 KiB,
+  or a malformed region or too few or too many regions fail at once, naming
+  the input. Inputs left out (or `null`) take their defaults, except
+  `regions` an action needs. `path` inputs cannot be set: the user chooses
+  their own files, so a plugin cannot have another one read a file the user
+  never picked.
+- An action with `result.into = "ask"` needs `into`: `"layer"` (a new layer
+  in the current document) or `"document"` (a new document), the choices its
+  dialog offers. Other actions take no `into`.
+- `layers` are layer ids to select first, the last one active, as clicking
+  them would. They stay selected only if the action starts or asks to send.
+
+The first run of each other plugin in a session then waits for the user:
+**Run “Generate Image” for *Plugin (plugin id)*?** names the action with the
+plugin it belongs to, the texts and options it runs with, where its result
+goes, the layers it selects and the session, and for a plugin that declares
+network hosts, those hosts and that a run can send document data there and
+use paid credits.
+
+- **Allow** runs it, and that session's later runs of the same plugin's
+  actions, until the asking plugin stops.
+- **Always Allow** also stores `run_without_asking = true` in the asking
+  plugin's grant: its runs of other plugins' actions no longer wait for this
+  prompt. **Plugins → Manage Plugins…** shows it as **Run them without
+  asking** under **Run other plugins' actions**; turning either off forgets
+  the sessions already allowed. It goes away with the grant like the other
+  answers stored there.
+- **Cancel** fails the request with `-32800`. For 30 seconds the plugin's new
+  runs are refused at once, without a prompt.
+
+A plugin has at most one run waiting for this prompt; a second fails at once,
+so runs that may cost money cannot stack up behind one answer. The prompt
+waits until no other dialog, editor job or plugin action is open; it comes
+back after another dialog replaced it, and `request/cancel` closes it (see
+[Withdrawing a request](#withdrawing-a-request)).
+
+Once allowed, the action runs under its own plugin's rules, as its menu item
+would but without its dialog: the editor must not be busy (a dialog, an
+editor job, an open plugin action or Develop); a plugin that is not allowed
+yet shows its permission prompt, and the request fails (run it again once
+the user allowed it); an action that needs an image layer or a selection is
+refused as its menu item would be; missing models are offered for download
+(once they are ready, the action's dialog opens with these inputs for the
+user to run); and a plugin that declares network hosts asks **Send to
+*Plugin*?**, which also says which plugin started the run. The request waits
+for that answer: **Cancel** fails it with `-32800`. Once the job runs, the
+answer is `{ok: true, running: true, job, plugin, plugin_name, action,
+label}`. The job is shown in the status bar like any other, with Cancel and
+the plugin that started it, the asking plugin's log notes it, and its result
+is a proposal the user accepts or discards. A run never uses the asking
+plugin's grant: the other plugin's own grant, secrets, send prompt and
+offline mode apply.
+
 ### Network
 
 A plugin that lists hosts under `permissions.network` is treated as one that
@@ -1070,9 +1154,10 @@ wait for the user's answer (see [Network](#network)).
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
-| `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), and whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)) |
+| `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto, run_actions, run_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)), and whether it may run other plugins' actions, and without asking (see [Running other plugins' actions](#running-other-plugins-actions)) |
+| `plugins/actions` | — | `{actions: [{plugin, plugin_name, network, allowed, available, id, action, label, description, kind, source, surfaces, result, inputs}]}`: the other plugins' actions, once the user turned on **Run other plugins' actions** for this plugin (see [Running other plugins' actions](#running-other-plugins-actions)) |
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does; a plugin may switch at most once a second (`-32003` with `retry_after` otherwise; naming the current document always succeeds) |
-| `host/run` | `{action, inputs?, layers?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
+| `host/run` | `{action, inputs?, layers?, into?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. With **Run other plugins' actions**, another plugin's action as `<plugin>/<action>`, after the user allowed it, answered with `{ok: true, running: true, job, …}` once its job runs (see [Running other plugins' actions](#running-other-plugins-actions)). For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
 | `file/save_as` | `{document?, suggested_name?}` or `{document?, path, overwrite?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; with `path`, `{name, asked}` once it was saved there after Xuan's prompt (`asked: true`) or without asking (`asked: false`); see [Files the user chooses](#files-the-user-chooses) |
 | `file/export` | `{document?, format?, suggested_name?}` or `{document?, format?, path, overwrite?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`); with `path`, `{name, asked}` as for `file/save_as` |
@@ -1502,8 +1587,9 @@ verified or deleted, with the same map as `initialize`.
 
 A request that waits for the user (a direct edit held by the [edit
 session](#edit-sessions) prompt, an export held by the [send
-prompt](#network), or a [file request](#files-the-user-chooses)) can wait
-for minutes. A plugin that no longer wants the answer, because the client it
+prompt](#network), a [file request](#files-the-user-chooses), or a [run of
+another plugin's action](#running-other-plugins-actions) waiting for its
+prompt or for that plugin's send prompt) can wait for minutes. A plugin that no longer wants the answer, because the client it
 serves gave up, sends the notification `request/cancel` with the request's
 `id`:
 
@@ -1512,7 +1598,8 @@ serves gave up, sends the notification `request/cancel` with the request's
 ```
 
 Xuan drops the request and answers it with `-32800`. Its prompt is closed,
-not just hidden, so it does not come back after another dialog and a late
+not just hidden (a run waiting for another plugin's send prompt closes that
+prompt and the run), so it does not come back after another dialog and a late
 **Allow**, **Send**, **Open** or **Save** does nothing; if other requests still wait,
 Xuan asks about the first of them instead. Withdrawing is not a refusal: no
 answer is recorded for the session and the plugin may ask again at once. A
@@ -1617,7 +1704,7 @@ request](#withdrawing-a-request)).
 - Running jobs are shown in the status bar, with Cancel: the job's label and
   its latest `job/progress` message, a progress bar once it reports a
   `fraction` (a spinner until then), and a count such as **1 of 3** that lists
-  every running job. A plugin that cannot measure its progress should send
+  every running job. A job another plugin started names that plugin. A plugin that cannot measure its progress should send
   messages without a `fraction` rather than a made-up one.
 - Wherever a plugin's own words appear, Xuan says which plugin they come
   from: menu items and the shortcut list show `Action label · Plugin name`
@@ -1648,4 +1735,6 @@ request](#withdrawing-a-request)).
   example `merge` with a single layer, is refused. Commands that open, save, export or
   close files, use the clipboard, change settings or manage plugins are
   refused (see [Files the user chooses](#files-the-user-chooses) for saving
-  and opening), and a plugin can start only its own actions.
+  and opening), and a plugin can start only its own actions unless the user
+  lets it run other plugins' actions (see [Running other plugins'
+  actions](#running-other-plugins-actions)).

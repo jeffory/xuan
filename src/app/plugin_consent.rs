@@ -424,6 +424,12 @@ impl EditorApp {
                 if !waiting {
                     return;
                 }
+                // A run another plugin asked for answers its request; see
+                // `plugin_runs.rs`.
+                if (self.plugins.action.as_ref()).is_some_and(|edit| edit.caller.is_some()) {
+                    self.answer_run_consent(send);
+                    return;
+                }
                 if send {
                     if let Some(edit) = &mut self.plugins.action {
                         edit.consented = true;
@@ -464,6 +470,11 @@ impl EditorApp {
         let action = (request.action.as_deref())
             .and_then(|id| manifest.action(id))
             .map(|spec| one_line(spec.label.trim_end_matches('…'), 80));
+        // The plugin that started the run, when another plugin did.
+        let caller = (request.action.as_ref())
+            .and(self.plugins.action.as_ref())
+            .and_then(|edit| edit.caller.as_ref())
+            .map(|run| self.plugins.source(&run.plugin));
         let mut open = true;
         let mut answer = None;
         let mut dont_ask = request.dont_ask;
@@ -484,6 +495,15 @@ impl EditorApp {
                     .wrap(),
                 );
                 ui.add_space(8.0);
+                if let Some(caller) = &caller {
+                    ui.add(
+                        egui::Label::new(format!(
+                            "{caller} {}",
+                            tr("started this run for its client.")
+                        ))
+                        .wrap(),
+                    );
+                }
                 let lead = match &action {
                     Some(action) => format!("{} “{action}”, {}", tr("To run"), tr("Xuan sends it:")),
                     None => tr("It asks Xuan for this outside an action you started:").into(),
@@ -524,7 +544,7 @@ impl EditorApp {
 
 /// A text-like input's value as the prompt shows it, or `None` when empty
 /// or not text. Secrets are not shown.
-fn text_value(kind: InputKind, value: Option<&Value>) -> Option<String> {
+pub(super) fn text_value(kind: InputKind, value: Option<&Value>) -> Option<String> {
     let text = value?.as_str().filter(|text| !text.trim().is_empty())?;
     match kind {
         InputKind::Text | InputKind::Multiline | InputKind::Path => {

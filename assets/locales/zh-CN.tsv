@@ -1097,3 +1097,20 @@ No recent files	没有最近的文件
 File not found	找不到文件
 Clear Recently Opened	清除最近打开的文件
 Open Most Recent File	打开最近使用的第一个文件
+Run	运行
+for	为
+asks to run another plugin's action for its client:	请求为其客户端运行另一个插件的操作：
+A run can send document data there and may use paid credits.	运行时可能会将文档数据发送到那里，并可能消耗付费额度。
+It runs as if you chose it from the menu: the other plugin's own prompts still apply, and its result is a proposal you accept or discard. Allow holds for this session's runs of that plugin until the asking plugin stops.	它会像你从菜单中选择一样运行：另一个插件自己的提示仍然适用，其结果是一个由你接受或放弃的提议。“允许”对本次会话中该插件的运行有效，直到发出请求的插件停止。
+Always Allow lets the plugin run other plugins' actions without this prompt until you turn it off in Plugins → Manage Plugins….	“始终允许”让该插件不经此提示运行其他插件的操作，直到你在“插件 → 管理插件…”中将其关闭。
+Regions:	区域：
+Result: a new layer	结果：新图层
+Result: a new document	结果：新文档
+On the layers:	作用于图层：
+Run other plugins' actions	运行其他插件的操作
+Off: the plugin cannot list or start other plugins' actions. On: it can, and Xuan asks you before its first run of each plugin in each session. The other plugin's own permission, send and model prompts still apply, and its result is a proposal you accept or discard.	关闭：该插件无法列出或启动其他插件的操作。开启：可以，且 Xuan 会在每个会话中首次运行某个插件的操作之前询问你。另一个插件自己的权限、发送和模型提示仍然适用，其结果是一个由你接受或放弃的提议。
+Run them without asking	不经询问直接运行
+On: no prompt before the plugin's runs of other plugins' actions. The other plugin's own prompts still apply.	开启：该插件运行其他插件的操作之前不再提示。另一个插件自己的提示仍然适用。
+Started by	启动者：
+started this run for its client.	为其客户端启动了此次运行。
+Started	已启动

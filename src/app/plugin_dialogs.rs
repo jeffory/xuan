@@ -496,6 +496,8 @@ impl EditorApp {
         let mut ask_again: Option<String> = None;
         let mut auto_mode: Option<(String, bool)> = None;
         let mut save_mode: Option<(String, bool)> = None;
+        let mut run_mode: Option<(String, bool)> = None;
+        let mut run_auto: Option<(String, bool)> = None;
         let mut offline = self.config.disable_network_plugins;
         let mut block = self.config.block_undeclared_network();
         let plugin_dir = self
@@ -649,6 +651,31 @@ impl EditorApp {
                                     save_mode = Some((id.clone(), save));
                                 }
                             }
+                            // Running other plugins' actions, offered like
+                            // saving without asking.
+                            if self.plugin_granted(&id)
+                                && (self.asks_before_edits(&id) || self.runs_other_actions(&id))
+                            {
+                                let mut run = self.runs_other_actions(&id);
+                                if widgets::checkbox(ui, &mut run, tr("Run other plugins' actions"))
+                                    .on_hover_text(tr("Off: the plugin cannot list or start other plugins' actions. On: it can, and Xuan asks you before its first run of each plugin in each session. The other plugin's own permission, send and model prompts still apply, and its result is a proposal you accept or discard."))
+                                    .changed()
+                                {
+                                    run_mode = Some((id.clone(), run));
+                                }
+                                if run {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(18.0);
+                                        let mut always = self.runs_without_asking(&id);
+                                        if widgets::checkbox(ui, &mut always, tr("Run them without asking"))
+                                            .on_hover_text(tr("On: no prompt before the plugin's runs of other plugins' actions. The other plugin's own prompts still apply."))
+                                            .changed()
+                                        {
+                                            run_auto = Some((id.clone(), always));
+                                        }
+                                    });
+                                }
+                            }
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
@@ -771,6 +798,12 @@ impl EditorApp {
         if let Some((id, on)) = save_mode {
             self.set_save_without_asking(&id, on);
         }
+        if let Some((id, on)) = run_mode {
+            self.set_run_other_actions(&id, on);
+        }
+        if let Some((id, on)) = run_auto {
+            self.set_run_without_asking(&id, on);
+        }
         if offline != self.config.disable_network_plugins {
             self.set_network_plugins_disabled(offline);
         }
@@ -832,6 +865,10 @@ impl EditorApp {
             progress: job.progress,
             message: job.message.clone(),
             document: Some(job.document),
+            started_by: job
+                .caller
+                .as_ref()
+                .map(|caller| self.plugins.source(caller)),
         });
         let formats = self.plugins.formats.iter().map(|job| RunningJob {
             id: job.id,
@@ -839,6 +876,7 @@ impl EditorApp {
             progress: None,
             message: String::new(),
             document: None,
+            started_by: None,
         });
         let models = self.plugins.model_jobs.iter().map(|job| RunningJob {
             id: job.id,
@@ -850,6 +888,7 @@ impl EditorApp {
                 super::plugin_models::format_size(job.size)
             ),
             document: None,
+            started_by: None,
         });
         actions.chain(formats).chain(models).collect()
     }
@@ -899,6 +938,16 @@ impl EditorApp {
                         });
                     });
                     progress_indicator(ui, job.progress, 280.0);
+                    if let Some(started_by) = &job.started_by {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{} {started_by}", tr("Started by")))
+                                    .small()
+                                    .color(muted),
+                            )
+                            .wrap(),
+                        );
+                    }
                     if !job.message.is_empty() {
                         ui.add(
                             egui::Label::new(RichText::new(&job.message).small().color(muted))
@@ -914,7 +963,11 @@ impl EditorApp {
         } else {
             format!("{} · {}", job.label, job.message)
         };
-        ui.add(egui::Label::new(RichText::new(text).size(11.0)).truncate());
+        let label = ui.add(egui::Label::new(RichText::new(text).size(11.0)).truncate());
+        // A job another plugin started says which, as the user did not.
+        if let Some(started_by) = &job.started_by {
+            label.on_hover_text(format!("{} {started_by}", tr("Started by")));
+        }
         if let Some(id) = cancel {
             self.cancel_running_job(id);
         }
@@ -1131,6 +1184,9 @@ pub(super) struct RunningJob {
     pub message: String,
     /// The document a plugin action works on.
     pub document: Option<uuid::Uuid>,
+    /// The plugin that started it with `host/run`, as the status bar names
+    /// it, or `None` when the user did.
+    pub started_by: Option<String>,
 }
 
 /// A progress bar once the job reports a fraction, a spinner until then.

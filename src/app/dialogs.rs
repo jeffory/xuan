@@ -106,6 +106,7 @@ impl EditorApp {
                 Dialog::PluginConsent => self.plugin_consent_dialog(ctx),
                 Dialog::PluginFile => self.plugin_file_dialog(ctx),
                 Dialog::PluginEditSession => self.plugin_edit_session_dialog(ctx),
+                Dialog::PluginRun => self.plugin_run_dialog(ctx),
                 Dialog::Plugins => self.plugin_manager_dialog(ctx),
                 Dialog::PluginInstall => self.plugin_install_dialog(ctx),
                 Dialog::PluginModels => self.plugin_models_dialog(ctx),

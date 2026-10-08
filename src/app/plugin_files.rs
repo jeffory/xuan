@@ -523,7 +523,12 @@ impl EditorApp {
         }
     }
 
-    fn respond_to_plugin(&mut self, plugin: &str, id: Id, result: Result<Value, RpcError>) {
+    pub(super) fn respond_to_plugin(
+        &mut self,
+        plugin: &str,
+        id: Id,
+        result: Result<Value, RpcError>,
+    ) {
         if let Some(process) = self.plugins.process_mut(plugin) {
             let _ = process.respond(id, result);
         }

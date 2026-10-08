@@ -332,6 +332,19 @@ pub struct PluginGrant {
     /// to this grant like `send_without_asking`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub save_without_asking: bool,
+    /// "Run other plugins' actions": the plugin may list other plugins'
+    /// actions and start them with `host/run` (the MCP server, for its
+    /// clients). Each run still asks the user once per session, unless
+    /// `run_without_asking`, and still goes through the other plugin's own
+    /// grant and prompts. It belongs to this grant like
+    /// `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_other_actions: bool,
+    /// "Always Allow" in the prompt before a run of another plugin's
+    /// action: runs no longer ask once per session. It belongs to this
+    /// grant like `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_without_asking: bool,
 }
 
 impl PluginGrant {
