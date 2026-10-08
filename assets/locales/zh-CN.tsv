@@ -679,8 +679,6 @@ Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
 Layer effects on folders or adjustment layers	文件夹或调整图层上的图层效果
 Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
-Per-letter text colours (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
-Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
 Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以像素导入）
 Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
 Blur or noise settings adapted to Xuan	已按 Xuan 调整的模糊或杂色设置

@@ -235,7 +235,8 @@ impl TextStyle {
 
     /// Put the runs in normal form: inside the text, sorted, not overlapping, each changing
     /// something the layer's style does not already have, and adjacent equal runs merged.
-    /// Runs past [`MAX_TEXT_RUNS`] are dropped.
+    /// The number of runs is left to [`TextStyle::validate`] to bound, so no letter quietly
+    /// loses its style.
     pub fn normalize_runs(&mut self) {
         if self.runs.is_empty() {
             return;
@@ -279,7 +280,6 @@ impl TextStyle {
                 _ => normal.push(run),
             }
         }
-        normal.truncate(MAX_TEXT_RUNS);
         self.runs = normal;
     }
 
@@ -486,7 +486,17 @@ mod tests {
             .collect();
         assert!(long.validate().is_err());
         long.normalize_runs();
-        assert_eq!(long.runs.len(), MAX_TEXT_RUNS);
+        assert_eq!(long.runs.len(), MAX_TEXT_RUNS + 1);
+        assert!(long.validate().is_err());
+        // Restyling every other letter can go past the limit too; the text then fails
+        // validation (which the Text window shows) rather than losing styles.
+        let mut striped = style(&"a".repeat(MAX_TEXT_RUNS * 2 + 2));
+        for i in 0..=MAX_TEXT_RUNS {
+            striped.set_run_style(i * 2..i * 2 + 1, &color(RED));
+        }
+        assert_eq!(striped.runs, long.runs);
+        assert!(striped.validate().is_err());
+        long.runs.pop();
         long.validate().unwrap();
         // Runs that change nothing are dropped.
         text.runs = vec![run(0, 2, color(text.color)), run(2, 3, RunStyle::default())];
