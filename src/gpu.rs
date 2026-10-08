@@ -1277,7 +1277,7 @@ mod tests {
         let stride = (width * 4).div_ceil(256) * 256;
         let buffer = compositor.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("compositor verification"),
-            size: (stride * height) as u64,
+            size: u64::from(stride) * u64::from(height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });

@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use heic_rs::{DecodeOptions, PixelLayout};
 use image::RgbaImage;
 
-use crate::document::{MAX_PIXELS, validate_size};
+use crate::document::validate_size;
 
 pub(super) fn decode(bytes: &[u8], used: &mut u64) -> Result<RgbaImage> {
     let info = heic_rs::probe(bytes).context("Cannot read HEIC/HEIF image")?;
@@ -12,7 +12,7 @@ pub(super) fn decode(bytes: &[u8], used: &mut u64) -> Result<RgbaImage> {
 
     let options = DecodeOptions {
         layout: PixelLayout::Rgba8,
-        max_pixels: Some(MAX_PIXELS),
+        max_pixels: Some(crate::limits::get().image_pixels),
         strict: true,
         ..Default::default()
     };

@@ -36,8 +36,7 @@ use super::compositor::{Dropped, ImportReport, ImportSource, font_from_postscrip
 use crate::{
     blend::BlendMode,
     document::{
-        Adjustment, Document, Layer, MAX_LAYERS, MAX_PIXELS, Mask, Point, ShapeStyle, Transform,
-        validate_size,
+        Adjustment, Document, Layer, MAX_LAYERS, Mask, Point, ShapeStyle, Transform, validate_size,
     },
     i18n::tr,
     layer_effects::LayerEffects,
@@ -49,8 +48,8 @@ mod descriptor;
 
 use descriptor::{Descriptor, Engine};
 
-/// The largest Photoshop file Xuan reads into memory.
-pub const MAX_FILE_BYTES: u64 = 1 << 30;
+/// PSD's own limit on the canvas side; only PSB files may be larger.
+const MAX_PSD_SIDE: u32 = 30_000;
 /// Photoshop's own limit on channels per layer and per document.
 const MAX_CHANNELS: u16 = 56;
 /// Layer and mask bounds beyond PSB's 300,000 pixels per side mark a damaged file.
@@ -61,7 +60,8 @@ const MAX_POSITION: i64 = 1_000_000;
 const MAX_LAYER_BLOCKS: usize = 256;
 /// Folder nesting Xuan's documents allow.
 pub const MAX_FOLDER_DEPTH: usize = 64;
-/// Bytes one ZIP-compressed channel may inflate to (it is decoded row by row).
+/// Bytes one ZIP-compressed channel may inflate to (it is decoded row by row), or more where
+/// this computer allows larger images.
 const MAX_ZIP_SOURCE: u64 = 400_000_000;
 
 /// Photoshop blend-mode keys, Photoshop's names for them, and the Xuan mode each becomes. Every
@@ -136,10 +136,12 @@ pub struct PixelBudget {
 }
 
 impl Default for PixelBudget {
+    /// What opening a file may add on this computer; see [`crate::limits`].
     fn default() -> Self {
+        let budget = crate::limits::get().project_pixels;
         Self {
-            layers: MAX_PIXELS,
-            masks: MAX_PIXELS,
+            layers: budget,
+            masks: budget,
         }
     }
 }
@@ -172,18 +174,16 @@ pub fn is_photoshop(path: &Path) -> bool {
 /// Read a Photoshop file from disk; see [`read`].
 pub fn load(path: &Path, budget: PixelBudget) -> Result<(Document, ImportReport)> {
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
-    ensure!(
-        metadata.len() <= MAX_FILE_BYTES,
-        tr("Photoshop files are limited to 1 GiB")
-    );
+    // The whole file is read into memory, so how large it may be follows the memory.
+    let limit = crate::limits::get().photoshop_file_bytes();
+    let too_big = || {
+        tr("Photoshop files are limited to {} on this computer")
+            .replace("{}", &crate::limits::size(limit))
+    };
+    ensure!(metadata.len() <= limit, too_big());
     let mut bytes = Vec::new();
-    File::open(path)?
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() as u64 <= MAX_FILE_BYTES,
-        tr("Photoshop files are limited to 1 GiB")
-    );
+    File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 <= limit, too_big());
     read(&bytes, budget)
 }
 
@@ -192,9 +192,11 @@ pub(crate) fn damaged() -> anyhow::Error {
 }
 
 fn too_large() -> anyhow::Error {
-    anyhow!(tr(
-        "The Photoshop file's layers don't fit in the 100-megapixel limit, even when cropped to the canvas"
-    ))
+    let budget = crate::limits::get().project_pixels;
+    anyhow!(
+        tr("The Photoshop file's layers don't fit within {} megapixels, the most this computer opens, even when cropped to the canvas")
+            .replace("{}", &crate::limits::grouped(budget / 1_000_000))
+    )
 }
 
 /// Bounds-checked big-endian reads over a byte slice. Every read either succeeds completely or
@@ -346,6 +348,7 @@ fn header(reader: &mut Reader<'_>) -> Result<Header> {
         );
     }
     ensure!((1..=MAX_CHANNELS).contains(&channels), damaged());
+    ensure!(version == 2 || width.max(height) <= MAX_PSD_SIDE, damaged());
     validate_size(width, height)?;
     Ok(Header {
         psb: version == 2,
@@ -775,7 +778,8 @@ fn check_channel(data: &[u8], width: usize, height: usize, psb: bool) -> Result<
             packbits_rows(&mut reader, height, width, psb)?;
         }
         2 | 3 => ensure!(
-            (width as u64).saturating_mul(height as u64) <= MAX_ZIP_SOURCE,
+            (width as u64).saturating_mul(height as u64)
+                <= MAX_ZIP_SOURCE.max(crate::limits::get().image_pixels),
             too_large()
         ),
         _ => bail!(tr(

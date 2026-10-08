@@ -357,8 +357,8 @@ fn path_shape_layers_are_live_antialiased_and_described() {
             "The path encloses no area",
         ),
         (
-            json!({"op": "add_shape_layer", "shape": "Path", "path": "M 0 0 H 40000 V 10 Z"}),
-            "Dimensions must be between 1 and 30000 pixels",
+            json!({"op": "add_shape_layer", "shape": "Path", "path": "M 0 0 H 70000 V 10 Z"}),
+            "Dimensions must be between 1 and 65,535 pixels",
         ),
     ] {
         let message = error(&canvas(), bad.clone());

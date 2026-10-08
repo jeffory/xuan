@@ -747,9 +747,9 @@ Smart objects (imported as pixels)	智能对象（以像素导入）
 Fill layers (imported as pixels)	填充图层（以像素导入）
 Layers cropped to the canvas to fit the memory limit	为符合内存限制而裁切到画布的图层
 Clipping masks on folders or left-out layers	文件夹或已省略图层上的剪贴蒙版
-Photoshop files are limited to 1 GiB	Photoshop 文件不能超过 1 GiB
+Photoshop files are limited to {} on this computer	在这台电脑上，Photoshop 文件不能超过 {}
 The Photoshop file is damaged or incomplete	Photoshop 文件已损坏或不完整
-The Photoshop file's layers don't fit in the 100-megapixel limit, even when cropped to the canvas	即使裁切到画布，Photoshop 文件的图层仍超出 1 亿像素的限制
+The Photoshop file's layers don't fit within {} megapixels, the most this computer opens, even when cropped to the canvas	即使裁切到画布，Photoshop 文件的图层仍超出这台电脑可打开的上限（{} 百万像素）
 This is not a Photoshop file	这不是 Photoshop 文件
 This Photoshop file version isn't supported	不支持此 Photoshop 文件版本
 Only 8-bit RGB Photoshop files can be imported. In Photoshop, choose Image → Mode → RGB Color and 8 Bits/Channel, then save again.	只能导入 8 位 RGB 的 Photoshop 文件。请在 Photoshop 中选择“图像 → 模式 → RGB 颜色”和“8 位/通道”，然后重新存储。

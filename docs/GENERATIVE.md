@@ -84,7 +84,8 @@ server in Xuan should reuse the `document/*` and `document/edit` code paths
   Accept/Discard and exactly one undo step.
 - Jobs run in the background (`src/plugins/jobs.rs`) with `job/progress`,
   `job/cancel` (error `-32800`), `action/estimate`, and limits on outputs, layers,
-  edits and total pixels (100 MP).
+  edits and total pixels (a quarter of the memory, at least 100 MP; see
+  [size limits](USAGE.md#size-limits)).
 - 8-bit sRGB RGBA PNG only.
 
 **Missing or weak.**

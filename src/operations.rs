@@ -1187,8 +1187,8 @@ mod tests {
         assert_eq!(same.layers[0].transform.x, 10.0);
         // The document size limits apply, overflow included.
         let mut document = setup();
-        let error = extend_canvas(&mut document, 29_901, 0, 0, 0).unwrap_err();
-        assert!(error.to_string().contains("30000"), "{error}");
+        let error = extend_canvas(&mut document, crate::document::MAX_SIDE, 0, 0, 0).unwrap_err();
+        assert!(error.to_string().contains("65,535"), "{error}");
         let error = extend_canvas(&mut document, 19_900, 9_950, 0, 0).unwrap_err();
         assert!(error.to_string().contains("100 megapixels"), "{error}");
         assert!(extend_canvas(&mut document, u32::MAX, 0, u32::MAX, 0).is_err());

@@ -10,18 +10,22 @@ use uuid::Uuid;
 
 use crate::blend::BlendMode;
 
-pub const MAX_SIDE: u32 = 30_000;
-pub const MAX_PIXELS: u64 = 100_000_000;
+pub use crate::limits::MAX_SIDE;
 pub const MAX_LAYERS: usize = 10_000;
 
+/// Check a canvas, layer or mask size against [`MAX_SIDE`] and this computer's
+/// [`image_pixels`](crate::limits::Limits::image_pixels).
 pub fn validate_size(width: u32, height: u32) -> Result<()> {
     ensure!(
         (1..=MAX_SIDE).contains(&width) && (1..=MAX_SIDE).contains(&height),
-        "Dimensions must be between 1 and {MAX_SIDE} pixels"
+        "Dimensions must be between 1 and {} pixels",
+        crate::limits::grouped(MAX_SIDE.into())
     );
+    let limit = crate::limits::get().image_pixels;
     ensure!(
-        u64::from(width) * u64::from(height) <= MAX_PIXELS,
-        "Images are limited to 100 megapixels"
+        u64::from(width) * u64::from(height) <= limit,
+        "Images are limited to {} on this computer",
+        crate::limits::megapixels(limit)
     );
     Ok(())
 }
@@ -802,9 +806,9 @@ impl Document {
             self.active.is_none_or(|id| ids.contains_key(&id)),
             "Missing active layer"
         );
-        let mut pixels = 0_u64;
-        let mut mask_pixels = 0_u64;
-        let mut raw_bytes = 0_u64;
+        // Only each image's own size is checked: how many pixels a project holds is limited
+        // when a file is opened or imported (see `crate::limits`), so a document edited in
+        // the app can always be saved.
         for layer in &self.layers {
             ensure!(
                 !layer.standalone_mask
@@ -818,7 +822,6 @@ impl Document {
             );
             if let Some(raw) = &layer.raw {
                 raw.validate()?;
-                raw_bytes += raw.bytes.len() as u64;
                 ensure!(
                     layer.pixels.is_some() && layer.text.is_none() && layer.shape.is_none(),
                     "Invalid RAW layer"
@@ -880,7 +883,6 @@ impl Document {
             );
             if let Some(image) = &layer.pixels {
                 validate_size(image.width(), image.height())?;
-                pixels += u64::from(image.width()) * u64::from(image.height());
             }
             if let Some(mask) = &layer.mask {
                 validate_size(mask.pixels.width(), mask.pixels.height())?;
@@ -888,7 +890,6 @@ impl Document {
                     mask.placement.is_none_or(Transform::valid),
                     "Invalid mask transform"
                 );
-                mask_pixels += u64::from(mask.pixels.width()) * u64::from(mask.pixels.height());
             }
             let mut parent = layer.parent;
             let mut child = layer;
@@ -934,14 +935,6 @@ impl Document {
                 "A layer cannot clip to a folder whose shape depends on it"
             );
         }
-        ensure!(
-            pixels <= MAX_PIXELS && mask_pixels <= MAX_PIXELS,
-            "Project exceeds the 100 megapixel asset limit"
-        );
-        ensure!(
-            raw_bytes <= crate::raw::MAX_RAW_BYTES,
-            "Project exceeds 512 MiB of RAW assets"
-        );
         Ok(())
     }
 }
@@ -949,6 +942,35 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_each_image_is_size_checked_so_edited_documents_always_save() {
+        // 30 layers sharing a 2,000 × 2,000 image: 120 megapixels in all, more than opening a
+        // file may bring in (100 megapixels in tests), yet each image is small.
+        let side = 2_000;
+        let pixels = Arc::new(RgbaImage::new(side, side));
+        let mut document = Document::new(side, side).unwrap();
+        for i in 0..30 {
+            let mut layer = Layer::blank(format!("Copy {i}"), side, side);
+            layer.pixels = Some(pixels.clone());
+            document.insert(layer);
+        }
+        let total: u64 = document
+            .layers
+            .iter()
+            .filter_map(|l| l.pixels.as_ref())
+            .map(|p| u64::from(p.width()) * u64::from(p.height()))
+            .sum();
+        assert!(total > crate::limits::get().project_pixels);
+        document.validate().unwrap();
+
+        // A single image past the limits is refused, naming the limit.
+        assert!(validate_size(MAX_SIDE, 1).is_ok());
+        let error = validate_size(MAX_SIDE + 1, 1).unwrap_err().to_string();
+        assert!(error.contains("65,535"), "{error}");
+        let error = validate_size(20_000, 20_000).unwrap_err().to_string();
+        assert!(error.contains("100 megapixels on this computer"), "{error}");
+    }
 
     #[test]
     fn old_layers_default_to_attached_masks_and_standalone_masks_validate() {

@@ -310,7 +310,8 @@ impl TextRenderer {
         style.validate()?;
         let line_height = style.size * 1.3;
         ensure!(
-            (style.content.lines().count().max(1) as f32 * line_height) <= 30_000.0,
+            (style.content.lines().count().max(1) as f32 * line_height)
+                <= crate::document::MAX_SIDE as f32,
             "Text is too tall"
         );
         let family = if self.has_family(&style.family) {

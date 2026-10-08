@@ -1023,14 +1023,14 @@ impl EditorApp {
                     ui.add(
                         widgets::Number::new(&mut self.dimensions[0])
                             .size(vec2(180.0, 36.0))
-                            .range(1..=30_000)
+                            .range(1..=xuan::document::MAX_SIDE)
                             .suffix(" px"),
                     );
                     ui.label("×");
                     ui.add(
                         widgets::Number::new(&mut self.dimensions[1])
                             .size(vec2(180.0, 36.0))
-                            .range(1..=30_000)
+                            .range(1..=xuan::document::MAX_SIDE)
                             .suffix(" px"),
                     );
                     ui.end_row();

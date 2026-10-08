@@ -13,12 +13,16 @@ use uuid::Uuid;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
-    document::{Document, MAX_PIXELS, validate_size},
+    document::{Document, MAX_SIDE, validate_size},
     render,
 };
 
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
-const MAX_ASSET: u64 = 512 * 1024 * 1024;
+
+/// Largest image file or project asset read whole; see [`crate::limits::Limits::file_bytes`].
+pub(crate) fn max_asset() -> u64 {
+    crate::limits::get().file_bytes()
+}
 
 mod compositor;
 mod heif;
@@ -35,22 +39,31 @@ struct Manifest {
     pixel_layers: HashSet<Uuid>,
 }
 
-fn encode_png(image: &DynamicImage) -> Result<Vec<u8>> {
-    let mut encoded = Cursor::new(Vec::new());
-    image.write_to(&mut encoded, ImageFormat::Png)?;
-    Ok(encoded.into_inner())
+/// Add one file to a project archive. A file of 4 GiB or more needs a ZIP64 entry, which the
+/// archive only marks where it must, so smaller projects stay readable by any ZIP tool.
+fn write_entry<W: Write + std::io::Seek>(
+    archive: &mut ZipWriter<W>,
+    name: String,
+    options: SimpleFileOptions,
+    bytes: &[u8],
+) -> Result<()> {
+    let large = bytes.len() as u64 >= u64::from(u32::MAX);
+    archive.start_file(name, options.large_file(large))?;
+    archive.write_all(bytes)?;
+    Ok(())
 }
 
 fn decode_image(bytes: Vec<u8>, used: &mut u64) -> Result<DynamicImage> {
-    ensure!(bytes.len() as u64 <= MAX_ASSET, "Image file is too large");
+    ensure!(bytes.len() as u64 <= max_asset(), "Image file is too large");
     if heic_rs::ftyp::parse(&bytes).is_ok() {
         return heif::decode(&bytes, used).map(DynamicImage::ImageRgba8);
     }
     let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(30_000);
-    limits.max_image_height = Some(30_000);
-    limits.max_alloc = Some(MAX_PIXELS * 8);
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    // Room for a 16-bit RGBA decode of the largest image allowed.
+    limits.max_alloc = Some(crate::limits::get().image_pixels * 8);
     reader.limits(limits);
     let mut decoder = reader.into_decoder()?;
     use image::ImageDecoder;
@@ -65,9 +78,11 @@ fn decode_image(bytes: Vec<u8>, used: &mut u64) -> Result<DynamicImage> {
 fn reserve_pixels(width: u32, height: u32, used: &mut u64) -> Result<()> {
     validate_size(width, height)?;
     let total = used.saturating_add(u64::from(width) * u64::from(height));
+    let budget = crate::limits::get().project_pixels;
     ensure!(
-        total <= MAX_PIXELS,
-        "Project exceeds 100 megapixels of source images"
+        total <= budget,
+        "Project exceeds {} of source images, the most this computer opens",
+        crate::limits::megapixels(budget)
     );
     *used = total;
     Ok(())
@@ -81,12 +96,18 @@ pub fn import_image(path: &Path) -> Result<RgbaImage> {
         "{} is not a regular file",
         path.display()
     );
-    ensure!(metadata.len() <= MAX_ASSET, "Image exceeds 512 MiB");
+    let too_large = || {
+        format!(
+            "Image files are limited to {} on this computer",
+            crate::limits::size(max_asset())
+        )
+    };
+    ensure!(metadata.len() <= max_asset(), too_large());
     let mut bytes = Vec::new();
     File::open(path)?
-        .take(MAX_ASSET + 1)
+        .take(max_asset() + 1)
         .read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= MAX_ASSET, "Image exceeds 512 MiB");
+    ensure!(bytes.len() as u64 <= max_asset(), too_large());
     let extension = path
         .extension()
         .and_then(|s| s.to_str())
@@ -131,18 +152,25 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
         for layer in &document.layers {
             if let Some(raw) = &layer.raw {
                 // The legacy archive suffix is shared by all RAW formats.
-                archive.start_file(format!("raw/{}.nef", layer.id), options)?;
-                archive.write_all(&raw.bytes)?;
+                write_entry(
+                    &mut archive,
+                    format!("raw/{}.nef", layer.id),
+                    options,
+                    &raw.bytes,
+                )?;
             }
+            // Encoded straight from the layer, without copying its pixels first.
             if let Some(pixels) = &layer.pixels {
-                archive.start_file(format!("images/{}.png", layer.id), options)?;
-                archive.write_all(&encode_png(&DynamicImage::ImageRgba8((**pixels).clone()))?)?;
+                let mut png = Cursor::new(Vec::new());
+                pixels.write_to(&mut png, ImageFormat::Png)?;
+                let name = format!("images/{}.png", layer.id);
+                write_entry(&mut archive, name, options, png.get_ref())?;
             }
             if let Some(mask) = &layer.mask {
-                archive.start_file(format!("images/{}.mask.png", layer.id), options)?;
-                archive.write_all(&encode_png(&DynamicImage::ImageLuma8(
-                    (*mask.pixels).clone(),
-                ))?)?;
+                let mut png = Cursor::new(Vec::new());
+                mask.pixels.write_to(&mut png, ImageFormat::Png)?;
+                let name = format!("images/{}.mask.png", layer.id);
+                write_entry(&mut archive, name, options, png.get_ref())?;
             }
         }
         archive.finish()?;
@@ -247,24 +275,30 @@ pub fn load(path: &Path) -> Result<Document> {
     validate_size(manifest.document.width, manifest.document.height)?;
     for layer in &mut manifest.document.layers {
         if let Some(raw) = &mut layer.raw {
-            let bytes = zip_read(&mut archive, &format!("raw/{}.nef", layer.id), MAX_ASSET)?;
+            let bytes = zip_read(&mut archive, &format!("raw/{}.nef", layer.id), max_asset())?;
             used_raw += bytes.len() as u64;
+            let budget = crate::limits::get().raw_bytes;
             ensure!(
-                used_raw <= crate::raw::MAX_RAW_BYTES,
-                "Project exceeds 512 MiB of RAW assets"
+                used_raw <= budget,
+                "Project exceeds {} of RAW files, the most this computer opens",
+                crate::limits::size(budget)
             );
             raw.bytes = Arc::new(bytes);
             raw.validate()?;
         }
         if manifest.pixel_layers.contains(&layer.id) {
-            let bytes = zip_read(&mut archive, &format!("images/{}.png", layer.id), MAX_ASSET)?;
+            let bytes = zip_read(
+                &mut archive,
+                &format!("images/{}.png", layer.id),
+                max_asset(),
+            )?;
             layer.pixels = Some(Arc::new(decode_image(bytes, &mut used_pixels)?.to_rgba8()));
         }
         if let Some(mask) = &mut layer.mask {
             let bytes = zip_read(
                 &mut archive,
                 &format!("images/{}.mask.png", layer.id),
-                MAX_ASSET,
+                max_asset(),
             )?;
             mask.pixels = Arc::new(decode_image(bytes, &mut used_masks)?.to_luma8());
         }
@@ -319,13 +353,33 @@ pub fn load_with_report(path: &Path) -> Result<(Document, ImportReport)> {
     }
 }
 
+/// Refuse sizes a format cannot store, before rendering anything. PNG and JPEG hold any
+/// document size Xuan allows (JPEG up to [`MAX_SIDE`], which is its own limit).
+fn check_export_size(extension: &str, width: u32, height: u32) -> Result<()> {
+    match extension {
+        "webp" => ensure!(
+            width.max(height) <= 16_383,
+            "WebP images are limited to 16,383 pixels a side; export PNG or TIFF instead"
+        ),
+        // Classic TIFF addresses its data with 32-bit offsets.
+        "tif" | "tiff" => ensure!(
+            u64::from(width) * u64::from(height) * 4 < u64::from(u32::MAX) - (1 << 20),
+            "TIFF files are limited to 4 GiB, and this image needs {}; export PNG instead",
+            crate::limits::size(u64::from(width) * u64::from(height) * 4)
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
 pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
-    let image = render::render(document);
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png")
         .to_lowercase();
+    check_export_size(&extension, document.width, document.height)?;
+    let image = render::render(document);
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -374,6 +428,23 @@ mod tests {
     use crate::document::{Layer, Mask, Transform};
     use image::{GrayImage, Luma, Rgba};
     use serde_json::Value;
+
+    #[test]
+    fn exports_refuse_sizes_their_format_cannot_store() {
+        assert!(check_export_size("webp", 16_383, 100).is_ok());
+        let error = check_export_size("webp", 16_384, 100)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("16,383"), "{error}");
+        assert!(check_export_size("tiff", 30_000, 30_000).is_ok());
+        let error = check_export_size("tif", 40_000, 30_000)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("4 GiB"), "{error}");
+        for extension in ["png", "jpg", "jpeg"] {
+            assert!(check_export_size(extension, MAX_SIDE, MAX_SIDE).is_ok());
+        }
+    }
 
     #[test]
     fn exports_all_formats_and_png_print_resolution() {
@@ -812,7 +883,7 @@ mod tests {
             let image = zip_read(
                 &mut archive,
                 &format!("images/{}.png", doc.layers[0].id),
-                MAX_ASSET,
+                max_asset(),
             )
             .unwrap();
             let mut writer = ZipWriter::new(File::create(&hostile).unwrap());
@@ -842,7 +913,7 @@ mod tests {
         let image = zip_read(
             &mut archive,
             &format!("images/{}.png", doc.layers[0].id),
-            MAX_ASSET,
+            max_asset(),
         )
         .unwrap();
         let mut writer = ZipWriter::new(File::create(&broken).unwrap());

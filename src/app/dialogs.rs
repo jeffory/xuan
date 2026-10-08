@@ -265,7 +265,7 @@ impl EditorApp {
                             ui.label(tr("Width"));
                             let width = ui.add(
                                 widgets::Number::new(&mut self.dimensions[0])
-                                    .range(1..=30_000)
+                                    .range(1..=xuan::document::MAX_SIDE)
                                     .suffix(" px")
                                     .speed(1.0),
                             );
@@ -296,7 +296,7 @@ impl EditorApp {
                             ui.label(tr("Height"));
                             ui.add(
                                 widgets::Number::new(&mut self.dimensions[1])
-                                    .range(1..=30_000)
+                                    .range(1..=xuan::document::MAX_SIDE)
                                     .suffix(" px")
                                     .speed(1.0),
                             );

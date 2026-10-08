@@ -29,7 +29,11 @@ pub(crate) use process::white_balance;
 pub use process::{auto_exposure, render, render_16, sample_white_balance, source_point};
 pub use settings::{DevelopSettings, Overlay, OverlayKind, WhiteBalance, rotate_point};
 
-pub const MAX_RAW_BYTES: u64 = 512 * 1024 * 1024;
+/// Largest RAW file, and most RAW data one project may embed; follows the memory (see
+/// [`crate::limits`]).
+pub fn max_raw_bytes() -> u64 {
+    crate::limits::get().raw_bytes
+}
 pub const EXTENSIONS: &[&str] = &["nef", "nrw", "cr2", "cr3", "crw", "raf", "arw"];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -62,7 +66,7 @@ impl RawAsset {
             "Invalid RAW filename"
         );
         ensure!(
-            !self.bytes.is_empty() && self.bytes.len() as u64 <= MAX_RAW_BYTES,
+            !self.bytes.is_empty() && self.bytes.len() as u64 <= max_raw_bytes(),
             "Missing or oversized RAW source"
         );
         validate_size(self.metadata.width, self.metadata.height)?;
@@ -129,12 +133,14 @@ pub fn is_raw(path: &Path) -> bool {
 
 pub fn open(path: &Path) -> Result<(RawAsset, DecodedRaw)> {
     let file = File::open(path).with_context(|| format!("Cannot read {}", path.display()))?;
+    let limit = max_raw_bytes();
     ensure!(
-        file.metadata()?.len() <= MAX_RAW_BYTES,
-        "RAW file exceeds 512 MiB"
+        file.metadata()?.len() <= limit,
+        "RAW files are limited to {} on this computer",
+        crate::limits::size(limit)
     );
     let mut bytes = Vec::new();
-    file.take(MAX_RAW_BYTES + 1).read_to_end(&mut bytes)?;
+    file.take(limit + 1).read_to_end(&mut bytes)?;
     let decoded = decode(&bytes)?;
     let asset = RawAsset {
         filename: path
@@ -151,7 +157,7 @@ pub fn open(path: &Path) -> Result<(RawAsset, DecodedRaw)> {
 
 pub fn decode(bytes: &[u8]) -> Result<DecodedRaw> {
     ensure!(
-        !bytes.is_empty() && bytes.len() as u64 <= MAX_RAW_BYTES,
+        !bytes.is_empty() && bytes.len() as u64 <= max_raw_bytes(),
         "Empty or oversized RAW file"
     );
     // The external decoder has panic paths for unsupported encodings. Convert these

@@ -141,7 +141,7 @@ Press **Ctrl+K** (or choose **Help → Command Palette…**) to search every com
 - **Adjustments:** editable Hue/Saturation color ranges, per-channel Levels and Curves, Exposure, Gradient Map, Grain, Black & White (Photoshop's per-color-family weights, defaulting to reds 40%, yellows 60%, greens 40%, cyans 60%, blues 20% and magentas 80%, with an optional tint), Color Balance (cyan–red, magenta–green and yellow–blue shifts for shadows, midtones and highlights, with Preserve Luminosity), and Invert. Apply directly or add an adjustment layer, with live preview and selection coverage.
 - **Filters:** Gaussian and Motion Blur with expanded bounds, Add Noise, Lens Correction, content-aware fill, **Remove Background** and **Remove Flat Background** (see below). Filtering and expensive retouching run in cancellable workers.
 - **RAW Develop:** Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW open in a dedicated Develop workspace. Adjust white balance, exposure, tone curves, HSL, monochrome and split toning, noise reduction, sharpening, manual lens correction, crop, and brush/gradient masks. Compare before/after and inspect clipping or full-resolution detail. Develop creates an embedded RAW layer; double-click it to edit the original RAW again. Save `.xuan` to retain the source and adjustments, or export a 16-bit sRGB TIFF directly from Develop. See [RAW workflow and limits](RAW.md).
-- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, rulers, guides and a layout grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
+- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, rulers, guides and a layout grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps within a memory budget that grows with the computer's memory (see [Size limits](#size-limits)), keeping at least one step.
 
 Double-click a layer name to rename it inline. Press Enter or click elsewhere to
 save, or Escape to cancel. **Rename…** in the layer's context menu opens the same
@@ -343,9 +343,9 @@ shown as children when a project is opened. Save as `.xuan` to preserve the stac
 
 Use **File → Open Compositor Package…** to import an original `.comp` folder package (format versions 1–11, as written by Compositor up to 1.4.5). Save it as `.xuan` to keep editing in Xuan. Folders, opacity, masks, clipping, adjustment layers, guides, live shapes and editable text come across. Parts Xuan cannot show yet are left out, and a summary lists them after opening. Photoshop blend modes, layer effects, and Black & White and Color Balance adjustment layers come across unchanged. Gaussian Blur, Motion Blur and Add Noise adjustments become filter layers. Text keeps its content, font, size and color; its alignment, spacing, paragraph box and per-letter colors or fonts are not represented, so the original rendering stays until you edit the text. Line shapes and very large text arrive as plain pixels. See [FORMAT.md](FORMAT.md#importing-compositor-packages) for the details. Image export supports PNG, JPEG, TIFF, and WebP; JPEG has a quality preview and PNG/JPEG carry print resolution.
 
-Photoshop files (`.psd` and `.psb`, 8-bit RGB) open with **File → Open**, import into the open document with **Import as Layer** (inside a folder named after the file), or can be dragged onto the window. CMYK, Lab, Grayscale, Indexed and 16- or 32-bit files are refused; convert them to RGB Color, 8 Bits/Channel in Photoshop first. Folders, layer masks, opacity, fill opacity, visibility, clipping and all of Photoshop's blend modes stay editable, as do Levels, Curves, Exposure, Invert, Black & White and Color Balance adjustment layers, strokes, shadows, glows and color overlays, solid-filled rectangle and ellipse shapes, and simple horizontal text (which keeps Photoshop's rendering until you edit it). Other vector shapes, smart objects, fill layers and vertical or warped text come in as pixels; bevels, satin, gradient and pattern overlays and other adjustment layers are left out. When anything changes, a list of the conversions appears first and nothing is applied until you choose **Import** (Enter); **Cancel** (Esc) leaves your documents as they were. Files too large for the 100-megapixel budget have their layers cropped to the canvas. See [FORMAT.md](FORMAT.md#importing-photoshop-files) for the full mapping and limits.
+Photoshop files (`.psd` and `.psb`, 8-bit RGB) open with **File → Open**, import into the open document with **Import as Layer** (inside a folder named after the file), or can be dragged onto the window. CMYK, Lab, Grayscale, Indexed and 16- or 32-bit files are refused; convert them to RGB Color, 8 Bits/Channel in Photoshop first. Folders, layer masks, opacity, fill opacity, visibility, clipping and all of Photoshop's blend modes stay editable, as do Levels, Curves, Exposure, Invert, Black & White and Color Balance adjustment layers, strokes, shadows, glows and color overlays, solid-filled rectangle and ellipse shapes, and simple horizontal text (which keeps Photoshop's rendering until you edit it). Other vector shapes, smart objects, fill layers and vertical or warped text come in as pixels; bevels, satin, gradient and pattern overlays and other adjustment layers are left out. When anything changes, a list of the conversions appears first and nothing is applied until you choose **Import** (Enter); **Cancel** (Esc) leaves your documents as they were. Files whose layers don't fit the [size limits](#size-limits) have their layers cropped to the canvas. See [FORMAT.md](FORMAT.md#importing-photoshop-files) for the full mapping and limits.
 
-HEIC/HEIF photos (`.heic`, `.heif`, and `.hif`, including uppercase extensions) open directly on Linux and Windows using the bundled decoder. Use File → Open, import as a layer, or drag a photo into the editor. The primary still image is imported, including tiled images and container rotation/mirroring; sequences and unsupported HEVC coding features report an error. Images use the editor's 8-bit raster pipeline and are limited to 512 MiB per file, 30,000 pixels per side, and 100 megapixels. Saved `.xuan` projects embed the decoded pixels, so the original HEIC file is no longer required. HEIC export is not supported. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library. No external converter is required for these formats. See the [project format](FORMAT.md) for details about saved documents.
+HEIC/HEIF photos (`.heic`, `.heif`, and `.hif`, including uppercase extensions) open directly on Linux and Windows using the bundled decoder. Use File → Open, import as a layer, or drag a photo into the editor. The primary still image is imported, including tiled images and container rotation/mirroring; sequences and unsupported HEVC coding features report an error. Images use the editor's 8-bit raster pipeline and follow the [size limits](#size-limits). Saved `.xuan` projects embed the decoded pixels, so the original HEIC file is no longer required. HEIC export is not supported. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library. No external converter is required for these formats. See the [project format](FORMAT.md) for details about saved documents.
 
 ### Drag and drop
 
@@ -439,6 +439,33 @@ the manifest, the protocol and the SDKs.
 The photo editor uses an 8-bit sRGB raster pipeline. RAW Develop uses floating-point camera data and offers direct 16-bit TIFF output with an sRGB profile; its photo-layer render uses the existing 8-bit pipeline. Imported raster ICC profiles are not converted or preserved. `.comp` versions 1–11 and 8-bit RGB Photoshop PSD/PSB files can be imported; Xuan writes neither format. Selections and undo history are session state and are not saved in project archives.
 
 Select Subject and Remove Background use a classical graph cut (below) instead of Apple's Vision foreground model, so results differ from Compositor on cluttered photos; a plugin can supply a machine-learning model instead. Content-aware fill uses a portable texture-matching implementation, so its results differ from Compositor. Spot healing follows Compositor's algorithm and offers the same Content-Aware, Create Texture and Proximity Match modes. Initial zoomed-out canvas previews are capped at 4096 pixels per side. At 100% zoom and above, the preview uses full document resolution up to the device's texture limit; the pixel grid (see below) appears when individual document pixels can be displayed. Filter Apply uses full layer dimensions and export uses full document dimensions. Imports, saves, and raster adjustments can temporarily occupy the UI thread. Vulkan is the verified rendering path; OpenGL surface availability depends on the driver.
+
+### Size limits
+
+Layers are kept in memory, 4 bytes per pixel, so how large a document can be follows the
+computer's memory. No limit is ever below 100 megapixels, what Xuan allowed before.
+
+| Limit | Rule | 16 GiB | 32 GiB | 64 GiB | 128 GiB |
+| --- | --- | --- | --- | --- | --- |
+| One canvas, layer or mask | a pixel per 64 bytes of memory | 268 MP | 536 MP | 1,073 MP | 2,147 MP |
+| Layers that opening or importing a file adds (masks have the same again) | a quarter of the memory | 1,073 MP | 2,147 MP | 4,294 MP | 8,589 MP |
+| Undo history | an eighth of the memory | 2 GiB | 4 GiB | 8 GiB | 16 GiB |
+| RAW files embedded in one project | a thirty-second of the memory | 512 MiB | 1 GiB | 2 GiB | 4 GiB |
+
+- Sides are at most 65,535 pixels, JPEG's own limit. WebP export stores at most 16,383
+  pixels a side and TIFF export at most 4 GiB; export PNG for anything larger. Photoshop
+  `.psd` files are at most 30,000 pixels a side (Photoshop's rule; `.psb` files can be
+  larger), and so are Compositor packages.
+- Only opening and importing files, and plugin results, count the total. Editing in Xuan is
+  never refused for it, and **Save** never refuses a document for its size. A project made on
+  a computer with more memory may be too large to open on one with less; the message says
+  what this computer allows.
+- An image file is read whole, so it may be up to 8 bytes per pixel of the image limit (a
+  16-bit RGBA TIFF) and at least 512 MiB; a Photoshop file up to a quarter of the memory and
+  at least 1 GiB.
+- The memory is the physical memory, or the control group's limit when that is lower, as in
+  a container. To try the limits of another computer, start Xuan with `XUAN_MEMORY` set to
+  its memory, for example `XUAN_MEMORY=16G xuan` (bytes, or a K, M, G or T suffix).
 
 ## Language and settings
 

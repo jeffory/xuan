@@ -1266,9 +1266,10 @@ impl Manifest {
                 action
                     .source
                     .max_side
-                    .is_none_or(|side| (16..=30_000).contains(&side)),
-                "action `{}` max_side must be between 16 and 30000",
-                action.id
+                    .is_none_or(|side| (16..=crate::document::MAX_SIDE).contains(&side)),
+                "action `{}` max_side must be between 16 and {}",
+                action.id,
+                crate::document::MAX_SIDE
             );
             self.check_surfaces(action)?;
         }
@@ -1638,7 +1639,7 @@ import = true
         assert!(error("{ from = \"layer\", extend = { left = 8 } }", "").contains("composite"));
         assert!(error("{ from = \"selection\", extend = { left = 8 } }", "").contains("composite"));
         assert!(
-            error("{ from = \"composite\", extend = { top = 30001 } }", "").contains("at most")
+            error("{ from = \"composite\", extend = { top = 65536 } }", "").contains("at most")
         );
         assert!(action("{ from = \"composite\", extend = { top = -1 } }", "").is_err());
         assert!(
