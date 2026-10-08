@@ -726,15 +726,54 @@ mod layer_appearance {
 
     /// Focuses the layer panel's opacity slider (the slider level with the "Opacity" label).
     fn focus_opacity(ui: &mut UiTest) {
-        let label = ui.harness.get_by_label("Opacity").rect().center().y;
+        focus_slider(ui, "Opacity");
+    }
+
+    /// Focuses the layer panel's slider level with `label`, which must be enabled.
+    fn focus_slider(ui: &mut UiTest, label: &str) {
+        assert!(slider_enabled(ui, label), "{label} is disabled");
+        let y = ui.harness.get_by_label(label).rect().center().y;
         let slider = ui
             .harness
             .get_all_by_role(Role::Slider)
-            .find(|slider| (slider.rect().center().y - label).abs() < 12.0)
-            .expect("an opacity slider");
-        assert!(!slider.accesskit_node().is_disabled());
+            .find(|slider| (slider.rect().center().y - y).abs() < 12.0)
+            .unwrap();
         slider.focus();
         ui.settle();
+    }
+
+    fn slider_enabled(ui: &UiTest, label: &str) -> bool {
+        let y = ui.harness.get_by_label(label).rect().center().y;
+        let slider = ui
+            .harness
+            .get_all_by_role(Role::Slider)
+            .find(|slider| (slider.rect().center().y - y).abs() < 12.0)
+            .unwrap_or_else(|| panic!("a {label} slider"));
+        !slider.accesskit_node().is_disabled()
+    }
+
+    /// Fill sits under Opacity and changes only the fill, one undo step per change; folders
+    /// have none.
+    #[test]
+    fn fill_is_set_apart_from_opacity_on_pixel_layers() {
+        let mut ui = UiTest::with_document();
+        let opacity = ui.harness.get_by_label("Opacity").rect().center().y;
+        assert!(ui.harness.get_by_label("Fill").rect().center().y > opacity);
+        focus_slider(&mut ui, "Fill");
+        for _ in 0..10 {
+            ui.key(Key::ArrowLeft);
+        }
+        let fill = active(&ui).fill;
+        assert!(fill < 1.0, "{fill}");
+        assert_eq!(active(&ui).opacity, 1.0);
+        ui.app_mut().command("undo");
+        ui.settle();
+        assert!(active(&ui).fill > fill);
+        ui.app_mut().command("group");
+        ui.settle();
+        assert!(active(&ui).group);
+        assert!(!slider_enabled(&ui, "Fill"));
+        assert!(slider_enabled(&ui, "Opacity"));
     }
 
     fn active(ui: &UiTest) -> &xuan::document::Layer {

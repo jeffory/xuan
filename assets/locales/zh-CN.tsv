@@ -567,6 +567,7 @@ Erase	擦除
 Add Text	添加文字
 Feather Selection	羽化选区
 Layer Opacity	图层不透明度
+Fades the layer's own pixels but not its layer effects	只淡化图层自身的像素，不淡化图层效果
 Layer Visibility	图层可见性
 Layer Mask	图层蒙版
 Add Mask	添加蒙版
@@ -740,7 +741,6 @@ Folder blend mode	文件夹混合模式
 passes through	按“穿透”处理
 Bevel, satin, gradient or pattern effects and other effects Xuan doesn't have (left out)	斜面、光泽、渐变或图案效果等 Xuan 不支持的效果（已省略）
 Effect blend modes, spread, noise or centered strokes (drawn approximately)	效果的混合模式、扩展、杂色或居中描边（近似绘制）
-Fill opacity on layers with effects (drawn at full fill)	带效果图层的填充不透明度（按完全填充绘制）
 Vertical, warped or transformed text (imported as pixels)	竖排、变形或经过变换的文字（以像素导入）
 Text with several styles (kept until the text is edited)	包含多种样式的文字（编辑文字前保持原样）
 Vector shapes (imported as pixels)	矢量形状（以像素导入）

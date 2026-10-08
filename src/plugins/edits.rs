@@ -123,6 +123,7 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         "visible": layer.visible,
         "locked": layer.locked,
         "opacity": layer.opacity,
+        "fill": layer.fill,
         "blend": layer.blend,
         "parent": layer.parent,
         "clip_to": layer.clip_to,
@@ -677,6 +678,9 @@ pub enum Edit {
         locked: Option<bool>,
         #[serde(default)]
         opacity: Option<f32>,
+        /// Photoshop's Fill, 0–1: fades the layer's own pixels but not its layer effects.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill: Option<f32>,
         #[serde(default)]
         blend: Option<BlendMode>,
         /// Clip to this layer below in the same parent (a layer or a folder), or with
@@ -1843,6 +1847,7 @@ fn apply_each(
                 visible,
                 locked,
                 opacity,
+                fill,
                 blend,
                 clip_to,
             } => {
@@ -1867,6 +1872,17 @@ fn apply_each(
                 }
                 if let Some(opacity) = opacity {
                     target.opacity = valid_opacity(*opacity)?;
+                }
+                if let Some(fill) = fill {
+                    ensure!(
+                        fill.is_finite() && (0.0..=1.0).contains(fill),
+                        "Fill must be between 0 and 1"
+                    );
+                    ensure!(
+                        *fill == 1.0 || target.can_attach_effects(),
+                        "Only pixel, text and shape layers take a fill"
+                    );
+                    target.fill = *fill;
                 }
                 if let Some(blend) = blend {
                     target.blend = *blend;
@@ -3360,6 +3376,7 @@ mod tests {
                     visible: Some(false),
                     locked: None,
                     opacity: None,
+                    fill: None,
                     blend: None,
                     clip_to: None,
                 },
@@ -3410,6 +3427,7 @@ mod tests {
                     visible: None,
                     locked: None,
                     opacity: Some(2.0),
+                    fill: None,
                     blend: None,
                     clip_to: None,
                 }]
@@ -4841,5 +4859,42 @@ mod tests {
             &[edit(json!({"op": "trim", "based_on": "top_left"}))],
         )
         .unwrap();
+    }
+
+    /// `set` takes a layer's Fill apart from its opacity, and `document/get` reports it.
+    #[test]
+    fn set_changes_fill_on_pixel_layers_only() {
+        let mut document = Document::new(8, 8).unwrap();
+        let layer = document.layers[0].id;
+        let set = |value: Value| serde_json::from_value::<Edit>(value).unwrap();
+        run(
+            &mut document,
+            &[set(json!({"op": "set", "layer": layer, "fill": 0.25}))],
+        )
+        .unwrap();
+        assert_eq!(document.layers[0].fill, 0.25);
+        assert_eq!(document.layers[0].opacity, 1.0);
+        assert_eq!(describe(&document)["layers"][0]["fill"], 0.25);
+        // Left out, it does not change.
+        run(
+            &mut document,
+            &[set(json!({"op": "set", "layer": layer, "opacity": 0.5}))],
+        )
+        .unwrap();
+        assert_eq!(document.layers[0].fill, 0.25);
+        for bad in [json!(1.5), json!(-0.1)] {
+            let edit = set(json!({"op": "set", "layer": layer, "fill": bad}));
+            assert!(run(&mut document.clone(), &[edit]).is_err(), "{bad}");
+        }
+        let mut folder = Layer::blank("Folder", 8, 8);
+        folder.group = true;
+        let folder_id = folder.id;
+        document.layers.push(folder);
+        let edit = set(json!({"op": "set", "layer": folder_id, "fill": 0.5}));
+        let error = run(&mut document.clone(), &[edit]).unwrap_err();
+        assert!(error.to_string().contains("take a fill"), "{error}");
+        // 100% is every layer's fill, so setting it anywhere is fine.
+        let edit = set(json!({"op": "set", "layer": folder_id, "fill": 1}));
+        run(&mut document, &[edit]).unwrap();
     }
 }

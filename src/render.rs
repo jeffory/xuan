@@ -2,7 +2,7 @@ use image::{GrayImage, Rgba, RgbaImage};
 use rayon::prelude::*;
 
 use crate::{
-    blend::{BlendMode, composite, dissolve_alpha},
+    blend::{BlendMode, composite_filled, dissolve_alpha},
     document::{Document, Layer, Point},
 };
 
@@ -439,10 +439,14 @@ fn composite_at(
         if let Some(image) = &layer.pixels {
             let mut source = sample(image, layer.transform.inverse(point));
             source[3] = layer_alpha(document, layer, point, 0) * coverage;
+            // Fill fades the layer's own pixels (the effects are already drawn into a layer
+            // with any, at full fill); as a clipping base the layer keeps its full alpha.
+            let mut fill = layer.fill;
             if layer.blend == BlendMode::Dissolve {
-                source[3] = dissolve_alpha(source[3], point.x, point.y);
+                source[3] = dissolve_alpha(source[3] * fill, point.x, point.y);
+                fill = 1.0;
             }
-            pixel = composite(pixel, source, layer.blend);
+            pixel = composite_filled(pixel, source, layer.blend, fill);
         }
     }
     pixel
@@ -830,3 +834,6 @@ mod tests {
         assert_eq!(render(&doc).get_pixel(0, 0).0, [255, 0, 0, 255]);
     }
 }
+
+#[cfg(test)]
+mod fill_tests;

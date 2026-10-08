@@ -106,6 +106,18 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
         src = sample_source(uv);
     }
     src.a *= amount;
+    // The layer's Fill (params.second.x), as `blend::composite_filled`.
+    let fill = params.second.x;
+    if fill < 1.0 && special_fill(params.flags.x) {
+        let shown = src.a * fill * (1.0 - dst.a);
+        let alpha = shown + dst.a;
+        let mixed = blend_filled(dst.rgb, src.rgb, params.flags.x, fill);
+        let color = (shown * src.rgb + dst.a * (src.a * mixed + (1.0 - src.a) * dst.rgb))
+            / max(alpha, 0.000001);
+        textureStore(output, position, select(vec4(0.0), vec4(color, alpha), alpha > 0.0));
+        return;
+    }
+    src.a *= fill;
     if params.flags.x == 13u {
         src.a = select(0.0, 1.0, dissolve_value(vec2<i32>(floor(point))) < src.a);
     }
@@ -113,4 +125,22 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
     let color = ((1.0 - src.a) * dst.a * dst.rgb + (1.0 - dst.a) * src.a * src.rgb
         + dst.a * src.a * blend(dst.rgb, src.rgb, params.flags.x)) / max(alpha, 0.000001);
     textureStore(output, position, vec4(color, alpha));
+}
+
+// Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and
+// Difference: `BlendMode::fill_is_special`.
+fn special_fill(mode: u32) -> bool {
+    return mode == 6u || mode == 7u || mode == 8u || mode == 14u || mode == 16u
+        || mode == 20u || mode == 21u || mode == 23u;
+}
+
+// `blend::blend_channel_filled`: the layer's colour moves toward the mode's neutral colour by
+// the fill, except Hard Mix, whose threshold softens into a ramp.
+fn blend_filled(d: vec3<f32>, s: vec3<f32>, mode: u32, fill: f32) -> vec3<f32> {
+    switch mode {
+        case 8u, 14u: { return blend(d, 1.0 + (s - 1.0) * fill, mode); }
+        case 20u, 21u: { return blend(d, 0.5 + (s - 0.5) * fill, mode); }
+        case 23u: { return clamp((d - fill * (1.0 - s)) / (1.0 - fill), vec3(0.0), vec3(1.0)); }
+        default: { return blend(d, s * fill, mode); }
+    }
 }

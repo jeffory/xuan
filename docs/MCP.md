@@ -74,9 +74,9 @@ the document takes effect on the next frame and is drawn at once.
 | open a document | `file/open` (new): the user confirms the file |
 | save / export a document | `file/save_as`, `file/export` (new): the system save dialog, or with `path` Xuan's own prompt (#54); `file/save` saves in place |
 | switch document | `document/activate` (new) |
-| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
+| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, fill, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
-| get/set layer properties: name, visibility, lock, opacity, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
+| get/set layer properties: name, visibility, lock, opacity, fill, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
 | … transform | `document/edit` `transform` (new) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
 | create text / shape layer | `document/edit` `add_text_layer` (with an SVG `path` for text on a path), `add_shape_layer` (new) |
@@ -188,6 +188,14 @@ like the existing ones, rather than anything specific to MCP:
   back over a spot builds up to `opacity`. A flow below 1 paints dabs 0.1 of
   the size apart unless `spacing` says otherwise. At 1 a stroke paints
   exactly as before.
+- **Fill opacity** (#105). A layer could only be faded as a whole, effects
+  included, so text with only its stroke showing, or a Hard Mix layer softened
+  into a contrast boost, could not be made. `set_layer` takes `fill` (0–1),
+  Photoshop's Fill on pixel, text and shape layers: it fades the layer's own
+  pixels but not its layer effects, and in the eight modes Photoshop treats
+  specially (Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light,
+  Linear Light, Hard Mix, Difference) it weakens the blend instead of fading
+  it. `get_document` reports each layer's `fill`.
 - **Vector paths** (#62). Every curve had to be computed outside Xuan and
   sent as dense point lists, and changing one meant recomputing it. Agents
   write SVG path data easily, so the tools take it: `select_shape` with

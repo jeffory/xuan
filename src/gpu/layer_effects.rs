@@ -13,10 +13,17 @@ const SHADER: &str = concat!(
 /// Small rasters are quicker on the CPU than a round trip to the GPU.
 const MINIMUM: u64 = 16_384;
 
-/// `padded` drawn with `effects`, or `None` without a GPU (or for a small raster).
-pub(crate) fn layer_effects(padded: &RgbaImage, effects: &LayerEffects) -> Option<RgbaImage> {
+/// `padded` drawn with `effects` and the pixels at `fill`, or `None` without a GPU (or for a
+/// small raster).
+pub(crate) fn layer_effects(
+    padded: &RgbaImage,
+    effects: &LayerEffects,
+    fill: f32,
+) -> Option<RgbaImage> {
     let pixels = u64::from(padded.width()) * u64::from(padded.height());
-    attempt(pixels, MINIMUM, |gpu| gpu.layer_effects(padded, effects))
+    attempt(pixels, MINIMUM, |gpu| {
+        gpu.layer_effects(padded, effects, fill)
+    })
 }
 
 /// One render's encoder and the buffers every pass shares.
@@ -83,6 +90,7 @@ impl Processor {
         &self,
         padded: &RgbaImage,
         effects: &LayerEffects,
+        fill: f32,
     ) -> Result<RgbaImage> {
         let (width, height) = padded.dimensions();
         let plan = Plan::new(effects);
@@ -162,7 +170,7 @@ impl Processor {
                 flag(plan.overlay.is_some()),
                 flag(plan.outer_glow.is_some()),
                 flag(plan.inner_glow.is_some()),
-                0.0,
+                fill,
             ],
         ];
         let output = self.empty(bytes)?;

@@ -412,6 +412,10 @@ pub struct Layer {
     pub visible: bool,
     pub locked: bool,
     pub opacity: f32,
+    /// Photoshop's Fill: fades the layer's own pixels but not its layer effects, where
+    /// `opacity` fades both (format 13). Only pixel, text and shape layers have one below 1.
+    #[serde(default = "full_fill", skip_serializing_if = "is_full_fill")]
+    pub fill: f32,
     pub blend: BlendMode,
     pub transform: Transform,
     pub parent: Option<Uuid>,
@@ -441,6 +445,14 @@ pub struct Layer {
     pub pixels: Option<Arc<RgbaImage>>,
 }
 
+fn full_fill() -> f32 {
+    1.0
+}
+
+fn is_full_fill(fill: &f32) -> bool {
+    *fill == 1.0
+}
+
 impl Layer {
     pub fn is_effect(&self) -> bool {
         self.standalone_mask || self.adjustment.is_some() || self.filter.is_some()
@@ -457,6 +469,7 @@ impl Layer {
             visible: true,
             locked: false,
             opacity: 1.0,
+            fill: 1.0,
             blend: BlendMode::Normal,
             transform: Transform::new(width, height),
             parent: None,
@@ -875,6 +888,15 @@ impl Document {
             ensure!(
                 layer.opacity.is_finite() && (0.0..=1.0).contains(&layer.opacity),
                 "Invalid opacity"
+            );
+            ensure!(
+                layer.fill.is_finite() && (0.0..=1.0).contains(&layer.fill),
+                "Invalid fill"
+            );
+            // As in Photoshop, folders and adjustment, filter and mask layers have no fill.
+            ensure!(
+                layer.fill == 1.0 || layer.can_attach_effects(),
+                "Only pixel, text and shape layers take a fill"
             );
             ensure!(
                 !(layer.group || layer.adjustment.is_some() || layer.filter.is_some())
