@@ -1,0 +1,9 @@
+# A pseudo-locale for tests (en-XA, as on Android): English with accents, in brackets. Not a translation.
+@name	Ƥšéûðö
+Settings	[Šéţţîñĝš]
+General	[Ĝéñéŕåļ]
+Colour	[Çöļöûŕ]
+Done	[Ðöñé]
+{index} of {count}	[{count} öƒ {index}]
+{n} panes	[{n} þåñéš]
+{n} panes	[{n} þåñé]	one

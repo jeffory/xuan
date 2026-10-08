@@ -1,0 +1,1418 @@
+# The English source: every interface string, one per line, used as the key of every
+# other locale. A plural lists its English singular too: key, tab, singular, tab, "one".
+# See docs/TRANSLATING.md.
+@name	English
+Settings
+Settings…
+General
+General preferences
+Language
+Language changes apply immediately.
+Configuration file
+Appearance
+Window appearance
+Window title bar
+System
+Compact
+Use the title bar and window buttons of your desktop.
+Show the menus in the title bar, with window buttons on the right.
+Show the menus in the title bar, beside the window buttons.
+Rounded window corners appear after restarting Xuan.
+Title bar changes apply immediately.
+Title bar changes apply after restarting Xuan.
+Window buttons
+Match desktop theme
+Draw the buttons with the images of your desktop theme, falling back to the built-in ones when it has none.
+Always draw the buttons that come with Xuan.
+Images from
+KDE's window decoration images for GTK apps
+the GTK theme
+the icon theme
+Hovered close button:
+No theme images were found, so the built-in buttons are drawn.
+Could not load settings
+Could not save settings
+Done
+File
+Edit
+Image
+Layer
+Select
+Filter
+View
+Help
+New Canvas…
+Open…
+Open Image from Clipboard
+Open Compositor Package…
+Import Image as Layer…
+Save
+Save As…
+Export Image…
+Close Project
+Close RAW Develop
+Quit
+Undo
+Redo
+Cut
+Copy
+Copy Merged
+Paste
+Fill Foreground
+Fill Background
+Clear Pixels
+Content-Aware Fill
+Canvas Size…
+Image Size…
+Flip Canvas Horizontal
+Flip Canvas Vertical
+Rotate Canvas 90° Clockwise
+Rotate Canvas 90° Counter-Clockwise
+Rotate Canvas 180°
+Rotate Canvas
+Crop to Selection
+Trim…
+Trim
+Nothing to trim
+Based on
+Trim away
+Transparent Pixels
+Top Left Pixel Colour
+Bottom Right Pixel Colour
+New Layer
+New Group
+New Mask Layer
+New Adjustment Layer
+New Filter Layer
+Duplicate Layers
+Merge Layers
+Group Layers
+Ungroup Layers
+Flatten Image
+Delete Layers
+Rename…
+Flip Horizontal
+Flip Vertical
+Add Layer Mask
+Delete Mask
+Clipping Mask
+Move Out of Group
+Move Out of Parent
+Develop RAW…
+Rasterize RAW Layer
+Select All
+Deselect
+Invert Selection
+Load Selection
+Feather 3 px
+Fit Canvas
+Actual Pixels
+Zoom In
+Zoom Out
+Show Transform Controls
+Keyboard Shortcuts
+About Xuan
+Close window
+Minimize window
+Maximize window
+Restore window
+Close panel
+New canvas
+Open project
+Import image
+Create a canvas or import an image.
+A blank space for your next composition.
+Ready when you are
+Move / Transform
+Marquee
+Lasso
+Magic Wand
+Crop
+Brush
+Pencil
+Eraser
+Spot Healing
+Clone Stamp
+Blur / Smudge
+Gradient
+Shape
+Text
+Eyedropper
+Hand
+Zoom
+Click to select · Click outside to deselect · Drag to move · Handles to resize · Space to pan
+Drag to select · Shift add · Alt subtract · Ctrl+D deselect · Delete clears
+Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels
+Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect
+Drag to crop · Drag handles to adjust · Enter applies · Escape cancels · Space to pan
+Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan
+Paint over blemishes · [ ] size · Space to pan
+Alt-click to set source · Drag to clone · [ ] size · Space to pan
+Drag to retouch · [ ] size · 1–0 strength · Space to pan
+Drag to draw gradient · Shift locks angle · Escape cancels
+Drag to draw a new shape · Shift constrains proportions · Alt draws from center
+Click to add text · Click text to edit · Use Move to transform
+Click to sample the composition · X swaps foreground and background
+Drag to pan · Scroll to zoom · Ctrl+0 fits canvas
+Click to zoom in · Alt-click to zoom out · Ctrl+1 actual pixels
+Auto Select
+Ignore Transparent Pixels
+Select layers only at visible pixels. Uncheck to select anywhere inside a layer's bounds.
+Show Controls
+Transform
+Select a layer to transform
+Width
+Height
+Angle
+Opacity
+Size
+Hardness
+Spacing
+Flow
+Strength
+Smoothing
+Reduce hand jitter. Higher values make the brush follow farther behind the pointer. 0% turns smoothing off.
+Pen dynamics
+Pressure: size
+Pressure: opacity
+Pressure: flow
+How much paint one pass lays down. Going over the same spot in one stroke builds up to the opacity.
+Tilt: shape
+Ellipse
+Rectangle
+Rounded
+Radius
+Freehand
+Polygonal
+Polygonal Lasso
+Add
+Subtract
+Intersect
+Tolerance
+Contiguous
+Linear
+Radial
+Blur
+Smudge
+Liquify
+Aligned
+Sample
+Current layer
+All visible layers
+Point
+3×3
+5×5
+Alt-click on the canvas to set a clone source
+This Layer
+All Layers
+Layers
+No layers yet
+Layer contents
+Layer Appearance
+Blend
+Normal
+Multiply
+Screen
+Overlay
+Soft Light
+Hard Light
+Darken
+Lighten
+Colour Dodge
+Colour Burn
+Linear Burn
+Difference
+Exclusion
+Hue
+Saturation
+Colour
+Luminosity
+Dissolve
+Darker Colour
+Lighter Colour
+Linear Dodge (Add)
+Vivid Light
+Linear Light
+Pin Light
+Hard Mix
+Divide
+Lock layer
+Unlock layer
+Toggle visibility
+New layer (Ctrl+Shift+N)
+Group layers (Ctrl+G)
+Select group
+Add layer mask
+Add mask layer affecting layers below
+New adjustment layer
+New filter layer
+Delete layer
+Collapse layers
+Expand layers
+Mask
+Mask · Image only
+Mask · Layers below
+Invert mask
+Delete mask
+Link Mask
+Link
+Edit text…
+Edit adjustment…
+Edit filter…
+Non-destructive effect layer
+RAW · Embedded · Double-click to develop
+Foreground colour
+Background colour
+Swap colours (X)
+Default colours (D)
+Canvas size
+Image size
+Create canvas
+Resolution
+Anchor
+Transparent canvas · sRGB
+Change the canvas bounds and anchor your composition.
+Scale the composition while preserving source pixels.
+Cancel
+Apply
+Resize
+OK
+Working…
+Cancelled
+Preview
+Reset
+Rename Layer
+Save your changes?
+Some projects have unsaved changes.
+Discard changes
+Couldn't complete the operation
+Export image
+Export…
+Format
+Quality
+JPEG preview · transparency is flattened onto white
+WebP preview · transparency is kept
+Lossless
+Estimated size:
+sRGB · Transparent
+Keyboard shortcuts
+Brush or layer opacity
+Set clone source
+Pan canvas
+Pan canvas horizontally
+Horizontal wheel / Shift+wheel
+Wheel over a slider or number
+Adjust value
+Apply crop / Cancel gesture
+A space for your next composition.
+Native image editor · Rust + egui + wgpu
+Ported from Compositor by Wonder Assembly LLC.
+Free and open source, under the MIT license.
+Add text…
+Edit Text
+Font
+Search installed fonts
+No matching fonts
+This font is unavailable. Editing uses a fallback font.
+Bold
+Italic
+Underline
+Strikethrough
+Left
+Right
+Top
+Bottom
+Center
+Live preview · Ctrl+Enter to apply
+Text applied
+Adjustments
+Adjustment
+Hue / Saturation
+Levels
+Curves
+Exposure
+Gradient Map
+Black & White
+Colour Balance
+Midtones
+Preserve Luminosity
+Default
+Invert
+Gaussian Blur
+Motion Blur
+Lens Correction
+Original pixels · alpha-weighted histogram
+Input black
+Input white
+Output black
+Output white
+Gamma
+Output
+Red
+Green
+Blue
+All
+Reds
+Yellows
+Greens
+Cyans
+Blues
+Magentas
+Colourise
+Colour range falloff
+Range start
+Range end
+Falloff start
+Falloff end
+Invert selected colour range
+Click to add a point · Drag points to reshape the curve
+Amount
+Distance
+Monochromatic
+Offset
+Roughness
+New pattern
+Distortion
+Vignette
+Vignetting
+Highlights
+Shadows
+Develop
+Develop RAW
+RAW adjustment
+Undo RAW adjustment
+Opening RAW…
+Decoding RAW sensor data…
+Updating preview…
+Developing full-resolution image…
+Applying…
+Exporting 16-bit TIFF…
+RAW embedded · 32-bit float processing · sRGB photo layer
+RAW developed · Double-click the RAW layer to edit it again
+Embedded RAW layer with an sRGB photo render. Double-click the layer to return to Develop.
+Finish developing?
+Develop the image to keep your RAW adjustments in a project, or discard this Develop session.
+Develop the images to keep your RAW adjustments in projects, or discard all open Develop sessions.
+Discard and close
+Keep developing
+Retry preview
+Unable to develop this RAW file
+Natural
+Landscape
+Black & white
+Presets
+Save settings…
+Load settings…
+RAW settings
+Reset all Develop adjustments to defaults
+Basic
+Tone
+Detail
+Lens
+Masks
+Info
+White balance
+As shot
+Temperature
+Sampled neutral
+Pick neutral
+Daylight
+Cloudy
+Shade
+Tungsten
+Flash
+Tint
+Light
+Auto exposure
+Brightness
+Contrast
+Whites
+Blacks
+Presence
+Clarity
+Texture
+Dehaze
+Vibrance
+Tone curve
+S curve
+Lift blacks
+Colour mixer
+Orange
+Yellow
+Aqua
+Purple
+Magenta
+Lightness
+Monochrome
+Red mix
+Green mix
+Blue mix
+Split toning
+Shadow hue
+Shadow amount
+Highlight hue
+Highlight amount
+Balance
+Noise reduction
+Luminance
+Sharpening
+Threshold
+Manual lens correction
+Defringe
+Geometry
+Straighten
+Rotate left 90°
+Rotate right 90°
+Horizontal
+Vertical
+Bounds as a fraction of the rotated image
+Uncrop
+Square
+Round
+Tip
+Switch between Brush and Pencil
+Drag to draw hard pixels · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan
+Lens corrections are manual. The photo editor currently uses 8-bit sRGB; RAW data and Develop settings retain their original precision.
+Local adjustments
+Add a mask, then drag over the photo to place it.
+Draw mask
+Show guides
+Inverse
+Feather
+Brush radius
+Clear brush
+Warmth
+Camera information
+Source
+Dimensions
+Focal length
+Aperture
+Shutter
+Decoded depth
+RAW storage
+Edited
+Original
+Split
+Side by side
+Clipping
+Fit
+Full resolution
+Always use full-resolution preview
+Zoom in
+Zoom out
+Scroll to zoom · Space-drag to pan · Ctrl+0 to fit
+Zooming in loads full detail automatically. Use 100% to judge sharpening and noise reduction. Always using full resolution also applies it to Fit view and takes longer to update.
+This image exceeds the GPU's full-resolution preview limit. Develop and TIFF export still use every source pixel.
+Click a neutral gray area to set white balance
+Drag on the image to place the selected mask
+Film negative
+Negative
+Convert negative to positive
+Crop out the holder and borders, then analyze. Sample an unexposed film edge for a more accurate orange mask.
+Analyze crop
+Pick film base
+Black point
+Film gamma
+Red balance
+Green balance
+Blue balance
+Film calibration
+Film base is measured in linear camera RGB. Density range controls each channel's white point.
+Red base
+Green base
+Blue base
+Red density
+Green density
+Blue density
+Use film colour balance in the Negative tab instead of camera white balance.
+Click an unexposed film edge to sample the orange mask
+Cannot sample this area. Choose a clear, unexposed film edge.
+Project saved
+Export cancelled
+Opened image from clipboard
+Clipboard image
+Pasted image
+Select a layer before cutting pixels.
+Select a layer or make a selection before copying.
+The selection is empty.
+The layer is locked
+Select a RAW layer
+Unlock the RAW layer before developing it
+Unlock the text layer to edit it
+The RAW layer is no longer available
+The target project is no longer open
+The system clipboard is unavailable
+The clipboard does not contain an image or image file
+Only local image files can be pasted
+Could not read the clipboard image
+Import Image
+Copy Layers from Project
+Flip Layer
+Flip Canvas
+Fill
+Paint
+Erase
+Add Text
+Feather Selection
+Layer Opacity
+Fades the layer's own pixels but not its layer effects
+Layer Visibility
+Layer Mask
+Add Mask
+Add Mask from Selection
+Toggle Mask
+Reorder Layer
+Remove Background
+Remove Flat Background (edge colours)
+Nudge
+Untitled
+Images and Xuan projects
+Open Compositor .comp package folder
+Drag a crop area, then press Enter to apply
+Click the canvas to place text
+Hue/Saturation
+Grain
+Add Noise
+Version
+Exported
+Copied
+Unsaved changes
+Could not open
+Could not save project
+Could not copy to the system clipboard
+Could not load RAW settings
+Saved 16-bit TIFF
+Embedded
+Selection
+Histogram
+Folder
+Duplicate
+Delete
+Auto
+Clipboard
+Invalid clipboard image pixels
+ within Xuan; system clipboard unavailable
+ · Locked
+Save the 16-bit image with a .tif or .tiff extension
+The RAW worker stopped unexpectedly
+The filter worker stopped unexpectedly
+The editing worker stopped unexpectedly
+Red / cyan
+Blue / yellow
+Merge Down / Selected
+Enable / Disable Mask
+Link / Unlink Mask
+Enable / Disable
+Link / Unlink
+Create / Release Clipping Mask
+Load Layer / Mask
+Cannot sample this area. Choose a neutral area of the image.
+Add dropped files
+Insert the dropped file as a layer, or open it as a new document?
+Insert the dropped files as layers, or open them as new documents?
+Open as new document
+Insert as layer
+Pixel Grid
+Show pixel grid above
+Outlines individual pixels when zoomed in past this level, between 200% and 6400%.
+Content-Aware
+Create Texture
+Proximity Match
+Spot Healing works on layer pixels, not masks
+Navigator
+Show
+Grid
+Guides
+Grid Settings…
+Grid Settings
+Rulers
+Snap
+Snap To
+Document Bounds
+Lock Guides
+Clear Guides
+New Guide
+Move Guide
+Delete Guide
+Style
+Gridline every
+pixels
+Subdivisions
+A subdivision every
+pixels.
+Use no more subdivisions than the pixels between gridlines.
+Restore Defaults
+Choose a custom grid colour
+Light Gray
+Light Blue
+Light Red
+Medium Blue
+Cyan
+Black
+Custom
+Lines
+Dashed Lines
+Dots
+Drag from a ruler
+New guide
+No document open
+Imported with changes
+Imported with changes. These parts of the Compositor project aren't supported yet:
+Layer effects on folders or adjustment layers
+Text alignment, spacing or paragraph box (kept until the text is edited)
+Font, colour, bold and italic change the {} selected letters
+Text beyond Xuan's limits (imported as pixels)
+Live line shapes (imported as pixels)
+Blur or noise settings adapted to Xuan
+Clipping masks on blur or noise layers
+Layer Effects
+Layer Effects…
+Stroke
+Drop Shadow
+Colour Overlay
+Inner Shadow
+Outer Glow
+Inner Glow
+Position
+Outside
+Inside
+Remove Effect
+Add Effect
+Not on this layer
+Effects stay editable; the pixels are not changed
+Select a pixel or text layer to add effects
+Free Transform
+Re-run Plugin Action…
+Inverse Selection
+Show Grid
+Show Guides
+Reset Panel Layout
+Manage Plugins…
+Window
+Tools
+Plugins
+Switch Rectangle / Ellipse Marquee
+Switch Freehand / Polygonal Lasso
+Switch Rectangle / Ellipse Shape
+Swap Colours
+Reset Colours
+Decrease Brush Size
+Increase Brush Size
+Decrease Brush Hardness
+Increase Brush Hardness
+Rotate Left
+Rotate Right
+Show Edited
+Show Original
+Split View
+Side by Side View
+Show Clipping
+Search commands or keys
+Reset All
+Reassign
+{key} is already used by “{command}”.
+{key} is reserved for the editor and cannot be assigned.
+Single letters and digits are kept for tools. Add Ctrl or Alt.
+Click a shortcut and press keys. Escape cancels; Backspace removes it.
+Press keys…
+Add shortcut
+Restore the default shortcut
+Change the keys that run commands
+Other
+Customize…
+Imported with changes. These parts of the Photoshop file aren't supported yet:
+Folder blend mode
+passes through
+Bevel, satin, gradient or pattern effects and other effects Xuan doesn't have (left out)
+Effect blend modes, spread, noise or centered strokes (drawn approximately)
+Vertical, warped or transformed text (imported as pixels)
+Text with several styles (kept until the text is edited)
+Vector shapes (imported as pixels)
+Vector masks (left out)
+Shapes saved without pixels that Xuan can't draw (left out)
+Smart objects (imported as pixels)
+Fill layers (imported as pixels)
+Layers cropped to the canvas to fit the memory limit
+Artboards (each opened as its own document)
+Artboards (each imported as a folder)
+Layers outside every artboard (left out)
+Artboards too large for the memory limit (left out)
+Layers cropped to their artboard
+Artboard background colours (added as a layer)
+Artboard backgrounds Xuan can't read (left out)
+Artboard Background
+Clipping masks on folders or left-out layers
+Photoshop files are limited to {} on this computer
+The Photoshop file is damaged or incomplete
+The Photoshop file's layers don't fit within {} megapixels, the most this computer opens, even when cropped to the canvas
+This is not a Photoshop file
+This Photoshop file version isn't supported
+Only 8-bit RGB Photoshop files can be imported. In Photoshop, choose Image → Mode → RGB Color and 8 Bits/Channel, then save again.
+This Photoshop file uses the {} colour mode.
+This Photoshop file uses {} bits per channel.
+Bitmap
+Grayscale
+Indexed Color
+CMYK
+Multichannel
+Duotone
+Lab
+unknown
+A Photoshop layer's bounds are out of range
+The Photoshop file has too many layers
+This Photoshop file uses an unsupported compression method
+The Photoshop file's folders are nested too deeply
+Background
+Blend mode
+drawn as Normal
+Adjustment layer
+left out
+Import “{}”?
+Xuan will convert these Photoshop features. Nothing is applied until you continue.
+Import
+Import Photoshop File
+Too many layers
+Command Palette…
+Type a command…
+No matching commands
+Recent
+The pixels of the layer
+The whole image, flattened
+The flattened image inside the selection
+cropped around the regions
+longest side at most
+Positions and sizes of the regions:
+with the shape of the selection
+Region
+Options:
+The document's size and the names and positions of its layers
+The mask of the layer
+The shape of the selection
+Cancelled; nothing was sent
+Send to
+says it connects to:
+To run
+Xuan sends it:
+It asks Xuan for this outside an action you started:
+While the action runs, the plugin may also ask for other layers or the whole image. Xuan cannot check where the plugin sends what it receives.
+Your answer holds until the plugin stops. Xuan cannot check where the plugin sends what it receives.
+Don't ask again for this plugin
+Send
+uses the network, and plugins that use the network are disabled
+uses the network, and plugins that use the network are disabled.
+Off: plugins that use the network are disabled
+runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it. The plugin can still read your files and contact any server, whatever it declares. Only run plugins you trust.
+Says it connects to:
+Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.
+Gets document data without asking
+Ask Again
+Disable plugins that use the network
+Plugins that declare network hosts do not start and their actions are unavailable. A plugin that declares none could still connect.
+Block network for plugins that don't declare it
+Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked.
+Only available on Linux.
+Plugins that declare network hosts do not start and their actions are unavailable. Xuan blocks the network of the others.
+runs as a program with your rights. Xuan enforces the permissions below only for what Xuan itself sends the plugin and does for it, and blocks its network. The plugin can still read your files. Only run plugins you trust.
+Network blocked by Xuan (Linux)
+It cannot open network sockets, not even to this computer.
+did not start with its network blocked, and Xuan does not run it unfiltered while “Block network for plugins that don't declare it” is on in Settings
+Select an area first
+The selection, as a mask
+Generation
+Plugin
+The plugin reported no model details.
+provenance entries that looked like secrets were removed
+extended by
+on the left
+at the top
+on the right
+at the bottom
+Install from Folder or Zip…
+Install Plugin
+Cannot install this plugin
+Choose a plugin folder or a .zip archive. Xuan checks it and shows what it asks for before anything is copied into your plugins folder.
+You can also drop a folder or a .zip file here.
+Choose Zip…
+Zip archive
+Choose Folder…
+Update
+Install
+Install…
+Installed
+Name:
+Id:
+Version:
+From:
+Installs to:
+Replaces the installed version
+Replaces the plugin installed in this folder
+Installing does not allow it to run: Xuan asks for that the first time it starts.
+It stays allowed: you allowed it before with the same folder, command and permissions.
+Its folder, command or permissions differ from what you allowed, so Xuan asks again before it runs.
+There is no configuration folder to install plugins into.
+is being updated
+Install a plugin from a folder or a .zip archive. You can also drop one on this window.
+Models are not downloaded while plugins that use the network are disabled
+Xuan downloads them over https into the plugin's models folder and checks each against the size and SHA-256 the plugin declares. It never runs or unpacks them; the plugin loads them.
+does not match the size or SHA-256 its plugin declares. Download it again from Plugins → Manage Plugins… → Models.
+Cancelled; nothing was downloaded
+Corrupt
+Could not download
+Delete All Models
+Deleted model
+Deleted the models of
+Download
+Download Models?
+Downloading
+License:
+Models
+Not downloaded
+Not verified
+Ready
+Size:
+Source:
+The download stopped
+The plugin gives no license or source.
+Total:
+Verify
+Verifying
+Waiting for the plugin's models…
+Xuan downloads these models for
+downloaded and verified
+from
+needs these models from
+verified
+Uses models that Xuan downloads, after asking you:
+Can read the document and propose selections or new documents, but can't change your image
+Build
+Development build
+modified
+Copy version
+Load Layer Selection
+Load Mask Selection
+Expand Selection
+Contract Selection
+Expand by
+Contract by
+Layer's Pixels
+Mask's Black Areas
+Expand…
+Contract…
+Select Layer's Pixels
+Select Mask's Black Areas
+Expand Selection…
+Contract Selection…
+Colour Range
+Colour Range…
+Pick
+Remove
+Fuzziness
+Shift-click adds a colour, Alt-click takes one away.
+Click the image to pick the colour to select.
+How far a colour may be from the picked ones and still be selected
+Select everything except those colours, such as all but a green screen
+Remove Flat Background
+Select Subject
+Subject
+Wand
+Object
+Object Selection
+Click an object or drag a box around it
+is not installed or no longer provides it
+is disabled
+is not installed
+A plugin is already replacing this layer; wait for it to finish or cancel it
+used the built-in
+Built-in
+Choose the algorithm behind Select Subject and Remove Background
+provider
+Select an unlocked image layer
+Built-in uses Xuan's own classical segmentation, with no machine learning. A plugin that provides one of these, such as a segmentation model, can replace it; it runs under the plugin's usual permissions, and if it cannot run (disabled, or offline mode) the built-in algorithm is used with a notice.
+Theme
+Light mode
+Dark mode
+Follow your desktop's light or dark setting.
+Always use light colours.
+Always use dark colours.
+Use system accent colour
+Highlights take your desktop's accent colour instead of Xuan's blue, when it has one.
+Next Tab
+Previous Tab
+Tab 1
+Tab 2
+Tab 3
+Tab 4
+Tab 5
+Tab 6
+Tab 7
+Tab 8
+Last Tab
+Reopen Closed Tab
+Close Other Tabs
+Close Tabs to the Right
+Close Tab
+Copy Path
+Show in Folder
+Scroll tabs left
+Scroll tabs right
+List all tabs
+Could not show the file
+Close
+Open a file?
+asks Xuan to open this file:
+It opens as a new document. Open it only if you expected this.
+Open
+Export Image
+Save Project
+Allow
+Deny
+Always Allow
+Session:
+to edit your documents for this session?
+asks to change your documents directly, starting with:
+Each change is one step you can undo, and shows at once. Your answer holds until the plugin stops or starts a new session.
+Always Allow turns on auto mode: the plugin edits without asking until you turn it off in Plugins → Manage Plugins….
+Edit without asking (auto mode)
+Off: the plugin asks before its first edit in each session. On: it edits your documents without asking; every edit is still one step you can undo.
+Asks you before its first edit in each session, unless you turn on auto mode.
+With Deny: refuse every session until the plugin stops
+lines
+Copies
+lines to the clipboard:
+Copies to the clipboard:
+Brush dynamics
+Distance between dabs as a percentage of the size. 0% paints a continuous stroke.
+Taper in
+Taper out
+Length over which the stroke grows at its start or fades at its end. 0 turns the taper off.
+Taper: size
+Taper: opacity
+Scatter
+How far dabs scatter from the stroke, as a percentage of the size.
+Count
+Dabs painted at each spacing step.
+Size jitter
+How much smaller each dab may randomly be.
+Opacity jitter
+How much more transparent each dab may randomly be.
+Hue jitter
+How far each dab's hue may randomly turn. 100% reaches the opposite hue.
+Paths…
+Paths
+New Path
+Fill Path
+Stroke Path
+Make Selection
+Shape Layer from Path
+Rename Path
+Delete Path
+This document has no paths yet.
+Name
+Rename
+Shape Layer
+Even-odd fill (inner subpaths cut holes)
+New
+New path from SVG path data, e.g. M 0 70 C 12 64 38 64 51 70 Z
+Add Path
+Saved
+Saved without asking:
+Exported without asking:
+Export an image?
+Save the project?
+Save a file?
+asks Xuan to export
+asks Xuan to save
+asks Xuan to save, to its project file,
+in
+This replaces the existing file.
+This writes a new file.
+Always Allow lets this plugin save and export without asking until you turn it off in Plugins → Manage Plugins…. It still asks before replacing a file it did not write since Xuan started.
+Save and export without asking
+Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files it wrote since Xuan started, without asking; the status bar shows each one. Replacing any other file still asks.
+Path
+Text on a path
+None (text box)
+Save a path with Select → Paths… to set text along it.
+Start
+End
+Letter spacing
+Baseline shift
+Flip to the other side
+Turn letters with the path
+End size
+Letters past the end of an open path are hidden; on a closed path the text wraps around.
+Pen
+Click for a corner, drag for a curve · Click the first anchor to close · Enter finishes · Drag anchors and handles · Alt-drag a handle breaks it · Click a segment to add an anchor, an anchor to delete it · Alt-click converts
+Convert Anchor
+Move Anchor
+Delete Anchor
+Move Handle
+Add Anchor
+Click the first anchor to close the path · Enter finishes it
+Editing “{}”
+Editing the outline of “{}”
+Click to start a path · Click a path to edit it
+Edit with Pen
+Stroke with
+Make Path from Selection
+Symmetry
+Off
+Vertical mirrors left and right across the axis, Horizontal mirrors top and bottom, Radial turns the stroke around the centre.
+Segments
+Copies of the stroke around the centre.
+Centre X
+Centre Y
+Centre on canvas
+{index} of {count}
+Show all running jobs
+New layer with AI
+Advanced
+Generate
+Move the layer to reframe
+AI Region
+Use Selection
+Clear
+Make a selection first
+Drag a box and say what to do there · Click a box to change it · Delete removes it
+{verb} {count} boxes
+Blank
+Generate image
+Exact size
+Make the canvas exactly W × H; the image covers it and can be moved
+Describe the image; it is made at least this size.
+Finish or close the open plugin action first
+Drop an image here
+{} opens a file
+{} starts a new canvas
+No shortcuts match.
+Details
+Open Recent
+No recent files
+File not found
+Clear Recently Opened
+Open Most Recent File
+Paste Layers
+Copied layers:
+Preset
+Screens
+Social
+Square post
+Portrait post
+Landscape post
+Story / Reel
+Video thumbnail
+Link preview
+Banner
+Swap
+Swap width and height (portrait / landscape)
+Keep aspect ratio
+Paint Bucket
+Click to fill similar colours with the foreground colour · 1–0 opacity · Shift+G switches to Gradient
+Switch between Gradient and Paint Bucket
+Anti-alias
+Current Layer
+Stroke…
+Location
+Centre
+Preserve transparency
+The stroke stopped unexpectedly
+Ratio
+Free
+Ratio width
+Ratio height
+Swap the ratio's width and height (portrait / landscape)
+Bloom / Glow
+Tonal Contrast
+Dither
+Midpoint
+Roundness
+Atkinson (Classic Mac)
+Floyd–Steinberg
+Bayer 2 × 2
+Bayer 4 × 4
+Bayer 8 × 8
+Halftone Dots
+Halftone Lines
+Halftone Diamonds
+Mac Patterns
+ASCII
+Scanlines (CRT)
+Pixel Size
+Dot
+Diffusion
+Cell Size
+Text Size
+Characters
+Line Spacing
+Glow
+Wobble
+Density
+Two Colours
+Dark colour
+Light colour
+Light on Dark
+Dodge / Burn
+Switch Dodge / Burn / Sponge
+Switch Blur / Smudge / Liquify
+Dodge
+Burn
+Sponge
+Range
+Desaturate
+Saturate
+Drag to lighten, darken or change saturation · [ ] size · Shift-click straight line · 1–0 exposure · Shift+O switches Dodge / Burn / Sponge
+Dodge, Burn and Sponge work on layer pixels, not masks
+Liquify works on layer pixels, not masks
+The tones that change most. The effect fades out smoothly into the other tones.
+How strong the effect is. Going over the same spot in one stroke does not add to it; start a new stroke to go further.
+Imported with changes. Xuan does not draw these parts of the SVG file:
+Text (convert it to outlines first)
+Bitmaps and linked images
+This is not an OpenRaster file
+The OpenRaster file is damaged or incomplete
+The OpenRaster file's layers don't fit within {} megapixels, the most this computer opens
+The OpenRaster file names an unsafe layer path: {}
+The OpenRaster file has too many entries
+This is not an OpenRaster file: its mimetype entry is missing
+The OpenRaster file has too many layers
+The OpenRaster file's stacks are nested too deeply
+The OpenRaster file is missing the layer image {}
+An OpenRaster layer image is too large
+Text layers (flattened to pixels)
+Shape layers (flattened to pixels)
+Layer effects (drawn into their layers)
+Layer masks (applied to the layer's pixels)
+Fill below 100% (applied to the layer's pixels)
+Scaled, rotated or warped layers (resampled to pixels)
+Adjustments, filters and masks on a layer (applied to its pixels)
+Clipping masks (merged into their base layer)
+Adjustment layers (merged with the layers below them)
+Filter layers (merged with the layers below them)
+Mask layers (merged with the layers below them)
+Folders with a mask (flattened to one layer)
+Hidden adjustment, filter or mask layers (left out)
+RAW layers (written as their developed pixels)
+Exported with changes. OpenRaster can't hold these, so Xuan flattened them:
+Isolated folders whose layers blend (now pass through)
+Filter layers and other content Xuan can't read (left out)
+Imported with changes. These parts of the OpenRaster file aren't supported yet:
+Import OpenRaster File
+Xuan will convert these OpenRaster features. Nothing is applied until you continue.
+OpenRaster keeps layers, folders, blend modes and opacity
+These are flattened:
+This file was changed by another program.
+Reload
+Keep mine
+Reloaded
+Box
+Perspective
+Perspective Crop
+Switch Crop Box / Perspective Crop
+Switch between a crop box and perspective corners (Shift+C)
+Width of the straightened canvas
+Height of the straightened canvas
+Work the size out from the corners: the average of opposite sides
+Click four corners, or press Reset to start from the canvas
+{} of 4 corners placed
+Drag the corners onto the edges, then press Enter to apply
+Put the corners back at the selection's bounds, or inset from the canvas edges
+Perspective Crop removed {} paths that reached the vanishing line
+Drag the corners onto the edges of a page, screen or sign · Drag inside to move them · Enter straightens · Escape cancels · Shift+C switches to the box
+The crop's sides cross. Drag the corners so they go round the shape in order.
+The crop's corners must make a convex shape, with no corner pointing inwards or lying on a straight side.
+The crop's corners are too close together to straighten.
+“{}” reaches the vanishing line of the crop's perspective, so it cannot be straightened. Move the corners closer together, or make the layer smaller first.
+Composite
+Alpha
+Channels
+Select a pixel layer to see its channels
+Click to edit every channel
+Click to edit only this channel · Shift-click adds it · Ctrl-click loads it as a selection
+Editing every channel
+Editing channels:
+Select a pixel layer to load its channel
+Load Channel Selection
+Paste into Channel
+Load Channel as Selection
+Edit All Channels
+Edit Red Channel
+Edit Green Channel
+Edit Blue Channel
+Edit Alpha Channel
+Colour Lookup
+Colour Lookup…
+Colour lookup tables
+Could not load the colour lookup table
+Open an image before adding a colour lookup table
+1D table, {} entries
+3D table, {} points a side
+Interpolation
+Tetrahedral
+Trilinear
+Load Table…
+Adjustment Presets…
+Adjustment Presets
+Apply Adjustment Preset
+Preset saved
+No presets yet. Select adjustment layers and save them below.
+{} adjustment layers
+Select adjustment layers to save them as a preset.
+Save the {} selected adjustment layers as a preset.
+Replaces the preset of this name.
+Save Preset
+Save the selected adjustment layer as a preset.
+The border and spacing leave no room for the photos
+Border
+Cell
+Frame
+One large, two small
+One large above three
+Images
+The photos add up to more than {}, the most this computer opens at once
+Collage
+New Collage
+Some photos could not be added to the collage.
+Collage Layout
+Collage layout
+New collage
+Create collage
+Photos in a grid of cells. Each cell is a folder with its photo clipped to a frame, so everything stays editable.
+Layout
+Columns
+Rows
+Corner radius
+Border colour
+Choose photos…
+Clear photos
+No photos yet: drop or import images into the cells later.
+{} photos; the first {} fill the cells
+Photos: {}
+Photos follow their cells. Cells the new layout does not have are removed with their photos.
+Place in Cell
+New Collage…
+Collage Layout…
+Units
+Pixels
+Inches
+Centimetres
+Millimetres
+Points
+Picas
+Percent
+Pixels/inch
+Pixels/cm
+Resample
+Off, the pixels stay as they are: Width, Height and Resolution change only the print size
+Relative
+Width and Height are added to the current size
+MP
+Units & Rulers
+Units for the rulers and for resolutions
+What View → Rulers measure in. Print units use the document's resolution; percent is of its width or height. Right-click a ruler to change it there.
+How New Canvas, Canvas Size and Image Size show resolutions. Width and Height have their own Units menu in those dialogs.
+Camera Raw Filter…
+Camera Raw Filter
+Camera Raw
+Camera Raw Filter applied
+Camera Raw Filter cancelled
+RAW development cancelled
+Applying the Camera Raw Filter…
+Reading the layer…
+Camera Raw Filter · 32-bit float processing · Apply changes this layer
+Unable to filter this layer
+Opening the layer…
+Apply the Camera Raw Filter to keep your adjustments, or discard them and leave the layer as it was.
+Optics
+The Camera Raw Filter changes a layer's pixels, not its mask
+Select an unlocked layer with pixels. RAW layers open in Develop.
+The layer is no longer available
+Check for Updates…
+Check for updates
+Once a day, ask GitHub whether a newer release of Xuan is out, and show its release notes. Only that request is sent, and nothing is downloaded or installed. Help → Check for Updates… checks now.
+Software update
+Checking for updates…
+Xuan is up to date.
+Couldn't check for updates.
+Check your connection and try again later.
+A new version of Xuan is available.
+New version
+Installed version
+Download opens the release page in your browser. Nothing is downloaded or installed until you choose a file there.
+Later
+Skip This Version
+This release has no notes.
+The update check stopped unexpectedly.
+Drag to mark a region for the plugin · Click a region to edit its details
+This layer was generated by a plugin that is not installed:
+the plugins that come with Xuan
+comes with Xuan
+Browse…
+Random
+Drag on the canvas to add a box, or add the current selection.
+Remove region
+Add Selection
+Clear All
+Result
+New layer
+New document
+Run
+Folder:
+Runs:
+Changed since you allowed it:
+It was in
+It ran
+Its permissions changed
+No plugins installed
+Install a plugin by placing its folder, with a plugin.toml manifest, in the plugins directory, then press Reload.
+Enabled
+Running
+Not running
+Permissions
+Allowed
+Revoke
+{n} actions	{n} action	one
+{n} panes	{n} pane	one
+{n} formats	{n} format	one
+Log
+Could not load
+Plugins folder
+Could not save plugin secrets
+Compare
+Hide the result to see the original
+Discard
+Accept
+Receives these secrets:
+Edits documents directly (as undoable steps)
+Has Xuan read any file for it, not only those in its own and temporary folders
+Has Xuan read and write any file or folder for it, not only its own and temporary folders
+plugin
+needs your permission to run.
+Review Permissions…
+Retry
+Image unavailable
+could not be read, so it is left unchanged. Fix or remove it, then press Reload in Plugins → Manage Plugins…
+Could not load plugin secrets
+was removed or changed by Reload
+Could not save secrets
+it exited
+stopped unexpectedly
+did not start
+it did not answer in time
+it speaks protocol
+Open Plugins → Manage Plugins… to configure it.
+retry in
+Select an image layer first
+Open a document first
+Draw at least this many regions:
+Draw at most this many regions:
+finished; its result is shown when the editor is free
+The document was closed
+applied
+discarded
+No more regions can be added
+Accept the plugin's permissions, then open the file again
+Opening
+Accept the plugin's permissions in Plugins → Manage Plugins… first
+Exporting
+the plugin did not answer in time
+Could not export

@@ -845,7 +845,7 @@ impl EditorApp {
         demo: bool,
         screenshot: Option<PathBuf>,
     ) -> Self {
-        xuan::i18n::set_language(xuan::config::Language::English);
+        xuan::i18n::set_language(&xuan::config::Language::english());
         theme::apply(ctx, &theme::Palette::DARK);
         egui_extras::install_image_loaders(ctx);
         let mut app = Self {
@@ -2181,7 +2181,7 @@ impl eframe::App for EditorApp {
 
 impl EditorApp {
     fn show(&mut self, ctx: &egui::Context) {
-        xuan::i18n::set_language(self.config.language);
+        xuan::i18n::set_language(&self.config.language);
         if self.processor.is_none() {
             self.processor = self
                 .gpu_state

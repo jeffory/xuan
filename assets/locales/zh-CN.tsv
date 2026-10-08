@@ -1,3 +1,5 @@
+# 简体中文 (Simplified Chinese). See docs/TRANSLATING.md.
+@name	简体中文
 Settings	设置
 Settings…	设置…
 General	常规
@@ -181,7 +183,6 @@ Radius	半径
 Freehand	自由绘制
 Polygonal	多边形
 Polygonal Lasso	多边形套索
-Replace	替换
 Add	添加
 Subtract	减去
 Intersect	交集
@@ -217,7 +218,6 @@ Darken	变暗
 Lighten	变亮
 Colour Dodge	颜色减淡
 Colour Burn	颜色加深
-Linear Dodge	线性减淡
 Linear Burn	线性加深
 Difference	差值
 Exclusion	排除
@@ -254,7 +254,6 @@ Invert mask	反相蒙版
 Delete mask	删除蒙版
 Link Mask	链接蒙版
 Link	链接
-Unlink	取消链接
 Edit text…	编辑文字…
 Edit adjustment…	编辑调整…
 Edit filter…	编辑滤镜…
@@ -286,7 +285,6 @@ Some projects have unsaved changes.	部分项目有未保存的更改。
 Discard changes	放弃更改
 Couldn't complete the operation	无法完成操作
 Export image	导出图像
-Close / Quit	关闭 / 退出
 Export…	导出…
 Format	格式
 Quality	质量
@@ -296,20 +294,8 @@ Lossless	无损
 Estimated size:	预计大小：
 sRGB · Transparent	sRGB · 透明
 Keyboard shortcuts	键盘快捷键
-New / Open / Save	新建 / 打开 / 保存
-Import image as layer	将图像导入为图层
-Undo / Redo	撤销 / 重做
-Duplicate / Merge / Group	复制 / 合并 / 编组
-Select all / Deselect	全选 / 取消选择
-Copy / Paste image	复制 / 粘贴图像
-Fit / Actual pixels	适合窗口 / 实际像素
-Move / Marquee / Lasso / Wand / Crop	移动 / 选框 / 套索 / 魔棒 / 裁剪
-Brush / Eraser / Heal / Clone / Blur	画笔 / 橡皮擦 / 修复 / 仿制 / 模糊
-Gradient / Shape / Eyedropper / Hand / Zoom	渐变 / 形状 / 吸管 / 抓手 / 缩放
-Brush size / Hardness	画笔大小 / 硬度
 Brush or layer opacity	画笔或图层不透明度
 Set clone source	设置仿制来源
-Swap / Reset colours	交换 / 重置颜色
 Pan canvas	平移画布
 Pan canvas horizontally	水平平移画布
 Horizontal wheel / Shift+wheel	水平滚轮 / Shift+滚轮
@@ -340,7 +326,6 @@ Text applied	文字已应用
 Adjustments	调整
 Adjustment	调整
 Hue / Saturation	色相 / 饱和度
-Hue & Saturation	色相与饱和度
 Levels	色阶
 Curves	曲线
 Exposure	曝光
@@ -350,11 +335,9 @@ Colour Balance	色彩平衡
 Midtones	中间调
 Preserve Luminosity	保持明度
 Default	默认值
-Film Grain	胶片颗粒
 Invert	反相
 Gaussian Blur	高斯模糊
 Motion Blur	动感模糊
-Noise	噪点
 Lens Correction	镜头校正
 Original pixels · alpha-weighted histogram	原始像素 · 按透明度加权的直方图
 Input black	输入黑场
@@ -500,7 +483,6 @@ Warmth	暖色
 Camera information	相机信息
 Source	来源
 Dimensions	尺寸
-Camera	相机
 Focal length	焦距
 Aperture	光圈
 Shutter	快门
@@ -586,7 +568,6 @@ Images and Xuan projects	图像和 Xuan 项目
 Open Compositor .comp package folder	打开 Compositor .comp 项目包文件夹
 Drag a crop area, then press Enter to apply	拖动选择裁剪区域，按 Enter 应用
 Click the canvas to place text	单击画布放置文字
-New canvas (Ctrl+N)	新建画布 (Ctrl+N)
 Hue/Saturation	色相/饱和度
 Grain	颗粒
 Add Noise	添加杂色
@@ -670,8 +651,6 @@ Custom	自定义
 Lines	直线
 Dashed Lines	虚线
 Dots	点线
-Rulers / Grid / Guides	标尺 / 网格 / 参考线
-Snap / Lock guides	对齐 / 锁定参考线
 Drag from a ruler	从标尺拖动
 New guide	新建参考线
 No document open	未打开文档

@@ -3,7 +3,7 @@
 
 use super::theme::PaletteExt as _;
 use egui::{Button, Event, Key, Modifiers, RichText, Ui, WidgetInfo, WidgetType};
-use xuan::i18n::tr;
+use xuan::i18n::{tr, tr_args};
 
 use super::{
     commands::{self, Category, Chord, Entry, Keymap, Refusal},
@@ -118,10 +118,10 @@ impl KeyEditor {
                 commands::set_override(overrides, keymap, &id, &keys);
             }
             Err(Refusal::Reserved) => {
-                self.message = Some(
-                    tr("{key} is reserved for the editor and cannot be assigned.")
-                        .replace("{key}", &chord.label()),
-                );
+                self.message = Some(tr_args(
+                    "{key} is reserved for the editor and cannot be assigned.",
+                    &[("key", &chord.label())],
+                ));
             }
             Err(Refusal::NeedsModifier) => {
                 self.message = Some(
@@ -241,11 +241,10 @@ pub(super) fn page(
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.add(
-                    egui::Label::new(
-                        tr("{key} is already used by “{command}”.")
-                            .replace("{key}", &conflict.chord.label())
-                            .replace("{command}", other),
-                    )
+                    egui::Label::new(tr_args(
+                        "{key} is already used by “{command}”.",
+                        &[("key", &conflict.chord.label()), ("command", other)],
+                    ))
                     .wrap(),
                 );
                 let response = widgets::dialog_footer(
