@@ -115,6 +115,7 @@ impl EditorApp {
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),
                 Dialog::SelectionAmount => self.selection_amount_dialog(ctx),
                 Dialog::Trim => self.trim_dialog(ctx),
+                Dialog::Stroke => self.stroke_dialog(ctx),
                 Dialog::Paths => self.paths_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::About => {

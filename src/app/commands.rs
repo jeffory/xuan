@@ -463,6 +463,22 @@ fn has_selection(app: &EditorApp) -> bool {
             .session()
             .is_some_and(|s| s.document.selection.is_some())
 }
+/// Edit → Stroke… needs a selection and an unlocked pixel layer whose pixels (not its mask)
+/// are being edited: not a folder, adjustment, filter, mask, text, shape or RAW layer.
+fn stroke_target(app: &EditorApp) -> bool {
+    has_selection(app)
+        && !app.editing_mask()
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|l| {
+                l.can_attach_effects()
+                    && !l.locked
+                    && l.text.is_none()
+                    && l.shape.is_none()
+                    && l.raw.is_none()
+            })
+}
 fn has_guides(app: &EditorApp) -> bool {
     editing(app) && app.session().is_some_and(|s| !s.document.guides.is_empty())
 }
@@ -679,6 +695,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[bare(Key::Delete), bare(Key::Backspace)])
         .host(Edit)
         .aliases(&["delete", "erase"]),
+    cmd("stroke", "Stroke…", C::Edit)
+        .when(stroke_target)
+        .aliases(&["outline", "border", "selection edge"]),
     cmd("content_fill", "Content-Aware Fill", C::Edit)
         .keys(&[shift(Key::F5)])
         .host(Edit)

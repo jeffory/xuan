@@ -36,8 +36,14 @@ mod bucket_tests;
 
 mod bucket;
 pub use bucket::{BucketOptions, bucket, bucket_coverage};
+
+#[cfg(test)]
+#[path = "paint/outline_tests.rs"]
+mod outline_tests;
+
 pub mod dynamics;
 pub use dynamics::Dynamics;
+pub mod outline;
 mod pencil;
 pub use pencil::tip_offsets;
 mod stroke;
