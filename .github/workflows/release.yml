@@ -63,6 +63,8 @@ jobs:
             test -f "$artifact"
             sha256sum --check "$artifact.sha256"
           done
+          # AppImageUpdate reads this to update the AppImage.
+          test -s "xuan-$version-x86_64.AppImage.zsync"
       - name: Publish release notes and packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,7 +81,7 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" \
             dist/xuan-"$version"-linux-x86_64.{tar.gz,deb,rpm}{,.sha256} \
-            dist/xuan-"$version"-x86_64.AppImage{,.sha256} \
+            dist/xuan-"$version"-x86_64.AppImage{,.sha256,.zsync} \
             dist/xuan-"$version"-windows-x86_64.zip{,.sha256} \
             dist/xuan-"$version"-source.tar.gz{,.sha256} \
             --clobber --repo "$GITHUB_REPOSITORY"
