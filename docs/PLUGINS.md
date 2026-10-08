@@ -539,7 +539,10 @@ where it is stored as `"<plugin>/<action>"`.
 Inputs become a dialog, drawn by the host. Types: `text`, `multiline`,
 `integer`, `number` (with `min`, `max`, `step`), `seed`, `bool`, `enum`,
 `color`, `path` and `regions`. Each has `label`, optional `help`, `default` and
-`placeholder`.
+`placeholder`. An `integer` or `number` with both `min` and `max` is a slider,
+except an `integer` whose range spans more than 10,000 values, such as a port
+(0–65535), which is a number field; typed values are kept within the range.
+Settings are drawn the same way.
 
 `regions` opens the **Region** tool while the dialog is open: the user drags
 numbered boxes over the image, or turns the current selection into a region, and

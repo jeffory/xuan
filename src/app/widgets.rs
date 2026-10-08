@@ -1590,6 +1590,14 @@ pub fn menu_choice<T: PartialEq>(
     response
 }
 
+/// A small filled circle in `color` before a status such as a plugin's "Running" or "Not
+/// running". The text beside it says the same, for those who cannot tell the colours apart.
+pub fn status_dot(ui: &mut Ui, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(8.0, 12.0), Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
+    response
+}
+
 /// The side of [`alert_icon`], in points.
 pub const ALERT_ICON_SIZE: f32 = 28.0;
 

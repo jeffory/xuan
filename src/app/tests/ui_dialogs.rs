@@ -675,3 +675,86 @@ fn the_error_dialog_has_an_icon_and_copies_its_details() {
     ui.click("OK");
     assert!(ui.app().error.is_none());
 }
+
+/// Manage Plugins: a port-like integer setting (0–65535) is a number field that keeps typed
+/// values in range, a narrow one stays a slider, and the status line has a dot (issue 91).
+#[test]
+fn a_port_setting_is_a_number_field_and_the_status_has_a_dot() {
+    use egui_kittest::kittest::By;
+    let config = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("plugin.toml"),
+        r#"
+[plugin]
+id = "server"
+name = "Server"
+version = "0.1.0"
+command = ["sh", "plugin.sh"]
+
+[[settings]]
+id = "port"
+type = "integer"
+label = "Port"
+default = 8765
+min = 0
+max = 65535
+
+[[settings]]
+id = "level"
+type = "integer"
+label = "Level"
+default = 5
+min = 0
+max = 10
+"#,
+    )
+    .unwrap();
+    let mut ui = UiTest::new();
+    ui.isolate_config(config.path());
+    let manifest = xuan::plugins::Manifest::load(dir.path()).unwrap();
+    ui.app_mut().install_plugins(vec![manifest], vec![]);
+    let sliders = |ui: &UiTest| ui.harness.query_all_by_role(Role::Slider).count();
+    let outside = sliders(&ui);
+    ui.app_mut().plugins.manager_selected = Some("server".into());
+    ui.app_mut().command("plugins");
+    ui.settle();
+    assert!(ui.has("Not running"));
+    // A muted dot just before the status.
+    let status = ui.harness.get_by_label("Not running").rect();
+    let muted = super::super::theme::palette(&ui.ctx()).muted;
+    let dot = ui
+        .harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::Circle(circle) => {
+                circle.fill == muted
+                    && (circle.center.y - status.center().y).abs() < 3.0
+                    && (status.left() - 16.0..status.left()).contains(&circle.center.x)
+            }
+            _ => false,
+        });
+    assert!(dot, "no status dot before {status:?}");
+    // Level is a slider; Port is not.
+    assert_eq!(sliders(&ui), outside + 1);
+
+    let port = |ui: &UiTest| {
+        (ui.app().config.plugins.get("server"))
+            .and_then(|plugin| plugin.settings.get("port"))
+            .and_then(toml::Value::as_integer)
+    };
+    for (typed, kept) in [("9000", 9000), ("70000", 65535), ("-3", 0)] {
+        // Focused, the field selects its text, so typing replaces it.
+        let shown = port(&ui).unwrap_or(8765).to_string();
+        ui.harness
+            .get(By::new().role(Role::SpinButton).value(&shown))
+            .focus();
+        ui.settle();
+        ui.type_keys(typed);
+        ui.key(egui::Key::Enter);
+        assert_eq!(port(&ui), Some(kept), "typed {typed}");
+    }
+    assert!(ui.has("Not running"));
+}
