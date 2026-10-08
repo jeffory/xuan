@@ -115,6 +115,51 @@ fn brush_source(uv: vec2<f32>) -> vec4<f32> {
     return vec4(sum.rgb / max(sum.a, 0.000001), sum.a);
 }
 
+// Dodge, Burn and Sponge (modes 6, 7 and 8), as paint::tone::apply.
+fn tone_weight(range: f32, luma: f32) -> f32 {
+    let shadows = 1.0 - smoothstep(5.0 / 24.0, 11.0 / 24.0, luma);
+    let highlights = smoothstep(13.0 / 24.0, 19.0 / 24.0, luma);
+    if (range == 0.0) {
+        return shadows;
+    }
+    if (range == 2.0) {
+        return highlights;
+    }
+    return max(1.0 - shadows - highlights, 0.0);
+}
+
+fn tone_pixel(p: vec4<f32>, mode: f32, amount: f32) -> vec4<f32> {
+    let strength = clamp(amount * config[13].w, 0.0, 1.0);
+    if (p.a <= 0.0 || strength <= 0.0) {
+        return p;
+    }
+    let y = dot(p.rgb, vec3(0.2126, 0.7152, 0.0722));
+    var rgb = p.rgb;
+    if (mode == 6.0) {
+        let k = strength * tone_weight(config[13].z, y) * 0.5;
+        rgb = rgb + k * (1.0 - rgb);
+    } else if (mode == 7.0) {
+        let k = strength * tone_weight(config[13].z, y) * 0.5;
+        rgb = rgb - k * rgb;
+    } else {
+        var factor = 1.0 - strength;
+        if (config[14].w != 0.0) {
+            factor = 1.0 + strength;
+            for (var c = 0; c < 3; c++) {
+                let d = rgb[c] - y;
+                if (d > 1e-6) {
+                    factor = min(factor, (1.0 - y) / d);
+                } else if (d < -1e-6) {
+                    factor = min(factor, y / -d);
+                }
+            }
+            factor = max(factor, 1.0);
+        }
+        rgb = y + (rgb - y) * factor;
+    }
+    return vec4(clamp(rgb, vec3(0.0), vec3(1.0)), p.a);
+}
+
 @compute @workgroup_size(8, 8)
 fn stroke_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
     let size = vec2<u32>(config[0].xy);
@@ -179,6 +224,8 @@ fn stroke_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
         } else if (mode == 0.0) {
             color.a *= amount;
             p = over(p, color);
+        } else if (mode >= 6.0) {
+            p = tone_pixel(p, mode, amount);
         } else if (config[12].x != 0.0) {
             if (mode == 2.0 || mode == 5.0) {
                 color = brush_source((point + config[11].zw) / config[12].xy);

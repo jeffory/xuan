@@ -63,11 +63,7 @@ impl Stroke {
             let piece = Piece::Segment([from, to], [from_brush.clone(), brush.clone()]);
             return self.draw(document, vec![piece], &options);
         }
-        let accumulate = options.mask_target
-            || matches!(
-                options.mode,
-                PaintMode::Paint | PaintMode::Erase | PaintMode::Pencil
-            );
+        let accumulate = options.mask_target || dynamic(options.mode);
         super::stroke_segment(
             document,
             from,
@@ -131,8 +127,8 @@ impl Stroke {
     }
 
     /// Fix the stroke's symmetric copies at its first piece, from the
-    /// brush's symmetry on this canvas. Only the Brush, Pencil and Eraser
-    /// paint symmetrically.
+    /// brush's symmetry on this canvas. Only the Brush, Pencil, Eraser and
+    /// Dodge, Burn and Sponge paint symmetrically.
     fn start(&mut self, document: &Document, brush: &Brush, mode: PaintMode) {
         if self.copies.is_none() {
             self.copies = Some(if dynamic(mode) && brush.symmetry.active() {
@@ -316,11 +312,18 @@ impl Stroke {
     }
 }
 
-/// Whether a mode paints with brush dynamics.
+/// Whether a mode paints with brush dynamics and symmetry, and keeps its
+/// coverage and original pixels for the whole stroke. Dodge, Burn and
+/// Sponge rely on that to change each pixel once, from its original value.
 fn dynamic(mode: PaintMode) -> bool {
     matches!(
         mode,
-        PaintMode::Paint | PaintMode::Erase | PaintMode::Pencil
+        PaintMode::Paint
+            | PaintMode::Erase
+            | PaintMode::Pencil
+            | PaintMode::Dodge
+            | PaintMode::Burn
+            | PaintMode::Sponge
     )
 }
 

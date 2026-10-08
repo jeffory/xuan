@@ -76,6 +76,8 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Tools | Spot Healing | J |
 | Tools | Clone Stamp | S |
 | Tools | Blur / Smudge | R |
+| Tools | Dodge / Burn | O |
+| Tools | Switch Dodge / Burn / Sponge | Shift+O |
 | Tools | Gradient | G |
 | Tools | Switch between Gradient and Paint Bucket | Shift+G |
 | Tools | Shape | U |
@@ -95,7 +97,7 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Help | Keyboard Shortcuts | F1 |
 <!-- END GENERATED -->
 
-With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last. G likewise selects whichever of Gradient and Paint Bucket you used last.
+With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last. G likewise selects whichever of Gradient and Paint Bucket you used last. O selects the Dodge / Burn tool in the mode you used last; with the tool selected, Shift+O moves on to the next of Dodge, Burn and Sponge.
 
 ## Other keys and pointer controls
 

@@ -1162,3 +1162,15 @@ Two Colours	双色
 Dark colour	暗部颜色
 Light colour	亮部颜色
 Light on Dark	暗底亮色
+Dodge / Burn	减淡 / 加深
+Switch Dodge / Burn / Sponge	切换减淡 / 加深 / 海绵
+Dodge	减淡
+Burn	加深
+Sponge	海绵
+Range	范围
+Desaturate	去色
+Saturate	加色
+Drag to lighten, darken or change saturation · [ ] size · Shift-click straight line · 1–0 exposure · Shift+O switches Dodge / Burn / Sponge	拖动以减淡、加深或改变饱和度 · [ ] 大小 · Shift 单击绘制直线 · 1–0 曝光 · Shift+O 切换减淡 / 加深 / 海绵
+Dodge, Burn and Sponge work on layer pixels, not masks	减淡、加深和海绵只作用于图层像素，不作用于蒙版
+The tones that change most. The effect fades out smoothly into the other tones.	变化最大的色调。效果会平滑地过渡到其他色调。
+How strong the effect is. Going over the same spot in one stroke does not add to it; start a new stroke to go further.	效果的强度。在同一笔画中反复涂抹同一处不会叠加；要加强效果，请开始新的笔画。

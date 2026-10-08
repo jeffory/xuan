@@ -1106,6 +1106,85 @@ fn processing_low_flow_stroke_builds_up_as_on_the_cpu() {
 
 #[test]
 #[ignore = "requires native compute adapter"]
+fn processing_dodge_burn_and_sponge_match_cpu() {
+    use crate::paint::{Brush, PaintMode, Stroke, StrokeOptions, Tone, ToneRange};
+    let gpu = processor();
+    let mut base = Document::new(560, 400).unwrap();
+    base.insert(Layer::image("Pixels", fixture(560, 400)));
+    base.selection = Some(Arc::new(image::GrayImage::from_fn(560, 400, |x, y| {
+        image::Luma([(x * 19 + y * 11) as u8])
+    })));
+    // Dabs of 300 px are large enough for the GPU path; the stroke goes
+    // back over itself, which must not compound.
+    let points = [
+        Point::new(150.0, 160.0),
+        Point::new(400.0, 230.0),
+        Point::new(160.0, 200.0),
+        Point::new(380.0, 170.0),
+    ];
+    for (mode, range, saturate) in [
+        (PaintMode::Dodge, ToneRange::Shadows, false),
+        (PaintMode::Dodge, ToneRange::Midtones, false),
+        (PaintMode::Burn, ToneRange::Midtones, false),
+        (PaintMode::Burn, ToneRange::Highlights, false),
+        (PaintMode::Sponge, ToneRange::Midtones, false),
+        (PaintMode::Sponge, ToneRange::Midtones, true),
+    ] {
+        let brush = Brush {
+            diameter: 300.0,
+            hardness: 0.6,
+            opacity: 0.9,
+            tone: Tone {
+                range,
+                exposure: 0.8,
+                saturate,
+            },
+            ..Default::default()
+        };
+        let apply = |device: Option<Arc<Processor>>| {
+            let mut document = base.clone();
+            let mut stroke = Stroke::default();
+            let options = || StrokeOptions {
+                mode,
+                mask_target: false,
+                source: None,
+                clone_offset: Point::default(),
+            };
+            scope(device, || {
+                for pair in points.windows(2) {
+                    stroke
+                        .segment(&mut document, pair[0], pair[1], &brush, &brush, options())
+                        .unwrap();
+                }
+                stroke.finish(&mut document, options()).unwrap();
+            });
+            document
+        };
+        let expected = apply(None);
+        let actual = apply(Some(gpu.clone()));
+        let original = base.active().unwrap().pixels.as_ref().unwrap();
+        let expected = expected.active().unwrap().pixels.as_ref().unwrap();
+        assert!(
+            differing_pixels(expected, original, 2) > 1000,
+            "{mode:?} {range:?} changed too little to compare"
+        );
+        // Alpha is untouched on both paths.
+        assert!(
+            expected
+                .pixels()
+                .zip(original.pixels())
+                .all(|(a, b)| a[3] == b[3])
+        );
+        compare(
+            actual.active().unwrap().pixels.as_ref().unwrap(),
+            expected,
+            1,
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires native compute adapter"]
 fn processing_brush_dynamics_match_cpu() {
     use crate::paint::{Brush, Dynamics, PaintMode, Stroke, StrokeOptions};
     let gpu = processor();

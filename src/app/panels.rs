@@ -156,6 +156,9 @@ impl EditorApp {
                                                 ],
                                             );
                                         }
+                                        if self.tool == Tool::Dodge {
+                                            self.tone_options(ui);
+                                        }
                                         if self.tool == Tool::Heal {
                                             widgets::segmented(
                                                 ui,
@@ -221,7 +224,10 @@ impl EditorApp {
                                                 "How much paint one pass lays down. Going over the same spot in one stroke builds up to the opacity.",
                                             ));
                                         }
-                                        widgets::color_well(ui, &mut self.brush.color);
+                                        // Dodge, Burn and Sponge use no colour.
+                                        if self.tool != Tool::Dodge {
+                                            widgets::color_well(ui, &mut self.brush.color);
+                                        }
                                         ui.menu_button(tr("Pen dynamics"), |ui| {
                                             widgets::checkbox(ui, &mut self.pressure_size, tr("Pressure: size"));
                                             widgets::checkbox(ui, &mut self.pressure_opacity, tr("Pressure: opacity"));
@@ -230,7 +236,7 @@ impl EditorApp {
                                             }
                                             widgets::checkbox(ui, &mut self.tilt_shape, tr("Tilt: shape"));
                                         });
-                                        if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase) {
+                                        if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase | Tool::Dodge) {
                                             ui.menu_button(tr("Brush dynamics"), |ui| self.brush_dynamics(ui));
                                             ui.menu_button(tr("Symmetry"), |ui| self.brush_symmetry(ui));
                                         }
@@ -630,6 +636,52 @@ impl EditorApp {
         if let Some(tool) = tool {
             self.set_tool(tool);
         }
+    }
+
+    /// The Dodge / Burn tool's mode, then Range and Exposure (Dodge and Burn)
+    /// or Saturate / Desaturate and Exposure (Sponge).
+    fn tone_options(&mut self, ui: &mut egui::Ui) {
+        use xuan::paint::ToneRange;
+        widgets::segmented(
+            ui,
+            &mut self.tone_mode,
+            &[
+                (PaintMode::Dodge, tr("Dodge")),
+                (PaintMode::Burn, tr("Burn")),
+                (PaintMode::Sponge, tr("Sponge")),
+            ],
+        );
+        let tone = &mut self.brush.tone;
+        if self.tone_mode == PaintMode::Sponge {
+            widgets::segmented(
+                ui,
+                &mut tone.saturate,
+                &[(false, tr("Desaturate")), (true, tr("Saturate"))],
+            );
+        } else {
+            ui.label(tr("Range"));
+            widgets::segmented(
+                ui,
+                &mut tone.range,
+                &[
+                    (ToneRange::Shadows, tr("Shadows")),
+                    (ToneRange::Midtones, tr("Midtones")),
+                    (ToneRange::Highlights, tr("Highlights")),
+                ],
+            )
+            .on_hover_text(tr(
+                "The tones that change most. The effect fades out smoothly into the other tones.",
+            ));
+        }
+        ui.label(tr("Exposure"));
+        ui.add(
+            widgets::Slider::new(&mut tone.exposure, 0.0..=1.0)
+                .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                .percentage(),
+        )
+        .on_hover_text(tr(
+            "How strong the effect is. Going over the same spot in one stroke does not add to it; start a new stroke to go further.",
+        ));
     }
 
     /// Tool options → Brush dynamics: spacing, taper, scatter and jitter.

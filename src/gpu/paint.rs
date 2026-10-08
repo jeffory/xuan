@@ -195,6 +195,9 @@ pub(crate) fn stroke(
         PaintMode::Blur => 3,
         PaintMode::Heal => 4,
         PaintMode::Smudge => 5,
+        PaintMode::Dodge => 6,
+        PaintMode::Burn => 7,
+        PaintMode::Sponge => 8,
     };
     let minimum = if mode == 3 || mode == 4 {
         16_384
@@ -260,12 +263,22 @@ pub(crate) fn stroke(
         if let Some(source) = source {
             auxiliary.extend_from_slice(source.as_raw());
         }
-        config.push([stroke.brush.tilt[0], stroke.brush.tilt[1], 0.0, 0.0]);
+        let tone = stroke.brush.tone;
+        config.push([
+            stroke.brush.tilt[0],
+            stroke.brush.tilt[1],
+            match tone.range {
+                crate::paint::ToneRange::Shadows => 0.0,
+                crate::paint::ToneRange::Midtones => 1.0,
+                crate::paint::ToneRange::Highlights => 2.0,
+            },
+            tone.exposure,
+        ]);
         config.push([
             if coverage.is_some() { 1.0 } else { 0.0 },
             f32::from_bits((auxiliary.len() / 4) as u32),
             stroke.flow,
-            0.0,
+            if tone.saturate { 1.0 } else { 0.0 },
         ]);
         if let Some(coverage) = &coverage {
             for y in top..bottom {
