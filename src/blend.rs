@@ -115,6 +115,22 @@ impl BlendMode {
         self.code() < 13
     }
 
+    /// The eight modes Photoshop applies a layer's Fill to differently from its Opacity
+    /// (see [`composite_filled`]).
+    pub fn fill_is_special(self) -> bool {
+        matches!(
+            self,
+            Self::ColorBurn
+                | Self::LinearBurn
+                | Self::ColorDodge
+                | Self::LinearDodge
+                | Self::VividLight
+                | Self::LinearLight
+                | Self::HardMix
+                | Self::Difference
+        )
+    }
+
     /// Menu order (`GROUPS` flattened).
     pub fn menu_order() -> impl Iterator<Item = Self> {
         Self::GROUPS.into_iter().flatten().copied()
@@ -357,6 +373,62 @@ pub fn composite(dst: [f32; 4], src: [f32; 4], mode: BlendMode) -> [f32; 4] {
     result
 }
 
+/// One channel of one of the eight special modes ([`BlendMode::fill_is_special`]) for a
+/// layer at `fill` below 1. Photoshop documents only that Fill on these modes changes the
+/// result rather than fading it, and users measure it, so this follows what can be checked:
+///
+/// * Color Burn at Fill X% matches Fill 100% with white clipped over the layer at
+///   (100 − X)% opacity (measured on Adobe's community forum): Fill moves the layer's colour
+///   toward the mode's neutral colour, the one that leaves the backdrop as it is, and the mode
+///   then applies at full strength. The neutral is white for Color Burn and Linear Burn,
+///   black for Color Dodge, Linear Dodge and Difference, and 50% grey for Vivid Light and
+///   Linear Light. Linear Dodge at 50% fill, for one, adds half the layer.
+/// * Hard Mix has no neutral colour. Below 100% it softens its threshold into a ramp, which
+///   Photoshop's users describe as "a contrast tool cranked to absurd levels": at Fill 90%
+///   one channel takes about 27 levels instead of 2. The ramp
+///   `clamp((d − fill·(1 − s)) / (1 − fill))` is the one with that count: it is the backdrop
+///   at Fill 0%, centred on Hard Mix's threshold `d + s = 1`, and steepens to the threshold at
+///   100%. Adobe does not publish the exact formula, so the ramp's shape is inferred.
+pub fn blend_channel_filled(d: f32, s: f32, mode: BlendMode, fill: f32) -> f32 {
+    let toward = |neutral: f32| neutral + (s - neutral) * fill;
+    match mode {
+        BlendMode::ColorBurn | BlendMode::LinearBurn => blend_channel(d, toward(1.0), mode),
+        BlendMode::ColorDodge | BlendMode::LinearDodge | BlendMode::Difference => {
+            blend_channel(d, toward(0.0), mode)
+        }
+        BlendMode::VividLight | BlendMode::LinearLight => blend_channel(d, toward(0.5), mode),
+        BlendMode::HardMix if fill < 1.0 => ((d - fill * (1.0 - s)) / (1.0 - fill)).clamp(0.0, 1.0),
+        _ => blend_channel(d, s, mode),
+    }
+}
+
+/// [`composite`] for a layer at `fill` (Photoshop's Fill, 0–1): for most modes it fades the
+/// layer as opacity does, scaling `src`'s alpha. For the eight special modes Fill changes the
+/// blend instead ([`blend_channel_filled`]) while the layer's alpha still fades the result;
+/// only where there is no backdrop to blend with does the layer show at its faded alpha.
+/// `composite.wgsl` mirrors this.
+pub fn composite_filled(dst: [f32; 4], mut src: [f32; 4], mode: BlendMode, fill: f32) -> [f32; 4] {
+    if fill >= 1.0 {
+        return composite(dst, src, mode);
+    }
+    if !mode.fill_is_special() {
+        src[3] *= fill;
+        return composite(dst, src, mode);
+    }
+    let shown = src[3] * fill * (1.0 - dst[3]);
+    let alpha = shown + dst[3];
+    if alpha <= 0.0 {
+        return [0.0; 4];
+    }
+    let mut result = [0.0; 4];
+    for i in 0..3 {
+        let mixed = blend_channel_filled(dst[i], src[i], mode, fill);
+        result[i] = (shown * src[i] + dst[3] * (src[3] * mixed + (1.0 - src[3]) * dst[i])) / alpha;
+    }
+    result[3] = alpha;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +503,118 @@ mod tests {
         // 170 of 255, as upstream measures for Soft Light.
         let value = blend_channel(0.5, 0.9, SoftLight);
         assert_eq!((value * 255.0).round(), 170.0);
+    }
+
+    const SPECIAL: [BlendMode; 8] = [
+        BlendMode::ColorBurn,
+        BlendMode::LinearBurn,
+        BlendMode::ColorDodge,
+        BlendMode::LinearDodge,
+        BlendMode::VividLight,
+        BlendMode::LinearLight,
+        BlendMode::HardMix,
+        BlendMode::Difference,
+    ];
+
+    #[test]
+    fn exactly_eight_modes_take_fill_differently() {
+        let special: Vec<_> = BlendMode::ALL
+            .into_iter()
+            .filter(|m| m.fill_is_special())
+            .collect();
+        assert_eq!(special, {
+            let mut sorted = SPECIAL.to_vec();
+            sorted.sort_by_key(|m| m.code());
+            sorted
+        });
+    }
+
+    /// Fill moves the layer toward the mode's neutral colour; Hard Mix ramps.
+    #[test]
+    fn special_modes_weaken_the_blend_with_fill() {
+        use BlendMode::*;
+        let cases: &[(BlendMode, f32, f32, f32, f32)] = &[
+            // Linear Dodge at 50% adds half the layer, with no fade toward the backdrop.
+            (LinearDodge, 0.25, 0.5, 0.5, 0.5),
+            (LinearDodge, 0.6, 0.8, 0.5, 1.0),
+            // Color Burn at X% is Color Burn of white over the layer at (100 − X)% (white
+            // being the neutral colour).
+            (ColorBurn, 0.5, 0.0, 0.5, 0.0),
+            (ColorBurn, 0.6, 0.5, 0.5, 1.0 - 0.4 / 0.75),
+            (LinearBurn, 0.6, 0.2, 0.5, 0.2),
+            (ColorDodge, 0.3, 1.0, 0.5, 0.6),
+            (Difference, 0.8, 1.0, 0.25, 0.55),
+            (VividLight, 0.4, 1.0, 0.5, 0.4 / 0.5),
+            (LinearLight, 0.5, 1.0, 0.25, 0.75),
+            (LinearLight, 0.5, 0.0, 0.5, 0.0),
+            // Hard Mix at 50%: clamp(2d − (1 − s)), centred on d + s = 1.
+            (HardMix, 0.5, 0.5, 0.5, 0.5),
+            (HardMix, 0.4, 0.5, 0.5, 0.3),
+            (HardMix, 0.9, 0.5, 0.5, 1.0),
+            (HardMix, 0.3, 0.6, 0.0, 0.3),
+        ];
+        for &(mode, d, s, fill, expected) in cases {
+            close(
+                blend_channel_filled(d, s, mode, fill),
+                expected,
+                &format!("{} d={d} s={s} fill={fill}", mode.name()),
+            );
+        }
+        // At 100% each is the mode itself; at 0% each leaves the backdrop.
+        for mode in SPECIAL {
+            for (d, s) in [(0.2, 0.7), (0.65, 0.3), (0.5, 0.5)] {
+                assert_eq!(
+                    blend_channel_filled(d, s, mode, 1.0),
+                    blend_channel(d, s, mode)
+                );
+                close(blend_channel_filled(d, s, mode, 0.0), d, mode.name());
+            }
+        }
+    }
+
+    #[test]
+    fn fill_fades_like_opacity_in_other_modes_and_not_in_the_eight() {
+        let backdrop = [0.3, 0.55, 0.8, 1.0];
+        let layer = [0.7, 0.2, 0.45, 1.0];
+        for mode in BlendMode::ALL {
+            let filled = composite_filled(backdrop, layer, mode, 0.5);
+            let faded = composite(backdrop, [layer[0], layer[1], layer[2], 0.5], mode);
+            if mode.fill_is_special() {
+                assert_ne!(filled, faded, "{}", mode.name());
+            } else {
+                assert_eq!(filled, faded, "{}", mode.name());
+            }
+            // At 100% fill nothing changes.
+            assert_eq!(
+                composite_filled(backdrop, layer, mode, 1.0),
+                composite(backdrop, layer, mode)
+            );
+        }
+        // Hard Mix at 50% Fill is a soft contrast ramp; at 50% Opacity it is the hard
+        // threshold half faded.
+        let d = [0.4, 0.4, 0.4, 1.0];
+        let s = [0.5, 0.5, 0.5, 1.0];
+        close(
+            composite_filled(d, s, BlendMode::HardMix, 0.5)[0],
+            0.3,
+            "fill",
+        );
+        close(
+            composite(d, [0.5, 0.5, 0.5, 0.5], BlendMode::HardMix)[0],
+            0.2,
+            "opacity",
+        );
+        // The layer's own alpha still fades the filled blend toward the backdrop.
+        let half = composite_filled(d, [0.5, 0.5, 0.5, 0.5], BlendMode::HardMix, 0.5);
+        close(half[0], 0.35, "alpha");
+        // Over nothing the layer shows at its faded alpha, in every mode.
+        for mode in SPECIAL {
+            let shown = composite_filled([0.0; 4], [0.2, 0.4, 0.8, 0.8], mode, 0.25);
+            for (a, b) in shown.iter().zip([0.2, 0.4, 0.8, 0.2]) {
+                close(*a, b, mode.name());
+            }
+            assert_eq!(composite_filled([0.0; 4], layer, mode, 0.0), [0.0; 4]);
+        }
     }
 
     #[test]

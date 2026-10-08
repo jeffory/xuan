@@ -43,7 +43,7 @@ The file is read in memory: the header, color mode data (skipped), image resourc
 | Photoshop feature | In Xuan |
 | --- | --- |
 | Pixel layers: position, opacity, visibility, names | Editable |
-| Fill opacity | Multiplied into the layer opacity; on a layer whose effects draw, the layer keeps its layer opacity (as upstream) and this is reported |
+| Fill opacity | The layer's Fill (`fill`, [version 13](#fill-version-13)): it fades the pixels but not the layer effects. On adjustment layers it is multiplied into the opacity; folders have none |
 | Groups (folders) and their opacity | Editable folders. Folders always pass through; another folder blend mode is reported |
 | Layer masks: bounds, default color, disabled, linked | Editable masks on the layer's grid (a black-default mask covers only its stored area) |
 | Masks rendered from vector data, vector masks on pixel layers | Left out |
@@ -296,3 +296,17 @@ drawing it inverted; everything else keeps the lowest version its content needs 
 and a Lens Correction with no vignette reads the same in every version. A version 12
 document may also carry anything the earlier versions can. The reader accepts versions
 1-12.
+
+## Fill (version 13)
+
+A pixel, text or shape layer may have a `fill` (0-1), Photoshop's Fill: it fades the
+layer's own pixels but not its layer effects, while `opacity` fades both. In Color Burn,
+Linear Burn, Color Dodge, Linear Dodge (Add), Vivid Light, Linear Light, Hard Mix and
+Difference it changes the blend instead of fading it (`blend::blend_channel_filled` has
+the rule). The key is written only below 1, and a document with such a layer is written as
+version 13, so older builds report an unsupported version instead of drawing the layer at
+full fill; everything else keeps the lowest version its content needs. A missing `fill`
+reads as 1. Folders and mask, adjustment and filter layers have no fill: a value other
+than 1 on one, or one outside 0-1, fails validation on load and save. A version 13
+document may also carry anything the earlier versions can. The reader accepts versions
+1-13.

@@ -1809,19 +1809,12 @@ fn build(
         } else {
             read_effects(record, global_angle)
         };
-        // Fill opacity dims the layer's own pixels but not its effects, which Xuan cannot
-        // separate: layers with effects that draw keep their layer opacity, as upstream does.
-        let drawn = effects
-            .as_ref()
-            .is_some_and(|e| e.left_out || !e.effects.visible().is_empty());
-        layer.opacity = if group || (drawn && record.fill != 255) {
-            if !group {
-                report.add(Dropped::FillOpacity);
-            }
-            opacity
-        } else {
-            opacity * f32::from(record.fill) / 255.0
-        };
+        // Fill opacity (`iOpa`) dims the layer's own pixels but not its effects. Folders have
+        // none; on an adjustment layer it is folded into the opacity below.
+        layer.opacity = opacity;
+        if !group {
+            layer.fill = f32::from(record.fill) / 255.0;
+        }
         if group {
             let key = record.section_blend.unwrap_or(record.blend);
             if !matches!(&key, b"pass" | b"norm") {
@@ -1834,6 +1827,9 @@ fn build(
             match adjustment(record) {
                 Ok(adjustment) => {
                     layer.adjustment = Some(adjustment);
+                    // With nothing of their own to fade, adjustments apply at both.
+                    layer.opacity *= layer.fill;
+                    layer.fill = 1.0;
                     // Xuan's adjustments replace the backdrop; they have no blend mode.
                     if layer.blend != BlendMode::Normal {
                         report.add(Dropped::PhotoshopBlendMode(blend_name(record.blend)));

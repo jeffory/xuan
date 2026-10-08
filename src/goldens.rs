@@ -83,6 +83,7 @@ const SCENES: &[&str] = &[
     "black_white_color_balance",
     "layer_effects",
     "layer_effects_combined",
+    "fill_opacity",
     "text_and_shapes",
     "path_shapes",
     "text_on_path",
@@ -149,6 +150,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("black_white_color_balance", black_white_color_balance()),
         composite("layer_effects", layer_effects()),
         composite("layer_effects_combined", layer_effects_combined()),
+        composite("fill_opacity", fill_opacity()),
         composite("text_and_shapes", text_and_shapes()),
         composite("path_shapes", path_shapes()),
         composite("text_on_path", text_on_path()),
@@ -694,6 +696,79 @@ fn layer_effects_combined() -> Document {
         layer,
         clipped,
     ])
+}
+
+/// Fill against Opacity. Top: a strip for each of the eight modes Fill changes, at Fill 50% on
+/// the left half and Opacity 50% on the right, fading out at each half's end. Bottom: a layer
+/// with a stroke, a drop shadow and an inner glow at Fill 100%, 50% and 0%, and at Opacity 50%.
+fn fill_opacity() -> Document {
+    use crate::layer_effects::{GlowEffect, LayerEffects, ShadowEffect, StrokeEffect};
+    let special: Vec<_> = BlendMode::ALL
+        .into_iter()
+        .filter(|m| m.fill_is_special())
+        .collect();
+    let mut layers = vec![Layer::image("Gradient", gradient())];
+    let half = SIZE / 2;
+    for (index, &mode) in special.iter().enumerate() {
+        for side in 0..2 {
+            let mut strip = hue_ramp(half, 18);
+            for (x, _, pixel) in strip.enumerate_pixels_mut() {
+                if x >= half * 3 / 4 {
+                    pixel[3] = (255 - (x - half * 3 / 4) * 7) as u8;
+                }
+            }
+            let mut layer = placed(
+                Layer::image(mode.name(), strip),
+                (side * half) as f32,
+                2.0 + (index as u32 * 18) as f32,
+            );
+            layer.blend = mode;
+            if side == 0 {
+                layer.fill = 0.5;
+            } else {
+                layer.opacity = 0.5;
+            }
+            layers.push(layer);
+        }
+    }
+    let effects = LayerEffects {
+        stroke: Some(StrokeEffect {
+            size: 4.0,
+            color: [250, 240, 40],
+            ..StrokeEffect::default()
+        }),
+        drop_shadow: Some(ShadowEffect {
+            angle: 120.0,
+            distance: 8.0,
+            blur: 6.0,
+            opacity: 0.8,
+            ..ShadowEffect::DROP
+        }),
+        inner_glow: Some(GlowEffect {
+            size: 10.0,
+            color: [255, 255, 200],
+            opacity: 1.0,
+            ..GlowEffect::INNER
+        }),
+        ..LayerEffects::default()
+    };
+    for (index, (fill, opacity)) in [(1.0, 1.0), (0.5, 1.0), (0.0, 1.0), (1.0, 0.5)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut layer = rounded(
+            12.0 + index as f32 * 62.0,
+            168.0,
+            46.0,
+            70.0,
+            [60, 90, 200, 255],
+        );
+        layer.effects = Some(effects.clone());
+        layer.fill = fill;
+        layer.opacity = opacity;
+        layers.push(layer);
+    }
+    document(layers)
 }
 
 fn text(renderer: &mut TextRenderer, style: TextStyle, x: f32, y: f32) -> Layer {

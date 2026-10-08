@@ -78,8 +78,6 @@ pub enum Dropped {
     /// A Photoshop layer whose effect settings Xuan approximates (effect blend modes, spread,
     /// noise, centered strokes, glows from the center).
     PhotoshopEffectSettings,
-    /// A Photoshop layer with effects and a fill opacity, drawn at its layer opacity.
-    FillOpacity,
     /// Photoshop type that Xuan cannot edit (vertical, warped, rotated or unreadable),
     /// imported as its pixels.
     PhotoshopTextAsPixels,
@@ -137,9 +135,6 @@ impl Dropped {
                 "Effect blend modes, spread, noise or centered strokes (drawn approximately)",
             )
             .into(),
-            Self::FillOpacity => {
-                tr("Fill opacity on layers with effects (drawn at full fill)").into()
-            }
             Self::PhotoshopTextAsPixels => {
                 tr("Vertical, warped or transformed text (imported as pixels)").into()
             }
