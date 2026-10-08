@@ -1,5 +1,5 @@
 use super::widgets;
-use std::{io::Cursor, sync::Arc};
+use std::sync::Arc;
 use xuan::canvas_presets as presets;
 use xuan::i18n::tr;
 
@@ -1254,44 +1254,27 @@ impl EditorApp {
                     .map(|(extension, label, ..)| (extension.clone(), label.clone())),
             )
             .collect();
-        if self.export_changed {
-            let doc = &self.session().unwrap().document;
-            let factor = (700.0 / doc.width.max(doc.height) as f32).min(1.0);
-            let image = render::render_scaled(
-                doc,
-                (doc.width as f32 * factor).max(1.0) as u32,
-                (doc.height as f32 * factor).max(1.0) as u32,
-            );
-            let mut preview = image.clone();
-            let mut bytes = Vec::new();
-            let options = self.export_options;
-            if self.export_format == "jpg" {
-                let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                    &mut bytes,
-                    options.jpeg_quality,
-                );
-                if encoder.encode_image(&render::flatten_white(&image)).is_ok()
-                    && let Ok(decoded) = image::load_from_memory(&bytes)
-                {
-                    preview = decoded.to_rgba8();
-                }
-            } else if self.export_format == "webp" && !options.webp_lossless {
-                if let Ok(encoded) = io::encode_webp(&image, false, options.webp_quality)
-                    && let Ok(decoded) = image::load_from_memory(&encoded)
-                {
-                    preview = decoded.to_rgba8();
-                    bytes = encoded;
-                }
-            } else {
-                let _ = image::DynamicImage::ImageRgba8(image)
-                    .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png);
-            }
-            // The preview is at most 700 pixels a side: scale its size up to the
-            // document's, a rough guide to the file's.
-            let area = |w: u32, h: u32| f64::from(w) * f64::from(h);
-            self.export_bytes = (bytes.len() as f64 * area(doc.width, doc.height)
-                / area(preview.width(), preview.height()))
-            .round() as usize;
+        let session = self.session().unwrap();
+        let settings = super::export_preview::Settings {
+            document: session.document.id,
+            revision: session.history.revision,
+            format: self.export_format.clone(),
+            options: self.export_options,
+        };
+        let (width, height) = io::export_size(
+            session.document.width,
+            session.document.height,
+            self.export_options.scale,
+        );
+        // OpenRaster keeps layers at the document's size; plugins write their own files.
+        let scalable = ["png", "jpg", "tiff", "webp"].contains(&self.export_format.as_str());
+        let estimated = scalable.then(|| self.export_preview.bytes(&settings));
+        let document = &self.sessions[self.current].document;
+        // A Scale past what an image may be is refused before choosing a file.
+        let too_large = (scalable && (width, height) != (document.width, document.height))
+            .then(|| xuan::document::validate_size(width, height).err())
+            .flatten();
+        if let Some(preview) = self.export_preview.poll(ctx, settings, document) {
             self.export_texture = Some(ctx.load_texture(
                 "export_preview",
                 egui::ColorImage::from_rgba_unmultiplied(
@@ -1300,7 +1283,6 @@ impl EditorApp {
                 ),
                 egui::TextureOptions::LINEAR,
             ));
-            self.export_changed = false;
         }
         let mut open = true;
         let mut export = false;
@@ -1325,22 +1307,20 @@ impl EditorApp {
                             .selected_text(self.export_format.to_uppercase())
                             .show_ui(ui, |ui| {
                                 for (format, label) in &formats {
-                                    self.export_changed |= widgets::menu_choice(
+                                    widgets::menu_choice(
                                         ui,
                                         &mut self.export_format,
                                         format.clone(),
                                         label,
-                                    )
-                                    .changed();
+                                    );
                                 }
                             });
                         if self.export_format == "webp" {
-                            self.export_changed |= widgets::checkbox(
+                            widgets::checkbox(
                                 ui,
                                 &mut self.export_options.webp_lossless,
                                 tr("Lossless"),
-                            )
-                            .changed();
+                            );
                         }
                         let quality = match self.export_format.as_str() {
                             "jpg" => Some(&mut self.export_options.jpeg_quality),
@@ -1352,15 +1332,28 @@ impl EditorApp {
                         if let Some(quality) = quality {
                             ui.spacing_mut().slider_width =
                                 (ui.available_width() - widgets::SLIDER_FIELD_WIDTH).max(90.0);
-                            self.export_changed |= ui
-                                .add(
-                                    widgets::Slider::new(quality, io::EXPORT_QUALITY)
-                                        .text(tr("Quality"))
-                                        .suffix("%"),
-                                )
-                                .changed();
+                            ui.add(
+                                widgets::Slider::new(quality, io::EXPORT_QUALITY)
+                                    .text(tr("Quality"))
+                                    .suffix("%"),
+                            );
                         }
                     });
+                    if scalable {
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.label(tr("Scale"));
+                            ui.add(
+                                widgets::Number::new(&mut self.export_options.scale)
+                                    .range(io::EXPORT_SCALE)
+                                    .suffix(" %"),
+                            );
+                            ui.label(
+                                RichText::new(format!("{width} × {height} px"))
+                                    .color(ui.palette().muted),
+                            );
+                        });
+                    }
                     let lossy = self.export_format == "jpg"
                         || (self.export_format == "webp" && !self.export_options.webp_lossless);
                     if self.export_format == "ora" {
@@ -1383,21 +1376,28 @@ impl EditorApp {
                         } else {
                             tr("WebP preview · transparency is kept")
                         };
-                        ui.label(
-                            RichText::new(format!(
-                                "{note} · {} {}",
-                                tr("Estimated size:"),
-                                estimated_size(self.export_bytes)
-                            ))
-                            .small()
-                            .color(ui.palette().muted),
-                        );
+                        ui.label(RichText::new(note).small().color(ui.palette().muted));
+                    }
+                    // Made in the background: until it is ready, say so.
+                    let size = match estimated {
+                        Some(Some(Some(bytes))) => Some(format!(
+                            "{} ≈ {}",
+                            tr("Estimated size:"),
+                            estimated_size(bytes as usize)
+                        )),
+                        Some(None) => Some(tr("Estimating size…").to_owned()),
+                        _ => None,
+                    };
+                    if let Some(error) = &too_large {
+                        ui.colored_label(ui.palette().error, error.to_string());
+                    } else if let Some(size) = size {
+                        ui.label(RichText::new(size).small().color(ui.palette().muted));
                     }
                 },
                 |ui, ()| {
                     let response = widgets::dialog_footer(
                         ui,
-                        widgets::FooterButtons::commit(tr("Export…")),
+                        widgets::FooterButtons::commit(tr("Export…")).enabled(too_large.is_none()),
                         |_| {},
                     );
                     export = response.commit;

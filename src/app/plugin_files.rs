@@ -119,13 +119,15 @@ impl Encoding {
         Ok(Self { quality, lossless })
     }
 
-    /// The Export dialog's options with this request's choices on top.
+    /// The Export dialog's options with this request's choices on top. A plugin's export is
+    /// always at the document's size, whatever the dialog's Scale.
     pub(super) fn options(self, dialog: io::ExportOptions) -> io::ExportOptions {
         let quality = self.quality;
         io::ExportOptions {
             jpeg_quality: quality.unwrap_or(dialog.jpeg_quality),
             webp_quality: quality.unwrap_or(dialog.webp_quality),
             webp_lossless: (self.lossless).unwrap_or(quality.is_none() && dialog.webp_lossless),
+            scale: 100,
         }
     }
 }
@@ -1236,8 +1238,15 @@ mod tests {
             jpeg_quality: 70,
             webp_quality: 60,
             webp_lossless: true,
+            scale: 100,
         };
         assert_eq!(Encoding::default().options(dialog), dialog);
+        // The dialog's Scale is not the plugin's.
+        let scaled = ExportOptions {
+            scale: 50,
+            ..dialog
+        };
+        assert_eq!(Encoding::default().options(scaled), dialog);
         let lossy_dialog = ExportOptions {
             webp_lossless: false,
             ..dialog
@@ -1253,7 +1262,8 @@ mod tests {
             ExportOptions {
                 jpeg_quality: 80,
                 webp_quality: 80,
-                webp_lossless: false
+                webp_lossless: false,
+                scale: 100,
             }
         );
         let exact = Encoding {
