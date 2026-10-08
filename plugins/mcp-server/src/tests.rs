@@ -1447,7 +1447,7 @@ fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
         "paint_stroke",
         json!({
             "points": [[10, 50, 0.1], [60, 40], [110, 50, 0.2]],
-            "size": 8, "pressure_opacity": true, "taper_in": 20, "taper_out": 30,
+            "size": 8, "pressure_opacity": true, "taper_in": 20, "taper_out": 30, "flow": 0.3,
         }),
     );
     assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
@@ -1455,7 +1455,7 @@ fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
         edit_requests(&editor)[0]["edits"],
         json!([{
             "op": "stroke", "points": [[10, 50, 0.1], [60, 40], [110, 50, 0.2]], "size": 8,
-            "pressure_opacity": true, "taper_in": 20, "taper_out": 30,
+            "pressure_opacity": true, "taper_in": 20, "taper_out": 30, "flow": 0.3,
         }])
     );
     // Dynamics set at the top apply to each stroke, which may override them.
@@ -1513,6 +1513,7 @@ fn paint_stroke_passes_point_pressure_and_brush_dynamics() {
     let item = &schema["properties"]["strokes"]["items"]["properties"];
     assert_eq!(item["points"], schema["properties"]["points"]);
     for key in [
+        "flow",
         "pressure_opacity",
         "spacing",
         "taper_in",

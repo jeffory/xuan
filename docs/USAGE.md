@@ -248,6 +248,25 @@ and painting on layer masks. Pressure and tilt continue to control the brush.
 Shift-click straight lines bypass smoothing. RAW Develop's mask brushes are
 unchanged. **Hardness** controls edge softness independently of stroke smoothing.
 
+### Brush flow
+
+The Brush and Eraser have **Flow** (1–100%, 100% by default) next to
+**Opacity**, as in Photoshop. Flow is how much paint one pass lays down;
+**Opacity** is the most a stroke can reach. At Flow 20% one pass paints about a
+fifth of the opacity, and going back over the same spot without lifting builds
+the paint up toward the opacity, never past it. A new stroke starts building
+again on top. At 100% the whole opacity goes down at once and overlaps within
+a stroke don't darken, as before. Flow works the same when erasing and when
+painting a layer mask.
+
+Below 100% the stroke is painted as close dabs (10% of the size apart, or the
+**Spacing** from **Brush dynamics**), each laying down a share of the flow, so
+one pass lays down the same amount whatever the spacing and however fast the
+pointer moves. **Pressure: flow** in **Pen dynamics** scales the flow with
+pen pressure. The Pencil and the retouching tools ignore flow. Flow stays set
+while Xuan runs, like the size and opacity. Plugins and MCP clients set it per
+stroke (`flow`).
+
 ### Brush dynamics
 
 The Brush, Pencil and Eraser have a **Brush dynamics** menu in their toolbar.
@@ -309,6 +328,8 @@ toolbar to control these independently:
 
 - **Pressure: size** scales the selected brush size with pen pressure.
 - **Pressure: opacity** scales the selected opacity with pen pressure.
+- **Pressure: flow** (Brush and Eraser) scales the selected flow with pen
+  pressure, so pressing harder builds up paint faster.
 - **Tilt: shape** flattens and rotates the brush footprint with the pen's tilt.
   The cursor outline previews the footprint. This option starts disabled.
 

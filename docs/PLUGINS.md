@@ -1209,10 +1209,14 @@ layer, so text and shape layers become pixel layers):
   `mask` paints the layer's mask with the gradient's brightness instead of its
   pixels. `start` and `end` must differ.
 - `{"op": "stroke", "layer"?, "points": [[x, y], …], "color"?, "size"?,
-  "hardness"?, "opacity"?, "erase"?, …dynamics, "symmetry"?}`: one brush stroke through the
+  "hardness"?, "opacity"?, "flow"?, "erase"?, …dynamics, "symmetry"?}`: one brush stroke through the
   points (at most 10,000) in document coordinates; `size` is the brush
   diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (defaults 0.8
-  and 1), and `erase` erases instead of painting. A single point paints one
+  and 1), and `erase` erases instead of painting. `flow` (above 0, at most 1;
+  default 1) is the Brush's **Flow**: how much paint one pass lays down.
+  Below 1, where the stroke goes back over itself the paint builds up toward
+  `opacity`, never past it, and the stroke is painted as dabs 0.1 of the size
+  apart (or at `spacing`); at 1 it paints exactly as without it. A single point paints one
   round dab the size of the brush. The layer grows to hold the stroke, as with
   the Brush tool. Several strokes in one request are one undo step.
 

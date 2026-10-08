@@ -207,10 +207,27 @@ impl EditorApp {
                                             .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
                                             .percentage(),
                                         );
+                                        if matches!(self.tool, Tool::Brush | Tool::Erase) {
+                                            ui.label(tr("Flow"));
+                                            ui.add(
+                                                widgets::Slider::new(
+                                                    &mut self.brush.flow,
+                                                    0.01..=1.0,
+                                                )
+                                                .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                                                .percentage(),
+                                            )
+                                            .on_hover_text(tr(
+                                                "How much paint one pass lays down. Going over the same spot in one stroke builds up to the opacity.",
+                                            ));
+                                        }
                                         widgets::color_well(ui, &mut self.brush.color);
                                         ui.menu_button(tr("Pen dynamics"), |ui| {
                                             widgets::checkbox(ui, &mut self.pressure_size, tr("Pressure: size"));
                                             widgets::checkbox(ui, &mut self.pressure_opacity, tr("Pressure: opacity"));
+                                            if matches!(self.tool, Tool::Brush | Tool::Erase) {
+                                                widgets::checkbox(ui, &mut self.pressure_flow, tr("Pressure: flow"));
+                                            }
                                             widgets::checkbox(ui, &mut self.tilt_shape, tr("Tilt: shape"));
                                         });
                                         if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase) {

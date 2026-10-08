@@ -889,6 +889,11 @@ pub enum Edit {
         hardness: f32,
         #[serde(default = "one")]
         opacity: f32,
+        /// How much paint one pass lays down, 0 to 1, building up to
+        /// `opacity` where the stroke crosses itself; 1 (the default) paints
+        /// the whole opacity at once.
+        #[serde(default = "one")]
+        flow: f32,
         #[serde(default)]
         erase: bool,
         /// Pressure (and taper) also scales the opacity.
@@ -1360,6 +1365,7 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 taper_in,
                 taper_out,
                 symmetry,
+                flow,
                 ..
             } => {
                 let reach = f64::from(size.max(1.0)) + 2.0;
@@ -1383,6 +1389,9 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                     || *size_jitter > 0.0
                     || *opacity_jitter > 0.0
                     || *hue_jitter > 0.0;
+                // A flow below 1 paints close dabs when nothing else does.
+                let flow_dabs = !dabs && *flow < 1.0;
+                let dabs = dabs || flow_dabs;
                 if dabs {
                     // Each dab touches at most the brush's square, and dabs
                     // are at least `MIN_STEP` apart along the stroke.
@@ -1393,6 +1402,8 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                         .sum();
                     let spacing = if *spacing > 0.0 {
                         f64::from(*spacing)
+                    } else if flow_dabs {
+                        f64::from(crate::paint::dynamics::FLOW_SPACING)
                     } else {
                         f64::from(crate::paint::dynamics::DEFAULT_SPACING)
                     };
@@ -2230,6 +2241,7 @@ fn apply_each(
                 size,
                 hardness,
                 opacity,
+                flow,
                 erase,
                 pressure_opacity,
                 spacing,
@@ -2262,6 +2274,10 @@ fn apply_each(
                     "The hardness must be between 0 and 1"
                 );
                 valid_opacity(*opacity)?;
+                ensure!(
+                    flow.is_finite() && *flow > 0.0 && *flow <= 1.0,
+                    "The flow must be above 0 and at most 1"
+                );
                 let dynamics = crate::paint::Dynamics {
                     spacing: *spacing,
                     taper_in: *taper_in,
@@ -2287,6 +2303,7 @@ fn apply_each(
                     diameter: *size,
                     hardness: *hardness,
                     opacity: *opacity,
+                    flow: *flow,
                     color: color.0,
                     dynamics,
                     symmetry,
@@ -4516,6 +4533,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(painted_rows(&mixed, 15), 30);
+    }
+
+    #[test]
+    fn stroke_flow_defaults_to_full_and_builds_up_where_the_stroke_goes_back() {
+        let parsed: Edit =
+            serde_json::from_value(json!({"op": "stroke", "points": [[1, 1]]})).unwrap();
+        let Edit::Stroke { flow, .. } = parsed else {
+            panic!("not a stroke");
+        };
+        assert_eq!(flow, 1.0);
+        let alpha = |flow: Option<f32>, passes: usize| {
+            let mut document = clear_document();
+            let points: Vec<_> = (0..=passes)
+                .map(|i| json!([if i % 2 == 0 { 20 } else { 180 }, 30]))
+                .collect();
+            let mut stroke = json!({"op": "stroke", "size": 20, "hardness": 1, "points": points});
+            if let Some(flow) = flow {
+                stroke["flow"] = json!(flow);
+            }
+            run(&mut document, &[edit(stroke)]).unwrap();
+            crate::render::render(&document).get_pixel(100, 30)[3]
+        };
+        assert_eq!(alpha(None, 1), 255);
+        assert_eq!(alpha(Some(1.0), 1), 255);
+        let (once, often) = (alpha(Some(0.2), 1), alpha(Some(0.2), 20));
+        assert!((40..=65).contains(&once), "{once}");
+        assert!(often > 240, "{often}");
+        let mut document = clear_document();
+        for flow in [0.0, -0.5, 1.5, f32::NAN] {
+            let stroke = json!({"op": "stroke", "points": [[1, 1]], "flow": flow});
+            let parsed = serde_json::from_value::<Edit>(stroke.clone());
+            assert!(
+                parsed.is_err() || run(&mut document, &[parsed.unwrap()]).is_err(),
+                "{stroke}"
+            );
+        }
     }
 
     #[test]

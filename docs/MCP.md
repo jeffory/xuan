@@ -179,6 +179,15 @@ like the existing ones, rather than anything specific to MCP:
   segment by the existing brush, so the GPU and CPU paths and the stroke's
   coverage rules are shared and agree. All are off by default; a stroke that
   uses none of them is painted exactly as before.
+- **Brush flow** (#104). A stroke laid its whole opacity down at once, so
+  building paint up gradually took one stroke per coat. `paint_stroke` (at
+  the top level and in each item of `strokes`) and the `stroke` edit take
+  `flow` (0–1, default 1), the Brush's Flow: below 1, each dab moves a pixel's
+  coverage a share of the way to its own (Photoshop's flow under an opacity
+  cap), shared so that one pass lays down `flow` at any spacing, and going
+  back over a spot builds up to `opacity`. A flow below 1 paints dabs 0.1 of
+  the size apart unless `spacing` says otherwise. At 1 a stroke paints
+  exactly as before.
 - **Vector paths** (#62). Every curve had to be computed outside Xuan and
   sent as dense point lists, and changing one meant recomputing it. Agents
   write SVG path data easily, so the tools take it: `select_shape` with

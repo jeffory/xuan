@@ -34,6 +34,10 @@ mod symmetry_tests;
 #[path = "paint/bucket_tests.rs"]
 mod bucket_tests;
 
+#[cfg(test)]
+#[path = "paint/flow_tests.rs"]
+mod flow_tests;
+
 mod bucket;
 pub use bucket::{BucketOptions, bucket, bucket_coverage};
 pub mod dynamics;
@@ -62,6 +66,11 @@ pub struct Brush {
     pub diameter: f32,
     pub hardness: f32,
     pub opacity: f32,
+    /// How much paint one pass lays down, 0 to 1, building up to `opacity`
+    /// where the stroke goes over the same spot. The Brush and Eraser (on
+    /// pixels or a mask) use it through [`Stroke`]; 1 paints the whole
+    /// opacity at once, and other tools ignore it.
+    pub flow: f32,
     pub color: [u8; 4],
     /// Pen tilt in degrees; zero produces the usual circular brush.
     pub tilt: [f32; 2],
@@ -81,6 +90,7 @@ impl Default for Brush {
             diameter: 40.0,
             hardness: 0.8,
             opacity: 1.0,
+            flow: 1.0,
             color: [0, 0, 0, 255],
             tilt: [0.0; 2],
             square: false,
@@ -248,6 +258,12 @@ fn stroke_segment(
         source,
         clone_offset,
     } = options;
+    // Flow builds up dab by dab; swept segments take the strongest coverage.
+    let flow = if stroke::flows(mode) && from == to {
+        brush.flow
+    } else {
+        1.0
+    };
     let selection = document.selection.clone();
     let Some(layer) = document.active_mut() else {
         bail!("Select a layer first");
@@ -334,6 +350,7 @@ fn stroke_segment(
             endpoints: [from, to],
             from_brush,
             brush,
+            flow,
             options: StrokeOptions {
                 mode,
                 mask_target,
@@ -381,15 +398,16 @@ fn stroke_segment(
             if amount <= 0.0 {
                 continue;
             }
-            let original = if let Some(stroke) = &mut stroke {
+            let (amount, original) = if let Some(stroke) = &mut stroke {
                 let sample = stroke.pixel_mut(x, y);
+                let amount = build_up(sample.amount, amount, flow);
                 if amount <= sample.amount {
                     continue;
                 }
                 sample.amount = amount;
-                Some(sample.original)
+                (amount, Some(sample.original))
             } else {
-                None
+                (amount, None)
             };
             if mask_target {
                 let pixels = Arc::make_mut(&mut layer.mask.as_mut().unwrap().pixels);
@@ -481,6 +499,18 @@ fn stroke_segment(
         }
     }
     Ok(())
+}
+
+/// A pixel's stroke coverage after a dab covers it with `amount` at `flow`.
+/// The dab moves the coverage `flow` of the way up to `amount`, so where
+/// dabs overlap the paint builds up, but never past the strongest of them
+/// (the opacity). Flow 1 takes the strongest coverage at once.
+pub(crate) fn build_up(previous: f32, amount: f32, flow: f32) -> f32 {
+    if flow >= 1.0 {
+        previous.max(amount)
+    } else {
+        previous + (amount - previous).max(0.0) * flow.max(0.0)
+    }
 }
 
 pub fn fill(document: &mut Document, color: [u8; 4], erase: bool, mask_target: bool) -> Result<()> {
