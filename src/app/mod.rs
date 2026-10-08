@@ -1298,6 +1298,16 @@ impl EditorApp {
         self.current = self.sessions.len() - 1;
     }
 
+    /// Runs a command the user picked in the UI. Adding a mask there also switches the colours
+    /// to white and black for painting it; `host/run` leaves a plugin's colours alone.
+    fn ui_command(&mut self, command: &str) {
+        self.command(command);
+        if matches!(command, "mask" | "new_mask_layer") {
+            self.brush.color = [255; 4];
+            self.background = [0, 0, 0, 255];
+        }
+    }
+
     fn command(&mut self, command: &str) {
         #[cfg(test)]
         if let Some(trace) = &mut self.command_trace {
@@ -1540,8 +1550,6 @@ impl EditorApp {
                 {
                     session.collapsed.remove(&parent);
                 }
-                self.brush.color = [255; 4];
-                self.background = [0, 0, 0, 255];
             }
             "delete_mask" => {
                 self.edit(tr("Delete Mask"), |doc| {

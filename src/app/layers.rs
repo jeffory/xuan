@@ -870,7 +870,7 @@ impl EditorApp {
             ctx.request_repaint();
         }
         if let Some(command) = actions.command {
-            self.command(command);
+            self.ui_command(command);
         }
         if let Some(adjustment) = actions.adjustment {
             self.start_adjustment(adjustment, true);
