@@ -1250,3 +1250,14 @@ Interpolation	插值
 Tetrahedral	四面体
 Trilinear	三线性
 Load Table…	载入查找表…
+Adjustment Presets…	调整预设…
+Adjustment Presets	调整预设
+Apply Adjustment Preset	应用调整预设
+Preset saved	预设已保存
+No presets yet. Select adjustment layers and save them below.	还没有预设。请选择调整图层，然后在下方保存。
+{} adjustment layers	{} 个调整图层
+Select adjustment layers to save them as a preset.	选择调整图层以将其保存为预设。
+Save the {} selected adjustment layers as a preset.	将所选的 {} 个调整图层保存为预设。
+Replaces the preset of this name.	将替换同名预设。
+Save Preset	保存预设
+Save the selected adjustment layer as a preset.	将所选的调整图层保存为预设。

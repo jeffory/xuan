@@ -447,6 +447,7 @@ impl EditorApp {
                                         filter = filter_menu(ui);
                                         filter_layer = true;
                                     });
+                                    item(ui, &items, "adjustment_presets", &mut action);
                                     ui.menu_button(tr("Layer Mask"), |ui| {
                                         item(ui, &items, "new_mask_layer", &mut action);
                                         item(ui, &items, "mask", &mut action);

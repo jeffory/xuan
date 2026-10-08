@@ -1,3 +1,4 @@
+pub mod adjustment_presets;
 pub mod blend;
 pub mod buildinfo;
 pub mod canvas_presets;

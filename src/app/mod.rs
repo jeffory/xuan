@@ -46,6 +46,7 @@ mod plugin_models;
 mod plugin_panes;
 mod plugin_sessions;
 mod plugins;
+mod presets_dialog;
 mod providers;
 mod recent;
 mod reload;
@@ -447,6 +448,8 @@ enum Dialog {
     Trim,
     /// Select → Paths….
     Paths,
+    /// Layer → Adjustment Presets….
+    AdjustmentPresets,
     /// Edit → Stroke….
     Stroke,
 }
@@ -590,6 +593,10 @@ pub struct EditorApp {
     stroke_settings: stroke_dialog::StrokeSettings,
     /// Select → Paths…, while it is open.
     paths_edit: Option<paths_dialog::PathsEdit>,
+    /// Layer → Adjustment Presets…, while it is open.
+    presets_edit: Option<presets_dialog::PresetsEdit>,
+    /// The saved adjustment presets.
+    adjustment_presets: xuan::adjustment_presets::Library,
     /// The Pen tool's path being drawn and the path shown for editing.
     pen: pen_tool::PenState,
     expand_amount: u32,
@@ -829,6 +836,8 @@ impl EditorApp {
             stroke: None,
             stroke_settings: Default::default(),
             paths_edit: None,
+            presets_edit: None,
+            adjustment_presets: Default::default(),
             pen: Default::default(),
             expand_amount: 2,
             contract_amount: 2,
@@ -1828,6 +1837,7 @@ impl EditorApp {
             }),
             "color_range" => self.open_color_range(),
             "paths" => self.open_paths(),
+            "adjustment_presets" => self.open_adjustment_presets(),
             "expand_selection" => {
                 self.open_selection_amount(selection_dialogs::AmountOperation::Expand)
             }
