@@ -66,6 +66,9 @@ mod stroke;
 #[path = "tests/crop.rs"]
 mod crop;
 
+#[path = "tests/perspective_crop.rs"]
+mod perspective_crop;
+
 #[path = "tests/compositor_filters.rs"]
 mod compositor_filters;
 

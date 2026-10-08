@@ -1192,6 +1192,11 @@ impl EditorApp {
                     self.select_canvas_layer(point, modifiers.shift, false);
                 }
             }
+            // Without perspective corners, each click places one.
+            Tool::Crop if self.crop.perspective && self.crop.quad.is_none() => {
+                self.forget_crop_of_other_documents();
+                self.crop.place_corner(point);
+            }
             Tool::Wand if self.wand_object => {
                 let mode = self.selection_mode(modifiers);
                 self.select_object(
@@ -1475,7 +1480,13 @@ impl EditorApp {
         let mask_target = self.transforming_mask();
         if tool == Tool::Crop {
             self.forget_crop_of_other_documents();
-            self.crop.drag = Some(self.crop.press(point, self.sessions[self.current].zoom));
+            let zoom = self.sessions[self.current].zoom;
+            self.crop.drag = if self.crop.perspective {
+                // Without corners, a drag does nothing; clicks place them.
+                self.crop.press_quad(point, zoom)
+            } else {
+                Some(self.crop.press(point, zoom))
+            };
         }
         let drawing_crop = self.crop.drag == Some(super::crop_tool::CropDrag::Draw);
         // A marquee, shape or crop starts on a nearby Snap To target; Ctrl starts it freely.

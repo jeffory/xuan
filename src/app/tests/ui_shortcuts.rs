@@ -88,6 +88,13 @@ fn app_effect(id: &str) -> Option<Effect> {
             },
             |app| app.tool == Tool::Dodge && app.tone_mode == PaintMode::Sponge,
         ),
+        "crop_mode" => State(
+            |app| {
+                app.tool = Tool::Crop;
+                app.crop.perspective = false;
+            },
+            |app| app.tool == Tool::Crop && app.crop.perspective && app.crop.quad.is_some(),
+        ),
         "marquee_shape" => State(
             |app| app.ellipse = false,
             |app| app.tool == Tool::Marquee && app.ellipse,

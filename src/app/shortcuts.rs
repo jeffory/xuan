@@ -159,7 +159,9 @@ impl EditorApp {
         }
         if pressed(Key::Enter) {
             self.forget_crop_of_other_documents();
-            if self.crop.rect.is_some() {
+            if self.tool == Tool::Crop && self.crop.perspective && self.crop.quad.is_some() {
+                self.apply_perspective_crop();
+            } else if self.crop.rect.is_some() {
                 self.apply_crop();
             } else if self.polygon.len() >= 3 {
                 self.finish_polygon();

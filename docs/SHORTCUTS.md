@@ -70,6 +70,7 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Tools | Switch Freehand / Polygonal Lasso | Shift+L |
 | Tools | Magic Wand | W |
 | Tools | Crop | C |
+| Tools | Switch Crop Box / Perspective Crop | Shift+C |
 | Tools | Brush | B |
 | Tools | Switch between Brush and Pencil | Shift+B |
 | Tools | Eraser | E |
@@ -97,7 +98,7 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Help | Keyboard Shortcuts | F1 |
 <!-- END GENERATED -->
 
-With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last. G likewise selects whichever of Gradient and Paint Bucket you used last. O selects the Dodge / Burn tool in the mode you used last; with the tool selected, Shift+O moves on to the next of Dodge, Burn and Sponge.
+With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last. G likewise selects whichever of Gradient and Paint Bucket you used last. O selects the Dodge / Burn tool in the mode you used last; with the tool selected, Shift+O moves on to the next of Dodge, Burn and Sponge. C likewise selects the Crop tool in the mode you used last; with it selected, Shift+C switches between the crop box and Perspective Crop.
 
 ## Other keys and pointer controls
 
