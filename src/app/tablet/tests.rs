@@ -373,8 +373,15 @@ fn pressure_controls_are_independent_and_missing_pressure_uses_the_selected_brus
     app.pressure_opacity = true;
     assert_eq!(app.input_brush().diameter, 40.0);
     assert_eq!(app.input_brush().opacity, 0.2);
+    // Pressure scales the flow only when asked, on top of the set flow.
+    app.brush.flow = 0.5;
+    assert_eq!(app.input_brush().flow, 0.5);
+    app.pressure_flow = true;
+    assert_eq!(app.input_brush().flow, 0.125);
+    assert_eq!(app.input_brush().opacity, 0.2);
     app.pen_sample.as_mut().unwrap().pressure = None;
     assert_eq!(app.input_brush().opacity, 0.8);
+    assert_eq!(app.input_brush().flow, 0.5);
     app.pen_sample.as_mut().unwrap().tilt = Some([60.0, -15.0]);
     assert_eq!(app.input_brush().tilt, [0.0; 2]);
     app.tilt_shape = true;

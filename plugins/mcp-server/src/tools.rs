@@ -906,7 +906,7 @@ fn specs() -> Vec<Spec> {
             description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows (a single point paints one round dab), or `path`, SVG path data such as \"M 0 700 C 120 640 380 640 512 700\" whose curves Xuan flattens to points (one subpath; `taper_in`/`taper_out` taper its ends). For several strokes or dabs give `strokes` instead: a list of {points, color, size, …}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. \
 A point may be [x, y, pressure] with pressure 0–1 (default 1), as from a pen: it scales the size along the stroke, and the opacity too with `pressure_opacity`, e.g. [[10, 50, 0.1], [60, 40, 1], [110, 50, 0.1]] for a blade thin at both ends. \
 Symmetry paints each stroke again as one coat with it: `symmetry` {\"mode\": \"vertical\"} mirrors it left↔right across a vertical axis (x → 2·cx − x), \"horizontal\" top↔bottom, and {\"mode\": \"radial\", \"segments\": 12} turns it into 12 copies around the centre, e.g. a starburst's rays from one ray. `center` [x, y] (on the canvas, default its middle) is where the axis or the turns go through. Scatter and jitter are mirrored with the stroke, and every copy counts against the limits. \
-Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
+Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. `flow` (0–1, default 1) is how much paint one pass lays down: below 1, going back over the same spot within a stroke builds up to `opacity`. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
             properties: {
                 let mut properties = brush_properties();
                 properties.insert(SYMMETRY.into(), symmetry_schema());
@@ -1655,7 +1655,7 @@ fn selection_edit(args: &Map<String, Value>) -> Result<Plan, String> {
 }
 
 /// `paint_stroke`'s arguments.
-const STROKE_ARGS: [&str; 19] = [
+const STROKE_ARGS: [&str; 20] = [
     "layer",
     "points",
     "path",
@@ -1664,6 +1664,7 @@ const STROKE_ARGS: [&str; 19] = [
     "size",
     "hardness",
     "opacity",
+    "flow",
     "erase",
     "pressure_opacity",
     "spacing",
@@ -1677,11 +1678,12 @@ const STROKE_ARGS: [&str; 19] = [
     "seed",
 ];
 /// What each stroke of `strokes` may set, the top-level value otherwise.
-const BRUSH: [&str; 15] = [
+const BRUSH: [&str; 16] = [
     "color",
     "size",
     "hardness",
     "opacity",
+    "flow",
     "erase",
     "pressure_opacity",
     "spacing",
@@ -1722,6 +1724,7 @@ fn brush_properties() -> Map<String, Value> {
         "size": number("Brush diameter, 1–2000 (default 20)"),
         "hardness": number("0–1 (default 0.8)"),
         "opacity": number("0–1 (default 1)"),
+        "flow": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "How much paint one pass lays down (default 1); below 1 paint builds up to `opacity` where the stroke goes back over itself"},
         "erase": {"type": "boolean"},
         "pressure_opacity": {"type": "boolean", "description": "Point pressure and taper also scale the opacity"},
         "spacing": {"type": "number", "minimum": 0, "maximum": 10, "description": "Distance between dabs as a fraction of the size, e.g. 0.25; 0 (default) is continuous"},

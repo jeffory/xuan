@@ -169,6 +169,9 @@ pub(crate) struct Stroke<'a> {
     pub endpoints: [Point; 2],
     pub brush: &'a crate::paint::Brush,
     pub from_brush: &'a crate::paint::Brush,
+    /// How far each pixel's coverage moves up to this segment's; see
+    /// [`crate::paint::build_up`].
+    pub flow: f32,
     pub options: crate::paint::StrokeOptions<'a>,
 }
 
@@ -261,7 +264,7 @@ pub(crate) fn stroke(
         config.push([
             if coverage.is_some() { 1.0 } else { 0.0 },
             f32::from_bits((auxiliary.len() / 4) as u32),
-            0.0,
+            stroke.flow,
             0.0,
         ]);
         if let Some(coverage) = &coverage {
@@ -372,4 +375,22 @@ pub(crate) fn filter_selection(edit: FilterSelection<'_>) -> Option<Vec<u8>> {
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use wgpu::naga;
+
+    /// The brush's coverage build-up (flow) runs only with a GPU, so at
+    /// least check the shader still validates without one.
+    #[test]
+    fn paint_shader_validates() {
+        let module = naga::front::wgsl::parse_str(super::SHADER).expect("paint shader parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("paint shader validates");
+    }
 }

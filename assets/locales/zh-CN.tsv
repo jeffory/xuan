@@ -171,6 +171,8 @@ Reduce hand jitter. Higher values make the brush follow farther behind the point
 Pen dynamics	数位笔动态
 Pressure: size	压力控制大小
 Pressure: opacity	压力控制不透明度
+Pressure: flow	压力控制流量
+How much paint one pass lays down. Going over the same spot in one stroke builds up to the opacity.	每次经过绘制的颜料量。在同一笔画中反复涂抹同一处会逐渐叠加，直到达到不透明度。
 Tilt: shape	倾斜控制形状
 Ellipse	椭圆
 Rectangle	矩形

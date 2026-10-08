@@ -531,6 +531,8 @@ pub struct EditorApp {
     gradient_variant: Tool,
     pressure_size: bool,
     pressure_opacity: bool,
+    /// Pen pressure scales the brush's flow.
+    pressure_flow: bool,
     tilt_shape: bool,
     pen_samples: Vec<tablet::Sample>,
     pen_sample: Option<tablet::Sample>,
@@ -768,6 +770,7 @@ impl EditorApp {
             gradient_variant: Tool::Gradient,
             pressure_size: true,
             pressure_opacity: false,
+            pressure_flow: false,
             tilt_shape: false,
             pen_samples: Vec::new(),
             pen_sample: None,
@@ -892,6 +895,9 @@ impl EditorApp {
             }
             if self.pressure_opacity {
                 brush.opacity *= pressure;
+            }
+            if self.pressure_flow {
+                brush.flow *= pressure;
             }
         }
         brush

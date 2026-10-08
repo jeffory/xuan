@@ -193,3 +193,179 @@ fn stroke_coverage_follows_expanding_transformed_layers() {
         (32, 32)
     );
 }
+
+/// Brush, Eraser, mask, dynamics, symmetry and pencil strokes at full flow,
+/// side by side in one image.
+fn full_flow_strokes() -> RgbaImage {
+    const W: u32 = 96;
+    const H: u32 = 64;
+    let background = |document: &mut Document| {
+        document.active_mut().unwrap().pixels = Some(Arc::new(RgbaImage::from_fn(W, H, |x, y| {
+            Rgba([
+                (x * 2) as u8,
+                (y * 3) as u8,
+                140,
+                if x < 12 { 0 } else { 255 },
+            ])
+        })));
+        document.selection = Some(Arc::new(GrayImage::from_fn(W, H, |x, y| {
+            Luma([if y > 54 { 90 } else { 255 - x as u8 }])
+        })));
+    };
+    let zigzag = |brush: &Brush, pressure: bool| -> Vec<(Point, Brush)> {
+        (0..=12)
+            .map(|i| {
+                let mut brush = brush.clone();
+                if pressure {
+                    let p = 0.2 + 0.8 * ((i * 7) % 12) as f32 / 12.0;
+                    brush.diameter *= p;
+                    brush.opacity *= p;
+                }
+                let point = Point::new(8.0 + i as f32 * 6.5, if i % 2 == 0 { 18.0 } else { 46.0 });
+                (point, brush)
+            })
+            .collect()
+    };
+    let soft = Brush {
+        diameter: 15.0,
+        hardness: 0.55,
+        opacity: 0.7,
+        color: [220, 40, 90, 200],
+        ..Brush::default()
+    };
+    let dynamics = |dynamics: Dynamics| Brush {
+        dynamics,
+        ..soft.clone()
+    };
+    let scenes: Vec<(Brush, PaintMode, bool, bool, bool)> = vec![
+        // brush, mode, mask, pressure, live segments (else a whole path)
+        (soft.clone(), PaintMode::Paint, false, false, true),
+        (soft.clone(), PaintMode::Paint, false, true, true),
+        (soft.clone(), PaintMode::Erase, false, true, true),
+        (soft.clone(), PaintMode::Paint, true, true, true),
+        (soft.clone(), PaintMode::Erase, true, false, true),
+        (
+            dynamics(Dynamics {
+                spacing: 0.4,
+                ..Dynamics::default()
+            }),
+            PaintMode::Paint,
+            false,
+            true,
+            true,
+        ),
+        (
+            dynamics(Dynamics {
+                taper_in: 30.0,
+                taper_out: 40.0,
+                taper_opacity: true,
+                ..Dynamics::default()
+            }),
+            PaintMode::Paint,
+            false,
+            false,
+            false,
+        ),
+        (
+            dynamics(Dynamics {
+                spacing: 0.3,
+                count: 2,
+                size_jitter: 0.5,
+                opacity_jitter: 0.6,
+                hue_jitter: 0.3,
+                seed: 9,
+                ..Dynamics::default()
+            }),
+            PaintMode::Erase,
+            false,
+            false,
+            false,
+        ),
+        (
+            Brush {
+                symmetry: Symmetry {
+                    mode: SymmetryMode::Vertical,
+                    ..Symmetry::default()
+                },
+                ..soft.clone()
+            },
+            PaintMode::Paint,
+            false,
+            true,
+            true,
+        ),
+        (
+            Brush {
+                diameter: 5.0,
+                opacity: 0.8,
+                ..soft.clone()
+            },
+            PaintMode::Pencil,
+            false,
+            false,
+            true,
+        ),
+    ];
+    let mut strip = RgbaImage::new(W * scenes.len() as u32, H * 2);
+    for (index, (brush, mode, mask, pressure, live)) in scenes.into_iter().enumerate() {
+        let mut document = Document::new(W, H).unwrap();
+        background(&mut document);
+        if mask {
+            prepare_mask(document.active_mut().unwrap()).unwrap();
+        }
+        let samples = zigzag(&brush, pressure);
+        let options = options(mode, mask);
+        let mut stroke = Stroke::default();
+        if live {
+            for pair in samples.windows(2) {
+                let options = StrokeOptions { ..options };
+                stroke
+                    .segment(
+                        &mut document,
+                        pair[0].0,
+                        pair[1].0,
+                        &pair[0].1,
+                        &pair[1].1,
+                        options,
+                    )
+                    .unwrap();
+            }
+            stroke.finish(&mut document, options).unwrap();
+        } else {
+            stroke.path(&mut document, &samples, options).unwrap();
+        }
+        let layer = document.active().unwrap();
+        let x = index as u32 * W;
+        image::imageops::replace(&mut strip, &**layer.pixels.as_ref().unwrap(), x.into(), 0);
+        if let Some(mask) = &layer.mask {
+            let mask = image::DynamicImage::ImageLuma8((*mask.pixels).clone()).to_rgba8();
+            image::imageops::replace(&mut strip, &mask, x.into(), H.into());
+        }
+    }
+    strip
+}
+
+/// Flow 100% paints exactly what strokes painted before Flow existed: the
+/// reference was rendered by the brush before flow was added. Linux, where
+/// it was rendered, matches exactly; elsewhere libm may move a pixel a level.
+#[test]
+fn full_flow_paints_the_strokes_as_before_flow() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("testdata/paint/strokes_before_flow.png");
+    let actual = full_flow_strokes();
+    if std::env::var_os("XUAN_UPDATE_STROKES").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        actual.save(&path).unwrap();
+    }
+    let expected = image::open(&path).unwrap().to_rgba8();
+    assert_eq!(actual.dimensions(), expected.dimensions());
+    let tolerance = if cfg!(target_os = "linux") { 0 } else { 1 };
+    let worst = actual
+        .as_raw()
+        .iter()
+        .zip(expected.as_raw())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
+    assert!(worst <= tolerance, "a pixel moved by {worst}");
+}
