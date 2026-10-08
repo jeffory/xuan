@@ -557,6 +557,9 @@ pub struct Document {
     /// Paths kept with the document, as in Photoshop's Paths panel (format version 10).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<crate::vector::NamedPath>,
+    /// The collage the document was made as, so its layout can be changed (format version 16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collage: Option<Box<crate::collage::Collage>>,
     #[serde(skip)]
     pub selected: HashSet<Uuid>,
     #[serde(skip)]
@@ -578,6 +581,7 @@ impl Document {
             guides: Vec::new(),
             grid: None,
             paths: Vec::new(),
+            collage: None,
             selection: None,
         })
     }
@@ -832,6 +836,9 @@ impl Document {
             grid.validate()?;
         }
         crate::vector::validate_paths(&self.paths)?;
+        if let Some(collage) = &self.collage {
+            collage.validate()?;
+        }
         // Indexed so hostile files with many deeply nested layers validate in linear time.
         let ids: std::collections::HashMap<_, _> =
             self.layers.iter().map(|layer| (layer.id, layer)).collect();
