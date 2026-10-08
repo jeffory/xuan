@@ -73,6 +73,14 @@ fn app_effect(id: &str) -> Option<Effect> {
             |app| app.tool == Tool::Pencil,
         ),
         "switch_brush" => State(|app| app.tool = Tool::Brush, |app| app.tool == Tool::Pencil),
+        "tool_gradient" => State(
+            |app| app.gradient_variant = Tool::Bucket,
+            |app| app.tool == Tool::Bucket,
+        ),
+        "switch_gradient" => State(
+            |app| app.tool = Tool::Gradient,
+            |app| app.tool == Tool::Bucket,
+        ),
         "marquee_shape" => State(
             |app| app.ellipse = false,
             |app| app.tool == Tool::Marquee && app.ellipse,

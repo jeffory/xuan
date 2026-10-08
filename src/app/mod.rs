@@ -101,6 +101,8 @@ pub enum Tool {
     Clone,
     Blur,
     Gradient,
+    /// Fills the area around a click with the foreground colour; shares G with Gradient.
+    Bucket,
     Shape,
     /// Draws and edits Bézier paths.
     Pen,
@@ -113,7 +115,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 20] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
@@ -126,6 +128,7 @@ impl Tool {
         Self::Clone,
         Self::Blur,
         Self::Gradient,
+        Self::Bucket,
         Self::Shape,
         Self::Pen,
         Self::Text,
@@ -149,6 +152,7 @@ impl Tool {
             Self::Clone => tr("Clone Stamp"),
             Self::Blur => tr("Blur / Smudge"),
             Self::Gradient => tr("Gradient"),
+            Self::Bucket => tr("Paint Bucket"),
             Self::Shape => tr("Shape"),
             Self::Pen => tr("Pen"),
             Self::Text => tr("Text"),
@@ -192,6 +196,9 @@ impl Tool {
             Self::Clone => tr("Alt-click to set source · Drag to clone · [ ] size · Space to pan"),
             Self::Blur => tr("Drag to retouch · [ ] size · 1–0 strength · Space to pan"),
             Self::Gradient => tr("Drag to draw gradient · Shift locks angle · Escape cancels"),
+            Self::Bucket => tr(
+                "Click to fill similar colours with the foreground colour · 1–0 opacity · Shift+G switches to Gradient",
+            ),
             Self::Shape => tr(
                 "Drag to draw a new shape · Shift constrains proportions · Alt draws from center",
             ),
@@ -347,6 +354,27 @@ impl Session {
     }
 }
 
+/// The Paint Bucket's options; colour and opacity are the brush's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BucketSettings {
+    tolerance: u8,
+    contiguous: bool,
+    anti_alias: bool,
+    /// Sample: All Layers instead of the current layer.
+    all_layers: bool,
+}
+
+impl Default for BucketSettings {
+    fn default() -> Self {
+        Self {
+            tolerance: 32,
+            contiguous: true,
+            anti_alias: true,
+            all_layers: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dialog {
     New,
@@ -493,6 +521,8 @@ pub struct EditorApp {
     brush_smoothing: f32,
     /// The tool plain B selects: Brush or Pencil, whichever was used last.
     brush_variant: Tool,
+    /// The tool plain G selects: Gradient or Paint Bucket, whichever was used last.
+    gradient_variant: Tool,
     pressure_size: bool,
     pressure_opacity: bool,
     tilt_shape: bool,
@@ -522,6 +552,8 @@ pub struct EditorApp {
     /// Why the last command used a built-in algorithm instead of the chosen provider.
     provider_notice: Option<String>,
     contiguous: bool,
+    /// The Paint Bucket's Tolerance, Contiguous, Anti-alias and Sample options.
+    bucket: BucketSettings,
     /// The Magic tool's Object mode: a click or a dragged rectangle selects an object.
     wand_object: bool,
     radial: bool,
@@ -670,6 +702,7 @@ impl EditorApp {
             "brush" => self.set_tool(Tool::Brush),
             "selection" => self.set_tool(Tool::Marquee),
             "gradient" => self.set_tool(Tool::Gradient),
+            "bucket" => self.set_tool(Tool::Bucket),
             "shape" => self.set_tool(Tool::Shape),
             "text" => {
                 self.set_tool(Tool::Text);
@@ -722,6 +755,7 @@ impl EditorApp {
             brush: Brush::default(),
             brush_smoothing: 0.0,
             brush_variant: Tool::Brush,
+            gradient_variant: Tool::Gradient,
             pressure_size: true,
             pressure_opacity: false,
             tilt_shape: false,
@@ -745,6 +779,7 @@ impl EditorApp {
             provider_notice: None,
             color_range_fuzziness: xuan::selection_ops::ColorRange::DEFAULT_FUZZINESS,
             contiguous: true,
+            bucket: BucketSettings::default(),
             wand_object: false,
             radial: false,
             shape_kind: ShapeKind::Rectangle,
@@ -1210,6 +1245,9 @@ impl EditorApp {
         self.release_sample_caches();
         if matches!(tool, Tool::Brush | Tool::Pencil) {
             self.brush_variant = tool;
+        }
+        if matches!(tool, Tool::Gradient | Tool::Bucket) {
+            self.gradient_variant = tool;
         }
         self.polygon.clear();
         self.crop_rect = None;

@@ -77,6 +77,7 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Tools | Clone Stamp | S |
 | Tools | Blur / Smudge | R |
 | Tools | Gradient | G |
+| Tools | Switch between Gradient and Paint Bucket | Shift+G |
 | Tools | Shape | U |
 | Tools | Switch Rectangle / Ellipse Shape | Shift+U |
 | Tools | Pen | P |
@@ -94,7 +95,7 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Help | Keyboard Shortcuts | F1 |
 <!-- END GENERATED -->
 
-With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last.
+With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last. G likewise selects whichever of Gradient and Paint Bucket you used last.
 
 ## Other keys and pointer controls
 
