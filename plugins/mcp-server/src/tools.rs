@@ -1022,7 +1022,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             required: &["filter"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = unquote(pick(args, &["filter", "layer", "as_layer"])?, "filter");
+                let args = effect_args(pick(args, &["filter", "layer", "as_layer"])?, "filter");
                 let edit = if args.get("as_layer") == Some(&json!(true)) {
                     op("add_adjustment_layer", &args, &["filter"])
                 } else {
@@ -1043,7 +1043,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             required: &["adjustment"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = unquote(
+                let args = effect_args(
                     pick(args, &["adjustment", "layer", "as_layer"])?,
                     "adjustment",
                 );
@@ -1429,10 +1429,10 @@ pub fn call(cx: &Context, name: &str, args: Map<String, Value>) -> CallToolResul
     let Some(spec) = specs().into_iter().find(|spec| spec.name == name) else {
         return CallToolResult::error(vec![ContentBlock::text(format!("Unknown tool {name}"))]);
     };
-    let result = match spec.run {
+    let result = retype(args, &spec.properties).and_then(|args| match spec.run {
         Action::Run(run) | Action::Mixed(run, _) => run(cx, args),
         Action::Edit(plan) => plan(cx, args).and_then(|plan| perform(cx, plan)),
-    };
+    });
     match result {
         Ok(content) => CallToolResult::success(content),
         // Where the user keeps files is not the client's business.
@@ -1550,12 +1550,14 @@ fn batch(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, St
                 ));
             }
         };
-        let plan = planner(cx, arguments).map_err(|error| {
-            format!(
-                "Step {number} ({}): {error}. Nothing was changed.",
-                spec.name
-            )
-        })?;
+        let plan = retype(arguments, &spec.properties)
+            .and_then(|arguments| planner(cx, arguments))
+            .map_err(|error| {
+                format!(
+                    "Step {number} ({}): {error}. Nothing was changed.",
+                    spec.name
+                )
+            })?;
         plans.push((spec.name, plan));
     }
     // Which step each edit came from, to say which one Xuan refused.
@@ -1859,6 +1861,185 @@ fn unquote(mut args: Map<String, Value>, key: &str) -> Map<String, Value> {
             .filter(|value| value.is_string() || value.is_object())
             .unwrap_or_else(|| json!(text));
         args.insert(key.into(), value);
+    }
+    args
+}
+
+/// The arguments with the types some clients lose put back, by the tool's
+/// `properties`. Clients that turn a model's text into JSON with the schema
+/// get it wrong where the schema has no types (a batch step's `arguments`):
+/// arrays come as `{"item": […]}` and numbers and booleans as text. Only
+/// what the schema asks for is changed, so a layer named "12" stays text.
+/// Text where the schema wants a number or boolean is refused, naming it.
+fn retype(args: Map<String, Value>, properties: &Value) -> Result<Map<String, Value>, String> {
+    let schema = json!({"type": "object", "properties": properties});
+    let mut args = Value::Object(args);
+    retype_value(&mut args, &schema, "")?;
+    match args {
+        Value::Object(args) => Ok(args),
+        _ => unreachable!("an object stays an object"),
+    }
+}
+
+/// [`retype`] for one value at `path`, and what it holds.
+fn retype_value(value: &mut Value, schema: &Value, path: &str) -> Result<(), String> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let branches = (schema.get("oneOf").or_else(|| schema.get("anyOf"))).and_then(Value::as_array);
+    if let Some(branches) = branches {
+        let branch = (branches.iter())
+            .find(|branch| fits(value, branch))
+            .or_else(|| (branches.iter()).find(|branch| coerce(value, branch).is_some()));
+        if let Some(branch) = branch {
+            if let Some(retyped) = coerce(value, branch) {
+                *value = retyped;
+            }
+            return retype_value(value, branch, path);
+        }
+        return Ok(());
+    }
+    if !fits(value, schema) {
+        if let Some(retyped) = coerce(value, schema) {
+            *value = retyped;
+        } else if let Value::String(text) = value {
+            let types = types(schema);
+            let what = if types.contains(&"boolean") {
+                "true or false"
+            } else {
+                "a number"
+            };
+            if !types.is_empty()
+                && (types.iter()).all(|kind| matches!(*kind, "number" | "integer" | "boolean"))
+            {
+                return Err(format!("`{path}` must be {what}, not the text {text:?}"));
+            }
+        }
+    }
+    match value {
+        Value::Array(items) => {
+            if let Some(schema) = schema.get("items") {
+                for (index, item) in items.iter_mut().enumerate() {
+                    retype_value(item, schema, &format!("{path}[{index}]"))?;
+                }
+            }
+        }
+        Value::Object(fields) => {
+            if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+                for (key, field) in fields.iter_mut() {
+                    if let Some(schema) = properties.get(key) {
+                        let path = if path.is_empty() {
+                            key.clone()
+                        } else {
+                            format!("{path}.{key}")
+                        };
+                        retype_value(field, schema, &path)?;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The JSON types a schema allows; none when it does not say.
+fn types(schema: &Value) -> Vec<&str> {
+    match schema.get("type") {
+        Some(Value::String(kind)) => vec![kind.as_str()],
+        Some(Value::Array(kinds)) => kinds.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether the value is of a type the schema allows, or the schema says none.
+fn fits(value: &Value, schema: &Value) -> bool {
+    let types = types(schema);
+    types.is_empty()
+        || types.iter().any(|kind| match *kind {
+            "number" => value.is_number(),
+            "integer" => value.is_i64() || value.is_u64(),
+            "boolean" => value.is_boolean(),
+            "string" => value.is_string(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            "null" => value.is_null(),
+            _ => true,
+        })
+}
+
+/// The value as a type the schema allows, from the forms clients lose it to:
+/// `{"item": […]}` for an array, text for a number or boolean.
+fn coerce(value: &Value, schema: &Value) -> Option<Value> {
+    types(schema)
+        .into_iter()
+        .find_map(|kind| match (kind, value) {
+            ("array", Value::Object(fields)) if fields.len() == 1 => match fields.get("item")? {
+                Value::Array(items) => Some(Value::Array(items.clone())),
+                // A converter's one repeated element, not in a list.
+                item => Some(Value::Array(vec![item.clone()])),
+            },
+            ("number", Value::String(text)) => numeric(text),
+            ("integer", Value::String(text)) => numeric(text).filter(|n| n.is_i64() || n.is_u64()),
+            ("boolean", Value::String(text)) => match text.trim() {
+                "true" => Some(json!(true)),
+                "false" => Some(json!(false)),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
+/// Text that is a number, as a JSON number: whole numbers as integers.
+fn numeric(text: &str) -> Option<Value> {
+    let text = text.trim();
+    if let Ok(n) = text.parse::<i64>() {
+        return Some(json!(n));
+    }
+    let n = text.parse::<f64>().ok().filter(|n| n.is_finite())?;
+    serde_json::Number::from_f64(n).map(Value::Number)
+}
+
+/// A filter or adjustment with the types some clients lose put back. Their
+/// schema has no types inside, but nothing in one is text: every value is a
+/// number, a boolean or a list of those. So anywhere inside, text that is a
+/// number or `true`/`false` is read as one and `{"item": […]}` as the list.
+fn loosen(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            if fields.len() == 1
+                && let Some(item) = fields.get_mut("item")
+            {
+                let items = match item.take() {
+                    Value::Array(items) => items,
+                    item => vec![item],
+                };
+                *value = Value::Array(items);
+                return loosen(value);
+            }
+            fields.values_mut().for_each(loosen);
+        }
+        Value::Array(items) => items.iter_mut().for_each(loosen),
+        Value::String(text) => {
+            let retyped = match text.trim() {
+                "true" => Some(json!(true)),
+                "false" => Some(json!(false)),
+                text => numeric(text),
+            };
+            if let Some(retyped) = retyped {
+                *value = retyped;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The arguments with the effect at `key` read as JSON when sent as a
+/// string ([`unquote`]) and, when it is an object, [`loosen`]ed.
+fn effect_args(args: Map<String, Value>, key: &str) -> Map<String, Value> {
+    let mut args = unquote(args, key);
+    if let Some(effect @ Value::Object(_)) = args.get_mut(key) {
+        loosen(effect);
     }
     args
 }

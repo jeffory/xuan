@@ -1810,6 +1810,134 @@ fn a_failing_batch_step_is_named_and_nothing_is_applied() {
 }
 
 #[test]
+fn batch_steps_get_back_the_types_clients_lose() {
+    // As opencode sent it for a model whose calls it converts with the
+    // schema, which has no types for a step's `arguments`: arrays wrapped
+    // as {"item": […]} and numbers and booleans as text.
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "batch",
+        json!({"name": "Night sky", "steps": [
+            {"tool": "set_layer", "arguments": {"layer": "base", "name": "12", "visible": "true"}},
+            {"tool": "fill_gradient", "arguments": {
+                "layer": "base",
+                "start": {"item": ["0", "0"]},
+                "end": {"item": ["0", "1920"]},
+                "stops": {"item": [
+                    {"color": "#0b0518", "position": "0"},
+                    {"color": "#170a2e", "position": "0.22"},
+                ]},
+                "radial": "false",
+            }},
+            {"tool": "paint_stroke", "arguments": {"layer": "base", "points": {"item": [{"item": ["1", "2"]}]}}},
+        ]}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    // The same as the direct calls with the types right; a layer named
+    // "12" stays text, as the schema wants.
+    call_tool(
+        &editor,
+        "set_layer",
+        json!({"layer": "base", "name": "12", "visible": true}),
+    );
+    call_tool(
+        &editor,
+        "fill_gradient",
+        json!({"layer": "base", "start": [0, 0], "end": [0, 1920], "radial": false, "stops": [
+            {"color": "#0b0518", "position": 0},
+            {"color": "#170a2e", "position": 0.22},
+        ]}),
+    );
+    call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"layer": "base", "points": [[1, 2]]}),
+    );
+    let requests = edit_requests(&editor);
+    let direct: Vec<Value> = (requests[1..].iter())
+        .flat_map(|request| request["edits"].as_array().unwrap().clone())
+        .collect();
+    assert_eq!(requests[0]["edits"], json!(direct));
+    assert_eq!(requests[0]["edits"][0]["name"], "12");
+    // Direct calls are mended too.
+    let result = call_tool(
+        &editor,
+        "fill_gradient",
+        json!({"start": ["0", "0"], "end": {"item": [0, "10"]}, "stops": [
+            {"color": "#000000", "position": "0"}, {"color": "#ffffff", "position": "1"},
+        ]}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let edits = edit_requests(&editor).last().unwrap()["edits"].clone();
+    assert_eq!(edits[0]["end"], json!([0, 10]));
+    assert_eq!(edits[0]["stops"][1]["position"], json!(1));
+}
+
+#[test]
+fn filters_and_adjustments_get_back_the_types_clients_lose() {
+    // Their schema has no types inside, so a converter sends text.
+    let editor = FakeEditor::new(false);
+    for (tool, arguments, edit) in [
+        (
+            "apply_filter",
+            json!({"filter": {"GaussianBlur": {"radius": "100"}}, "layer": "base", "as_layer": "true"}),
+            json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 100}}}),
+        ),
+        (
+            "apply_filter",
+            json!({"filter": {"Noise": {"amount": "12.5", "monochrome": "false"}}}),
+            json!({"op": "apply_filter", "filter": {"Noise": {"amount": 12.5, "monochrome": false}}}),
+        ),
+        (
+            "apply_adjustment",
+            json!({"adjustment": {"ColorBalance": {"shadows": {"item": ["1", "0", "-2"]}, "midtones": [0, 0, 0],
+                    "highlights": [0, 0, 0], "preserve_luminosity": "true"}}}),
+            json!({"op": "apply_adjustment", "adjustment": {"ColorBalance": {"shadows": [1, 0, -2], "midtones": [0, 0, 0],
+                    "highlights": [0, 0, 0], "preserve_luminosity": true}}}),
+        ),
+        (
+            "apply_adjustment",
+            json!({"adjustment": "Invert"}),
+            json!({"op": "apply_adjustment", "adjustment": "Invert"}),
+        ),
+    ] {
+        let result = call_tool(&editor, tool, arguments);
+        assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+        assert_eq!(edit_requests(&editor).last().unwrap()["edits"][0], edit);
+    }
+}
+
+#[test]
+fn a_batch_step_of_the_wrong_type_is_named_with_its_argument() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "fill", "arguments": {"color": "#000000"}},
+            {"tool": "fill_gradient", "arguments": {"start": [0, 0], "end": [0, 10], "stops": [
+                {"color": "#000000", "position": 0}, {"color": "#ffffff", "position": "end"},
+            ]}},
+        ]}),
+    );
+    assert_eq!(
+        text_of(&result),
+        "Step 2 (fill_gradient): `stops[1].position` must be a number, not the text \"end\". Nothing was changed."
+    );
+    assert!(edit_requests(&editor).is_empty());
+    let result = call_tool(
+        &editor,
+        "set_layer",
+        json!({"layer": "base", "visible": "yes"}),
+    );
+    assert_eq!(
+        text_of(&result),
+        "`visible` must be true or false, not the text \"yes\""
+    );
+}
+
+#[test]
 fn a_batch_takes_only_edit_tools() {
     let editor = FakeEditor::new(false);
     for (step, says) in [
