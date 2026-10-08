@@ -146,14 +146,14 @@ pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
 }
 
 pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
+    eye_labelled(ui, visible, tr("Toggle visibility"))
+}
+
+/// The visibility eye, named `label` for assistive technology and its tooltip.
+pub fn eye_labelled(ui: &mut Ui, visible: bool, label: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::Checkbox,
-            ui.is_enabled(),
-            visible,
-            tr("Toggle visibility"),
-        )
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, label)
     });
     if response.hovered() {
         ui.painter().rect_filled(rect, 4.0, ui.palette().icon_hover);
@@ -170,7 +170,7 @@ pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
     };
     svg(ui, source, rect, color);
     focus_ring(ui, &response, 4.0);
-    response.on_hover_text(tr("Toggle visibility"))
+    response.on_hover_text(label)
 }
 
 /// A layer action icon (new layer, group, mask, …), named `label` for assistive technology

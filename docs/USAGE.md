@@ -79,7 +79,7 @@ To compile the application or produce a release archive, see the [development gu
 
 Xuan has charcoal and light themes (Settings → Appearance → Theme), contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
 
-The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
+The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined, and the **Channels** pane (collapsed at first) the active layer's channels. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, Channels collapsed, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
 ### Document tabs
 
@@ -424,6 +424,20 @@ the selected child); it can be used repeatedly. **New Mask Layer** creates a
 standalone mask. Select a mask child to paint it, and use **Link / Unlink** to
 control whether it follows its image's transforms. Older single image masks are
 shown as children when a project is opened. Save as `.xuan` to preserve the stack.
+
+### Channels
+
+The **Channels** pane, collapsed between Navigator and Layers by default, shows the active layer's **Composite** and its **Red**, **Green**, **Blue** and **Alpha** channels with thumbnails. Xuan is layer-based, so channels belong to the active pixel layer rather than to the whole image; for a text, shape, RAW, folder or effect layer the pane says to select a pixel layer. Which channels you target and view belongs to each open document and is not saved.
+
+- **Click a channel** (or press Ctrl+3, Ctrl+4, Ctrl+5 or Ctrl+6 for red, green, blue or alpha) to target it: painting, Fill, the Paint Bucket, gradients, retouching tools, destructive adjustments and filters from the **Filter** and **Image** menus, and plugin edits then change only that channel, and the canvas shows it alone as grey. **Shift-click** adds a channel to the targets or removes it. **Click Composite** (Ctrl+2) to edit every channel again. The pane's header names the targeted channels, and **View → Channels** lists the same choices.
+- A targeted channel takes the matching channel of the colour you paint with, so a mid-grey colour writes 128. In the alpha channel the Brush adds opacity and the Eraser removes it. A stroke that grows the layer starts its new pixels transparent in the channels it does not target.
+- **Eyes** choose what the canvas shows without changing the targets. One channel shows as grey; several colour channels show in their colours; alpha shown with colour channels appears as a translucent red overlay where the layer is transparent. One channel always stays visible.
+- **Ctrl-click a channel**, or with one channel targeted choose **Select → Load Channel as Selection**, to select each pixel as much as the channel is bright there (value ÷ 255).
+- With one channel targeted, **Edit → Paste** writes the pasted image's brightness into that channel of the active layer, centred on the canvas (or where it was copied from), instead of adding a layer.
+
+Edits that change the canvas or the layers themselves, such as Image Size, Crop, Rotate or Merge, always apply to every channel. Adjustment and filter layers, and layer masks, are not limited by the targeted channels.
+
+An image with one plain layer that covers the canvas exactly (full opacity and fill, Normal blending, no mask or effects, not moved) exports as its pixels unchanged, so packed channel maps, such as a game's metallic / occlusion / detail / smoothness texture, keep every channel, including colour where the alpha is zero.
 
 ## Files and export
 

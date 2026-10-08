@@ -258,6 +258,9 @@ impl EditorApp {
         let has_doc = self.session().is_some() && !developing;
         let can_view = self.develop.as_ref().is_none_or(|d| d.ready());
         let pane_entries = self.pane_entries();
+        let channel_targets = self
+            .session()
+            .map_or(xuan::channels::Channels::ALL, |s| s.channel_targets);
         let mut pane_toggle = None;
         let plugin_menu = self.plugin_menu_items();
         let recent = self.recent_status();
@@ -495,6 +498,7 @@ impl EditorApp {
                                         "select_mask_black",
                                         &mut action,
                                     );
+                                    item(ui, &items, "load_channel_selection", &mut action);
                                     labelled(
                                         ui,
                                         &items,
@@ -553,6 +557,28 @@ impl EditorApp {
                                     item(ui, &items, "actual", &mut action);
                                     item(ui, &items, "zoom_in", &mut action);
                                     item(ui, &items, "zoom_out", &mut action);
+                                });
+                                ui.add_enabled_ui(has_doc, |ui| {
+                                    ui.menu_button(tr("Channels"), |ui| {
+                                        for id in [
+                                            "channel_composite",
+                                            "channel_red",
+                                            "channel_green",
+                                            "channel_blue",
+                                            "channel_alpha",
+                                        ] {
+                                            let checked = match super::channel_pane::row(id) {
+                                                Some(None) => {
+                                                    channel_targets == xuan::channels::Channels::ALL
+                                                }
+                                                Some(Some(channel)) => {
+                                                    channel_targets.single() == Some(channel)
+                                                }
+                                                None => false,
+                                            };
+                                            check_item(ui, &items, checked, None, id, &mut action);
+                                        }
+                                    });
                                 });
                                 ui.separator();
                                 check_item(

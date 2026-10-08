@@ -31,6 +31,11 @@ impl History {
         }
     }
 
+    /// The document as it was when the open edit began.
+    pub fn pending_document(&self) -> Option<&Document> {
+        self.pending.as_ref().map(|entry| &entry.document)
+    }
+
     pub fn commit(&mut self) {
         if let Some(entry) = self.pending.take() {
             self.undo.push(entry);

@@ -450,6 +450,13 @@ fn image_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|l| l.pixels.is_some() && !l.group)
 }
+/// Exactly one channel of the active layer is targeted.
+fn single_channel(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .is_some_and(|s| s.channel_targets.single().is_some())
+}
 fn masked_layer(app: &EditorApp) -> bool {
     editing(app)
         && app
@@ -816,6 +823,13 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("select_mask_black", "Select Mask's Black Areas", C::Select)
         .when(masked_layer)
         .host(Edit),
+    cmd(
+        "load_channel_selection",
+        "Load Channel as Selection",
+        C::Select,
+    )
+    .when(single_channel)
+    .aliases(&["channel", "mask map"]),
     cmd("select_subject", "Select Subject", C::Select)
         .keys(&[ctrl_alt(Key::A)])
         .host(Edit)
@@ -866,6 +880,22 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .host(View)
         .when(can_view),
+    // Channel targets, as Photoshop's Ctrl+2…6.
+    cmd("channel_composite", "Edit All Channels", C::View)
+        .keys(&[ctrl(Key::Num2)])
+        .aliases(&["rgb", "rgba", "composite"]),
+    cmd("channel_red", "Edit Red Channel", C::View)
+        .keys(&[ctrl(Key::Num3)])
+        .aliases(&["channels"]),
+    cmd("channel_green", "Edit Green Channel", C::View)
+        .keys(&[ctrl(Key::Num4)])
+        .aliases(&["channels"]),
+    cmd("channel_blue", "Edit Blue Channel", C::View)
+        .keys(&[ctrl(Key::Num5)])
+        .aliases(&["channels"]),
+    cmd("channel_alpha", "Edit Alpha Channel", C::View)
+        .keys(&[ctrl(Key::Num6)])
+        .aliases(&["channels", "transparency"]),
     cmd("toggle_pixel_grid", "Pixel Grid", C::View)
         .both()
         .run(Run::App(toggle_pixel_grid))

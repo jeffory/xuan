@@ -260,7 +260,15 @@ fn reset_panel_layout_keeps_the_installed_plugin_panes() {
     app.config.panes.ensure("plugin:gone/pane");
     app.command("reset_panels");
     let ids: Vec<_> = app.config.panes.0.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, [xuan::panes::NAVIGATOR, xuan::panes::LAYERS, key]);
+    assert_eq!(
+        ids,
+        [
+            xuan::panes::NAVIGATOR,
+            xuan::panes::CHANNELS,
+            xuan::panes::LAYERS,
+            key
+        ]
+    );
     let pane = app.config.panes.get(key).unwrap();
     assert!(!pane.hidden && !pane.collapsed && pane.height == 0.0);
     assert!(!app.config.panes.get(xuan::panes::LAYERS).unwrap().collapsed);
@@ -4013,6 +4021,7 @@ done
             ids,
             [
                 xuan::panes::NAVIGATOR,
+                xuan::panes::CHANNELS,
                 xuan::panes::LAYERS,
                 "plugin:mock/info"
             ]

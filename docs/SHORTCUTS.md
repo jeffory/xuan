@@ -45,6 +45,11 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | View | Actual Pixels | Ctrl+1 |
 | View | Zoom In | Ctrl+Plus / Ctrl+= |
 | View | Zoom Out | Ctrl+Minus |
+| View | Edit All Channels | Ctrl+2 |
+| View | Edit Red Channel | Ctrl+3 |
+| View | Edit Green Channel | Ctrl+4 |
+| View | Edit Blue Channel | Ctrl+5 |
+| View | Edit Alpha Channel | Ctrl+6 |
 | View | Show Transform Controls | Ctrl+H |
 | View | Show Grid | Ctrl+' |
 | View | Show Guides | Ctrl+; |

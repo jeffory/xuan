@@ -48,7 +48,7 @@ impl EditorApp {
         let Some(session) = self.session_mut() else {
             return;
         };
-        session.history.commit();
+        session.commit();
         session.history.begin(tr("Colour Range"), &session.document);
         let image = Arc::new(render::render(&session.document));
         let document = session.document.id;
@@ -141,7 +141,7 @@ impl EditorApp {
         {
             if keep && !edit.range.include.is_empty() {
                 session.document.selection = Some(Arc::new(edit.range.mask(&edit.image)));
-                session.history.commit();
+                session.commit();
                 self.status = tr("Colour Range").into();
             } else {
                 session.history.cancel(&mut session.document);

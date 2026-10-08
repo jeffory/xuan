@@ -57,6 +57,9 @@ mod crop;
 #[path = "ui_perspective_crop.rs"]
 mod perspective_crop;
 
+#[path = "ui_channels.rs"]
+mod channels;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;
@@ -1034,7 +1037,7 @@ mod layer_appearance {
 
 mod window_menu {
     use super::*;
-    use xuan::panes::{LAYERS, NAVIGATOR};
+    use xuan::panes::{CHANNELS, LAYERS, NAVIGATOR};
 
     fn ids(ui: &UiTest) -> Vec<String> {
         ui.app()
@@ -1051,7 +1054,7 @@ mod window_menu {
         let directory = tempfile::tempdir().unwrap();
         let mut ui = UiTest::with_document();
         ui.isolate_config(directory.path());
-        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        assert_eq!(ids(&ui), [NAVIGATOR, CHANNELS, LAYERS]);
         // Its header is the sidebar's, and its body draws the thumbnail.
         assert!(ui.has("Navigator"));
         assert_eq!(ui.app().session().unwrap().navigator.renders, 1);
@@ -1072,11 +1075,11 @@ mod window_menu {
         assert!(saved.panes.get(NAVIGATOR).unwrap().hidden);
 
         // Reset Panel Layout brings it back above Layers.
-        ui.app_mut().config.panes.move_pane(0, 2);
-        assert_eq!(ids(&ui), [LAYERS, NAVIGATOR]);
+        ui.app_mut().config.panes.move_pane(0, 3);
+        assert_eq!(ids(&ui), [CHANNELS, LAYERS, NAVIGATOR]);
         ui.open_menu("Window");
         ui.click("Reset Panel Layout");
-        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        assert_eq!(ids(&ui), [NAVIGATOR, CHANNELS, LAYERS]);
         assert!(!ui.app().config.panes.get(NAVIGATOR).unwrap().hidden);
         assert!(ui.has("Navigator"));
     }

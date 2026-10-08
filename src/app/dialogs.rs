@@ -1063,7 +1063,7 @@ impl EditorApp {
         }
         if apply {
             if let Some(s) = self.session_mut() {
-                s.history.commit();
+                s.commit();
             }
             self.dialog = None;
         } else {

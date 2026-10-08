@@ -254,7 +254,7 @@ impl EditorApp {
         };
         self.text_renderer.get_or_insert_with(TextRenderer::default);
         let session = self.session_mut().unwrap();
-        session.history.commit();
+        session.commit();
         session.history.begin(
             if is_new {
                 tr("Add Text")
@@ -334,7 +334,7 @@ impl EditorApp {
             self.brush.color = self.text_style.color;
             let session = self.session_mut().unwrap();
             session.document.select(edit.target, false);
-            session.history.commit();
+            session.commit();
             self.status = tr("Text applied").into();
         } else if let Some(session) = self.session_mut() {
             session.history.cancel(&mut session.document);
