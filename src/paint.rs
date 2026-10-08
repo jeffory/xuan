@@ -784,7 +784,7 @@ pub fn path_shape_size(path: &VectorPath) -> Result<(u32, u32)> {
         area.width() <= f64::from(crate::document::MAX_SIDE)
             && area.height() <= f64::from(crate::document::MAX_SIDE),
         "Dimensions must be between 1 and {} pixels",
-        crate::document::MAX_SIDE
+        crate::limits::grouped(crate::document::MAX_SIDE.into())
     );
     let size = (area.width() as u32, area.height() as u32);
     validate_size(size.0, size.1)?;

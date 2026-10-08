@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::manifest::FilesystemAccess;
 use crate::{
     blend::BlendMode,
-    document::{Adjustment, Document, Layer, MAX_PIXELS, MAX_SIDE, Mask, Point, Transform},
+    document::{Adjustment, Document, Layer, MAX_SIDE, Mask, Point, Transform},
     effects::Filter,
     paint::ShapeKind,
     selection::SelectionMode,
@@ -198,8 +198,6 @@ pub const MAX_LAYERS: usize = 32;
 pub const MAX_IMPORT_LAYERS: usize = 1000;
 /// Edits in one `document/edit` request or one result, all batches together.
 pub const MAX_EDITS: usize = 1000;
-/// Largest image file read for a plugin.
-const MAX_FILE: u64 = 512 * 1024 * 1024;
 
 /// Where the host may read and write files on a plugin's behalf: under its
 /// own folders (the plugin folder, its data folder, and the scratch and work
@@ -298,8 +296,9 @@ impl Access {
 }
 
 /// Reads the images of one plugin result, edit batch or import, keeping a
-/// running total so a plugin cannot make the host decode more than
-/// [`MAX_PIXELS`] pixels, or create more layers than allowed, for one answer.
+/// running total so a plugin cannot make the host decode more pixels than
+/// opening a file may add ([`crate::limits::Limits::project_pixels`]), or
+/// create more layers than allowed, for one answer.
 /// Each image is checked against the budget from its header, before it is
 /// decoded.
 pub struct Reader {
@@ -383,14 +382,7 @@ impl Reader {
     /// Count `count` more pixels against the budget, for images the host
     /// makes itself (text, shapes, strokes that grow a layer).
     fn add_pixels(&mut self, width: u32, height: u32) -> Result<()> {
-        let pixels = self
-            .pixels
-            .saturating_add(u64::from(width) * u64::from(height));
-        ensure!(
-            pixels <= MAX_PIXELS,
-            "The plugin's images exceed 100 megapixels in total"
-        );
-        self.pixels = pixels;
+        self.pixels = budgeted(self.pixels, width, height)?;
         Ok(())
     }
 
@@ -436,34 +428,43 @@ impl Reader {
         let mut bytes = Vec::new();
         std::fs::File::open(&resolved)
             .with_context(|| format!("Cannot read {}", path.display()))?
-            .take(MAX_FILE + 1)
+            .take(crate::io::max_asset() + 1)
             .read_to_end(&mut bytes)
             .with_context(|| format!("Cannot read {}", path.display()))?;
-        ensure!(bytes.len() as u64 <= MAX_FILE, "Image exceeds 512 MiB");
+        ensure!(
+            bytes.len() as u64 <= crate::io::max_asset(),
+            "Image files are limited to {} on this computer",
+            crate::limits::size(crate::io::max_asset())
+        );
         let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .with_context(|| format!("Cannot read {}", path.display()))?;
         let mut limits = image::Limits::default();
         limits.max_image_width = Some(MAX_SIDE);
         limits.max_image_height = Some(MAX_SIDE);
-        limits.max_alloc = Some(MAX_PIXELS * 8);
+        limits.max_alloc = Some(crate::limits::get().image_pixels * 8);
         reader.limits(limits);
         let decoder = reader
             .into_decoder()
             .with_context(|| format!("Cannot decode {}", path.display()))?;
         let (width, height) = decoder.dimensions();
         crate::document::validate_size(width, height)?;
-        let pixels = self
-            .pixels
-            .saturating_add(u64::from(width) * u64::from(height));
-        ensure!(
-            pixels <= MAX_PIXELS,
-            "The plugin's images exceed 100 megapixels in total"
-        );
-        self.pixels = pixels;
+        self.pixels = budgeted(self.pixels, width, height)?;
         image::DynamicImage::from_decoder(decoder)
             .with_context(|| format!("Cannot decode {}", path.display()))
     }
+}
+
+/// `used` plus a `width` × `height` image, if that stays within the answer's pixel budget.
+fn budgeted(used: u64, width: u32, height: u32) -> Result<u64> {
+    let pixels = used.saturating_add(u64::from(width) * u64::from(height));
+    let budget = crate::limits::get().project_pixels;
+    ensure!(
+        pixels <= budget,
+        "The plugin's images exceed {} in total, the most this computer allows",
+        crate::limits::megapixels(budget)
+    );
+    Ok(pixels)
 }
 
 /// Read one image a plugin wrote.
@@ -3491,14 +3492,14 @@ mod tests {
         let error = run(
             &mut copy,
             &[Edit::ExtendCanvas {
-                left: 30_000,
+                left: MAX_SIDE,
                 top: 0,
                 right: 0,
                 bottom: 0,
             }],
         )
         .unwrap_err();
-        assert!(error.to_string().contains("30000"), "{error}");
+        assert!(error.to_string().contains("65,535"), "{error}");
     }
 
     fn edit(value: Value) -> Edit {
@@ -4222,7 +4223,7 @@ mod tests {
         assert_eq!((transform.x, transform.y), (6.0, 6.0));
         for bad in [
             json!({"op": "crop", "x": 0, "y": 0, "width": 0, "height": 5}),
-            json!({"op": "resize_canvas", "width": 40_000, "height": 5}),
+            json!({"op": "resize_canvas", "width": 70_000, "height": 5}),
             json!({"op": "resize_canvas", "width": 10, "height": 5, "anchor": [2, 0]}),
             json!({"op": "resize_image", "width": 0, "height": 5}),
         ] {

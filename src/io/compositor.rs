@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{MAX_ASSET, MAX_MANIFEST, decode_image, package_read};
+use super::{MAX_MANIFEST, decode_image, max_asset, package_read};
 use crate::{
     blend::BlendMode,
     document::{Adjustment, Document, Layer, Mask, Point, Transform},
@@ -32,6 +32,8 @@ pub const NEWEST_VERSION: u64 = 11;
 const MAX_TEXT_UNITS: usize = 100_000;
 /// Upstream's limit on a per-letter font name, in characters.
 const MAX_FONT_NAME: usize = 200;
+/// Upstream's largest canvas side (`CanvasDocument.validDimension`).
+const MAX_CANVAS_SIDE: u32 = 30_000;
 /// Upstream's largest text layer paragraph box side and area, in layer pixels.
 const MAX_BOX_SIDE: f64 = 30_000.0;
 const MAX_BOX_AREA: f64 = 200_000_000.0;
@@ -821,6 +823,10 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
             .as_u64()
             .context("Missing canvas height")?,
     )?;
+    ensure!(
+        width.max(height) <= MAX_CANVAS_SIDE,
+        "Compositor canvases are at most 30,000 pixels a side"
+    );
     let mut report = ImportReport::default();
     let mut document = Document::new(width, height)?;
     document.id = identifier(&manifest["documentID"])?.context("Missing document ID")?;
@@ -880,7 +886,7 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
                 name.eq_ignore_ascii_case(&format!("{id}.png")),
                 "Unsafe layer asset path"
             );
-            let bytes = package_read(path, &Path::new("images").join(name), MAX_ASSET)?;
+            let bytes = package_read(path, &Path::new("images").join(name), max_asset())?;
             layer.pixels = Some(Arc::new(decode_image(bytes, &mut image_pixels)?.to_rgba8()));
         }
         if let Some(name) = record["maskFile"].as_str() {
@@ -888,7 +894,7 @@ pub fn load(path: &Path) -> Result<(Document, ImportReport)> {
                 name.eq_ignore_ascii_case(&format!("{id}.mask.png")),
                 "Unsafe mask asset path"
             );
-            let bytes = package_read(path, &Path::new("images").join(name), MAX_ASSET)?;
+            let bytes = package_read(path, &Path::new("images").join(name), max_asset())?;
             layer.mask = Some(Mask {
                 pixels: Arc::new(decode_image(bytes, &mut mask_pixels)?.to_luma8()),
                 enabled: record["maskEnabled"].as_bool().unwrap_or(true),

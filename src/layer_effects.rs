@@ -348,10 +348,6 @@ pub fn margin(effects: &LayerEffects) -> u32 {
     margin.ceil() as u32 + 2
 }
 
-/// Largest effect raster, as for any other layer.
-const MAX_PIXELS: u64 = crate::document::MAX_PIXELS;
-const MAX_SIDE: u32 = 30_000;
-
 /// The settings of one render, as plain numbers shared by the CPU and GPU passes.
 pub(crate) struct Plan {
     /// Reach in pixels and whether the stroke is inside.
@@ -642,7 +638,8 @@ pub fn render(pixels: &RgbaImage, effects: &LayerEffects) -> Option<(RgbaImage, 
     }
     let margin = margin(&visible);
     let (width, height) = (pixels.width() + margin * 2, pixels.height() + margin * 2);
-    if width > MAX_SIDE || height > MAX_SIDE || u64::from(width) * u64::from(height) > MAX_PIXELS {
+    // The effect raster is limited like any other layer.
+    if crate::document::validate_size(width, height).is_err() {
         return None;
     }
     let padded = pad(pixels, margin);

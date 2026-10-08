@@ -1129,7 +1129,7 @@ mod tests {
         let place = |placed: &Placed| {
             place_layer(&prepared, "x", image.clone(), 0.0, 0.0, placed, None).is_err()
         };
-        for bad in [0.0, -5.0, f32::NAN, f32::INFINITY, 30_001.0] {
+        for bad in [0.0, -5.0, f32::NAN, f32::INFINITY, 65_536.0] {
             assert!(place(&Placed {
                 width: Some(bad),
                 ..Placed::default()
@@ -1524,7 +1524,7 @@ mod tests {
         let document = document();
         for extend in [
             Extend {
-                left: Amount::Pixels(29_700),
+                left: Amount::Pixels(65_200),
                 ..Extend::default()
             },
             Extend {

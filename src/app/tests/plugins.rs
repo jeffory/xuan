@@ -805,9 +805,9 @@ fn extending_the_canvas_needs_document_edit_even_in_a_result() {
     app.resolve_proposal(false);
     assert_eq!(size(&app), (8, 8));
     // Past the size limits the request changes nothing.
-    let huge = json!({"op": "extend_canvas", "right": 30_000});
+    let huge = json!({"op": "extend_canvas", "right": xuan::document::MAX_SIDE});
     let error = plugin_request(&mut app, "document/edit", json!({"edits": [huge]})).unwrap_err();
-    assert!(error.message.contains("30000"), "{}", error.message);
+    assert!(error.message.contains("65,535"), "{}", error.message);
     assert_eq!(size(&app), (8, 8));
 }
 
@@ -1495,7 +1495,12 @@ fn invalid_and_oversized_masks_are_refused() {
     app.session_mut().unwrap().history.commit();
     let mask = write_mask(dir.path(), "mask.png", (8, 8), |_, _| 255);
     // Wider than any image Xuan opens: refused from its header.
-    let wide = write_mask(dir.path(), "wide.png", (30_001, 1), |_, _| 255);
+    let wide = write_mask(
+        dir.path(),
+        "wide.png",
+        (xuan::document::MAX_SIDE + 1, 1),
+        |_, _| 255,
+    );
     let foreign = write_mask(outside.path(), "foreign.png", (8, 8), |_, _| 255);
     let text = dir.path().join("not-a.png");
     std::fs::write(&text, "not a png\r\n").unwrap();

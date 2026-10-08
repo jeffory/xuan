@@ -621,10 +621,11 @@ source = { from = "composite", max_side = 2048,
   image. Export pixels that `max_side` scaling makes straddle the old edge
   count as new. With `source.mask = "selection"`, the selection mask uses the
   same grid and is black over the new canvas.
-- The extended size is checked against the document limits (30,000 pixels a
-  side, 100 megapixels) before anything is exported; a larger extension
-  refuses to start. Sides in the manifest may be at most 30,000, and input
-  values are rounded and clamped to 0..30,000.
+- The extended size is checked against the document limits (65,535 pixels a
+  side, and the image limit of the [size limits](USAGE.md#size-limits), at least 100
+  megapixels) before anything is exported; a larger extension refuses to
+  start. Sides in the manifest may be at most 65,535, and input values are
+  rounded and clamped to 0..65,535.
 - `extend` needs an `edit` action with `from = "composite"`. Sending an
   extended source needs only `document = "read"`, but growing the canvas
   with the result needs `document = "edit"`.
@@ -957,10 +958,11 @@ PNG that becomes the selection, see below), `edit` (a list of
 document edits, see below, applied as one undo step), `text` (shown in the
 status bar) and `none`. An `image` or `document` output may also carry a
 `provenance` object, see [Provenance](#provenance). One result may hold at most 64 outputs, 32 new layers
-and documents, and 1,000 edits, and the images it refers to may add up to at
-most 100 megapixels; a larger result is refused as a whole. The same layer,
-edit and pixel limits apply to one `document/edit` request, and an import may
-return up to 1,000 layers within 100 megapixels. `action/estimate` with the same params may be answered
+and documents, and 1,000 edits, and the images it refers to may add up to as
+many pixels as opening a file may add (the [size limits](USAGE.md#size-limits): a quarter
+of the computer's memory, at least 100 megapixels); a larger result is refused
+as a whole. The same layer, edit and pixel limits apply to one `document/edit`
+request, and an import may return up to 1,000 layers within that budget. `action/estimate` with the same params may be answered
 with `{cost: "≈18 credits", seconds: 20}`; the dialog shows it before running.
 
 **Placed size.** An `image` normally lands at its pixel size divided by the
@@ -981,8 +983,8 @@ or `Settings::host` in Rust. For an extended source those bounds
 include the new canvas (see [Extending the
 canvas](#extending-the-canvas-outpainting)). `fit` cannot be combined with `width` or
 `height`, and an action without a source cannot use `fit`. Sizes must be
-finite, above 0 and at most 30,000 document units; the image's own pixels
-still count against the size and 100-megapixel limits. With `result.into =
+finite, above 0 and at most 65,535 document units; the image's own pixels
+still count against the size limits and the result's pixel budget. With `result.into =
 "replace"` the result is resampled to the size it is placed at, in the source
 layer's pixels. The SDKs have helpers: `job.image(path, fit_source=True)` or
 `width=`/`height=` in Python (`fit="cover"` for cover), and
@@ -1008,9 +1010,9 @@ nothing outside it is selected. Several masks apply in order. The selection
 changes only through a proposal: the new selection shows at once,
 **Compare** shows the old one, **Accept** makes it one undo step named after
 the action and **Discard** restores the old one. A mask is read from the
-plugin's folders and counts against the result's 100-megapixel budget like
-an image; a file that is missing, not an image or larger than 30,000 pixels
-on a side refuses the whole result. It needs no `document = "edit"` (see
+plugin's folders and counts against the result's pixel budget like an
+image; a file that is missing, not an image or larger than 65,535 pixels on a
+side refuses the whole result. It needs no `document = "edit"` (see
 [What `document` allows](#what-document-allows)). The SDKs have helpers:
 `job.mask(path, mode="add", fit_source=True)` in Python (and
 `encode_gray_png` to write one), and `Output::mask(path,
@@ -1128,7 +1130,8 @@ its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
   shrinking is not offered). Layers, mask placements and guides move by
   `left`, `top` exactly as **Image → Canvas Size…** moves them with the
   matching anchor, and the selection is cleared, as Canvas Size does. The new
-  size must stay within 30,000 pixels a side and 100 megapixels. Needs
+  size must stay within 65,535 pixels a side and the image limit of the
+  [size limits](USAGE.md#size-limits). Needs
   `document = "edit"`, also in a result's `edit` output.
 
 Layers and their properties:
@@ -1180,7 +1183,7 @@ Layers and their properties:
   places it (give no `x`, `y`, `width` or `height`). The layer covers the whole
   pixels the curves touch; resizing or rotating it redraws the outline, as for
   the other shapes. The path must enclose some area, and the layer is at most
-  30,000 pixels a side.
+  65,535 pixels a side.
 - `{"op": "add_path", "path", "name"?}`: keep SVG path data with the document
   as a named path, as in **Select → Paths…** (format 10). A path with the same
   name is replaced; without `name` it is called `Path 1`, `Path 2`, …. A
@@ -1367,9 +1370,10 @@ layer's own box. Other layers have `text: null`.
 Edits apply in order, each in the document's coordinates at that point: an
 `add_layer` after an `extend_canvas` is placed on the grown canvas. A batch
 that fails anywhere changes nothing, and every edit respects the same limits
-as the editor: locked layers, 30,000 pixels a side and 100 megapixels per
-image, at most 1,000 edits and 32 new layers per batch, and the 100-megapixel
-budget for the images it reads and the text and shapes it draws. Edits run on
+as the editor: locked layers, 65,535 pixels a side and the image limit of the
+[size limits](USAGE.md#size-limits) per image, at most 1,000 edits and 32 new layers per
+batch, and the pixel budget for the images it reads and the text and shapes it
+draws. Edits run on
 the editor's thread, so a request (or a result, all its batches together)
 also has a **work budget**, estimated before anything runs: about 1,000
 million pixel visits, where a colour selection costs a render of every layer,

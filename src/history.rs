@@ -1,7 +1,6 @@
 use crate::document::Document;
 
 const MAX_STEPS: usize = 64;
-const MAX_HISTORY_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Clone)]
 struct Entry {
@@ -35,8 +34,10 @@ impl History {
     pub fn commit(&mut self) {
         if let Some(entry) = self.pending.take() {
             self.undo.push(entry);
+            // How much undo may hold follows the memory; see `crate::limits`.
+            let budget = crate::limits::get().history_bytes;
             while self.undo.len() > 1
-                && (self.undo.len() > MAX_STEPS || self.retained_bytes() > MAX_HISTORY_BYTES)
+                && (self.undo.len() > MAX_STEPS || self.retained_bytes() as u64 > budget)
             {
                 self.undo.remove(0);
             }

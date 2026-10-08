@@ -1034,7 +1034,7 @@ fn files_without_layers_open_their_merged_image() {
         &bytes(&spec),
         PixelBudget {
             layers: 99,
-            masks: MAX_PIXELS,
+            masks: crate::limits::get().project_pixels,
         },
     );
     assert!(result.is_err());
@@ -1407,7 +1407,7 @@ fn shape_layers_without_pixels_are_drawn_from_their_path() {
     let mut reader = Reader::new(&record_bytes);
     let parsed = read_record(&mut reader, false).unwrap();
     let started = std::time::Instant::now();
-    assert!(draw_vector(&parsed, canvas, MAX_PIXELS).is_none());
+    assert!(draw_vector(&parsed, canvas, crate::limits::get().project_pixels).is_none());
     assert!(started.elapsed().as_secs() < 5);
     let cc = find("CC rectangle");
     assert_eq!(cc.shape.as_ref().unwrap().color, [0, 255, 0, 255]);

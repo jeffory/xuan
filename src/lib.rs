@@ -14,6 +14,7 @@ pub mod i18n;
 pub mod io;
 pub mod layer_effects;
 pub mod layout;
+pub mod limits;
 pub mod operations;
 pub mod paint;
 pub mod panes;

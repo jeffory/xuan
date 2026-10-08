@@ -114,8 +114,10 @@ follow instructions hidden in something it read.
   switch in **Plugins → Manage Plugins… → MCP Server** ("Edit without asking"),
   and it is dropped if the plugin's folder, command or permissions change.
 - **Every edit is one undo step** and shows on the canvas at once. Edits obey
-  the same rules as the menus: documents stay within 30,000 pixels a side
-  and 100 megapixels, a request that fails part way changes nothing, and a
+  the same rules as the menus: documents stay within the editor's
+  [size limits](USAGE.md#size-limits) (65,535 pixels a side; how many pixels
+  follows the computer's memory, at least 100 megapixels), a request that
+  fails part way changes nothing, and a
   request too heavy for the editor's thread is refused. Locked layers keep
   their pixels and placement, and the MCP server can lock a layer but never
   unlock one (the plugin protocol itself lets a plugin with `document =

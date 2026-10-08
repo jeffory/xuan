@@ -993,7 +993,7 @@ impl EditorApp {
         let max_side = params
             .get("max_side")
             .and_then(Value::as_u64)
-            .map(|v| v.clamp(16, 30_000) as u32);
+            .map(|v| v.clamp(16, u64::from(xuan::document::MAX_SIDE)) as u32);
         let internal =
             |error: anyhow::Error| RpcError::new(protocol::INTERNAL_ERROR, format!("{error:#}"));
         // A direct edit of a plugin that asks per session needs that answer.
