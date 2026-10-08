@@ -746,4 +746,54 @@ mod tests {
         let error = compose(&document, SMALL).unwrap_err();
         assert!(error.to_string().contains("texture"), "{error}");
     }
+
+    #[test]
+    #[ignore = "native GPU timing; run explicitly with --nocapture"]
+    fn benchmark_tiled_composition() {
+        use std::time::Instant;
+        let gpu = processor();
+        let (width, height) = (9000, 6000);
+        let mut document = Document::new(width, height).unwrap();
+        document.layers = (0..3)
+            .map(|i| {
+                let mut layer = Layer::image(
+                    "Photo",
+                    RgbaImage::from_fn(width, height, |x, y| {
+                        Rgba([
+                            (x + i * 50) as u8,
+                            (y * 3) as u8,
+                            (x ^ y) as u8,
+                            255 - i as u8 * 60,
+                        ])
+                    }),
+                );
+                layer.blend = crate::blend::BlendMode::ALL[i as usize * 3];
+                layer
+            })
+            .collect();
+        let mut blur = Layer::blank("Blur", width, height);
+        blur.filter = Some(Filter::GaussianBlur { radius: 6.0 });
+        blur.opacity = 0.5;
+        document.layers.push(blur);
+        document.active = Some(document.layers[0].id);
+        document.validate().unwrap();
+        // Lower the texture limit below the canvas so the GPU tiles it.
+        let tiling = Tiling {
+            texture: 8192,
+            ..Tiling::for_limits(&gpu.device.limits())
+        };
+        let start = Instant::now();
+        let tiled = super::super::scope(Some(gpu.clone()), || {
+            gpu.compose_within(&document, width, height, tiling)
+                .unwrap()
+        });
+        eprintln!("GPU tiles: {:.2} s", start.elapsed().as_secs_f64());
+        let start = Instant::now();
+        let cpu = render::render(&document);
+        eprintln!("CPU: {:.2} s", start.elapsed().as_secs_f64());
+        assert_eq!(
+            differences(&premultiplied(&tiled), &premultiplied(&cpu), 4),
+            0
+        );
+    }
 }
