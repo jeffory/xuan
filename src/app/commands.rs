@@ -1232,6 +1232,10 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .when(always)
         .aliases(&["keys", "hotkeys"]),
+    cmd("check_updates", "Check for Updates…", C::Help)
+        .both()
+        .when(always)
+        .aliases(&["update", "upgrade", "new version", "release notes"]),
     cmd("about", "About Xuan", C::Help)
         .both()
         .when(always)

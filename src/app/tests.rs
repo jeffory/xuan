@@ -87,6 +87,9 @@ mod adjustment_presets;
 #[path = "tests/units.rs"]
 mod units;
 
+#[path = "tests/update_check.rs"]
+mod update_check;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

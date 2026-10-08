@@ -121,6 +121,7 @@ impl EditorApp {
                 Dialog::Paths => self.paths_dialog(ctx),
                 Dialog::AdjustmentPresets => self.presets_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
+                Dialog::Update => self.update_dialog(ctx),
                 Dialog::About => {
                     let mut open = true;
                     widgets::Window::new(tr("About Xuan"))

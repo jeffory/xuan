@@ -42,6 +42,9 @@ mod dialogs;
 #[path = "ui_units.rs"]
 mod units;
 
+#[path = "ui_updates.rs"]
+mod updates;
+
 #[path = "ui_settings_shortcuts.rs"]
 mod settings_shortcuts;
 

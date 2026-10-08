@@ -241,6 +241,7 @@ impl EditorApp {
                 config.disable_network_plugins != self.config.disable_network_plugins;
             let blocking_changed =
                 config.block_undeclared_network() != self.config.block_undeclared_network();
+            let updates_turned_on = config.updates.check && !self.config.updates.check;
             self.config = config;
             if keys_changed {
                 self.rebuild_keymap();
@@ -250,6 +251,9 @@ impl EditorApp {
             }
             if blocking_changed {
                 self.apply_block_network_setting();
+            }
+            if updates_turned_on {
+                self.start_daily_update_check();
             }
             self.config_dirty = true;
             ctx.request_repaint();
@@ -548,6 +552,16 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
         if changed {
             config.block_undeclared_network = Some(block);
         }
+        settings_row(
+            ui,
+            "",
+            |ui| {
+                widgets::checkbox(ui, &mut config.updates.check, tr("Check for updates"));
+            },
+            Some(tr(
+                "Once a day, ask GitHub whether a newer release of Xuan is out, and show its release notes. Only that request is sent, and nothing is downloaded or installed. Help → Check for Updates… checks now.",
+            )),
+        );
         if let Ok(path) = Config::path() {
             settings_row(
                 ui,
