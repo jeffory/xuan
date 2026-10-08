@@ -797,7 +797,7 @@ impl EditorApp {
                                 changed |= widgets::checkbox(ui, monochrome, tr("Monochromatic"))
                                     .changed();
                             }
-                            Adjustment::Invert => {}
+                            Adjustment::Invert | Adjustment::ColorLookup { .. } => {}
                             Adjustment::BlackWhite {
                                 weights,
                                 tint,

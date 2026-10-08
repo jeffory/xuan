@@ -195,6 +195,11 @@ pub fn save_hashed(
                 let name = format!("images/{}.mask.png", layer.id);
                 write_entry(&mut archive, name, options, png.get_ref())?;
             }
+            if let Some(crate::document::Adjustment::ColorLookup { table, .. }) = &layer.adjustment
+            {
+                let name = format!("luts/{}.cube", layer.id);
+                write_entry(&mut archive, name, options, table.to_cube().as_bytes())?;
+            }
         }
         archive.finish()?;
     }
@@ -211,7 +216,15 @@ pub fn save_hashed(
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 14;
+const LATEST_VERSION: u32 = 15;
+
+/// The first version with Color Lookup adjustment layers, whose tables are stored as
+/// `luts/<layer UUID>.cube`.
+const COLOR_LOOKUP: u32 = 15;
+
+/// Bytes of Color Lookup tables one project may bring in when it is opened: room for 64 of
+/// the largest (65³) tables.
+const MAX_PROJECT_LUT_BYTES: usize = 64 * 65 * 65 * 65 * 12;
 
 /// The first version with upstream Compositor's Vignette, Bloom, Tonal Contrast and Dither
 /// filters, which older readers cannot draw.
@@ -227,7 +240,15 @@ const PHOTOSHOP_VIGNETTE: u32 = 12;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
-    if document
+    // Older readers do not know the adjustment and would refuse the whole project.
+    if document.layers.iter().any(|l| {
+        matches!(
+            l.adjustment,
+            Some(crate::document::Adjustment::ColorLookup { .. })
+        )
+    }) {
+        COLOR_LOOKUP
+    } else if document
         .layers
         .iter()
         .any(|l| l.filter.as_ref().is_some_and(|f| !f.is_legacy()))
@@ -338,6 +359,7 @@ fn load_archive<R: Read + Seek>(reader: R) -> Result<Document> {
     let mut used_pixels = 0;
     let mut used_masks = 0;
     let mut used_raw = 0;
+    let mut used_luts = 0;
     ensure!(manifest.document.layers.len() <= 10_000, "Too many layers");
     validate_size(manifest.document.width, manifest.document.height)?;
     for layer in &mut manifest.document.layers {
@@ -368,6 +390,22 @@ fn load_archive<R: Read + Seek>(reader: R) -> Result<Document> {
                 max_asset(),
             )?;
             mask.pixels = Arc::new(decode_image(bytes, &mut used_masks)?.to_luma8());
+        }
+        if let Some(crate::document::Adjustment::ColorLookup { table, .. }) = &mut layer.adjustment
+        {
+            let bytes = zip_read(
+                &mut archive,
+                &format!("luts/{}.cube", layer.id),
+                crate::lut::MAX_FILE_BYTES,
+            )?;
+            let lut = crate::lut::Lut::parse_bytes(&bytes)
+                .with_context(|| format!("Invalid colour lookup table for layer {}", layer.id))?;
+            used_luts += lut.bytes();
+            ensure!(
+                used_luts <= MAX_PROJECT_LUT_BYTES,
+                "Project holds more colour lookup tables than Xuan opens"
+            );
+            *table = Arc::new(lut);
         }
     }
     ensure!(
@@ -1320,6 +1358,92 @@ mod tests {
             save(&plain, &path).unwrap();
             assert_eq!(manifest_json(&path)["version"], 4);
         }
+    }
+
+    /// Rewrite the project at `path`, replacing (or with `None`, leaving out) one entry.
+    fn replace_entry(path: &Path, name: &str, bytes: Option<&[u8]>) {
+        let copy = path.with_extension("copy");
+        fs::copy(path, &copy).unwrap();
+        let mut source = ZipArchive::new(File::open(&copy).unwrap()).unwrap();
+        let mut writer = ZipWriter::new(File::create(path).unwrap());
+        for index in 0..source.len() {
+            let file = source.by_index_raw(index).unwrap();
+            if file.name() != name {
+                writer.raw_copy_file(file).unwrap();
+            }
+        }
+        if let Some(bytes) = bytes {
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    /// A Color Lookup layer needs version 15 and keeps its table in the project, so the
+    /// project looks the same without the original `.cube` file. A missing or broken table
+    /// is refused rather than opened as some other look.
+    #[test]
+    fn color_lookup_tables_round_trip_inside_the_project_as_version_15() {
+        use crate::{
+            document::Adjustment,
+            lut::{Dimension, Interpolation, Lut},
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("lookup.xuan");
+        let mut doc = Document::new(16, 16).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(16, 16, |x, y| {
+            Rgba([(x * 16) as u8, (y * 16) as u8, 90, 255])
+        })));
+        let mut table = Lut::identity(Dimension::Three, 9);
+        table.title = "Bleach".into();
+        for entry in &mut table.table {
+            *entry = [entry[2], entry[0] * 0.5 + 0.25, entry[1].powf(0.7)];
+        }
+        let mut layer = Layer::blank("Color Lookup", 16, 16);
+        layer.opacity = 0.5;
+        layer.adjustment = Some(Adjustment::ColorLookup {
+            name: "bleach.cube".into(),
+            interpolation: Interpolation::Trilinear,
+            table: Arc::new(table.clone()),
+        });
+        let id = layer.id;
+        doc.layers.push(layer);
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 15);
+        let stored = &manifest["document"]["layers"][1]["adjustment"]["ColorLookup"];
+        assert_eq!(stored["name"], "bleach.cube");
+        assert_eq!(stored["interpolation"], "Trilinear");
+        assert!(stored.get("table").is_none(), "{stored}");
+        let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let mut cube = String::new();
+        archive
+            .by_name(&format!("luts/{id}.cube"))
+            .unwrap()
+            .read_to_string(&mut cube)
+            .unwrap();
+        assert_eq!(Lut::parse(&cube).unwrap(), table);
+
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[1].adjustment, doc.layers[1].adjustment);
+        assert_eq!(render::render(&loaded), render::render(&doc));
+
+        // Without it the project keeps the version it needed before.
+        let mut plain = loaded.clone();
+        plain.layers[1].adjustment = Some(Adjustment::Invert);
+        save(&plain, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 1);
+
+        save(&doc, &path).unwrap();
+        let entry = format!("luts/{id}.cube");
+        replace_entry(&path, &entry, Some(b"LUT_3D_SIZE 9\n0 0 0\n"));
+        let error = format!("{:#}", load(&path).unwrap_err());
+        assert!(error.contains("incomplete"), "{error}");
+        replace_entry(&path, &entry, None);
+        let error = load(&path).unwrap_err().to_string();
+        assert!(error.contains("Missing project asset"), "{error}");
     }
 
     /// A layer's Fill below 100% needs version 13; at 100% the key is left out and the

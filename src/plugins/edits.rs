@@ -49,6 +49,16 @@ pub fn describe(document: &Document) -> Value {
     })
 }
 
+/// Check an adjustment a plugin sent. A Color Lookup's table lives outside the JSON, so a
+/// plugin cannot give one.
+fn check_adjustment(adjustment: &Adjustment) -> Result<()> {
+    ensure!(
+        !matches!(adjustment, Adjustment::ColorLookup { .. }),
+        "Plugins cannot add a Color Lookup: it needs a .cube file"
+    );
+    crate::effects::validate_adjustment(adjustment)
+}
+
 /// Describe one layer. Masks are reported both ways round: an image lists
 /// the mask layers attached to it under `masks`, and an effect layer (mask,
 /// adjustment or filter) attached to an image names it in `attached_to`.
@@ -2365,7 +2375,7 @@ fn apply_each(
                 crate::effects::apply_filter(document, filter, false)?;
             }
             Edit::ApplyAdjustment { layer, adjustment } => {
-                crate::effects::validate_adjustment(adjustment)?;
+                check_adjustment(adjustment)?;
                 activate(document, *layer)?;
                 crate::effects::apply_adjustment(document, adjustment, false)?;
             }
@@ -2380,7 +2390,7 @@ fn apply_each(
                     "Give either an adjustment or a filter"
                 );
                 if let Some(adjustment) = adjustment {
-                    crate::effects::validate_adjustment(adjustment)?;
+                    check_adjustment(adjustment)?;
                 }
                 if let Some(filter) = filter {
                     filter.validate()?;
@@ -4207,6 +4217,9 @@ mod tests {
             json!({"op": "add_shape_layer", "shape": "Ellipse", "x": 0, "y": 0, "width": 0, "height": 5}),
             json!({"op": "add_empty_layer", "above": Uuid::new_v4()}),
             json!({"op": "add_empty_layer", "name": "x".repeat(300)}),
+            // A Color Lookup's table cannot come in the JSON.
+            json!({"op": "add_adjustment_layer", "adjustment": {"ColorLookup": {"name": "a.cube"}}}),
+            json!({"op": "apply_adjustment", "adjustment": {"ColorLookup": {"name": "a.cube"}}}),
         ] {
             assert!(
                 run(&mut document.clone(), &[edit(bad.clone())]).is_err(),

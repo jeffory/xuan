@@ -338,6 +338,11 @@ impl Processor {
         selection: Option<&GrayImage>,
         noise_coordinates: bool,
     ) -> Result<RgbaImage> {
+        // The raster shader has no table binding; `effects::adjust` applies it on the CPU.
+        ensure!(
+            !matches!(adjustment, Adjustment::ColorLookup { .. }),
+            "Color Lookup is applied on the CPU"
+        );
         let mut layer = Layer::blank("Adjustment", image.width(), image.height());
         layer.adjustment = Some(adjustment.clone());
         let document = Document::new(image.width(), image.height())?;
