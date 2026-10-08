@@ -16,6 +16,7 @@ mod develop_controls;
 mod develop_preview;
 mod dialogs;
 mod drops;
+mod export_preview;
 mod eyedropper;
 mod filter_controls;
 mod filter_preview;
@@ -717,6 +718,10 @@ pub struct EditorApp {
     new_image_generate: bool,
     new_image_exact: bool,
     new_image_action: Option<(String, String)>,
+    /// File → New: what the canvas is filled with, and the size of the image on the clipboard
+    /// when it opened, offered as a preset.
+    new_canvas_background: xuan::config::CanvasBackground,
+    new_canvas_clipboard: Option<[u32; 2]>,
     anchor: [f32; 2],
     /// The size dialogs' units, Resample and Relative.
     size_units: size_units::SizeUnits,
@@ -760,13 +765,12 @@ pub struct EditorApp {
     /// Whole layers copied with those pixels, pasted while the system clipboard still holds them.
     copied_layers: Option<clipboard::CopiedLayers>,
     system_clipboard: Option<arboard::Clipboard>,
-    /// The Export dialog's JPEG and WebP choices, kept while Xuan runs.
+    /// The Export dialog's JPEG and WebP choices and Scale, kept while Xuan runs.
     export_options: io::ExportOptions,
     export_format: String,
     export_texture: Option<TextureHandle>,
-    /// The export's estimated size: the preview's, scaled up to the document.
-    export_bytes: usize,
-    export_changed: bool,
+    /// The Export dialog's preview and estimated size, made in the background.
+    export_preview: export_preview::ExportPreview,
     screenshot: Option<PathBuf>,
     screenshot_requested: bool,
     frames: usize,
@@ -953,6 +957,8 @@ impl EditorApp {
             new_image_generate: false,
             new_image_exact: false,
             new_image_action: None,
+            new_canvas_background: Default::default(),
+            new_canvas_clipboard: None,
             anchor: [0.5, 0.5],
             size_units: Default::default(),
             effect: None,
@@ -985,8 +991,7 @@ impl EditorApp {
             export_options: io::ExportOptions::default(),
             export_format: "png".into(),
             export_texture: None,
-            export_bytes: 0,
-            export_changed: true,
+            export_preview: Default::default(),
             screenshot,
             screenshot_requested: false,
             frames: 0,
@@ -1104,12 +1109,21 @@ impl EditorApp {
         match Document::new(self.dimensions[0], self.dimensions[1]) {
             Ok(mut document) => {
                 document.resolution = self.resolution;
+                if let Some(color) = self.new_canvas_background.pixel() {
+                    document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+                        document.width,
+                        document.height,
+                        image::Rgba(color),
+                    )));
+                }
                 let resolution = Some(self.resolution);
                 if self.config.new_canvas_size != Some(self.dimensions)
                     || self.config.units.new_canvas_resolution != resolution
+                    || self.config.new_canvas_background != self.new_canvas_background
                 {
                     self.config.new_canvas_size = Some(self.dimensions);
                     self.config.units.new_canvas_resolution = resolution;
+                    self.config.new_canvas_background = self.new_canvas_background;
                     self.save_config();
                 }
                 self.sessions
@@ -1722,6 +1736,8 @@ impl EditorApp {
                     self.dimensions = size;
                 }
                 self.resolution = self.config.units.new_canvas_resolution();
+                self.new_canvas_background = self.config.new_canvas_background;
+                self.new_canvas_clipboard = self.clipboard_image_size();
                 // Percent needs a document to be a percentage of.
                 let unit = Some(self.config.units.size)
                     .filter(|unit| *unit != xuan::units::Unit::Percent)
@@ -1753,7 +1769,8 @@ impl EditorApp {
             }
             "export" => {
                 self.dialog = Some(Dialog::Export);
-                self.export_changed = true;
+                self.export_preview.reset();
+                self.export_texture = None;
             }
             "close" => self.request_project_close(self.current),
             "undo" | "redo" => {
@@ -2347,6 +2364,7 @@ impl EditorApp {
                 .develop
                 .as_ref()
                 .is_none_or(|d| d.ready_for_screenshot())
+            && (self.dialog != Some(Dialog::Export) || self.export_preview.settled())
         {
             self.screenshot_requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));

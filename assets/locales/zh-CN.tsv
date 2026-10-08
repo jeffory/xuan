@@ -269,6 +269,12 @@ Create canvas	创建画布
 Resolution	分辨率
 Anchor	锚点
 Transparent canvas · sRGB	透明画布 · sRGB
+White canvas · sRGB	白色画布 · sRGB
+Black canvas · sRGB	黑色画布 · sRGB
+Coloured canvas · sRGB	彩色画布 · sRGB
+White	白色
+Transparent	透明
+Custom colour	自定义颜色
 Change the canvas bounds and anchor your composition.	更改画布边界和内容锚点。
 Scale the composition while preserving source pixels.	缩放合成图像并保留源像素。
 Cancel	取消
@@ -284,6 +290,9 @@ Save your changes?	保存更改？
 Some projects have unsaved changes.	部分项目有未保存的更改。
 Discard changes	放弃更改
 Couldn't complete the operation	无法完成操作
+Error	错误
+Copy details	复制详细信息
+Copy the message and Xuan's version, for a bug report	复制消息和 Xuan 的版本，用于报告问题
 Export image	导出图像
 Export…	导出…
 Format	格式
@@ -292,6 +301,8 @@ JPEG preview · transparency is flattened onto white	JPEG 预览 · 透明区域
 WebP preview · transparency is kept	WebP 预览 · 保留透明区域
 Lossless	无损
 Estimated size:	预计大小：
+Estimating size…	正在估算大小…
+Scale	缩放
 sRGB · Transparent	sRGB · 透明
 Keyboard shortcuts	键盘快捷键
 Brush or layer opacity	画笔或图层不透明度

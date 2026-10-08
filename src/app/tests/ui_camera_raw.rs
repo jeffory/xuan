@@ -185,3 +185,24 @@ fn the_menu_item_needs_an_unlocked_pixel_layer() {
     ui.open_menu("Filter");
     assert!(!ui.enabled(MENU_ITEM), "no document");
 }
+
+/// Develop's numbers read as whole units where a step of one is fine ("6500 K", "0 %"), and
+/// keep their decimals where the values are fractional by nature (Exposure, issue 91).
+#[test]
+fn develop_numbers_show_whole_units_and_keep_fractional_ones() {
+    use egui_kittest::kittest::By;
+    let mut ui = photo();
+    open_filter(&mut ui);
+    let shows = |ui: &UiTest, value: &str| {
+        ui.harness
+            .query_all(By::new().value(value))
+            .next()
+            .is_some()
+    };
+    for value in ["6500 K", "0 %", "0.00 EV"] {
+        assert!(shows(&ui, value), "{value} is missing");
+    }
+    for value in ["6500.00 K", "0.00%", "0.00 %"] {
+        assert!(!shows(&ui, value), "{value} is shown");
+    }
+}

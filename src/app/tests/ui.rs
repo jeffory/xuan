@@ -388,6 +388,28 @@ fn file_menu_quit_with_unsaved_changes_prompts_instead_of_closing() {
     assert_eq!(ui.app().sessions.len(), 1);
 }
 
+/// Quitting with unsaved work names each project that has changes, and only those (issue 91).
+#[test]
+fn quitting_lists_the_unsaved_projects() {
+    let mut ui = dirty_document();
+    ui.app_mut().sessions[0].title = "Poster".into();
+    for (title, dirty) in [("Sketch", false), ("Banner", true)] {
+        ui.app_mut().new_document();
+        ui.app_mut().sessions.last_mut().unwrap().title = title.into();
+        if dirty {
+            ui.app_mut().command("fill_fg");
+        }
+    }
+    ui.settle();
+    ui.open_menu("File");
+    ui.click_and_stop(QUIT);
+    ui.settle();
+    assert!(ui.has("Save your changes?"));
+    assert!(ui.has("• Poster") && ui.has("• Banner"));
+    assert!(!ui.has("• Sketch"), "a saved project is not listed");
+    ui.click("Cancel");
+}
+
 #[test]
 fn closing_a_dirty_document_prompts_and_cancel_keeps_it() {
     let mut ui = dirty_document();

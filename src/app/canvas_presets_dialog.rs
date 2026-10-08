@@ -70,6 +70,12 @@ pub(super) fn label(preset: &Preset) -> String {
     format!("{} ({})", tr(&preset.name), preset.size_text())
 }
 
+/// File → New's preset for the image on the clipboard, `size` pixels: `Clipboard image (800 ×
+/// 600)`.
+fn clipboard_preset(size: [u32; 2]) -> Preset {
+    Preset::pixels("Clipboard image", "Clipboard", size)
+}
+
 impl EditorApp {
     /// Where the presets are kept once changed: beside the configuration file.
     pub(super) fn canvas_presets_path(&self) -> Option<PathBuf> {
@@ -112,19 +118,50 @@ impl EditorApp {
         let presets = &self.canvas_presets.list;
         let list = presets.list(kind);
         let current = presets.find(kind, self.dimensions, self.resolution);
+        // The image on the clipboard, in pixels whatever the unit, when the fields match no
+        // preset of the list.
+        let clipboard = self.new_canvas_clipboard.map(clipboard_preset);
+        let on_clipboard = current.is_none() && self.new_canvas_clipboard == Some(self.dimensions);
         let mut picked = None;
         let mut action = None;
         ui.horizontal(|ui| {
             ui.label(tr("Preset"));
+            let shown = match current {
+                Some(index) => label(&list[index]),
+                None if on_clipboard => clipboard.as_ref().map_or_else(String::new, label),
+                None => tr("Custom").to_owned(),
+            };
             widgets::PopUp::from_id_salt("new_canvas_preset")
-                .selected_text(current.map_or_else(|| tr("Custom").to_owned(), |i| label(&list[i])))
+                .selected_text(shown)
                 .width(290.0)
                 .show_tall_ui(ui, |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(420.0)
                         .show(ui, |ui| {
                             // Custom keeps the fields as they are.
-                            widgets::menu_choice(ui, &mut current.is_none(), true, tr("Custom"));
+                            widgets::menu_choice(
+                                ui,
+                                &mut (current.is_none() && !on_clipboard),
+                                true,
+                                tr("Custom"),
+                            );
+                            if let Some(preset) = &clipboard {
+                                ui.label(
+                                    RichText::new(tr("Clipboard"))
+                                        .small()
+                                        .color(ui.palette().muted),
+                                );
+                                if widgets::menu_choice(
+                                    ui,
+                                    &mut { on_clipboard },
+                                    true,
+                                    label(preset),
+                                )
+                                .clicked()
+                                {
+                                    picked = Some(preset.clone());
+                                }
+                            }
                             for (group, range) in presets.groups(kind) {
                                 ui.label(
                                     RichText::new(tr(group)).small().color(ui.palette().muted),

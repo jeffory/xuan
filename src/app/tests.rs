@@ -4311,8 +4311,13 @@ fn live_adjustment_cancel_restores_original_and_export_renders() {
     assert_eq!(render::render(&app.session().unwrap().document), original);
     app.effect = None;
     app.dialog = Some(Dialog::Export);
-    frame(&context, &mut app);
-    assert!(app.export_texture.is_some());
+    // The preview is made on a worker thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.export_texture.is_none() {
+        assert!(std::time::Instant::now() < deadline, "no export preview");
+        frame(&context, &mut app);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 #[test]

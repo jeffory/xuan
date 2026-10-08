@@ -35,6 +35,15 @@ pub(super) fn input_id(input: &Input, salt: impl std::hash::Hash) -> egui::Id {
 }
 
 /// Draw one input and update its JSON value. Returns whether it changed.
+/// The most whole numbers a slider offers: an integer input with a wider range, such as a port
+/// (0–65535), gets a number field, where a value can be typed rather than hunted for.
+pub(super) const SLIDER_MAX_STEPS: f64 = 10_000.0;
+
+/// Whether an input with this range is a slider rather than a number field.
+pub(super) fn slider_fits(integer: bool, min: f64, max: f64) -> bool {
+    !integer || max - min <= SLIDER_MAX_STEPS
+}
+
 pub(super) fn input_widget(
     ui: &mut egui::Ui,
     input: &Input,
@@ -106,7 +115,9 @@ pub(super) fn input_widget(
                 let max = input
                     .max
                     .unwrap_or(if integer { i64::MAX as f64 } else { f64::MAX });
-                let response = if let (Some(min), Some(max)) = (input.min, input.max) {
+                let response = if let (Some(min), Some(max)) = (input.min, input.max)
+                    && slider_fits(integer, min, max)
+                {
                     ui.spacing_mut().slider_width = 140.0;
                     let mut slider = widgets::Slider::new(&mut number, min..=max);
                     if integer {
@@ -591,14 +602,18 @@ impl EditorApp {
                         ui.add_space(4.0);
                         let folder = grant_folder_text(&super::plugins::grant_for(manifest).dir, &manifest.dir);
                         ui.label(RichText::new(folder).small().color(ui.palette().muted));
-                        let status = if self.plugin_offline(&id) {
-                            tr("Off: plugins that use the network are disabled")
+                        let (status, dot) = if self.plugin_offline(&id) {
+                            (tr("Off: plugins that use the network are disabled"), ui.palette().warning)
                         } else if self.plugins.running(&id) {
-                            tr("Running")
+                            (tr("Running"), ui.palette().accent)
                         } else {
-                            tr("Not running")
+                            (tr("Not running"), ui.palette().muted)
                         };
-                        ui.label(RichText::new(status).small().color(ui.palette().muted));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            widgets::status_dot(ui, dot);
+                            ui.label(RichText::new(status).small().color(ui.palette().muted));
+                        });
                         ui.add_space(8.0);
                         {
                             widgets::subheading(ui, tr("Permissions"));
@@ -1151,6 +1166,18 @@ fn progress_indicator(ui: &mut egui::Ui, progress: Option<f32>, width: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_integer_ranges_get_a_number_field() {
+        // Percentages, pixel padding and timeouts stay sliders.
+        assert!(slider_fits(true, 0.0, 100.0));
+        assert!(slider_fits(true, 30.0, 3600.0));
+        assert!(slider_fits(true, 0.0, SLIDER_MAX_STEPS));
+        // A port does not.
+        assert!(!slider_fits(true, 0.0, 65535.0));
+        // Fractional numbers slide smoothly whatever their range.
+        assert!(slider_fits(false, 0.0, 65535.0));
+    }
 
     #[test]
     fn settings_values_convert_to_toml() {
