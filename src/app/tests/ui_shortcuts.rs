@@ -148,12 +148,12 @@ fn other_effect(chord: &str) -> Option<Effect> {
     Some(match chord {
         // Applies a crop, or abandons one, when a crop rectangle is waiting.
         "Enter" => State(
-            |app| app.crop_rect = Some((Point::new(2.0, 2.0), Point::new(10.0, 10.0))),
-            |app| app.crop_rect.is_none() && app.session().unwrap().document.width == 8,
+            |app| app.crop.rect = Some(xuan::crop::CropBox::new(2, 2, 8, 8)),
+            |app| app.crop.rect.is_none() && app.session().unwrap().document.width == 8,
         ),
         "Escape" => State(
-            |app| app.crop_rect = Some((Point::new(2.0, 2.0), Point::new(10.0, 10.0))),
-            |app| app.crop_rect.is_none(),
+            |app| app.crop.rect = Some(xuan::crop::CropBox::new(2, 2, 8, 8)),
+            |app| app.crop.rect.is_none(),
         ),
         _ => return None,
     })

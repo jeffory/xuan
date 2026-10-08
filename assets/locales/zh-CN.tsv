@@ -140,7 +140,7 @@ Click to select · Click outside to deselect · Drag to move · Handles to resiz
 Drag to select · Shift add · Alt subtract · Ctrl+D deselect · Delete clears	拖动选择 · Shift 添加 · Alt 减去 · Ctrl+D 取消选择 · Delete 清除
 Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels	绘制选区 · Shift 添加 · Alt 减去 · Enter 闭合多边形 · Escape 取消
 Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect	单击选择相似颜色 · Shift 添加 · Alt 减去 · Ctrl+D 取消选择
-Drag to crop · Enter applies · Escape cancels · Space to pan	拖动裁剪 · Enter 应用 · Escape 取消 · 空格平移
+Drag to crop · Drag handles to adjust · Enter applies · Escape cancels · Space to pan	拖动裁剪 · 拖动手柄调整 · Enter 应用 · Escape 取消 · 空格平移
 Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan	拖动绘画 · [ ] 大小 · Shift 单击绘制直线 · 1–0 不透明度 · 空格平移
 Paint over blemishes · [ ] size · Space to pan	涂抹瑕疵进行修复 · [ ] 大小 · 空格平移
 Alt-click to set source · Drag to clone · [ ] size · Space to pan	Alt 单击设置来源 · 拖动仿制 · [ ] 大小 · 空格平移
@@ -1122,3 +1122,8 @@ Location	位置
 Centre	居中
 Preserve transparency	保留透明区域
 The stroke stopped unexpectedly	描边意外中止
+Ratio	比例
+Free	自由
+Ratio width	比例宽度
+Ratio height	比例高度
+Swap the ratio's width and height (portrait / landscape)	交换比例的宽度和高度（竖向 / 横向）

@@ -362,14 +362,7 @@ impl EditorApp {
                                         );
                                     }
                                     Tool::Text => self.text_options(ui),
-                                    Tool::Crop => {
-                                        ui.label(
-                                            RichText::new(
-                                                tr("Drag a crop area, then press Enter to apply"),
-                                            )
-                                            .color(ui.palette().muted),
-                                        );
-                                    }
+                                    Tool::Crop => self.crop_options(ui),
                                     Tool::Dropper => {
                                         ui.label(tr("Sample"));
                                         widgets::segmented(
