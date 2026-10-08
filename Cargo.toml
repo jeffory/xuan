@@ -35,6 +35,9 @@ rawler = "=0.8.0"
 rayon = "1.11"
 raw-window-handle = "0.6"
 rfd = "0.15.4"
+# SVG import (src/io/svg.rs), and SVG window buttons through egui_extras (the version
+# egui_extras already uses).
+resvg = { version = "0.45", default-features = false }
 # OpenRaster's stack.xml (src/io/ora.rs): the version usvg already uses, with its node limit and
 # no DTDs.
 roxmltree = "0.20"
@@ -52,8 +55,6 @@ wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gl
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Rasterising SVG window buttons through egui_extras (the version egui_extras already uses).
-resvg = { version = "0.45", default-features = false }
 # The desktop portal's appearance settings (src/app/system_theme/linux.rs). Already built for
 # rfd's portal dialogs; only the blocking API is added.
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
