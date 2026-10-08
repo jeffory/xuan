@@ -16,8 +16,8 @@ and the library. The work is in four parts.
   backend, instead of failing to compile.
 - [x] `.github/workflows/macos.yml`: formatting, Clippy, tests and goldens, the GPU checks on Metal,
   the native clipboard test, a `--demo --screenshot` smoke test and the MCP server plugin, on an
-  Apple Silicon runner. It uploads the unsigned executable and the screenshot as the
-  `xuan-macos-arm64-unsigned` artifact.
+  Apple Silicon runner. It uploads the unsigned DMG as the `xuan-macos-arm64` artifact and the
+  screenshot as `xuan-macos-demo`.
 - [x] `scripts/fetch-raw-fixtures.sh` falls back to `shasum -a 256` where GNU `sha256sum` is missing.
 
 ## 2. Mac keyboard and window conventions (#128)
@@ -56,18 +56,32 @@ These need a real Mac; CI only builds, tests and screenshots the app.
 
 ## 3. App bundle and distribution, unsigned for now (#129)
 
-- [ ] `scripts/package-macos.py`: `Xuan.app` with an `Info.plist` declaring `.xuan` and the import
-  types (from `packaging/me.silverl.xuan.xml`), an `.icns` from the existing PNG icons, and a DMG.
-- [ ] Open files from Finder: double-click, Open With and drops on the Dock icon arrive as an
-  `odoc` Apple Event that winit does not forward. Install a handler in
-  `applicationWillFinishLaunching`.
-- [ ] Bundled plugins and the Python SDK under `Contents/Resources` (`bundled_dir_for` in
+- [x] `scripts/package-macos.py`: `Xuan.app` with an `Info.plist` that exports the `.xuan` type
+  (Xuan owns it) and lists Photoshop files, the images Xuan imports and camera RAW as
+  alternatives, an `.icns` from the PNG icons, an ad-hoc signature (Apple Silicon will not run an
+  unsealed bundle; this is not a Developer ID signature) and a DMG with a link to Applications.
+- [x] Open files from Finder: double-click, Open With and drops on the Dock icon arrive as an
+  `odoc` Apple Event, which AppKit hands to the delegate's `application:openURLs:`. winit's
+  delegate has none, so `install_open_handler` (`src/app/macos.rs`) adds it when the app posts
+  `NSApplicationWillFinishLaunchingNotification`, before the launch files are delivered. They open
+  as new tabs, waiting while a dialog is open.
+- [x] Bundled plugins and the Python SDK under `Contents/Resources` (`bundled_dir_for` in
   `src/plugins/mod.rs`), with `current_exe()` canonicalized. Finder starts apps with a minimal
-  `PATH`, so plugin interpreters from Homebrew are not found.
-- [ ] `check-packages.py --macos` and the release workflow (`xuan-*-x86_64` download pattern,
-  checksums, uploads).
+  `PATH`, so Xuan appends `/opt/homebrew/bin` and `/usr/local/bin` when they are missing.
+- [x] `check-packages.py --macos` mounts the DMG and checks the bundle, its seal and Info.plist; the
+  release workflow builds, verifies and uploads the DMG.
 - [ ] Later: Developer ID signing and notarization (hardened runtime, no App Sandbox, which would
   stop plugins from running).
+
+### Checking part 3 on a Mac
+
+- After removing the quarantine (`xattr -dr com.apple.quarantine /Applications/Xuan.app`), Xuan
+  starts from Finder and the Dock and shows its icon.
+- Double-clicking a `.xuan` file opens it in Xuan, and Finder shows Xuan's icon on it; Open With
+  lists Xuan for PNG, JPEG, PSD and RAW files; dropping files on the Dock icon opens them, both
+  when Xuan is running and when it is not.
+- Window → MCP Server finds the bundled plugin, and a Python plugin whose interpreter comes from
+  Homebrew starts when Xuan was opened from Finder.
 
 ## 4. Platform features and docs (#130)
 

@@ -6,6 +6,7 @@ import hashlib
 import io
 import os
 import platform
+import plistlib
 import re
 import subprocess
 import sys
@@ -37,30 +38,56 @@ def check_checksum(package):
         assert hashlib.file_digest(stream, "sha256").hexdigest() == digest, package
 
 
-def check_files(prefix, portable=False, windows=False, appimage=False):
+def check_files(prefix, portable=False, windows=False, appimage=False, macos=False):
+    """The files of a package installed at `prefix`; for macOS, the app
+    bundle's Contents folder."""
+    # In the app bundle the share folder sits in Resources.
+    share = "Resources/share" if macos else "share"
     expected = {
-        "share/licenses/xuan/LICENSE",
-        "share/licenses/xuan/rawler-LGPL-2.1.txt",
-        "share/licenses/xuan/heic-rs-MIT.txt",
-        "share/licenses/xuan/seccompiler-BSD-3-Clause.txt",
-        "share/licenses/xuan/kurbo-MIT.txt",
-        "share/licenses/xuan/Hack-LICENSE.txt",
-        "share/licenses/xuan/tabler-icons-MIT.txt",
-        "share/licenses/xuan/Inter-LICENSE.txt",
-        "share/licenses/xuan/DroidSansFallback-LICENSE.txt",
-        "share/licenses/xuan/egui-winit/LICENSE-MIT",
-        "share/licenses/xuan/egui-winit/LICENSE-APACHE",
+        f"{share}/licenses/xuan/{name}"
+        for name in (
+            "LICENSE",
+            "rawler-LGPL-2.1.txt",
+            "heic-rs-MIT.txt",
+            "seccompiler-BSD-3-Clause.txt",
+            "kurbo-MIT.txt",
+            "Hack-LICENSE.txt",
+            "tabler-icons-MIT.txt",
+            "Inter-LICENSE.txt",
+            "DroidSansFallback-LICENSE.txt",
+            "egui-winit/LICENSE-MIT",
+            "egui-winit/LICENSE-APACHE",
+        )
     }
-    executable = prefix / ("xuan.exe" if windows else "bin/xuan")
+    if windows:
+        executable = prefix / "xuan.exe"
+        plugins = prefix / "plugins"
+        sdk = prefix / "sdk/python"
+    elif macos:
+        executable = prefix / "MacOS/xuan"
+        plugins = prefix / "Resources/plugins"
+        sdk = prefix / "Resources/sdk/python"
+        expected.update(
+            {
+                "Info.plist",
+                "PkgInfo",
+                "Resources/xuan.icns",
+                "_CodeSignature/CodeResources",
+            }
+        )
+    else:
+        executable = prefix / "bin/xuan"
+        plugins = prefix / "lib/xuan/plugins"
+        sdk = prefix / "lib/xuan/sdk/python"
     expected.add(executable.relative_to(prefix).as_posix())
-    plugin = prefix / ("plugins" if windows else "lib/xuan/plugins") / "mcp-server"
+    plugin = plugins / "mcp-server"
     plugin_executable = plugin / (
         "target/release/xuan-mcp-server" + (".exe" if windows else "")
     )
-    sdk = prefix / ("sdk/python" if windows else "lib/xuan/sdk/python")
     for path in (plugin / "plugin.toml", plugin_executable, sdk / PLUGIN_SDK.name):
         expected.add(path.relative_to(prefix).as_posix())
-    if not windows:
+    linux = not windows and not macos
+    if linux:
         expected.update(
             {
                 "share/applications/me.silverl.xuan.desktop",
@@ -76,10 +103,8 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
         "SOURCES.md",
         "copyright",
     ]
-    expected.update(f"share/doc/xuan/{name}" for name in documents)
-    icons = (
-        [] if windows else list((ROOT / "assets/icons").glob("hicolor/*/apps/*.png"))
-    )
+    expected.update(f"{share}/doc/xuan/{name}" for name in documents)
+    icons = list((ROOT / "assets/icons").glob("hicolor/*/apps/*.png")) if linux else []
     expected.update(
         f"share/icons/{path.relative_to(ROOT / 'assets/icons').as_posix()}"
         for path in icons
@@ -128,13 +153,15 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
             assert path.stat().st_mode & required == required, (
                 f"Not publicly readable: {path}"
             )
-    check_plugin(plugin, plugin_executable, windows)
+    check_plugin(plugin, plugin_executable, windows, macos)
     check_sdk(sdk)
     if windows:
         assert pe_subsystem(executable) == 2, "Expected a GUI executable"
     else:
         assert executable.stat().st_mode & 0o777 == 0o755
-        if maximum := os.environ.get("XUAN_MAX_GLIBC"):
+        if macos:
+            check_macho(executable)
+        elif maximum := os.environ.get("XUAN_MAX_GLIBC"):
             subprocess.run(
                 [
                     sys.executable,
@@ -148,7 +175,7 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
     for original in icons:
         installed = prefix / "share/icons" / original.relative_to(ROOT / "assets/icons")
         assert installed.read_bytes() == original.read_bytes(), installed
-    documentation = prefix / "share/doc/xuan"
+    documentation = prefix / share / "doc/xuan"
     for name in documents:
         for link in re.findall(
             r"\[[^\]]*\]\(([^)]+)\)", (documentation / name).read_text(encoding="utf-8")
@@ -161,7 +188,7 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
     source_notice = (documentation / "SOURCES.md").read_text(encoding="utf-8")
     assert f"/releases/download/v{VERSION}/{SOURCE_NAME}.tar.gz" in source_notice
     assert f"/releases/download/v{VERSION}/{SOURCE_NAME}.tar.gz.sha256" in source_notice
-    if not windows:
+    if linux:
         subprocess.run(
             [
                 "desktop-file-validate",
@@ -169,7 +196,11 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
             ],
             check=True,
         )
-    if not windows or sys.platform == "win32":
+    if (
+        linux
+        or (windows and sys.platform == "win32")
+        or (macos and sys.platform == "darwin")
+    ):
         actual_version = subprocess.check_output(
             [prefix.parent / "AppRun" if appimage else executable, "--version"],
             text=True,
@@ -189,7 +220,22 @@ def pe_subsystem(executable):
     return int.from_bytes(data[pe + 92 : pe + 94], "little")
 
 
-def check_plugin(plugin, executable, windows):
+def check_macho(executable):
+    """A Mach-O executable for the host that links only the system's libraries,
+    which every Mac has."""
+    assert executable.read_bytes()[:4] == b"\xcf\xfa\xed\xfe", (
+        f"Not a 64-bit Mach-O executable: {executable}"
+    )
+    if sys.platform == "darwin":
+        libraries = subprocess.check_output(["otool", "-L", executable], text=True)
+        for line in libraries.splitlines()[1:]:
+            library = line.split()[0]
+            assert library.startswith(("/usr/lib/", "/System/Library/")), (
+                f"{executable.name} links a library macOS does not ship: {library}"
+            )
+
+
+def check_plugin(plugin, executable, windows, macos=False):
     """The bundled MCP server plugin: its manifest as in the repository and
     a release build of the command it names."""
     assert (plugin / "plugin.toml").read_bytes() == PLUGIN_MANIFEST.read_bytes(), (
@@ -200,6 +246,9 @@ def check_plugin(plugin, executable, windows):
     assert plugin / command == executable, manifest["plugin"]["command"]
     if windows:
         assert pe_subsystem(executable) == 3, "Expected a console plugin executable"
+    elif macos:
+        assert executable.stat().st_mode & 0o777 == 0o755, executable
+        check_macho(executable)
     else:
         assert executable.stat().st_mode & 0o777 == 0o755, executable
         assert executable.read_bytes()[:4] == b"\x7fELF", executable
@@ -210,7 +259,7 @@ def check_plugin(plugin, executable, windows):
         assert "INTERP" not in headers and "(NEEDED)" not in dynamic, (
             f"The bundled plugin must be statically linked: {executable}"
         )
-    if not windows or sys.platform == "win32":
+    if not (windows or macos) or sys.platform in ("win32", "darwin"):
         # Without a host on stdin it starts and exits at once.
         subprocess.run(
             [executable], stdin=subprocess.DEVNULL, check=True, timeout=30
@@ -280,6 +329,7 @@ def check_source(temporary):
         "scripts/check-linux-compat.sh",
         "scripts/linuxdeploy-plugin-xuan",
         "scripts/package-windows.py",
+        "scripts/package-macos.py",
         "scripts/package-source.py",
         "packaging/AppRun",
         ".github/workflows/linux.yml",
@@ -458,6 +508,62 @@ def check_appimage(temporary):
     )
 
 
+def check_macos(temporary):
+    """The DMG: Xuan.app beside a link to /Applications, with a sealed bundle
+    and an Info.plist naming this version."""
+    machine = {"aarch64": "arm64"}.get(platform.machine(), platform.machine())
+    package = ROOT / "dist" / f"xuan-{VERSION}-macos-{machine}.dmg"
+    check_checksum(package)
+    mount = temporary / "volume"
+    app = temporary / "Xuan.app"
+    subprocess.run(
+        [
+            "hdiutil",
+            "attach",
+            "-nobrowse",
+            "-readonly",
+            "-noautoopen",
+            "-mountpoint",
+            mount,
+            package,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    try:
+        assert {
+            path.name for path in mount.iterdir() if not path.name.startswith(".")
+        } == {
+            "Xuan.app",
+            "Applications",
+        }
+        assert os.readlink(mount / "Applications") == "/Applications"
+        subprocess.run(["ditto", mount / "Xuan.app", app], check=True)
+    finally:
+        subprocess.run(
+            ["hdiutil", "detach", mount], check=True, stdout=subprocess.DEVNULL
+        )
+    subprocess.run(["codesign", "--verify", "--strict", "--deep", app], check=True)
+    with (app / "Contents/Info.plist").open("rb") as stream:
+        info = plistlib.load(stream)
+    assert info["CFBundleIdentifier"] == "me.silverl.xuan", info
+    assert info["CFBundleExecutable"] == "xuan", info
+    assert info["CFBundleShortVersionString"] == VERSION, info
+    assert (app / "Contents/Resources" / f"{info['CFBundleIconFile']}.icns").is_file()
+    owned = [
+        document
+        for document in info["CFBundleDocumentTypes"]
+        if document["LSHandlerRank"] == "Owner"
+    ]
+    assert [document["LSItemContentTypes"] for document in owned] == [
+        ["me.silverl.xuan.project"]
+    ], owned
+    check_files(app / "Contents", macos=True)
+    print(
+        f"Verified {package.name}: app bundle, signature seal, documentation, checksums"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     formats = parser.add_mutually_exclusive_group()
@@ -467,6 +573,9 @@ def main():
     formats.add_argument(
         "--appimage", action="store_true", help="check only AppImage and sources"
     )
+    formats.add_argument(
+        "--macos", action="store_true", default=sys.platform == "darwin"
+    )
     args = parser.parse_args()
     os.umask(0o022)
     with tempfile.TemporaryDirectory(prefix="xuan-package-check-") as directory:
@@ -474,6 +583,9 @@ def main():
         check_source(temporary)
         if args.appimage:
             check_appimage(temporary)
+            return
+        if args.macos:
+            check_macos(temporary)
             return
         if args.windows:
             name = f"xuan-{VERSION}-windows-x86_64"

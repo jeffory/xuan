@@ -41,6 +41,15 @@ struct Args {
 }
 
 fn main() -> eframe::Result {
+    #[cfg(target_os = "macos")]
+    if let Some(path) = xuan::plugins::path_with(
+        std::env::var_os("PATH").as_deref(),
+        &xuan::plugins::MACOS_EXTRA_PATH,
+    ) {
+        // SAFETY: no other thread has started yet. Plugins inherit it, so their
+        // interpreters from Homebrew are found when Xuan starts from Finder or the Dock.
+        unsafe { std::env::set_var("PATH", path) };
+    }
     let Args {
         paths,
         demo,
@@ -98,6 +107,8 @@ fn main() -> eframe::Result {
         persist_window: screenshot.is_none(),
         ..Default::default()
     };
+    #[cfg(target_os = "macos")]
+    app::install_open_handler();
     eframe::run_native(
         "Xuan",
         options,

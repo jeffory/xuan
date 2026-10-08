@@ -69,7 +69,11 @@ pub fn plugin_dirs(
 pub fn bundled_dir() -> Option<PathBuf> {
     static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let exe = std::env::current_exe().ok();
+        // Canonicalized so a symlink to the executable (in /usr/local/bin, say) still finds
+        // the folder beside the real one. Not on Windows, where it adds a `\\?\` prefix.
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|exe| if cfg!(windows) { exe } else { canonical(&exe) });
         let dir = bundled_dir_from(
             std::env::var_os(BUNDLED_VARIABLE).as_deref(),
             exe.as_deref(),
@@ -91,14 +95,45 @@ pub fn bundled_dir_from(variable: Option<&OsStr>, exe: Option<&Path>) -> Option<
 /// Where the packages put the bundled plugins, from the executable's path:
 /// `<prefix>/lib/xuan/plugins` for `<prefix>/bin/xuan` on Linux (`/usr` for
 /// the deb and rpm, the tar archive's folder or its `install.sh` prefix, the
-/// AppImage's `usr`), and `plugins` next to `xuan.exe` on Windows.
+/// AppImage's `usr`), `plugins` next to `xuan.exe` on Windows, and
+/// `Contents/Resources/plugins` for `Xuan.app/Contents/MacOS/xuan` on macOS.
 pub fn bundled_dir_for(exe: &Path) -> Option<PathBuf> {
     let bin = exe.parent()?;
     if cfg!(windows) {
-        Some(bin.join("plugins"))
-    } else {
-        Some(bin.parent()?.join("lib").join("xuan").join("plugins"))
+        return Some(bin.join("plugins"));
     }
+    let parent = bin.parent()?;
+    if cfg!(target_os = "macos")
+        && bin.file_name() == Some(OsStr::new("MacOS"))
+        && parent.file_name() == Some(OsStr::new("Contents"))
+    {
+        return Some(parent.join("Resources").join("plugins"));
+    }
+    Some(parent.join("lib").join("xuan").join("plugins"))
+}
+
+/// Folders added to the end of `PATH` on macOS, where they are missing: apps started
+/// from Finder or the Dock get only the system's folders, so plugin interpreters from
+/// Homebrew (`/opt/homebrew/bin` on Apple Silicon, `/usr/local/bin` on Intel) or the
+/// python.org installer would not be found.
+pub const MACOS_EXTRA_PATH: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/// `existing` with each of `extra` appended unless it is already listed, or `None`
+/// when nothing is missing or the folders cannot be joined into one value.
+pub fn path_with(existing: Option<&OsStr>, extra: &[&str]) -> Option<std::ffi::OsString> {
+    let mut dirs: Vec<PathBuf> = existing
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default();
+    let missing: Vec<PathBuf> = extra
+        .iter()
+        .map(PathBuf::from)
+        .filter(|dir| !dirs.contains(dir))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    dirs.extend(missing);
+    std::env::join_paths(dirs).ok()
 }
 
 /// Names the folder of the Python plugin SDK (`xuan_plugin.py`). Xuan sets
@@ -453,6 +488,17 @@ mod tests {
             ] {
                 assert_eq!(bundled_dir_for(Path::new(exe)), Some(PathBuf::from(dir)));
             }
+            // In the app bundle on macOS; a `bin/xuan` layout elsewhere on the Mac.
+            let app = "/Applications/Xuan.app/Contents/MacOS/xuan";
+            let resources = if cfg!(target_os = "macos") {
+                "/Applications/Xuan.app/Contents/Resources/plugins"
+            } else {
+                "/Applications/Xuan.app/Contents/lib/xuan/plugins"
+            };
+            assert_eq!(
+                bundled_dir_for(Path::new(app)),
+                Some(PathBuf::from(resources))
+            );
         }
         let exe = config.path().join("bin").join("xuan");
         // The variable wins when it is an absolute path; otherwise it is ignored.
@@ -563,6 +609,31 @@ mod tests {
         assert_eq!(
             without_verbatim_prefix(Path::new(r"\\?\UNC\server\share")),
             Path::new(r"\\?\UNC\server\share")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_homebrew_folders_are_appended_to_the_path() {
+        let finder = OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
+        assert_eq!(
+            path_with(Some(finder), &MACOS_EXTRA_PATH).unwrap(),
+            "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+        );
+        // A folder already listed keeps its place, and nothing changes when none is missing.
+        let shell = OsStr::new("/usr/local/bin:/usr/bin:/opt/homebrew/bin");
+        assert_eq!(path_with(Some(shell), &MACOS_EXTRA_PATH), None);
+        assert_eq!(
+            path_with(
+                Some(OsStr::new("/usr/local/bin:/usr/bin")),
+                &MACOS_EXTRA_PATH
+            )
+            .unwrap(),
+            "/usr/local/bin:/usr/bin:/opt/homebrew/bin"
+        );
+        assert_eq!(
+            path_with(None, &MACOS_EXTRA_PATH).unwrap(),
+            "/opt/homebrew/bin:/usr/local/bin"
         );
     }
 
