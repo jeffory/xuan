@@ -21,6 +21,10 @@
 //!   network hosts. The request is answered once the job starts, or with why
 //!   nothing runs; its result is a proposal like any other.
 //!
+//! `jobs/list` reports what the status bar shows and what became of the
+//! jobs the plugin started (finished, proposed, accepted, failed…), so its
+//! client can wait for a long job without guessing.
+//!
 //! See "Running other plugins' actions" in `docs/PLUGINS.md`.
 use super::theme::PaletteExt as _;
 use egui::RichText;
@@ -38,7 +42,7 @@ use xuan::{
 use super::{
     Dialog, EditorApp,
     plugin_sessions::{COOLDOWN, request_session},
-    plugins::{ActionEdit, PendingStart, one_line, regions_from_value},
+    plugins::{ActionEdit, PendingStart, PluginJob, one_line, regions_from_value},
     widgets,
 };
 
@@ -90,6 +94,40 @@ pub(super) enum RunAnswer {
     Always,
     Cancel,
 }
+
+/// What became of a job another plugin started, as `jobs/list` reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum RunOutcome {
+    /// It finished; its result waits for the editor to be free.
+    Waiting,
+    /// Its result is shown, for the user to accept or discard.
+    Proposed,
+    /// Its result needed no answer: a new document, or a message.
+    Done,
+    Accepted,
+    Discarded,
+    Failed,
+    Cancelled,
+}
+
+/// A job another plugin started that is no longer running.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FinishedRun {
+    pub job: Uuid,
+    /// The plugin that started it, the plugin that ran it, and its action.
+    pub caller: String,
+    pub plugin: String,
+    pub action: String,
+    pub label: String,
+    pub outcome: RunOutcome,
+    /// Why it failed, when it did.
+    pub message: String,
+    pub at: std::time::Instant,
+}
+
+/// Most finished runs `jobs/list` remembers, of every plugin together.
+const FINISHED_RUNS: usize = 16;
 
 /// The plugin and action of a `host/run` request that names another
 /// plugin's action.
@@ -225,6 +263,120 @@ impl EditorApp {
             })
             .collect();
         Ok(json!({"actions": actions}))
+    }
+
+    /// `jobs/list`: the jobs the status bar shows, in its order, the
+    /// results waiting to be shown or answered, and what became of the
+    /// latest jobs `caller` started. Other plugins' finished jobs are not
+    /// its business.
+    pub(super) fn list_jobs(&self, caller: &str) -> Result<Value, RpcError> {
+        if !self.runs_other_actions(caller) {
+            return Err(self.needs_run_setting(caller));
+        }
+        let running = self.running_jobs();
+        let shown = self.shown_job(&running);
+        let jobs: Vec<Value> = (running.iter().enumerate())
+            .map(|(index, job)| {
+                let action = self.plugins.jobs.iter().find(|j| j.id == job.id);
+                let kind = if action.is_some() {
+                    "action"
+                } else if self.plugins.formats.iter().any(|j| j.id == job.id) {
+                    "file"
+                } else {
+                    "model"
+                };
+                json!({
+                    "job": job.id,
+                    "kind": kind,
+                    "label": job.label,
+                    "plugin": action.map(|j| &j.plugin),
+                    "action": action.map(|j| &j.action),
+                    "document": job.document,
+                    "progress": job.progress,
+                    "message": job.message,
+                    "started_by": action.and_then(|j| j.caller.as_ref()),
+                    "shown": index == shown,
+                })
+            })
+            .collect();
+        // The status bar's own words: the job shown and the count.
+        let status_bar = running.get(shown).map(|job| {
+            let mut text = job.label.clone();
+            if !job.message.is_empty() {
+                text = format!("{text} · {}", job.message);
+            }
+            if running.len() > 1 {
+                text = format!("{text} ({} of {})", shown + 1, running.len());
+            }
+            text
+        });
+        let finished: Vec<Value> = (self.plugins.finished_runs.iter().rev())
+            .filter(|run| run.caller == caller)
+            .map(|run| {
+                json!({
+                    "job": run.job,
+                    "plugin": run.plugin,
+                    "action": run.action,
+                    "label": run.label,
+                    "outcome": run.outcome,
+                    "message": run.message,
+                    "seconds_ago": run.at.elapsed().as_secs(),
+                })
+            })
+            .collect();
+        let proposal = self.plugins.proposal.as_ref().map(|proposal| {
+            json!({
+                "job": proposal.job,
+                "name": proposal.name,
+                "source": proposal.source,
+                "document": proposal.document,
+            })
+        });
+        Ok(json!({
+            "running": jobs,
+            "status_bar": status_bar,
+            "results_waiting": self.plugins.completed.len(),
+            "proposal": proposal,
+            "finished": finished,
+        }))
+    }
+
+    /// Note what became of a job another plugin started; a later note about
+    /// the same job replaces the earlier one.
+    pub(super) fn note_run(&mut self, job: &PluginJob, outcome: RunOutcome, message: &str) {
+        let Some(caller) = &job.caller else {
+            return;
+        };
+        let runs = &mut self.plugins.finished_runs;
+        if let Some(index) = runs.iter().position(|run| run.job == job.id) {
+            runs.remove(index);
+        }
+        runs.push_back(FinishedRun {
+            job: job.id,
+            caller: caller.clone(),
+            plugin: job.plugin.clone(),
+            action: job.action.clone(),
+            label: job.label.clone(),
+            outcome,
+            message: one_line(message, 500),
+            at: std::time::Instant::now(),
+        });
+        while runs.len() > FINISHED_RUNS {
+            runs.pop_front();
+        }
+    }
+
+    /// Note the user's answer to the proposal of a job another plugin
+    /// started.
+    pub(super) fn note_proposal_answer(&mut self, job: Uuid, accepted: bool) {
+        if let Some(run) = (self.plugins.finished_runs.iter_mut()).find(|run| run.job == job) {
+            run.outcome = if accepted {
+                RunOutcome::Accepted
+            } else {
+                RunOutcome::Discarded
+            };
+            run.at = std::time::Instant::now();
+        }
     }
 
     /// Check a `host/run` of another plugin's action before it waits for

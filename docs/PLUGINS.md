@@ -307,9 +307,9 @@ actions once the user turns on **Run other plugins' actions** for it in
 **Plugins → Manage Plugins…** (offered to plugins that ask before edits, and
 shown for any plugin while it is on). It is stored as `run_other_actions =
 true` in the plugin's grant and, like auto mode, goes away when the plugin's
-folder, command or permissions change. Without it, `plugins/actions` and a
-`host/run` of another plugin's action fail with `-32600` and a message that
-names the setting.
+folder, command or permissions change. Without it, `plugins/actions`,
+`jobs/list` and a `host/run` of another plugin's action fail with `-32600`
+and a message that names the setting.
 
 `plugins/actions` lists the actions of the installed, enabled plugins other
 than the one asking: for each, `plugin` and `plugin_name`, whether the plugin
@@ -382,6 +382,23 @@ the plugin that started it, the asking plugin's log notes it, and its result
 is a proposal the user accepts or discards. A run never uses the asking
 plugin's grant: the other plugin's own grant, secrets, send prompt and
 offline mode apply.
+
+`jobs/list` reports what the status bar shows, so the asking plugin can wait
+for a long job without guessing: `running`, every running action, import,
+export and model download in the status bar's order, each with its `job`
+id, `kind` (`action`, `file` or `model`), `label`, `plugin` and `action`,
+`document`, `progress` (0–1, or `null` before the plugin reports any),
+latest `message`, `started_by` (the plugin that started it with `host/run`,
+or `null` for the user) and whether it is the one the status bar `shown`;
+`status_bar`, the bar's text with its count, such as `Echo Source · Mock ·
+copying (1 of 2)`; `results_waiting`, finished jobs whose results wait for
+the editor to be free; the open `proposal` (`job`, `name`, `source`,
+`document`); and `finished`, the latest jobs this plugin started that no
+longer run, newest first, with their `outcome`: `waiting` (its result waits
+for the editor), `proposed` (shown, for the user to accept or discard),
+`done` (it needed no answer: a new document or a message), `accepted`,
+`discarded`, `failed` (with the error as `message`) or `cancelled`, and
+`seconds_ago`. Other plugins' finished jobs are not listed.
 
 ### Network
 
@@ -1156,6 +1173,7 @@ wait for the user's answer (see [Network](#network)).
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
 | `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto, run_actions, run_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)), and whether it may run other plugins' actions, and without asking (see [Running other plugins' actions](#running-other-plugins-actions)) |
 | `plugins/actions` | — | `{actions: [{plugin, plugin_name, network, allowed, available, id, action, label, description, kind, source, surfaces, result, inputs}]}`: the other plugins' actions, once the user turned on **Run other plugins' actions** for this plugin (see [Running other plugins' actions](#running-other-plugins-actions)) |
+| `jobs/list` | — | `{running: [{job, kind, label, plugin, action, document, progress, message, started_by, shown}], status_bar, results_waiting, proposal, finished: [{job, plugin, action, label, outcome, message, seconds_ago}]}`: the jobs the status bar shows, and what became of the ones this plugin started, with the same setting (see [Running other plugins' actions](#running-other-plugins-actions)) |
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does; a plugin may switch at most once a second (`-32003` with `retry_after` otherwise; naming the current document always succeeds) |
 | `host/run` | `{action, inputs?, layers?, into?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. With **Run other plugins' actions**, another plugin's action as `<plugin>/<action>`, after the user allowed it, answered with `{ok: true, running: true, job, …}` once its job runs (see [Running other plugins' actions](#running-other-plugins-actions)). For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |

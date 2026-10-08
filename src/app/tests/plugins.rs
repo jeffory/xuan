@@ -6849,4 +6849,120 @@ done
         ui.app_mut().stop_plugin("mock");
         ui.app_mut().stop_plugin("target");
     }
+
+    #[test]
+    fn jobs_list_reports_the_status_bar_and_what_became_of_the_callers_runs() {
+        use crate::app::plugin_runs::{FinishedRun, RunOutcome};
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_caller_and_target(&mut app, dir.path(), other.path(), false);
+        start_caller(&context, &mut app);
+        let jobs = |app: &mut EditorApp| plugin_request(app, "jobs/list", json!({}));
+        // It needs the setting, like the runs it reports.
+        let error = jobs(&mut app).unwrap_err();
+        assert!(
+            error.message.contains("Run other plugins' actions"),
+            "{}",
+            error.message
+        );
+        app.set_run_other_actions("mock", true);
+        app.set_run_without_asking("mock", true);
+        assert_eq!(
+            jobs(&mut app).unwrap(),
+            json!({"running": [], "status_bar": null, "results_waiting": 0, "proposal": null, "finished": []})
+        );
+        // Another plugin's finished jobs are not reported.
+        app.plugins.finished_runs.push_back(FinishedRun {
+            job: uuid::Uuid::new_v4(),
+            caller: "someone".into(),
+            plugin: "target".into(),
+            action: "echo".into(),
+            label: "Echo Source".into(),
+            outcome: RunOutcome::Failed,
+            message: "private".into(),
+            at: std::time::Instant::now(),
+        });
+        let run = |id: i64| run_request(id, "target/echo", json!({}));
+
+        // A running job, as the status bar shows it.
+        assert!(app.hold_plugin_run("mock", run(1001)).is_none());
+        let id = app.plugins.jobs[0].id;
+        let listed = jobs(&mut app).unwrap();
+        let running = &listed["running"][0];
+        assert_eq!(
+            (&running["job"], &running["kind"], &running["label"]),
+            (&json!(id), &json!("action"), &json!("Echo Source · Target"))
+        );
+        assert_eq!(
+            (
+                &running["plugin"],
+                &running["action"],
+                &running["started_by"],
+                &running["shown"]
+            ),
+            (
+                &json!("target"),
+                &json!("echo"),
+                &json!("mock"),
+                &json!(true)
+            )
+        );
+        assert!(
+            listed["status_bar"]
+                .as_str()
+                .unwrap()
+                .starts_with("Echo Source · Target")
+        );
+        assert_eq!(listed["finished"], json!([]));
+        // Its result waits while a dialog is open, then is proposed.
+        app.dialog = Some(Dialog::About);
+        run_until(&context, &mut app, |app| app.plugins.jobs.is_empty());
+        let listed = jobs(&mut app).unwrap();
+        assert_eq!(listed["results_waiting"], 1);
+        assert_eq!(listed["finished"][0]["outcome"], "waiting");
+        app.dialog = None;
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let listed = jobs(&mut app).unwrap();
+        assert_eq!(listed["finished"][0]["outcome"], "proposed");
+        assert_eq!(listed["finished"][0]["job"], json!(id));
+        assert_eq!(listed["proposal"]["job"], json!(id));
+        assert_eq!(listed["proposal"]["source"], "Target (plugin target)");
+        app.resolve_proposal(true);
+        let listed = jobs(&mut app).unwrap();
+        assert_eq!(listed["finished"][0]["outcome"], "accepted");
+        assert_eq!(listed["finished"].as_array().unwrap().len(), 1);
+
+        // Cancelled from the status bar, and stopped with its plugin.
+        assert!(app.hold_plugin_run("mock", run(1002)).is_none());
+        let cancelled = app.plugins.jobs[0].id;
+        app.cancel_running_job(cancelled);
+        run_until(&context, &mut app, |app| app.plugins.jobs.is_empty());
+        assert!(app.hold_plugin_run("mock", run(1003)).is_none());
+        let stopped = app.plugins.jobs[0].id;
+        app.stop_plugin("target");
+        let listed = jobs(&mut app).unwrap();
+        let finished = listed["finished"].as_array().unwrap();
+        assert_eq!(finished.len(), 3);
+        assert_eq!(
+            (
+                &finished[0]["job"],
+                &finished[0]["outcome"],
+                &finished[0]["message"]
+            ),
+            (
+                &json!(stopped),
+                &json!("cancelled"),
+                &json!("The plugin was stopped")
+            )
+        );
+        assert_eq!(
+            (&finished[1]["job"], &finished[1]["outcome"]),
+            (&json!(cancelled), &json!("cancelled"))
+        );
+        app.stop_plugin("mock");
+    }
 }

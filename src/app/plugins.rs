@@ -32,6 +32,7 @@ use xuan::{
 use super::{
     Dialog, EditorApp, Session, Tool,
     commands::{self, HostRun},
+    plugin_runs::RunOutcome,
 };
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -156,6 +157,9 @@ pub(super) struct PluginState {
     /// A run whose request waits for the send prompt of the plugin it runs;
     /// the open action carries it too.
     pub run_waiting: Option<super::plugin_runs::CallerRun>,
+    /// What became of the latest jobs other plugins started, for
+    /// `jobs/list`, oldest first.
+    pub finished_runs: std::collections::VecDeque<super::plugin_runs::FinishedRun>,
 }
 
 enum Pending {
@@ -237,6 +241,8 @@ enum FormatKind {
 
 /// Layers a job added that the user has not accepted yet.
 pub(super) struct Proposal {
+    /// The job whose result it is.
+    pub job: Uuid,
     pub document: Uuid,
     pub name: String,
     /// The plugin it comes from, as [`PluginState::source`] shows it.
@@ -654,6 +660,7 @@ impl EditorApp {
             .partition(|job| job.plugin == plugin);
         self.plugins.jobs = running;
         for job in stopped {
+            self.note_run(&job, RunOutcome::Cancelled, tr("The plugin was stopped"));
             self.restore_ai_boxes(job);
         }
         self.fail_format_jobs(plugin, None);
@@ -1039,6 +1046,7 @@ impl EditorApp {
         match request.method.as_str() {
             "session/status" => Ok(self.edit_session_status(plugin, request)),
             "plugins/actions" => self.list_plugin_actions(plugin),
+            "jobs/list" => self.list_jobs(plugin),
             "document/get" => Ok(self
                 .session()
                 .map_or(Value::Null, |session| edits::describe(&session.document))),
@@ -2073,19 +2081,23 @@ impl EditorApp {
             Ok(value) if !job.cancelled => value,
             Ok(_) => {
                 self.status = tr("Cancelled").into();
+                self.note_run(&job, RunOutcome::Cancelled, "");
                 self.restore_ai_boxes(job);
                 return;
             }
             Err(error) => {
                 if job.cancelled || error == tr("Cancelled") {
                     self.status = tr("Cancelled").into();
+                    self.note_run(&job, RunOutcome::Cancelled, "");
                 } else {
+                    self.note_run(&job, RunOutcome::Failed, &error);
                     self.error = Some(error);
                 }
                 self.restore_ai_boxes(job);
                 return;
             }
         };
+        self.note_run(&job, RunOutcome::Waiting, "");
         if !self.ready_for_plugin_result() {
             self.status = format!(
                 "{} {}",
@@ -2132,9 +2144,18 @@ impl EditorApp {
         while self.ready_for_plugin_result()
             && let Some((job, value)) = self.plugins.completed.pop_front()
         {
-            if let Err(error) = self.apply_job_result(&job, value) {
-                self.error = Some(format!("{}: {error:#}", job.label));
-                self.restore_ai_boxes(job);
+            match self.apply_job_result(&job, value) {
+                Err(error) => {
+                    self.error = Some(format!("{}: {error:#}", job.label));
+                    self.note_run(&job, RunOutcome::Failed, &format!("{error:#}"));
+                    self.restore_ai_boxes(job);
+                }
+                // Shown as a proposal for the user, or applied without one
+                // (a new document, a message).
+                Ok(()) if (self.plugins.proposal.as_ref()).is_some_and(|p| p.job == job.id) => {
+                    self.note_run(&job, RunOutcome::Proposed, "");
+                }
+                Ok(()) => self.note_run(&job, RunOutcome::Done, ""),
             }
         }
     }
@@ -2530,6 +2551,7 @@ impl EditorApp {
         session.document = document;
         session.invalidate();
         self.plugins.proposal = Some(Proposal {
+            job: job.id,
             document: job.document,
             name,
             source: self.plugins.source(&job.plugin),
@@ -2546,6 +2568,7 @@ impl EditorApp {
         let Some(proposal) = self.plugins.proposal.take() else {
             return;
         };
+        self.note_proposal_answer(proposal.job, accept);
         if let Some(session) = self
             .sessions
             .iter_mut()

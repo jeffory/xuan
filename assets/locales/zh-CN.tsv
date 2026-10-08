@@ -1114,3 +1114,4 @@ On: no prompt before the plugin's runs of other plugins' actions. The other plug
 Started by	启动者：
 started this run for its client.	为其客户端启动了此次运行。
 Started	已启动
+The plugin was stopped	插件已停止

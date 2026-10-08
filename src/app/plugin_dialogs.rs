@@ -903,15 +903,21 @@ impl EditorApp {
         }
     }
 
+    /// Which of the running jobs the status bar shows: the first one for
+    /// the current document, else the oldest.
+    pub(super) fn shown_job(&self, jobs: &[RunningJob]) -> usize {
+        let current = self.session().map(|s| s.document.id);
+        (jobs.iter())
+            .position(|job| current.is_some() && job.document == current)
+            .unwrap_or(0)
+    }
+
     /// The running jobs at the right of the status bar, laid out right to
     /// left: Cancel, progress, a count that lists every job when there are
     /// several, then the job's name and message. The job shown is the first
     /// one for the current document, else the oldest.
     pub(super) fn job_status(&mut self, ui: &mut egui::Ui, jobs: &[RunningJob]) {
-        let current = self.session().map(|s| s.document.id);
-        let index = (jobs.iter())
-            .position(|job| current.is_some() && job.document == current)
-            .unwrap_or(0);
+        let index = self.shown_job(jobs);
         let Some(job) = jobs.get(index) else {
             return;
         };
