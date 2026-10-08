@@ -14,6 +14,8 @@ pub(super) enum SettingsPage {
     Appearance,
     /// Which algorithm Select Subject, Remove Background and Object mode use.
     Selection,
+    /// What the rulers measure in, and how resolutions are shown.
+    Units,
     Keyboard,
 }
 
@@ -181,6 +183,11 @@ impl EditorApp {
                                 tr("Choose the algorithm behind Select Subject and Remove Background"),
                             ),
                             (
+                                SettingsPage::Units,
+                                tr("Units & Rulers"),
+                                tr("Units for the rulers and for resolutions"),
+                            ),
+                            (
                                 SettingsPage::Keyboard,
                                 tr("Keyboard Shortcuts"),
                                 tr("Change the keys that run commands"),
@@ -217,6 +224,7 @@ impl EditorApp {
                                 SettingsPage::Appearance => {
                                     editing = self.appearance_settings(ui, &mut config);
                                 }
+                                SettingsPage::Units => unit_settings(ui, &mut config),
                                 _ => selection_settings(ui, &mut config, &providers),
                             });
                     });
@@ -550,5 +558,57 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
                 None,
             );
         }
+    });
+}
+
+/// Settings → Units & Rulers.
+fn unit_settings(ui: &mut egui::Ui, config: &mut Config) {
+    ui.heading(tr("Units & Rulers"));
+    ui.add_space(16.0);
+    settings_grid(ui, "settings_units", |ui| {
+        settings_row(
+            ui,
+            tr("Rulers"),
+            |ui| {
+                widgets::PopUp::from_id_salt("settings_ruler_unit")
+                    .selected_text(tr(config.units.rulers.name()))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for option in xuan::units::Unit::ALL {
+                            widgets::menu_choice(
+                                ui,
+                                &mut config.units.rulers,
+                                option,
+                                tr(option.name()),
+                            );
+                        }
+                    });
+            },
+            Some(tr(
+                "What View → Rulers measure in. Print units use the document's resolution; percent is of its width or height. Right-click a ruler to change it there.",
+            )),
+        );
+        settings_row(
+            ui,
+            tr("Resolution"),
+            |ui| {
+                widgets::PopUp::from_id_salt("settings_resolution_unit")
+                    .selected_text(tr(config.units.resolution.name()))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for option in xuan::units::ResolutionUnit::ALL {
+                            widgets::menu_choice(
+                                ui,
+                                &mut config.units.resolution,
+                                option,
+                                tr(option.name()),
+                            );
+                        }
+                    });
+            },
+            Some(tr(
+                "How New Canvas, Canvas Size and Image Size show resolutions. Width and Height have their own Units menu in those dialogs.",
+            )),
+        );
     });
 }

@@ -5510,6 +5510,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tiff",
  "toml",
  "ureq",
  "url",

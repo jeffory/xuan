@@ -101,8 +101,25 @@ The **+** button after the last tab starts a new canvas. Hover a tab for its ful
   it shows the preset the fields match, in either orientation, or **Custom** once you type
   another size. **Swap** exchanges Width and Height (portrait / landscape), and **Keep aspect
   ratio** makes the other side follow the one you type, in the proportion it had when you ticked
-  the box or picked a preset. Sizes obey the same limits as every canvas. The size of the last
-  canvas you created is offered next time (paper sizes wait on physical units).
+  the box or picked a preset. Sizes obey the same limits as every canvas. The size and resolution
+  of the last canvas you created are offered next time (paper size presets are not offered yet).
+- **Units and print size:** File → New, **Image → Canvas Size…** and **Image → Image Size…**
+  show Width and Height in the unit chosen from the **Units** menu beside them: pixels, inches,
+  centimetres, millimetres, points (1/72 in) or picas (1/6 in), and in Canvas Size and Image
+  Size also percent of the current size. Print units convert through the **Resolution**, shown
+  in pixels per inch or per centimetre, so 210 × 297 mm at 300 ppi makes a 2480 × 3508 px (A4)
+  canvas. Pixels stay the source of truth: switching units never changes the size, sizes are
+  rounded to whole pixels, and the line under the fields shows the pixel size and megapixels
+  (and, in Image Size, the memory the pixels take). A size field also takes a value with a unit
+  typed after it, such as `10cm`, `4 in`, `210mm`, `12pt` or `50%`; a plain number is in the
+  menu's unit. Zero, negative and unreadable sizes and resolutions are refused and the field
+  keeps its value. In File → New, changing the resolution of a size in print units keeps its
+  print size, so the pixels change. **Image Size**'s **Resample** (on by default) does the same,
+  and **Keep aspect ratio** links Width to Height; with Resample off the pixels stay as they
+  are, Width and Height (in print units) set the print size by changing the resolution, and
+  only the resolution is saved, as one undo step. **Canvas Size**'s **Relative** makes Width
+  and Height an amount added to (or, negative, taken from) the current size. The units you
+  last chose are saved in the configuration file.
 - **Right-click** a tab for **Close Tab**, **Close Other Tabs**, **Close Tabs to the
   Right**, **Reopen Closed Tab**, **Copy Path** and **Show in Folder** (which selects the
   file in the file manager on Windows, macOS and Linux desktops that support it, and
@@ -172,9 +189,15 @@ Select Subject, Remove Background and Object mode use Xuan's built-in classical 
 ### Rulers, guides and grid
 
 **View → Rulers** (Ctrl+R) shows rulers along the top and left of the canvas,
-measured in document pixels from the image's top-left corner. Numbered ticks are
-roughly 70 points apart at any zoom, in steps of 1, 2, 5, 10, 20, 25, 50, 100 pixels
-and so on, with ten small ticks between them.
+measured from the image's top-left corner in document pixels, or in the unit chosen
+under **Settings → Units & Rulers** or by right-clicking either ruler: inches,
+centimetres, millimetres, points, picas or percent of the document's width (top) and
+height (left). Print units are converted through the document's resolution, so their
+ticks sit over the same pixels at any zoom. Numbered ticks are roughly 70 points apart
+at any zoom, in steps of 1, 2, 5, 10, 20, 25, 50, 100 pixels and so on (1-2-5 steps of
+the other units), with ten small ticks between them and a longer one at the half: a
+centimetre ruler marks each millimetre, 5 mm and the centimetre. Inches, and halves or
+quarters of one when zoomed in, are split in eighths.
 
 Drag from the top ruler to create a horizontal guide, or from the left ruler for a
 vertical one. With the Move tool, drag a guide to move it (the pointer changes over
@@ -212,8 +235,8 @@ within 10 screen points, whatever the zoom; the nearest one wins, and a guide wi
 a tie over the canvas, layers and grid. A magenta line marks what the drag snapped
 to. Hold Ctrl while dragging to move freely.
 
-The rulers, grid and guide visibility, Lock Guides, the snap settings and the
-default grid are app preferences, saved in the configuration file.
+The rulers and their unit, grid and guide visibility, Lock Guides, the snap settings
+and the default grid are app preferences, saved in the configuration file.
 
 ### Crop tool
 
@@ -444,7 +467,7 @@ An image with one plain layer that covers the canvas exactly (full opacity and f
 
 ## Files and export
 
-Use **File → Open Compositor Package…** to import an original `.comp` folder package (format versions 1–11, as written by Compositor up to 1.4.5). Save it as `.xuan` to keep editing in Xuan. Folders, opacity, masks, clipping, adjustment layers, guides, live shapes and editable text come across. Parts Xuan cannot show yet are left out, and a summary lists them after opening. Photoshop blend modes, layer effects, and Black & White and Color Balance adjustment layers come across unchanged. Gaussian Blur, Motion Blur and Add Noise adjustments become filter layers. Text keeps its content, font, size and color; its alignment, spacing, paragraph box and per-letter colors or fonts are not represented, so the original rendering stays until you edit the text. Line shapes and very large text arrive as plain pixels. See [FORMAT.md](FORMAT.md#importing-compositor-packages) for the details. Image export supports PNG, JPEG, TIFF, WebP and layered OpenRaster (ORA); PNG/JPEG carry print resolution. JPEG has a **Quality** slider with a preview and an estimated file size. WebP has a **Lossless** checkbox: on (the default), the file is exact; off, a **Quality** slider (85 by default) writes a much smaller lossy file, with the same preview and size estimate. WebP keeps transparency either way. The Export dialog remembers these choices until Xuan quits.
+Use **File → Open Compositor Package…** to import an original `.comp` folder package (format versions 1–11, as written by Compositor up to 1.4.5). Save it as `.xuan` to keep editing in Xuan. Folders, opacity, masks, clipping, adjustment layers, guides, live shapes and editable text come across. Parts Xuan cannot show yet are left out, and a summary lists them after opening. Photoshop blend modes, layer effects, and Black & White and Color Balance adjustment layers come across unchanged. Gaussian Blur, Motion Blur and Add Noise adjustments become filter layers. Text keeps its content, font, size and color; its alignment, spacing, paragraph box and per-letter colors or fonts are not represented, so the original rendering stays until you edit the text. Line shapes and very large text arrive as plain pixels. See [FORMAT.md](FORMAT.md#importing-compositor-packages) for the details. Image export supports PNG, JPEG, TIFF, WebP and layered OpenRaster (ORA); PNG, JPEG and TIFF carry the document's print resolution. Opening a PNG, JPEG, TIFF or WebP keeps the resolution the file states (PNG `pHYs`, JPEG JFIF density or Exif, TIFF `XResolution`, WebP Exif), so a 300-dpi scan opens as a 300 ppi document; files that state none, HEIC and SVG open at 72 ppi. JPEG has a **Quality** slider with a preview and an estimated file size. WebP has a **Lossless** checkbox: on (the default), the file is exact; off, a **Quality** slider (85 by default) writes a much smaller lossy file, with the same preview and size estimate. WebP keeps transparency either way. The Export dialog remembers these choices until Xuan quits.
 
 Photoshop files (`.psd` and `.psb`, 8-bit RGB) open with **File → Open**, import into the open document with **Import as Layer** (inside a folder named after the file), or can be dragged onto the window. CMYK, Lab, Grayscale, Indexed and 16- or 32-bit files are refused; convert them to RGB Color, 8 Bits/Channel in Photoshop first. Folders, layer masks, opacity, fill opacity, visibility, clipping and all of Photoshop's blend modes stay editable, as do Levels, Curves, Exposure, Invert, Black & White and Color Balance adjustment layers, strokes, shadows, glows and color overlays, solid-filled rectangle and ellipse shapes, and simple horizontal text (which keeps Photoshop's rendering until you edit it). Other vector shapes, smart objects, fill layers and vertical or warped text come in as pixels; bevels, satin, gradient and pattern overlays and other adjustment layers are left out. When anything changes, a list of the conversions appears first and nothing is applied until you choose **Import** (Enter); **Cancel** (Esc) leaves your documents as they were. Files whose layers don't fit the [size limits](#size-limits) have their layers cropped to the canvas. A file with artboards opens one tab per artboard, named after it and the artboard's size, showing what the artboard shows: its layers cropped to it, placed from its top-left corner, over its white, black or custom background colour (added as a layer named Artboard Background). If the only tab open is a new document you haven't touched, the first artboard takes its place. Layers outside every artboard are left out, and artboards too large to open are skipped; the list before importing names both. **Import as Layer** brings each artboard in as a folder named after it, laid out as on the Photoshop canvas, inside the folder named after the file. See [FORMAT.md](FORMAT.md#importing-photoshop-files) for the full mapping and limits.
 

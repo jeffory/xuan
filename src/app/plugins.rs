@@ -3002,8 +3002,7 @@ impl EditorApp {
         document.active = None;
         document.selected.clear();
         if let Some(resolution) = imported.resolution
-            && resolution.is_finite()
-            && (1.0..=9600.0).contains(&resolution)
+            && xuan::units::valid_resolution(f64::from(resolution))
         {
             document.resolution = resolution;
         }

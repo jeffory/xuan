@@ -827,7 +827,7 @@ impl Document {
     pub fn validate(&self) -> Result<()> {
         validate_size(self.width, self.height)?;
         ensure!(
-            self.resolution.is_finite() && (1.0..=9600.0).contains(&self.resolution),
+            crate::units::valid_resolution(f64::from(self.resolution)),
             "Invalid resolution"
         );
         ensure!(self.layers.len() <= MAX_LAYERS, "Too many layers");

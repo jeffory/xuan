@@ -34,5 +34,6 @@ pub mod segment;
 pub mod selection;
 pub mod selection_ops;
 pub mod text;
+pub mod units;
 pub mod vector;
 pub mod watch;

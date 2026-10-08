@@ -306,6 +306,9 @@ pub fn fixed_size(ui: &mut Ui, size: egui::Vec2, widget: impl Widget) -> Respons
 }
 
 /// A recessed field in place of DragValue's raised button.
+/// Reads typed text into a [`Number`]'s value; see [`Number::parser`].
+type NumberParser<'a> = Box<dyn Fn(&str) -> Option<f64> + 'a>;
+
 pub struct Number<'a, N> {
     value: &'a mut N,
     speed: f64,
@@ -314,6 +317,7 @@ pub struct Number<'a, N> {
     max_decimals: Option<usize>,
     clamp_existing_to_range: bool,
     size: egui::Vec2,
+    parser: Option<NumberParser<'a>>,
 }
 impl<'a, N: egui::emath::Numeric> Number<'a, N> {
     pub fn new(value: &'a mut N) -> Self {
@@ -325,7 +329,14 @@ impl<'a, N: egui::emath::Numeric> Number<'a, N> {
             max_decimals: N::INTEGRAL.then_some(0),
             clamp_existing_to_range: true,
             size: vec2(NUMBER_WIDTH, 22.0),
+            parser: None,
         }
+    }
+    /// Read typed text with `parser` instead of as a plain number, such as a size with a unit
+    /// after it. Text it returns `None` for leaves the value as it was.
+    pub fn parser(mut self, parser: impl Fn(&str) -> Option<f64> + 'a) -> Self {
+        self.parser = Some(Box::new(parser));
+        self
     }
     pub fn speed(mut self, speed: impl Into<f64>) -> Self {
         self.speed = speed.into();
@@ -393,6 +404,9 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
                 .suffix(self.suffix);
             if let Some(decimals) = self.max_decimals {
                 number = number.max_decimals(decimals);
+            }
+            if let Some(parser) = self.parser {
+                number = number.custom_parser(parser);
             }
             let mut response = fixed_size(ui, self.size, number);
             wheel_value(

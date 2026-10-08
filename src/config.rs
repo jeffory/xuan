@@ -189,6 +189,32 @@ pub struct Config {
     /// Background and the Magic tool's Object mode. Built-in when absent.
     #[serde(default, skip_serializing_if = "Providers::is_default")]
     pub providers: Providers,
+    /// The units sizes and resolutions are shown in.
+    pub units: UnitSettings,
+}
+
+/// The units sizes and resolutions are shown in (issue 94), in a `[units]` table.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UnitSettings {
+    /// File → New, Canvas Size and Image Size: the unit Width and Height were last shown in.
+    pub size: crate::units::Unit,
+    /// Pixels per inch or per centimetre.
+    pub resolution: crate::units::ResolutionUnit,
+    /// File → New: the resolution of the last canvas created, in pixels per inch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_canvas_resolution: Option<f32>,
+    /// What View → Rulers measure in.
+    pub rulers: crate::units::Unit,
+}
+
+impl UnitSettings {
+    /// File → New's resolution: the last one used, when it is one a document may have.
+    pub fn new_canvas_resolution(&self) -> f32 {
+        self.new_canvas_resolution
+            .filter(|ppi| crate::units::valid_resolution(f64::from(*ppi)))
+            .unwrap_or(crate::units::DEFAULT_RESOLUTION)
+    }
 }
 
 /// Files File → Open Recent remembers.
@@ -282,6 +308,7 @@ impl Default for Config {
             disable_network_plugins: false,
             block_undeclared_network: None,
             providers: Providers::default(),
+            units: UnitSettings::default(),
         }
     }
 }
@@ -538,6 +565,11 @@ impl Config {
                 table.remove("new_canvas_size");
             }
         }
+        if self.units == UnitSettings::default() {
+            table.remove("units");
+        } else {
+            table.insert("units".into(), toml::Value::try_from(self.units)?);
+        }
         table.insert("auto_select".into(), toml::Value::Boolean(self.auto_select));
         table.insert(
             "ignore_transparent_pixels".into(),
@@ -638,6 +670,44 @@ mod tests {
                 .contains("new_canvas_size")
         );
         assert_eq!(Config::load(&path).unwrap().new_canvas_size, None);
+    }
+
+    #[test]
+    fn unit_preferences_roundtrip() {
+        use crate::units::{ResolutionUnit, Unit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            units: UnitSettings {
+                size: Unit::Millimeters,
+                resolution: ResolutionUnit::PerCentimeter,
+                new_canvas_resolution: Some(300.0),
+                rulers: Unit::Inches,
+            },
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[units]") && text.contains("size = \"mm\""),
+            "{text}"
+        );
+        assert_eq!(Config::load(&path).unwrap().units, config.units);
+        assert_eq!(config.units.new_canvas_resolution(), 300.0);
+        // The defaults write nothing, and a stored resolution no document may have is ignored.
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("units"));
+        for bad in [0.0, -72.0, f32::NAN, 1e9] {
+            let units = UnitSettings {
+                new_canvas_resolution: Some(bad),
+                ..UnitSettings::default()
+            };
+            assert_eq!(units.new_canvas_resolution(), 72.0, "{bad}");
+        }
+        fs::write(&path, "[units]\nnew_canvas_resolution = -5.0\n").unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.units.size, Unit::Pixels);
+        assert_eq!(loaded.units.new_canvas_resolution(), 72.0);
     }
 
     #[test]

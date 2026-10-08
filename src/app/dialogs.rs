@@ -8,10 +8,11 @@ use xuan::{
     document::{Adjustment, Layer, Point},
     effects::{self, Filter},
     io, operations, render,
+    units::{self, Unit},
 };
 
 use super::{
-    Dialog, EditorApp,
+    Dialog, EditorApp, size_units,
     surfaces::{SurfaceRun, SurfaceStart},
     theme::PaletteExt,
 };
@@ -269,62 +270,128 @@ impl EditorApp {
                         ui.add_space(12.0);
                     }
                     let before = self.dimensions;
+                    let resolution = self.resolution;
+                    // Image Size without Resample keeps the pixels: Width and Height then set
+                    // the print size, through the resolution, and only in print units.
+                    let fixed_pixels = dialog == Dialog::ImageSize && !self.size_units.resample;
+                    let sides_enabled = !fixed_pixels || self.size_units.unit.is_physical();
                     ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(tr("Width"));
-                            let width = ui.add(
-                                widgets::Number::new(&mut self.dimensions[0])
-                                    .range(1..=xuan::document::MAX_SIDE)
-                                    .suffix(" px")
-                                    .speed(1.0),
-                            );
-                            if focus_width {
-                                if width.has_focus() {
-                                    // The field is editing now: select its text so typing
-                                    // replaces it, and stop asking for focus.
-                                    let end = self.dimensions[0].to_string().chars().count();
-                                    let mut state = egui::TextEdit::load_state(ui.ctx(), width.id)
-                                        .unwrap_or_default();
-                                    state.cursor.set_char_range(Some(
-                                        egui::text::CCursorRange::two(
-                                            egui::text::CCursor::new(0),
-                                            egui::text::CCursor::new(end),
-                                        ),
-                                    ));
-                                    state.store(ui.ctx(), width.id);
-                                    ui.ctx().data_mut(|d| {
-                                        d.insert_temp(focused, Some((dialog, false)))
-                                    });
-                                } else {
-                                    width.request_focus();
-                                }
+                        for axis in 0..2 {
+                            if axis == 1 {
+                                ui.add_space(15.0);
                             }
-                        });
+                            ui.vertical(|ui| {
+                                ui.label(tr(if axis == 0 { "Width" } else { "Height" }));
+                                let field = ui.add_enabled_ui(sides_enabled, |ui| {
+                                    self.size_field(ui, axis, fixed_pixels)
+                                });
+                                let field = field.inner;
+                                if axis == 0 && focus_width {
+                                    if field.has_focus() {
+                                        // The field is editing now: select its text so typing
+                                        // replaces it, and stop asking for focus.
+                                        let mut state =
+                                            egui::TextEdit::load_state(ui.ctx(), field.id)
+                                                .unwrap_or_default();
+                                        state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::two(
+                                                egui::text::CCursor::new(0),
+                                                egui::text::CCursor::new(usize::MAX),
+                                            ),
+                                        ));
+                                        state.store(ui.ctx(), field.id);
+                                        ui.ctx().data_mut(|d| {
+                                            d.insert_temp(focused, Some((dialog, false)))
+                                        });
+                                    } else {
+                                        field.request_focus();
+                                    }
+                                }
+                            });
+                        }
                         ui.add_space(15.0);
                         ui.vertical(|ui| {
-                            ui.label(tr("Height"));
-                            ui.add(
-                                widgets::Number::new(&mut self.dimensions[1])
-                                    .range(1..=xuan::document::MAX_SIDE)
-                                    .suffix(" px")
-                                    .speed(1.0),
-                            );
+                            ui.label(tr("Units"));
+                            let choices: &[Unit] = if dialog == Dialog::New {
+                                &Unit::LENGTHS
+                            } else {
+                                &Unit::ALL
+                            };
+                            if size_units::unit_menu(ui, &mut self.size_units.unit, choices) {
+                                self.size_units.size_edited();
+                                self.remember_units();
+                            }
                         });
                     });
+                    if self.dimensions != before {
+                        self.size_units.size_edited();
+                    }
                     if dialog == Dialog::New {
                         self.keep_ratio_edit(before);
                         ui.add_space(8.0);
                         self.swap_and_link(ui);
+                    } else if dialog == Dialog::ImageSize && !fixed_pixels {
+                        self.keep_ratio_edit(before);
+                        ui.add_space(8.0);
+                        let was = self.keep_ratio;
+                        widgets::checkbox(ui, &mut self.keep_ratio, tr("Keep aspect ratio"));
+                        if self.keep_ratio && !was {
+                            self.ratio = self.dimensions;
+                        }
                     }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         ui.label(tr("Resolution"));
-                        ui.add(
-                            widgets::Number::new(&mut self.resolution)
-                                .range(1.0..=9600.0)
-                                .suffix(" ppi"),
-                        );
+                        let unit = self.size_units.resolution_unit;
+                        let mut shown = unit.from_ppi(f64::from(self.resolution));
+                        let range = unit.from_ppi(f64::from(units::MIN_RESOLUTION))
+                            ..=unit.from_ppi(f64::from(units::MAX_RESOLUTION));
+                        let changed = ui
+                            .add(
+                                widgets::Number::new(&mut shown)
+                                    .range(range)
+                                    .max_decimals(2)
+                                    .suffix(format!(" {}", unit.suffix()))
+                                    .parser(move |text| unit.parse(text)),
+                            )
+                            .changed();
+                        let ppi = unit.to_ppi(shown);
+                        if changed && units::valid_resolution(ppi) {
+                            self.resolution = ppi as f32;
+                        }
+                        if size_units::resolution_unit_menu(
+                            ui,
+                            &mut self.size_units.resolution_unit,
+                        ) {
+                            self.remember_units();
+                        }
                     });
+                    let keeps_print_size = dialog == Dialog::New
+                        || (dialog == Dialog::ImageSize && self.size_units.resample);
+                    self.size_units.resolution_changed(
+                        &mut self.dimensions,
+                        resolution,
+                        self.resolution,
+                        keeps_print_size,
+                    );
+                    if dialog == Dialog::ImageSize {
+                        ui.add_space(8.0);
+                        let was = self.size_units.resample;
+                        widgets::checkbox(ui, &mut self.size_units.resample, tr("Resample"))
+                            .on_hover_text(tr(
+                                "Off, the pixels stay as they are: Width, Height and Resolution change only the print size",
+                            ));
+                        if was && !self.size_units.resample {
+                            self.dimensions = self.size_units.original;
+                            self.size_units.size_edited();
+                        }
+                    } else if dialog == Dialog::CanvasSize {
+                        ui.add_space(8.0);
+                        widgets::checkbox(ui, &mut self.size_units.relative, tr("Relative"))
+                            .on_hover_text(tr(
+                                "Width and Height are added to the current size",
+                            ));
+                    }
                     if dialog == Dialog::CanvasSize {
                         ui.add_space(12.0);
                         ui.label(tr("Anchor"));
@@ -399,11 +466,20 @@ impl EditorApp {
                     ui.add_space(12.0);
                     if let Err(error) = &valid {
                         ui.colored_label(ui.palette().error, error.to_string());
-                    } else if !generating {
+                    } else {
                         ui.label(
-                            RichText::new(tr("Transparent canvas · sRGB"))
-                                .color(ui.palette().muted),
+                            RichText::new(size_units::summary(
+                                self.dimensions,
+                                dialog == Dialog::ImageSize,
+                            ))
+                            .color(ui.palette().muted),
                         );
+                        if dialog == Dialog::New && !generating {
+                            ui.label(
+                                RichText::new(tr("Transparent canvas · sRGB"))
+                                    .color(ui.palette().muted),
+                            );
+                        }
                     }
                     valid.is_ok() && ready
                 },
@@ -448,10 +524,13 @@ impl EditorApp {
                 let [width, height] = self.dimensions;
                 let anchor = self.anchor;
                 let resolution = self.resolution;
+                // Without Resample, or at the same size, only the resolution changes.
+                let resample =
+                    self.size_units.resample && self.dimensions != self.size_units.original;
                 self.edit(title, |doc| {
                     if dialog == Dialog::CanvasSize {
                         operations::canvas_size(doc, width, height, anchor)?;
-                    } else {
+                    } else if resample {
                         operations::image_size(doc, width, height)?;
                     }
                     doc.resolution = resolution;
@@ -515,6 +594,50 @@ impl EditorApp {
             self.dimensions[1] = presets::linked_side(ratio_width, ratio_height, width, height);
         } else {
             self.dimensions[0] = presets::linked_side(ratio_height, ratio_width, height, width);
+        }
+    }
+
+    /// Width (`axis` 0) or Height (1) in the dialog's unit. A value typed with another unit
+    /// (`10cm`) is converted. With `fixed_pixels` (Image Size without Resample) a print size
+    /// sets the resolution instead of the pixels.
+    fn size_field(&mut self, ui: &mut egui::Ui, axis: usize, fixed_pixels: bool) -> egui::Response {
+        let units = &self.size_units;
+        let (unit, ppi, relative) = (units.unit, self.resolution, units.relative);
+        let reference = f64::from(units.original[axis]);
+        let mut value = units.shown(self.dimensions[axis], axis, ppi);
+        let suffix = if unit == Unit::Percent {
+            "%".to_owned()
+        } else {
+            format!(" {}", unit.suffix())
+        };
+        let response = ui.add(
+            widgets::Number::new(&mut value)
+                .range(units.range(axis, ppi))
+                .speed(units.step(axis, ppi))
+                .max_decimals(unit.decimals())
+                .suffix(suffix)
+                .parser(move |text| size_units::parse_size(text, unit, ppi, reference, relative)),
+        );
+        if response.changed() {
+            if fixed_pixels {
+                if let Some(resolution) = self.size_units.resolution_for(value, axis) {
+                    self.resolution = resolution;
+                }
+            } else if let Some(pixels) = self.size_units.pixels(value, axis, ppi) {
+                self.dimensions[axis] = pixels;
+            }
+        }
+        response
+    }
+
+    /// Saves the size and resolution units chosen in a size dialog for next time.
+    fn remember_units(&mut self) {
+        let mut units = self.config.units;
+        units.size = self.size_units.unit;
+        units.resolution = self.size_units.resolution_unit;
+        if units != self.config.units {
+            self.config.units = units;
+            self.save_config();
         }
     }
 
