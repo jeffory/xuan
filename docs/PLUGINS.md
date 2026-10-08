@@ -1064,7 +1064,7 @@ wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
-| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
+| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, fill, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
 | `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips; an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
@@ -1112,8 +1112,13 @@ its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
 
 - `{"op": "add_layer", "image": path, "name"?, "x"?, "y"?, "mask"?, "above"?, "opacity"?, "blend"?}`
 - `{"op": "replace_pixels", "layer", "image", "x"?, "y"?}`
-- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "blend"?, "clip_to"?: id | null}`:
-  `clip_to` clips the layer to a base below it in the same folder, as
+- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "fill"?, "blend"?, "clip_to"?: id | null}`:
+  `fill` (0–1) is Photoshop's Fill, on pixel, text and shape layers only: it
+  fades the layer's own pixels but not its layer effects, where `opacity`
+  fades both; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid
+  Light, Linear Light, Hard Mix and Difference it weakens the blend instead
+  (see [USAGE.md](USAGE.md)). A fill below 1 saves the project as `.xuan`
+  version 13. `clip_to` clips the layer to a base below it in the same folder, as
   **Layer → Clipping Mask** does, and `null` releases it (left out, it does
   not change). The base can be a pixel layer or a group: a group's shape is
   its visible layers together, mask layers inside it and its own opacity and

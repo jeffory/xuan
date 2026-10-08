@@ -358,10 +358,11 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text, `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text, `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
-                "opacity": number("0–1"), "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
+                "opacity": number("0–1"), "fill": number("0–1; pixel, text and shape layers only"),
+                "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
                 "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees"),
                 "text": {"type": "string", "description": "A text layer's new text"},
@@ -379,6 +380,7 @@ fn specs() -> Vec<Spec> {
                         "visible",
                         "locked",
                         "opacity",
+                        "fill",
                         "blend",
                         "clip_to",
                         "x",
@@ -404,7 +406,9 @@ fn specs() -> Vec<Spec> {
                 let mut set = op(
                     "set",
                     &args,
-                    &["layer", "name", "visible", "locked", "opacity", "blend"],
+                    &[
+                        "layer", "name", "visible", "locked", "opacity", "fill", "blend",
+                    ],
                 );
                 // `null` releases the clipping, so it is passed on, unlike other nulls.
                 if let Some(clip_to) = args.get("clip_to") {

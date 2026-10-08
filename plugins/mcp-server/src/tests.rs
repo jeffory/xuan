@@ -687,6 +687,37 @@ fn set_layer_clips_to_a_base_or_releases_with_null() {
 }
 
 #[test]
+fn set_layer_passes_fill_on_apart_from_opacity() {
+    let editor = FakeEditor::new(false);
+    let incoming = editor.dir.join("incoming");
+    let cx = tools::Context {
+        editor: editor.as_ref(),
+        session: Some("s"),
+        incoming: &incoming,
+        cancel: &CancelToken::new(),
+    };
+    let call = |args: Value| tools::call(&cx, "set_layer", serde_json::from_value(args).unwrap());
+    let layer = "11111111-1111-1111-1111-111111111111";
+    let result = call(json!({"layer": layer, "fill": 0, "opacity": 0.5}));
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    // Fill alone is a change too.
+    let result = call(json!({"layer": layer, "fill": 0.25}));
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    let requests = editor.requests();
+    assert_eq!(
+        requests[0].2["edits"],
+        json!([{"op": "set", "layer": layer, "opacity": 0.5, "fill": 0}])
+    );
+    assert_eq!(
+        requests[1].2["edits"],
+        json!([{"op": "set", "layer": layer, "fill": 0.25}])
+    );
+    let tools = tools::list();
+    let set = tools.iter().find(|t| t.name == "set_layer").unwrap();
+    assert_eq!(set.input_schema["properties"]["fill"]["type"], "number");
+}
+
+#[test]
 fn layers_are_chosen_for_commands_and_new_layers_and_jobs_reported() {
     let editor = FakeEditor::new(false);
     let incoming = editor.dir.join("incoming");
