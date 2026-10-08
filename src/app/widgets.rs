@@ -1590,6 +1590,26 @@ pub fn menu_choice<T: PartialEq>(
     response
 }
 
+/// The side of [`alert_icon`], in points.
+pub const ALERT_ICON_SIZE: f32 = 28.0;
+
+/// An error alert's icon: an exclamation mark on a disc in the palette's error colour, named
+/// "Error" for assistive technology.
+pub fn alert_icon(ui: &mut Ui) -> Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::Vec2::splat(ALERT_ICON_SIZE), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, tr("Error")));
+    let p = ui.palette();
+    let painter = ui.painter();
+    let center = rect.center();
+    painter.circle_filled(center, ALERT_ICON_SIZE / 2.0, p.error);
+    // The mark in the window's colour, which reads on the error disc in either theme.
+    let stroke = Stroke::new(3.0_f32, p.window);
+    painter.line_segment([center - vec2(0.0, 7.0), center + vec2(0.0, 2.5)], stroke);
+    painter.circle_filled(center + vec2(0.0, 7.0), 1.75, p.window);
+    response
+}
+
 /// A section heading inside a dialog or pane: the subheading text style in the palette text colour.
 pub fn subheading(ui: &mut Ui, text: impl Into<String>) -> Response {
     let color = ui.palette().text;

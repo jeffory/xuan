@@ -181,13 +181,26 @@ impl EditorApp {
                 .show_with_footer(
                     ctx,
                     |ui| {
-                        ui.label(error);
+                        ui.horizontal_top(|ui| {
+                            widgets::alert_icon(ui);
+                            ui.add_space(4.0);
+                            ui.add(egui::Label::new(&error).wrap());
+                        });
                     },
                     |ui, ()| {
                         dismiss = widgets::dialog_footer(
                             ui,
                             widgets::FooterButtons::single(tr("OK")),
-                            |_| {},
+                            |ui| {
+                                if widgets::button(ui, tr("Copy details"))
+                                    .on_hover_text(tr(
+                                        "Copy the message and Xuan's version, for a bug report",
+                                    ))
+                                    .clicked()
+                                {
+                                    ui.ctx().copy_text(error_details(&error));
+                                }
+                            },
                         )
                         .commit;
                     },
@@ -1588,6 +1601,19 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
         }
     }
     changed
+}
+
+/// What the error dialog's Copy details puts on the clipboard: the message, then the version
+/// and platform, as a bug report needs them.
+pub(super) fn error_details(error: &str) -> String {
+    format!(
+        "{}\n\n{}\n\n{} · {} {}",
+        tr("Couldn't complete the operation"),
+        error.trim_end(),
+        xuan::buildinfo::current().cli(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
 }
 
 /// An estimated file size for the Export dialog: "12 KiB", "1.4 MiB".

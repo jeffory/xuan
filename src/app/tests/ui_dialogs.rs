@@ -648,3 +648,30 @@ fn export_sizes_read_in_kib_then_mib() {
     assert_eq!(estimated_size(1024 * 1024), "1.0 MiB");
     assert_eq!(estimated_size(1_500_000), "1.4 MiB");
 }
+
+/// The error dialog shows an alert icon, and Copy details puts the message, the version and the
+/// platform on the clipboard (issue 91).
+#[test]
+fn the_error_dialog_has_an_icon_and_copies_its_details() {
+    let mut ui = UiTest::new();
+    ui.app_mut().error = Some("Cannot read photo.png: bad header".into());
+    ui.settle();
+    assert!(ui.has("Couldn't complete the operation"));
+    assert!(ui.has_role(Role::Image, "Error"));
+    ui.click_and_stop("Copy details");
+    let copied = ui.copied_text().expect("Copy details copies text");
+    assert!(
+        copied.contains("Cannot read photo.png: bad header"),
+        "{copied}"
+    );
+    assert!(
+        copied.contains(&xuan::buildinfo::current().cli()),
+        "{copied}"
+    );
+    assert!(copied.contains(std::env::consts::OS), "{copied}");
+    // Copying leaves the dialog open; OK closes it.
+    ui.settle();
+    assert!(ui.app().error.is_some());
+    ui.click("OK");
+    assert!(ui.app().error.is_none());
+}
