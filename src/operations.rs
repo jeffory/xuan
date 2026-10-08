@@ -120,32 +120,178 @@ pub fn duplicate(document: &mut Document) {
 }
 
 pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) -> Result<()> {
-    let targets = source.descendants(root);
-    let ids: HashMap<_, _> = targets.iter().map(|id| (*id, Uuid::new_v4())).collect();
-    let anchor = source
+    ensure!(
+        source.layers.iter().any(|l| l.id == root),
+        "The dragged layer no longer exists"
+    );
+    let offset = centring_offset(source, &[root], destination);
+    let index = destination.layers.len();
+    let copies = copy_into(
+        source,
+        &[root],
+        destination,
+        Some(None),
+        index,
+        offset,
+        false,
+    );
+    destination.select(copies[0], false);
+    destination.validate()
+}
+
+/// The selected layers that no other selected layer contains, from the bottom of the stack up:
+/// with their descendants, what Copy takes when there is no selection.
+pub fn selected_roots(document: &Document) -> Vec<Uuid> {
+    let parents: HashMap<_, _> = document.layers.iter().map(|l| (l.id, l.parent)).collect();
+    document
         .layers
         .iter()
-        .find(|l| l.id == root)
-        .ok_or_else(|| anyhow::anyhow!("The dragged layer no longer exists"))?
-        .transform
-        .center();
-    let offset = Point::new(
+        .filter(|layer| {
+            if !document.selected.contains(&layer.id) {
+                return false;
+            }
+            let mut parent = layer.parent;
+            // Bounded, as the parent chain of an invalid document can loop.
+            for _ in 0..parents.len() {
+                let Some(id) = parent else {
+                    return true;
+                };
+                if document.selected.contains(&id) {
+                    return false;
+                }
+                parent = parents.get(&id).copied().flatten();
+            }
+            true
+        })
+        .map(|layer| layer.id)
+        .collect()
+}
+
+/// Paste `roots` of `source` with their descendants into `destination`, as one complete copy
+/// with new IDs. In the document they came from the copies keep their place, just above the
+/// originals; in another document they are centred, above the active layer. A selected folder
+/// that is not one of the copies takes them inside it. Clipping to a layer outside the copy is
+/// kept in the same document and baked into the pixels in another.
+pub fn paste_layers(source: &Document, roots: &[Uuid], destination: &mut Document) -> Result<()> {
+    let roots: Vec<Uuid> = roots
+        .iter()
+        .copied()
+        .filter(|id| source.layers.iter().any(|l| l.id == *id))
+        .collect();
+    ensure!(!roots.is_empty(), "The copied layers no longer exist");
+    let same = source.id == destination.id;
+    let targets: HashSet<_> = roots
+        .iter()
+        .flat_map(|id| source.descendants(*id))
+        .collect();
+    let folder = destination
+        .active()
+        .filter(|l| l.group && !(same && targets.contains(&l.id)))
+        .map(|l| l.id);
+    let originals = destination
+        .layers
+        .iter()
+        .rposition(|l| targets.contains(&l.id))
+        .filter(|_| {
+            same && roots
+                .iter()
+                .all(|id| destination.layers.iter().any(|l| l.id == *id))
+        });
+    let (parent, index) = if let Some(folder) = folder {
+        let index = destination
+            .layers
+            .iter()
+            .rposition(|l| l.parent == Some(folder))
+            .or_else(|| destination.layers.iter().position(|l| l.id == folder))
+            .unwrap();
+        (Some(Some(folder)), index + 1)
+    } else if let Some(index) = originals {
+        // Each copy stays in its original's folder, as Duplicate does.
+        (None, index + 1)
+    } else if let Some(active) = destination.active() {
+        let index = destination
+            .layers
+            .iter()
+            .position(|l| l.id == active.id)
+            .unwrap();
+        (Some(destination.sibling_parent(active)), index + 1)
+    } else {
+        (Some(None), destination.layers.len())
+    };
+    let offset = if same {
+        Point::default()
+    } else {
+        centring_offset(source, &roots, destination)
+    };
+    let copies = copy_into(source, &roots, destination, parent, index, offset, same);
+    destination.selected.clear();
+    for id in copies {
+        destination.select(id, true);
+    }
+    destination.release_clipping_cycles();
+    destination.validate()
+}
+
+/// The shift that centres the bounds of `roots` on `destination`.
+fn centring_offset(source: &Document, roots: &[Uuid], destination: &Document) -> Point {
+    let layers = source.layers.iter().filter(|l| roots.contains(&l.id));
+    let anchor = if let [root] = roots
+        && let Some(root) = source.layers.iter().find(|l| l.id == *root)
+    {
+        root.transform.center()
+    } else {
+        let (mut min, mut max) = (
+            Point::new(f32::MAX, f32::MAX),
+            Point::new(f32::MIN, f32::MIN),
+        );
+        for corner in layers.flat_map(|l| l.transform.corners()) {
+            min = Point::new(min.x.min(corner.x), min.y.min(corner.y));
+            max = Point::new(max.x.max(corner.x), max.y.max(corner.y));
+        }
+        Point::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5)
+    };
+    Point::new(
         destination.width as f32 * 0.5 - anchor.x,
         destination.height as f32 * 0.5 - anchor.y,
-    );
+    )
+}
+
+/// Insert copies of `roots` and their descendants at `index` of `destination`, with new IDs and
+/// their parent and clipping references remapped, moved by `offset`. `parent`, when given,
+/// replaces the roots' own parent. Returns the roots' copies, from the bottom of the stack up.
+fn copy_into(
+    source: &Document,
+    roots: &[Uuid],
+    destination: &mut Document,
+    parent: Option<Option<Uuid>>,
+    index: usize,
+    offset: Point,
+    keep_clipping: bool,
+) -> Vec<Uuid> {
+    let targets: HashSet<_> = roots
+        .iter()
+        .flat_map(|id| source.descendants(*id))
+        .collect();
+    let ids: HashMap<_, _> = targets.iter().map(|id| (*id, Uuid::new_v4())).collect();
+    let mut prepared_source = None;
     let mut copies = Vec::new();
+    // Clipping to a layer outside the copy is kept only where that layer is.
+    let kept = |id: &Uuid| keep_clipping && destination.layers.iter().any(|l| l.id == *id);
     for layer in source.layers.iter().filter(|l| targets.contains(&l.id)) {
         let mut copy = layer.clone();
-        if let Some(clip) = layer.clip_to.filter(|id| !targets.contains(id))
+        if let Some(clip) = layer
+            .clip_to
+            .filter(|id| !targets.contains(id) && !kept(id))
             && let Some(pixels) = &layer.pixels
         {
-            let prepared_source = render::prepare_attachments(source);
+            let prepared_source =
+                prepared_source.get_or_insert_with(|| render::prepare_attachments(source));
             let base = prepared_source
                 .layers
                 .iter()
                 .find(|l| l.id == clip)
                 .unwrap();
-            let baked = crate::gpu::bake_alpha(&prepared_source, base, pixels, layer.transform)
+            let baked = crate::gpu::bake_alpha(prepared_source, base, pixels, layer.transform)
                 .unwrap_or_else(|| {
                     let mut baked = (**pixels).clone();
                     let (width, height) = baked.dimensions();
@@ -155,7 +301,7 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
                             (y as f32 + 0.5) / height as f32,
                         ));
                         pixel[3] = (pixel[3] as f32
-                            * render::layer_alpha(&prepared_source, base, point, 0))
+                            * render::layer_alpha(prepared_source, base, point, 0))
                         .round() as u8;
                     }
                     baked
@@ -166,8 +312,16 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
             copy.raw = None;
         }
         copy.id = ids[&layer.id];
-        copy.parent = layer.parent.and_then(|id| ids.get(&id).copied());
-        copy.clip_to = layer.clip_to.and_then(|id| ids.get(&id).copied());
+        copy.parent = match (layer.parent.and_then(|id| ids.get(&id)), parent) {
+            (Some(id), _) => Some(*id),
+            (None, Some(parent)) => parent,
+            (None, None) => layer
+                .parent
+                .filter(|id| destination.layers.iter().any(|l| l.id == *id)),
+        };
+        copy.clip_to = layer
+            .clip_to
+            .and_then(|id| ids.get(&id).copied().or_else(|| kept(&id).then_some(id)));
         copy.transform.x += offset.x;
         copy.transform.y += offset.y;
         if let Some(placement) = copy.mask.as_mut().and_then(|m| m.placement.as_mut()) {
@@ -176,9 +330,8 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
         }
         copies.push(copy);
     }
-    destination.layers.extend(copies);
-    destination.select(ids[&root], false);
-    destination.validate()
+    destination.layers.splice(index..index, copies);
+    roots.iter().filter_map(|id| ids.get(id).copied()).collect()
 }
 
 pub fn group(document: &mut Document) {
@@ -780,23 +933,28 @@ pub fn trim(document: &mut Document, basis: TrimBasis, sides: TrimSides) -> Resu
     Ok(true)
 }
 
+/// `roots` and their descendants rendered on their own, as shown even when hidden, on a canvas
+/// the size of the document.
+pub fn render_layers(document: &Document, roots: &[Uuid]) -> RgbaImage {
+    let mut isolated = document.clone();
+    let targets: HashSet<_> = roots
+        .iter()
+        .flat_map(|id| document.descendants(*id))
+        .collect();
+    isolated.layers.retain(|l| targets.contains(&l.id));
+    for root in isolated.layers.iter_mut().filter(|l| roots.contains(&l.id)) {
+        root.parent = None;
+        root.visible = true;
+        root.clip_to = root.clip_to.filter(|id| targets.contains(id));
+    }
+    render::render(&isolated)
+}
+
 pub fn copy_pixels(document: &Document, merged: bool) -> Option<(RgbaImage, Point)> {
     let image = if merged {
         render::render(document)
     } else {
-        let layer = document.active()?;
-        let mut isolated = document.clone();
-        let targets = document.descendants(layer.id);
-        isolated.layers.retain(|l| targets.contains(&l.id));
-        let root = isolated
-            .layers
-            .iter_mut()
-            .find(|l| l.id == layer.id)
-            .unwrap();
-        root.parent = None;
-        root.visible = true;
-        root.clip_to = None;
-        render::render(&isolated)
+        render_layers(document, &[document.active()?.id])
     };
     let (left, top, right, bottom) = if let Some(mask) = &document.selection {
         selection::bounds(mask)?
@@ -893,6 +1051,263 @@ pub fn selection_from_mask_black(document: &mut Document) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn solid(name: &str, width: u32, height: u32, color: [u8; 4]) -> Layer {
+        Layer::image(name, RgbaImage::from_pixel(width, height, Rgba(color)))
+    }
+
+    fn find<'a>(document: &'a Document, name: &str) -> &'a Layer {
+        document.layers.iter().find(|l| l.name == name).unwrap()
+    }
+
+    /// A 20 × 20 document whose folder holds an 8 × 8 base, a layer clipped to it, an editable
+    /// text layer with a stroke and a mask, and an adjustment layer.
+    fn folder_document() -> (Document, Uuid) {
+        let mut document = Document::new(20, 20).unwrap();
+        let mut folder = Layer::blank("Folder", 20, 20);
+        folder.group = true;
+        let mut base = solid("Base", 8, 8, [255, 0, 0, 255]);
+        base.transform.x = 2.0;
+        base.transform.y = 4.0;
+        let mut clipped = solid("Clipped", 20, 20, [0, 255, 0, 255]);
+        clipped.clip_to = Some(base.id);
+        let mut text = solid("Text", 8, 8, [0, 0, 0, 255]);
+        text.text = Some(crate::text::TextStyle {
+            content: "Hello".into(),
+            ..Default::default()
+        });
+        text.effects = Some(crate::layer_effects::LayerEffects {
+            stroke: Some(crate::layer_effects::StrokeEffect {
+                size: 3.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        text.blend = crate::blend::BlendMode::Multiply;
+        text.opacity = 0.5;
+        let mut mask = Layer::mask("Mask", 8, 8);
+        mask.mask.as_mut().unwrap().pixels = Arc::new(GrayImage::from_pixel(8, 8, Luma([128])));
+        mask.parent = Some(text.id);
+        let mut invert = Layer::blank("Invert", 20, 20);
+        invert.adjustment = Some(crate::document::Adjustment::Invert);
+        for layer in [&mut base, &mut clipped, &mut text, &mut invert] {
+            layer.parent = Some(folder.id);
+        }
+        let id = folder.id;
+        document
+            .layers
+            .extend([base, clipped, text, mask, invert, folder]);
+        document.select(id, false);
+        document.validate().unwrap();
+        (document, id)
+    }
+
+    #[test]
+    fn selected_roots_leave_out_layers_inside_selected_folders() {
+        let (mut document, folder) = folder_document();
+        let background = document.layers[0].id;
+        let base = find(&document, "Base").id;
+        document.select(base, true);
+        document.select(background, true);
+        assert_eq!(selected_roots(&document), [background, folder]);
+        document.select(folder, true);
+        assert_eq!(selected_roots(&document), [background, base]);
+    }
+
+    #[test]
+    fn rendering_copied_layers_shows_hidden_roots_and_their_children_only() {
+        let mut document = Document::new(4, 2).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(4, 2, Rgba([9; 4]))));
+        let mut hidden = solid("Hidden", 2, 2, [255, 0, 0, 255]);
+        hidden.visible = false;
+        let mut right = solid("Right", 2, 2, [0, 0, 255, 255]);
+        right.transform.x = 2.0;
+        let roots = [hidden.id, right.id];
+        document.layers.extend([hidden, right]);
+        let image = render_layers(&document, &roots);
+        assert_eq!(image.dimensions(), (4, 2));
+        assert_eq!(image.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(3, 1).0, [0, 0, 255, 255]);
+        // The single-layer copy renders the same way.
+        document.select(roots[0], false);
+        assert_eq!(
+            copy_pixels(&document, false).unwrap().0.get_pixel(0, 0).0,
+            [255, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn pasting_a_folder_into_another_document_copies_it_whole_with_new_ids() {
+        let (source, folder) = folder_document();
+        let mut destination = Document::new(40, 30).unwrap();
+        let below = destination.layers[0].id;
+        destination.insert(solid("Top", 4, 4, [0; 4]));
+        destination.select(below, false);
+        paste_layers(&source, &[folder], &mut destination).unwrap();
+        destination.validate().unwrap();
+
+        assert_eq!(destination.layers.len(), 2 + 6);
+        let names: Vec<_> = destination.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Layer 1", "Base", "Clipped", "Text", "Mask", "Invert", "Folder", "Top"
+            ],
+            "pasted just above the active layer"
+        );
+        let source_ids: HashSet<_> = source.layers.iter().map(|l| l.id).collect();
+        assert!(
+            destination.layers[1..7]
+                .iter()
+                .all(|l| !source_ids.contains(&l.id))
+        );
+        let copy = find(&destination, "Folder");
+        assert!(copy.group);
+        assert_eq!(copy.parent, None);
+        assert_eq!(destination.active, Some(copy.id));
+        assert_eq!(destination.selected, HashSet::from([copy.id]));
+        for name in ["Base", "Clipped", "Text", "Invert"] {
+            assert_eq!(find(&destination, name).parent, Some(copy.id), "{name}");
+        }
+        let text = find(&destination, "Text");
+        assert_eq!(find(&destination, "Mask").parent, Some(text.id));
+        assert_eq!(
+            find(&destination, "Clipped").clip_to,
+            Some(find(&destination, "Base").id)
+        );
+        assert_eq!(
+            find(&destination, "Invert").adjustment,
+            Some(crate::document::Adjustment::Invert)
+        );
+        assert_eq!(text.text.as_ref().unwrap().content, "Hello");
+        assert_eq!(text.effects, find(&source, "Text").effects);
+        assert_eq!(
+            (text.blend, text.opacity),
+            (crate::blend::BlendMode::Multiply, 0.5)
+        );
+        assert_eq!(
+            find(&destination, "Mask")
+                .mask
+                .as_ref()
+                .unwrap()
+                .pixels
+                .get_pixel(0, 0)
+                .0,
+            [128]
+        );
+        // The folder spans the source canvas, so its centre moves to the destination's.
+        assert_eq!(copy.transform.center(), Point::new(20.0, 15.0));
+        let base = find(&destination, "Base").transform;
+        assert_eq!((base.x, base.y), (12.0, 9.0));
+        // The source is untouched.
+        assert_eq!(source.layers.len(), 7);
+        assert!(
+            source
+                .layers
+                .iter()
+                .all(|l| !destination.selected.contains(&l.id))
+        );
+    }
+
+    #[test]
+    fn pasting_layers_in_their_document_lands_just_above_the_originals() {
+        let (mut document, _) = folder_document();
+        let base = find(&document, "Base").id;
+        let clipped = find(&document, "Clipped").id;
+        document.select(clipped, false);
+        let source = document.clone();
+        paste_layers(&source, &[clipped], &mut document).unwrap();
+        let index = document
+            .layers
+            .iter()
+            .position(|l| l.id == clipped)
+            .unwrap();
+        let copy = &document.layers[index + 1];
+        assert_eq!(copy.name, "Clipped");
+        assert_ne!(copy.id, clipped);
+        assert_eq!(copy.parent, Some(find(&source, "Folder").id));
+        assert_eq!(copy.transform, source.layers[index].transform);
+        // Its base is still here, so the copy keeps clipping to it, unbaked.
+        assert_eq!(copy.clip_to, Some(base));
+        assert_eq!(copy.pixels, source.layers[index].pixels);
+        assert_eq!(document.active, Some(copy.id));
+
+        // Copying the folder while it is selected pastes beside it, not into it.
+        let folder = find(&document, "Folder").id;
+        document.select(folder, false);
+        let source = document.clone();
+        paste_layers(&source, &[folder], &mut document).unwrap();
+        document.validate().unwrap();
+        let folders: Vec<_> = document.layers.iter().filter(|l| l.group).collect();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[1].parent, None);
+        assert_eq!(document.layers.last().unwrap().id, folders[1].id);
+    }
+
+    #[test]
+    fn pasting_layers_with_a_folder_selected_puts_them_at_its_top() {
+        let (mut document, folder) = folder_document();
+        let background = document.layers[0].id;
+        let source = document.clone();
+        paste_layers(&source, &[background], &mut document).unwrap();
+        document.validate().unwrap();
+        let copy = document.active().unwrap();
+        assert_eq!(copy.name, "Layer 1");
+        assert_eq!(copy.parent, Some(folder));
+        let index = document
+            .layers
+            .iter()
+            .position(|l| l.id == copy.id)
+            .unwrap();
+        assert_eq!(
+            document.layers[index - 1].name,
+            "Invert",
+            "above the folder's top child"
+        );
+
+        // An empty folder in another document takes them too.
+        let mut other = Document::new(10, 10).unwrap();
+        let mut empty = Layer::blank("Empty", 10, 10);
+        empty.group = true;
+        let empty_id = empty.id;
+        other.insert(empty);
+        paste_layers(&source, &[background], &mut other).unwrap();
+        other.validate().unwrap();
+        assert_eq!(other.active().unwrap().parent, Some(empty_id));
+    }
+
+    #[test]
+    fn pasting_into_another_document_bakes_clipping_to_layers_left_behind() {
+        let (source, _) = folder_document();
+        let clipped = find(&source, "Clipped");
+        let mut destination = Document::new(20, 20).unwrap();
+        paste_layers(&source, &[clipped.id], &mut destination).unwrap();
+        destination.validate().unwrap();
+        let copy = destination.active().unwrap();
+        assert_eq!(copy.clip_to, None);
+        let pixels = copy.pixels.as_deref().unwrap();
+        assert_eq!(pixels.get_pixel(0, 0).0[3], 0, "outside the base");
+        assert_eq!(pixels.get_pixel(3, 5).0[3], 255, "inside the base");
+
+        // Several layers are centred together.
+        let (mut source, _) = folder_document();
+        let base = find(&source, "Base").id;
+        let text = find(&source, "Text").id;
+        source.select(base, false);
+        source.select(text, true);
+        let roots = selected_roots(&source);
+        assert_eq!(roots, [base, text]);
+        let mut destination = Document::new(40, 40).unwrap();
+        paste_layers(&source, &roots, &mut destination).unwrap();
+        assert_eq!(destination.selected.len(), 2);
+        assert_eq!(destination.active().unwrap().name, "Text");
+        let base = find(&destination, "Base").transform;
+        let text = find(&destination, "Text").transform;
+        // Base spans (2, 4)–(10, 12) and Text (0, 0)–(8, 8): together centred at (5, 6).
+        assert_eq!((base.x, base.y), (17.0, 18.0));
+        assert_eq!((text.x, text.y), (15.0, 14.0));
+        assert!(paste_layers(&source, &[Uuid::new_v4()], &mut destination).is_err());
+    }
 
     #[test]
     fn merging_a_standalone_mask_bakes_all_lower_siblings() {

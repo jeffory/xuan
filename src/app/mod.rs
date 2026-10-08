@@ -596,7 +596,10 @@ pub struct EditorApp {
     /// Window-button artwork from the desktop theme, loaded on first use.
     #[cfg(target_os = "linux")]
     window_theme: chrome::SharedWindowTheme,
+    /// The pixels Xuan last put on the system clipboard, and where they came from.
     clipboard: Option<(RgbaImage, Point)>,
+    /// Whole layers copied with those pixels, pasted while the system clipboard still holds them.
+    copied_layers: Option<clipboard::CopiedLayers>,
     system_clipboard: Option<arboard::Clipboard>,
     jpeg_quality: u8,
     export_format: String,
@@ -797,6 +800,7 @@ impl EditorApp {
             #[cfg(target_os = "linux")]
             window_theme: Default::default(),
             clipboard: None,
+            copied_layers: None,
             system_clipboard: None,
             jpeg_quality: 90,
             export_format: "png".into(),
@@ -1666,11 +1670,27 @@ impl EditorApp {
                     self.error = Some(tr("Select a layer before cutting pixels.").into());
                     return;
                 }
+                // Without a selection, Copy takes the selected layers whole, with their
+                // flattened pixels on the system clipboard for other apps.
+                let layers = (command == "copy" && document.selection.is_none())
+                    .then(|| operations::selected_roots(document))
+                    .filter(|roots| !roots.is_empty())
+                    .map(|roots| clipboard::CopiedLayers {
+                        document: document.clone(),
+                        roots,
+                    });
                 // A marquee can remain active after the Move tool deselects every layer.
                 // Copy its visible contents when there is no layer to copy from.
                 let merged = command == "copy_merged"
                     || (document.active.is_none() && document.selection.is_some());
-                let Some((pixels, point)) = operations::copy_pixels(document, merged) else {
+                let copied = match &layers {
+                    Some(layers) => Some((
+                        operations::render_layers(document, &layers.roots),
+                        Point::default(),
+                    )),
+                    None => operations::copy_pixels(document, merged),
+                };
+                let Some((pixels, point)) = copied else {
                     self.error = Some(if document.selection.is_some() {
                         tr("The selection is empty.").into()
                     } else {
@@ -1692,17 +1712,21 @@ impl EditorApp {
                     ));
                     return;
                 }
-                self.status = format!(
-                    "{} {} × {} px",
-                    tr("Copied"),
-                    pixels.width(),
-                    pixels.height()
-                );
+                self.status = match &layers {
+                    Some(layers) => format!("{} {}", tr("Copied layers:"), layers.roots.len()),
+                    None => format!(
+                        "{} {} × {} px",
+                        tr("Copied"),
+                        pixels.width(),
+                        pixels.height()
+                    ),
+                };
                 if self.system_clipboard.is_none() {
                     self.status
                         .push_str(tr(" within Xuan; system clipboard unavailable"));
                 }
                 self.clipboard = Some((pixels, point));
+                self.copied_layers = layers;
                 if command == "cut" {
                     self.command("clear");
                 }

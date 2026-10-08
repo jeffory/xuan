@@ -1799,6 +1799,12 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
                         .expect("Copy must replace the old file list with image pixels");
                     assert_eq!((image.width, image.height), (4, 3));
                 }
+                "inspect layers" => {
+                    let image = clipboard
+                        .get_image()
+                        .expect("Copying layers must give other apps their pixels");
+                    assert_eq!((image.width, image.height), (20, 16));
+                }
                 _ => panic!("unexpected clipboard test command"),
             }
             println!("clipboard ready");
@@ -1919,6 +1925,44 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
     );
     assert_eq!(app.session().unwrap().document.layers.len(), 5);
     assert!(app.clipboard.is_none());
+
+    // Without a selection, Ctrl+C copies the layer whole, and other apps get its pixels.
+    app.command("deselect");
+    app.session_mut()
+        .unwrap()
+        .document
+        .active_mut()
+        .unwrap()
+        .name = "Whole".into();
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Copy],
+        egui::Modifiers::CTRL,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.copied_layers.is_some());
+    copy("inspect layers");
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        egui::Modifiers::CTRL,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 6);
+    assert_eq!(document.active().unwrap().name, "Whole");
+    copy("image");
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        egui::Modifiers::CTRL,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 7);
+    assert_eq!(document.active().unwrap().pixels.as_deref(), Some(&pixels));
+    assert!(app.copied_layers.is_none());
 
     // Exercise the File menu against another process's native clipboard.
     app.sessions.clear();
@@ -3831,6 +3875,238 @@ fn copying_layers_between_projects_keeps_source_and_undoes_in_destination() {
     app.command("undo");
     assert_eq!(app.sessions[1].document.layers.len(), 1);
     assert_eq!(app.sessions[0].document.layers.len(), 2);
+}
+
+/// A layer with editable text, a stroke and a mask, selected on its own in a 20 × 16 document.
+fn text_layer_document(app: &mut EditorApp) -> Uuid {
+    app.dimensions = [20, 16];
+    app.new_document();
+    let mut text = Layer::image(
+        "Title",
+        RgbaImage::from_pixel(6, 4, image::Rgba([0, 0, 0, 255])),
+    );
+    text.transform.x = 1.0;
+    text.transform.y = 2.0;
+    text.text = Some(xuan::text::TextStyle {
+        content: "Hello".into(),
+        ..Default::default()
+    });
+    text.effects = Some(xuan::layer_effects::LayerEffects {
+        stroke: Some(xuan::layer_effects::StrokeEffect {
+            size: 2.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut mask = Layer::mask("Mask", 6, 4);
+    mask.parent = Some(text.id);
+    mask.transform = text.transform;
+    let id = text.id;
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers.extend([text, mask]);
+    document.select(id, false);
+    document.validate().unwrap();
+    id
+}
+
+#[test]
+fn copy_without_a_selection_pastes_an_editable_text_layer_into_another_tab() {
+    use super::clipboard::ClipboardContent;
+
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
+    let (_, mut app) = app();
+    let original = text_layer_document(&mut app);
+    app.command("copy");
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.status.starts_with("Copied layers: 1"), "{}", app.status);
+    let (pixels, point) = app.clipboard.clone().unwrap();
+    // Other apps get the layer flattened on a canvas the size of the document.
+    assert_eq!(pixels.dimensions(), (20, 16));
+    assert_eq!(point, Point::default());
+    assert_eq!(pixels.get_pixel(3, 3).0, [0, 0, 0, 255]);
+    assert_eq!(app.copied_layers.as_ref().unwrap().roots, [original]);
+
+    app.dimensions = [30, 20];
+    app.new_document();
+    app.mask_target = true;
+    app.paste_content(ClipboardContent::Image(pixels.clone()));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(!app.mask_target);
+    let document = &app.sessions[1].document;
+    assert_eq!(document.layers.len(), 3);
+    let copy = document.active().unwrap();
+    assert_ne!(copy.id, original);
+    assert_eq!(copy.name, "Title");
+    assert_eq!(
+        copy.text.as_ref().unwrap().content,
+        "Hello",
+        "still editable"
+    );
+    assert_eq!(
+        copy.effects.as_ref().unwrap().stroke.unwrap().size,
+        2.0,
+        "keeps its stroke"
+    );
+    assert_eq!(copy.transform.center(), Point::new(15.0, 10.0), "centred");
+    let mask = document.layers.iter().find(|l| l.name == "Mask").unwrap();
+    assert_eq!(mask.parent, Some(copy.id), "keeps its mask");
+    assert!(mask.standalone_mask);
+    assert_eq!(mask.transform.center(), copy.transform.center());
+    assert_eq!(app.sessions[0].document.layers.len(), 3);
+    assert_eq!(
+        app.session().unwrap().history.undo_name(),
+        Some("Paste Layers")
+    );
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("redo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+
+    // In the document it came from, the copy lands just above the original, in place.
+    app.current = 0;
+    app.paste_content(ClipboardContent::Image(pixels));
+    let document = &app.session().unwrap().document;
+    let names: Vec<_> = document.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Layer 1", "Title", "Mask", "Title", "Mask"]);
+    let copy = document.active().unwrap();
+    assert_eq!(document.layers[3].id, copy.id);
+    assert_eq!((copy.transform.x, copy.transform.y), (1.0, 2.0));
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+}
+
+#[test]
+fn layer_copies_give_way_to_images_copied_in_other_apps_and_to_selections() {
+    use super::clipboard::ClipboardContent;
+
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
+    let (_, mut app) = app();
+    text_layer_document(&mut app);
+    app.command("copy");
+    assert!(app.copied_layers.is_some());
+
+    // Another app replaced the system clipboard since: its image is pasted instead.
+    let theirs = RgbaImage::from_pixel(4, 2, image::Rgba([9, 9, 9, 255]));
+    app.paste_content(ClipboardContent::Image(theirs.clone()));
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 4);
+    assert_eq!(document.active().unwrap().name, "Pasted image");
+    assert_eq!(document.active().unwrap().pixels.as_deref(), Some(&theirs));
+    assert!(app.copied_layers.is_none());
+    assert!(app.clipboard.is_none());
+    app.command("undo");
+
+    // Without a system clipboard, Xuan's own copy is the newest.
+    app.command("copy");
+    app.paste_content(ClipboardContent::Unavailable);
+    assert_eq!(app.session().unwrap().document.layers.len(), 5);
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().name,
+        "Title"
+    );
+    app.command("undo");
+    app.paste_content(ClipboardContent::Empty);
+    assert!(app.copied_layers.is_none());
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+
+    // With no document open, the layers go into a new one the size of their own.
+    app.command("copy");
+    app.sessions.clear();
+    app.paste_content(ClipboardContent::Unavailable);
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (20, 16));
+    let copy = document.active().unwrap();
+    assert!(copy.text.is_some());
+    assert_eq!((copy.transform.x, copy.transform.y), (7.0, 6.0), "centred");
+
+    // With a selection, Copy still takes pixels.
+    app.command("select_all");
+    app.command("copy");
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.copied_layers.is_none());
+    assert!(
+        app.status.starts_with("Copied 20 × 16 px"),
+        "{}",
+        app.status
+    );
+    let (pixels, _) = app.clipboard.clone().unwrap();
+    app.paste_content(ClipboardContent::Image(pixels));
+    let pasted = app.session().unwrap().document.active().unwrap();
+    assert_eq!(pasted.name, "Pasted image");
+    assert!(pasted.text.is_none());
+
+    // Copy Merged takes pixels without a selection too.
+    app.command("deselect");
+    app.command("copy_merged");
+    assert!(app.copied_layers.is_none());
+}
+
+#[test]
+fn copy_and_paste_shortcuts_duplicate_a_folder_whole_in_one_undo_step() {
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
+    let (context, mut app) = app();
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    let base = app.session().unwrap().document.active.unwrap();
+    let mut clipped = Layer::image(
+        "Clipped",
+        RgbaImage::from_pixel(16, 16, image::Rgba([0, 200, 0, 255])),
+    );
+    clipped.clip_to = Some(base);
+    let mut adjustment = Layer::blank("Invert", 16, 16);
+    adjustment.adjustment = Some(xuan::document::Adjustment::Invert);
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers.extend([clipped, adjustment]);
+    for layer in &mut document.layers {
+        document.selected.insert(layer.id);
+    }
+    app.command("group");
+    let folder = app.session().unwrap().document.active.unwrap();
+    assert_eq!(app.session().unwrap().document.layers.len(), 4);
+    let ctrl = egui::Modifiers {
+        ctrl: true,
+        command: true,
+        ..Default::default()
+    };
+    keyboard_frame(&context, &mut app, vec![egui::Event::Copy], ctrl);
+    assert!(app.copied_layers.is_some(), "{}", app.status);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        ctrl,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 8);
+    let copy = document.active().unwrap();
+    assert!(copy.group);
+    assert_ne!(copy.id, folder);
+    let children: Vec<_> = document
+        .layers
+        .iter()
+        .filter(|l| l.parent == Some(copy.id))
+        .collect();
+    assert_eq!(children.len(), 3);
+    let base_copy = children.iter().find(|l| l.name == "Layer 1").unwrap().id;
+    assert_ne!(base_copy, base);
+    assert_eq!(
+        children
+            .iter()
+            .find(|l| l.name == "Clipped")
+            .unwrap()
+            .clip_to,
+        Some(base_copy)
+    );
+    assert!(children.iter().any(|l| l.adjustment.is_some()));
+    document.validate().unwrap();
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 4);
+
+    // Edit → Paste takes the same path.
+    app.command("paste");
+    assert_eq!(app.session().unwrap().document.layers.len(), 8);
 }
 
 fn has_command(
