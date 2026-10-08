@@ -92,7 +92,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
             .on_hover_text(tr("Reset all Develop adjustments to defaults"))
             .clicked()
         {
-            d.settings = DevelopSettings::default();
+            d.settings = d.baseline();
             d.tool = CanvasTool::None;
             d.selected_overlay = None;
         }
@@ -101,8 +101,9 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
             .width(90.0)
             .show_ui(ui, |ui| {
                 ui.set_min_width(150.0);
+                let baseline = d.baseline();
                 for (name, preset) in [
-                    (tr("Natural"), DevelopSettings::default()),
+                    (tr("Natural"), baseline.clone()),
                     (
                         tr("Landscape"),
                         DevelopSettings {
@@ -111,7 +112,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
                             shadows: 20.0,
                             vibrance: 20.0,
                             clarity: 12.0,
-                            ..Default::default()
+                            ..baseline.clone()
                         },
                     ),
                     (
@@ -119,7 +120,7 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
                         DevelopSettings {
                             monochrome: true,
                             contrast: 18.0,
-                            ..Default::default()
+                            ..baseline
                         },
                     ),
                 ] {
@@ -142,19 +143,37 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
             });
     });
     ui.add_space(8.0);
-    widgets::segmented(
-        ui,
-        &mut d.panel,
-        &[
-            (0, tr("Basic")),
-            (6, tr("Negative")),
-            (1, tr("Tone")),
-            (2, tr("Detail")),
-            (3, tr("Lens")),
-            (4, tr("Masks")),
-            (5, tr("Info")),
-        ],
-    );
+    if d.is_filter() {
+        // A layer has no film negative to convert and no camera information.
+        if matches!(d.panel, 5 | 6) {
+            d.panel = 0;
+        }
+        widgets::segmented(
+            ui,
+            &mut d.panel,
+            &[
+                (0, tr("Basic")),
+                (1, tr("Tone")),
+                (2, tr("Detail")),
+                (3, tr("Optics")),
+                (4, tr("Masks")),
+            ],
+        );
+    } else {
+        widgets::segmented(
+            ui,
+            &mut d.panel,
+            &[
+                (0, tr("Basic")),
+                (6, tr("Negative")),
+                (1, tr("Tone")),
+                (2, tr("Detail")),
+                (3, tr("Lens")),
+                (4, tr("Masks")),
+                (5, tr("Info")),
+            ],
+        );
+    }
     ui.separator();
     egui::ScrollArea::vertical()
         .id_salt("raw_settings")
@@ -494,6 +513,22 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
 }
 
 fn lens(ui: &mut egui::Ui, d: &mut Develop) {
+    if d.is_filter() {
+        // The Camera Raw Filter keeps the layer's size and placement: no distortion,
+        // geometry or crop.
+        heading(ui, tr("Optics"));
+        percent(ui, tr("Red / cyan"), &mut d.settings.chromatic_red);
+        percent(ui, tr("Blue / yellow"), &mut d.settings.chromatic_blue);
+        slider(
+            ui,
+            tr("Defringe"),
+            &mut d.settings.defringe,
+            0.0..=100.0,
+            "%",
+        );
+        percent(ui, tr("Vignetting"), &mut d.settings.vignette);
+        return;
+    }
     heading(ui, tr("Manual lens correction"));
     if let Some(asset) = &d.asset
         && !asset.metadata.lens.is_empty()
@@ -844,7 +879,12 @@ fn load_preset(d: &mut Develop) {
     })();
     match result {
         Ok(settings) => {
-            d.settings = settings;
+            // Settings saved in RAW Develop may crop or rotate, which a layer filter cannot.
+            d.settings = if d.is_filter() {
+                settings.without_geometry()
+            } else {
+                settings
+            };
             d.selected_overlay = None;
             d.leave_tool(CanvasTool::DrawMask);
         }

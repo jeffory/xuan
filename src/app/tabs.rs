@@ -313,7 +313,13 @@ impl EditorApp {
                 .iter()
                 .chain(&self.inactive_develop)
                 .find(|d| d.id == id)
-                .map(|d| format!("{} · RAW", d.title))
+                .map(|d| {
+                    if d.is_filter() {
+                        format!("{} · {}", d.title, tr("Camera Raw"))
+                    } else {
+                        format!("{} · RAW", d.title)
+                    }
+                })
                 .unwrap_or_default(),
         }
     }

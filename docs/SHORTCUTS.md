@@ -41,6 +41,7 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Select | Deselect | Ctrl+D |
 | Select | Inverse Selection | Ctrl+Shift+I |
 | Select | Select Subject | Ctrl+Alt+A |
+| Filter | Camera Raw Filter… | Ctrl+Shift+A |
 | View | Fit Canvas | Ctrl+0 |
 | View | Actual Pixels | Ctrl+1 |
 | View | Zoom In | Ctrl+Plus / Ctrl+= |

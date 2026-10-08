@@ -301,9 +301,20 @@ fn documented_shortcuts_trigger_their_commands() {
                 ui.app_mut().command_trace = None;
                 ui.app_mut().command("select_all");
             }
+            // The Camera Raw Filter needs a layer with pixels.
+            if command.id == "camera_raw_filter" {
+                let session = ui.app_mut().session_mut().unwrap();
+                session.document.active_mut().unwrap().pixels =
+                    Some(Arc::new(RgbaImage::new(20, 16)));
+            }
             // An open palette would take the next chord.
             ui.app_mut().palette = None;
             press_and_check(&mut ui, command.id, chord, &effect);
+            // A workspace of its own would take the next chord.
+            if ui.app().develop.is_some() {
+                ui.app_mut().cancel_develop();
+                ui.settle();
+            }
             pressed += 1;
         }
     }

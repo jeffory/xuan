@@ -577,7 +577,7 @@ impl EditorApp {
             Sense::click_and_drag(),
         );
         let title = if let Some(develop) = &self.develop {
-            format!("{} — {}", develop.title, tr("Develop"))
+            format!("{} — {}", develop.title, develop.workspace_name())
         } else {
             self.session().map_or("Xuan".into(), |s| {
                 format!("{}{}", s.title, if s.history.edited() { "  •" } else { "" })
