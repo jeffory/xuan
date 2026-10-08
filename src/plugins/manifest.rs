@@ -308,6 +308,162 @@ impl Input {
         }))
     }
 
+    /// `value` if it is valid for this input as given, else why not: unlike
+    /// [`Input::coerce`], nothing is clamped, cut or replaced by a default,
+    /// so a value another plugin sends fails at once rather than running
+    /// with something else.
+    pub fn check(&self, value: &Value) -> std::result::Result<Value, String> {
+        let id = &self.id;
+        let number = || {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| format!("`{id}` must be a number"))
+        };
+        let in_range = |v: f64| {
+            let low = self.min.is_some_and(|min| v < min);
+            let high = self.max.is_some_and(|max| v > max);
+            match (self.min, self.max) {
+                (Some(min), Some(max)) if low || high => {
+                    Err(format!("`{id}` must be between {min} and {max}"))
+                }
+                (Some(min), _) if low => Err(format!("`{id}` must be at least {min}")),
+                (_, Some(max)) if high => Err(format!("`{id}` must be at most {max}")),
+                _ => Ok(v),
+            }
+        };
+        match self.kind {
+            InputKind::Text | InputKind::Multiline | InputKind::Path => {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| format!("`{id}` must be a string"))?;
+                if text.len() > MAX_INPUT_TEXT {
+                    return Err(format!("`{id}` is longer than 64 KiB"));
+                }
+                Ok(value.clone())
+            }
+            InputKind::Secret => Err(format!("`{id}` is a secret, never an action input")),
+            InputKind::Integer | InputKind::Seed => {
+                let v = number()?;
+                if v.fract() != 0.0 || v.abs() > 9.0e15 {
+                    return Err(format!("`{id}` must be a whole number"));
+                }
+                Ok(Value::from(in_range(v)? as i64))
+            }
+            InputKind::Number => in_range(number()?).map(Value::from),
+            InputKind::Bool => value
+                .as_bool()
+                .map(Value::Bool)
+                .ok_or_else(|| format!("`{id}` must be true or false")),
+            InputKind::Enum => value
+                .as_str()
+                .filter(|choice| self.values.iter().any(|c| c.id == *choice))
+                .map(|choice| Value::String(choice.to_owned()))
+                .ok_or_else(|| {
+                    let ids: Vec<&str> = self.values.iter().map(|c| c.id.as_str()).collect();
+                    format!("`{id}` must be one of {}", ids.join(", "))
+                }),
+            InputKind::Color => value
+                .as_str()
+                .filter(|text| super::ui::Node::color(text).is_some())
+                .map(|text| Value::String(text.to_owned()))
+                .ok_or_else(|| format!("`{id}` must be a colour as #rrggbb or #rrggbbaa")),
+            InputKind::Regions => {
+                let items = value
+                    .as_array()
+                    .ok_or_else(|| format!("`{id}` must be a list of regions"))?;
+                let limit = self
+                    .max
+                    .map_or(MAX_REGIONS, |max| (max.max(0.0) as usize).min(MAX_REGIONS));
+                let regions = |count: usize| match count {
+                    1 => "1 region".to_owned(),
+                    count => format!("{count} regions"),
+                };
+                if items.len() > limit {
+                    return Err(format!("`{id}` takes at most {}", regions(limit)));
+                }
+                if let Some(min) = self.min
+                    && (items.len() as f64) < min
+                {
+                    return Err(format!(
+                        "`{id}` needs at least {}",
+                        regions(min.ceil() as usize)
+                    ));
+                }
+                (items.iter().enumerate())
+                    .map(|(index, item)| self.check_region(index + 1, item))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map(Value::Array)
+            }
+        }
+    }
+
+    /// One region of a `regions` input, checked like [`Input::check`]: the
+    /// box in document pixels and only the declared fields, which take their
+    /// defaults when left out.
+    fn check_region(&self, number: usize, item: &Value) -> std::result::Result<Value, String> {
+        let id = &self.id;
+        let region = item
+            .as_object()
+            .ok_or_else(|| format!("`{id}` region {number} must be an object"))?;
+        if let Some(key) = (region.keys())
+            .find(|key| !matches!(key.as_str(), "x" | "y" | "width" | "height" | "fields"))
+        {
+            return Err(format!(
+                "`{id}` region {number} has an unknown key `{key}`; a region is {{x, y, width, height, fields}}"
+            ));
+        }
+        let coordinate = |key: &str| {
+            (region.get(key).and_then(Value::as_f64))
+                .filter(|v| v.is_finite() && v.abs() <= MAX_REGION_COORDINATE)
+                .ok_or_else(|| {
+                    format!(
+                        "`{id}` region {number} needs `{key}`, a number of document pixels within ±{MAX_REGION_COORDINATE}"
+                    )
+                })
+        };
+        let (x, y) = (coordinate("x")?, coordinate("y")?);
+        let (width, height) = (coordinate("width")?, coordinate("height")?);
+        if width <= 0.0 || height <= 0.0 {
+            return Err(format!(
+                "`{id}` region {number} must have a width and height above 0"
+            ));
+        }
+        let given = match region.get("fields") {
+            None | Some(Value::Null) => serde_json::Map::new(),
+            Some(Value::Object(fields)) => fields.clone(),
+            Some(_) => {
+                return Err(format!(
+                    "`{id}` region {number}: `fields` must be an object"
+                ));
+            }
+        };
+        if let Some(key) = given
+            .keys()
+            .find(|key| !self.fields.iter().any(|field| &field.id == *key))
+        {
+            return Err(format!(
+                "`{id}` region {number} has no field `{key}`; its fields are {}",
+                (self.fields.iter().map(|f| f.id.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        let mut fields = serde_json::Map::new();
+        for field in &self.fields {
+            let value = match given.get(&field.id) {
+                None | Some(Value::Null) => field.initial(),
+                Some(value) => field
+                    .check(value)
+                    .map_err(|error| format!("`{id}` region {number}: {error}"))?,
+            };
+            fields.insert(field.id.clone(), value);
+        }
+        Ok(serde_json::json!({
+            "x": x, "y": y, "width": width, "height": height, "fields": fields,
+        }))
+    }
+
     fn validate(&self, nested: bool) -> Result<()> {
         validate_id(&self.id).with_context(|| format!("input `{}`", self.id))?;
         let mut listed = std::collections::HashSet::new();
@@ -464,6 +620,59 @@ impl Action {
 
     pub fn on(&self, surface: Surface) -> bool {
         self.surfaces.contains(&surface)
+    }
+
+    /// The values to run the action with when another plugin starts it
+    /// (`host/run`): each input `inputs` gives, checked with
+    /// [`Input::check`], and the default of each it leaves out or sets to
+    /// `null`. Unknown inputs are refused, and so are `path` inputs: the
+    /// user chooses their own files, so a caller cannot have a plugin read
+    /// (and perhaps upload) a file the user never picked.
+    pub fn check_inputs(
+        &self,
+        inputs: Option<&Value>,
+    ) -> std::result::Result<serde_json::Map<String, Value>, String> {
+        let given = match inputs {
+            None | Some(Value::Null) => serde_json::Map::new(),
+            Some(Value::Object(given)) => given.clone(),
+            Some(_) => return Err("`inputs` must be an object".into()),
+        };
+        if let Some(key) = given
+            .keys()
+            .find(|key| !self.inputs.iter().any(|input| &input.id == *key))
+        {
+            let ids: Vec<&str> = (self.inputs.iter())
+                .filter(|input| !matches!(input.kind, InputKind::Path | InputKind::Secret))
+                .map(|input| input.id.as_str())
+                .collect();
+            return Err(if ids.is_empty() {
+                format!("The action takes no inputs, not `{key}`")
+            } else {
+                format!(
+                    "The action has no input `{key}`; its inputs are {}",
+                    ids.join(", ")
+                )
+            });
+        }
+        let mut values = serde_json::Map::new();
+        for input in &self.inputs {
+            let value = match given.get(&input.id) {
+                // Regions an action needs are never left to their default.
+                None | Some(Value::Null) if input.kind == InputKind::Regions => {
+                    input.check(&input.initial())?
+                }
+                None | Some(Value::Null) => input.initial(),
+                Some(_) if input.kind == InputKind::Path => {
+                    return Err(format!(
+                        "`{}` is a file the user chooses; another plugin cannot set it",
+                        input.id
+                    ));
+                }
+                Some(value) => input.check(value)?,
+            };
+            values.insert(input.id.clone(), value);
+        }
+        Ok(values)
     }
 }
 
@@ -1754,6 +1963,147 @@ import = true
         assert_eq!(
             unbounded.coerce(&json!(many)).as_array().unwrap().len(),
             MAX_REGIONS
+        );
+    }
+
+    #[test]
+    fn inputs_another_plugin_sends_are_checked_not_coerced() {
+        use serde_json::json;
+        let input = |text: &str| toml::from_str::<Input>(text).unwrap();
+        let refused = |input: &Input, value: Value| input.check(&value).unwrap_err();
+        let integer = input("id = 'steps'\ntype = 'integer'\nmin = 1\nmax = 10");
+        assert_eq!(integer.check(&json!(3)), Ok(json!(3)));
+        assert_eq!(integer.check(&json!(4.0)), Ok(json!(4)));
+        assert_eq!(
+            refused(&integer, json!(11)),
+            "`steps` must be between 1 and 10"
+        );
+        assert_eq!(
+            refused(&integer, json!(2.5)),
+            "`steps` must be a whole number"
+        );
+        assert_eq!(refused(&integer, json!("3")), "`steps` must be a number");
+        let seed = input("id = 'seed'\ntype = 'seed'");
+        assert_eq!(seed.check(&json!(1475826651)), Ok(json!(1475826651)));
+        assert!(seed.check(&json!(1e300)).is_err());
+        let number = input("id = 'strength'\ntype = 'number'\nmin = 0");
+        assert_eq!(number.check(&json!(0.25)), Ok(json!(0.25)));
+        assert_eq!(
+            refused(&number, json!(-0.5)),
+            "`strength` must be at least 0"
+        );
+        let text = input("id = 'prompt'\ntype = 'multiline'");
+        assert_eq!(text.check(&json!("a hat")), Ok(json!("a hat")));
+        assert_eq!(
+            refused(&text, json!("é".repeat(MAX_INPUT_TEXT))),
+            "`prompt` is longer than 64 KiB"
+        );
+        assert_eq!(refused(&text, json!(42)), "`prompt` must be a string");
+        let choice = input("id = 'model'\ntype = 'enum'\nvalues = ['pro', 'flash']");
+        assert_eq!(choice.check(&json!("flash")), Ok(json!("flash")));
+        assert_eq!(
+            refused(&choice, json!("fast")),
+            "`model` must be one of pro, flash"
+        );
+        let flag = input("id = 'a'\ntype = 'bool'");
+        assert_eq!(flag.check(&json!(true)), Ok(json!(true)));
+        assert!(flag.check(&json!(1)).is_err());
+        let color = input("id = 'tint'\ntype = 'color'");
+        assert_eq!(color.check(&json!("#12345680")), Ok(json!("#12345680")));
+        assert!(color.check(&json!("red")).is_err());
+        assert!(
+            input("id = 'k'\ntype = 'secret'")
+                .check(&json!("sk"))
+                .is_err()
+        );
+
+        let regions = input(
+            "id = 'boxes'\ntype = 'regions'\nmin = 1\nmax = 2\nfields = [{ id = 'n', type = 'integer', max = 3 }, { id = 'desc', type = 'text' }]",
+        );
+        assert_eq!(
+            regions.check(&json!([{"x": 1, "y": 2, "width": 3, "height": 4, "fields": {"n": 2}}])),
+            Ok(
+                json!([{"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0, "fields": {"n": 2, "desc": ""}}])
+            )
+        );
+        for (value, says) in [
+            (json!([]), "`boxes` needs at least 1 region"),
+            (
+                Value::Array(vec![json!({"x": 0, "y": 0, "width": 1, "height": 1}); 3]),
+                "`boxes` takes at most 2 regions",
+            ),
+            (
+                json!([{"x": 0, "y": 0, "width": 0, "height": 1}]),
+                "width and height above 0",
+            ),
+            (
+                json!([{"x": 1e12, "y": 0, "width": 1, "height": 1}]),
+                "needs `x`",
+            ),
+            (
+                json!([{"x": 0, "y": 0, "width": 1, "height": 1, "mask": "a.png"}]),
+                "unknown key `mask`",
+            ),
+            (
+                json!([{"x": 0, "y": 0, "width": 1, "height": 1, "fields": {"n": 4}}]),
+                "`boxes` region 1: `n` must be at most 3",
+            ),
+            (
+                json!([{"x": 0, "y": 0, "width": 1, "height": 1, "fields": {"color": "red"}}]),
+                "no field `color`; its fields are n, desc",
+            ),
+            (json!("x"), "must be a list of regions"),
+        ] {
+            let error = refused(&regions, value.clone());
+            assert!(error.contains(says), "{value}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_actions_inputs_from_another_plugin_take_defaults_and_refuse_files() {
+        use serde_json::json;
+        let manifest = Manifest::parse(
+            "[plugin]\nid = 'p'\nname = 'P'\nversion = '1'\ncommand = ['p']\n\n[[actions]]\nid = 'go'\nlabel = 'Go'\n\n[[actions.inputs]]\nid = 'prompt'\ntype = 'text'\ndefault = 'hello'\n\n[[actions.inputs]]\nid = 'model'\ntype = 'enum'\nvalues = ['a', 'b']\ndefault = 'b'\n\n[[actions.inputs]]\nid = 'reference'\ntype = 'path'\n\n[[actions]]\nid = 'boxes'\nlabel = 'Boxes'\n\n[[actions.inputs]]\nid = 'regions'\ntype = 'regions'\nmin = 1\n",
+            Path::new("."),
+        )
+        .unwrap();
+        let go = manifest.action("go").unwrap();
+        let values = go.check_inputs(None).unwrap();
+        assert_eq!(
+            Value::Object(values),
+            json!({"prompt": "hello", "model": "b", "reference": ""})
+        );
+        let values = go
+            .check_inputs(Some(&json!({"prompt": "a kite", "model": null})))
+            .unwrap();
+        assert_eq!(values["prompt"], "a kite");
+        assert_eq!(values["model"], "b");
+        assert_eq!(
+            go.check_inputs(Some(&json!({"reference": "/home/me/.ssh/id_ed25519"})))
+                .unwrap_err(),
+            "`reference` is a file the user chooses; another plugin cannot set it"
+        );
+        assert_eq!(
+            go.check_inputs(Some(&json!({"size": 3}))).unwrap_err(),
+            "The action has no input `size`; its inputs are prompt, model"
+        );
+        assert_eq!(
+            go.check_inputs(Some(&json!({"model": "c"}))).unwrap_err(),
+            "`model` must be one of a, b"
+        );
+        assert!(go.check_inputs(Some(&json!(["a"]))).is_err());
+        // Regions the action needs must be given.
+        let boxes = manifest.action("boxes").unwrap();
+        assert_eq!(
+            boxes.check_inputs(None).unwrap_err(),
+            "`regions` needs at least 1 region"
+        );
+        assert!(
+            boxes
+                .check_inputs(Some(
+                    &json!({"regions": [{"x": 0, "y": 0, "width": 4, "height": 4}]})
+                ))
+                .is_ok()
         );
     }
 
