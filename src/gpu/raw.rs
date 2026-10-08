@@ -559,7 +559,7 @@ mod tests {
                 for x in 0..ow {
                     let actual = shader_source_pixel(&u, x, y);
                     assert_eq!(actual, map.source_pixel(x, y));
-                    // The explicit table both encoders used before #15.
+                    // The explicit table both encoders used before they shared one mapping.
                     let [cx, cy] = match s.quarter_turns {
                         1 => [y, h - 1 - x],
                         2 => [w - 1 - x, h - 1 - y],

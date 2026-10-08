@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.75"
 description = "Write plugins for the Xuan image editor"
 license = "MIT"
-repository = "https://github.com/jeffory/xuan"
+repository = "https://github.com/silverling/xuan"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

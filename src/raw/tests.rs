@@ -1102,7 +1102,7 @@ fn real_canon_cr3_decodes() {
 
 #[test]
 fn real_canon_cr3_apsc_crop_decodes() {
-    // rawler 0.7.2 panicked on the crop area of APS-C crop-mode CR3 files (#29).
+    // rawler 0.7.2 panicked on the crop area of APS-C crop-mode CR3 files.
     check_real_raw("canon-r5m2-apsc-craw-cr3");
 }
 
@@ -1153,7 +1153,7 @@ fn real_unknown_camera_is_rejected_by_name() {
         return;
     };
     assert!(fixture.reject);
-    // The Nikon D1H is missing from rawler's camera database (#29). If an
+    // The Nikon D1H is missing from rawler's camera database. If an
     // upgrade adds it, turn this fixture into an "ok" one.
     let error = decode(&bytes).expect_err("the D1H is not supported by rawler");
     assert_eq!(

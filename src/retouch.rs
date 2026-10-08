@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn healing_a_dot_on_a_gradient_continues_the_gradient() {
-        // Regression for #27: the old per-pixel fill copied gradient blocks from far away
+        // Regression: the old per-pixel fill copied gradient blocks from far away
         // (maximum error 54 under the brush).
         let clean = |x: u32, y: u32| Rgba([(2 * x) as u8, (2 * y) as u8, 64, 255]);
         for mode in MODES {
