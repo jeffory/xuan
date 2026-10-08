@@ -228,7 +228,7 @@ fn the_toggle_is_rebindable() {
 #[test]
 fn translated_labels_are_listed_and_searched() {
     let mut ui = UiTest::new();
-    ui.app_mut().config.language = xuan::config::Language::SimplifiedChinese;
+    ui.app_mut().config.language = xuan::config::Language::new("zh-CN");
     ui.settle();
     ui.press(Modifiers::CTRL, Key::K);
     ui.type_keys("新建");

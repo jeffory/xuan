@@ -5910,7 +5910,7 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
         egui::Modifiers::CTRL,
     );
     assert!(app.dialog == Some(Dialog::Settings));
-    app.config.language = xuan::config::Language::SimplifiedChinese;
+    app.config.language = xuan::config::Language::new("zh-CN");
     // egui resolves window placement on its first pass.
     frame(&context, &mut app);
     let output = frame(&context, &mut app);
@@ -5929,12 +5929,13 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
         );
     }
     context.fonts_mut(|fonts| {
-        for line in include_str!("../../assets/locales/zh-CN.tsv").lines() {
-            let translated = line.split_once('\t').unwrap().1;
-            assert!(
-                fonts.has_glyphs(&egui::FontId::proportional(12.0), translated),
-                "Missing font glyph: {translated}"
-            );
+        for (tag, source) in xuan::i18n::bundled_sources() {
+            for translated in xuan::i18n::catalog::Catalog::parse(source).0.texts() {
+                assert!(
+                    fonts.has_glyphs(&egui::FontId::proportional(12.0), translated),
+                    "Missing font glyph in {tag}: {translated}"
+                );
+            }
         }
     });
     keyboard_frame(
@@ -5944,9 +5945,29 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
         egui::Modifiers::NONE,
     );
     assert!(app.dialog.is_none());
-    app.config.language = xuan::config::Language::English;
+    app.config.language = xuan::config::Language::english();
     frame(&context, &mut app);
     assert_eq!(Tool::Brush.label(), "Brush");
+}
+
+/// Command labels and category names reach `tr` through variables, so the source scan in
+/// `xuan::i18n` cannot see them; this keeps them in the English catalog translators work from.
+#[test]
+fn every_command_label_and_category_is_in_the_english_catalog() {
+    let (_, english) = xuan::i18n::bundled_sources()
+        .iter()
+        .find(|(tag, _)| *tag == xuan::i18n::ENGLISH)
+        .expect("assets/locales/en.tsv");
+    let english = xuan::i18n::catalog::Catalog::parse(english).0;
+    let names = super::commands::COMMANDS
+        .iter()
+        .map(|command| command.label)
+        .chain(super::commands::Category::ALL.map(|category| category.name()));
+    let missing: Vec<_> = names.filter(|name| english.get(name).is_none()).collect();
+    assert!(
+        missing.is_empty(),
+        "Add these to assets/locales/en.tsv: {missing:#?}"
+    );
 }
 
 fn drop_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {

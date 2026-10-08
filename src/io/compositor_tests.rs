@@ -527,10 +527,10 @@ fn summarizes_what_the_import_left_out_in_each_language() {
         Dropped::ClippingMask,
     ];
     let english: Vec<_> = every.iter().map(|item| item.label()).collect();
-    i18n::set_language(Language::SimplifiedChinese);
+    i18n::set_language(&Language::new("zh-CN"));
     let chinese: Vec<_> = every.iter().map(|item| item.label()).collect();
     let heading = report.summary().unwrap();
-    i18n::set_language(Language::English);
+    i18n::set_language(&Language::english());
     for (english, chinese) in english.iter().zip(&chinese) {
         assert_ne!(english, chinese, "missing zh-CN text for {english}");
     }
