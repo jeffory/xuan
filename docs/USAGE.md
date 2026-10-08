@@ -415,6 +415,29 @@ a prompt; in a mixed drop they open after you answer, even if you cancel. Drops
 that arrive while a dialog, background job, error, save prompt, or Develop is
 open are queued and handled once it closes.
 
+### Files changed by other programs
+
+When another program changes an open `.xuan` project on disk (a script, a sync tool, a Git
+checkout, an agent), Xuan picks up the new content by itself, usually within a second. Xuan
+waits until the file has been quiet for a moment and compares its content with what it last
+opened or saved, so touching the file, or Xuan's own **Save**, changes nothing. The file is
+read and loaded in the background.
+
+- A project with no unsaved changes is reloaded in its tab. The zoom, the scroll position,
+  the selected layers that are still in the file and the selection outline stay as they
+  were; the undo history starts again.
+- A project with unsaved changes keeps them, and a bar above the canvas says **This file was
+  changed by another program**. **Reload** replaces your changes with the file's content;
+  **Keep mine** keeps your version, which the next **Save** writes over the file.
+- While you are in the middle of an edit (a drag, an open dialog, a running job), the reload
+  waits until you finish.
+- A file that is still being written, or that does not load, is left alone: the open
+  document stays as it is, and the next change is tried again.
+
+Only `.xuan` projects are followed. PNG, JPEG, Photoshop and other files open as new
+projects without a file of their own, so a later change to the original file is not
+picked up; reopen it to see the change.
+
 ## Plugins
 
 Plugins add menu actions, sidebar panes and file formats. Install one with

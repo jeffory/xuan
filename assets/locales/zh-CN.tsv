@@ -1177,3 +1177,7 @@ How strong the effect is. Going over the same spot in one stroke does not add to
 Imported with changes. Xuan does not draw these parts of the SVG file:	已导入，但有改动。Xuan 不绘制 SVG 文件的以下部分：
 Text (convert it to outlines first)	文字（请先转换为轮廓）
 Bitmaps and linked images	位图和链接的图像
+This file was changed by another program.	此文件已被其他程序更改。
+Reload	重新载入
+Keep mine	保留我的版本
+Reloaded	已重新载入
