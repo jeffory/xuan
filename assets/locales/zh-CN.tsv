@@ -1129,3 +1129,33 @@ Free	自由
 Ratio width	比例宽度
 Ratio height	比例高度
 Swap the ratio's width and height (portrait / landscape)	交换比例的宽度和高度（竖向 / 横向）
+Bloom / Glow	泛光 / 辉光
+Tonal Contrast	色调对比度
+Dither	仿色
+Midpoint	中点
+Roundness	圆度
+Atkinson (Classic Mac)	Atkinson（经典 Mac）
+Floyd–Steinberg	Floyd–Steinberg
+Bayer 2 × 2	Bayer 2 × 2
+Bayer 4 × 4	Bayer 4 × 4
+Bayer 8 × 8	Bayer 8 × 8
+Halftone Dots	半调网点
+Halftone Lines	半调线条
+Halftone Diamonds	半调菱形
+Mac Patterns	Mac 图案
+ASCII	ASCII 字符
+Scanlines (CRT)	扫描线（CRT）
+Pixel Size	像素大小
+Dot	圆点
+Diffusion	扩散
+Cell Size	网格大小
+Text Size	文字大小
+Characters	字符
+Line Spacing	线间距
+Glow	辉光
+Wobble	抖动
+Density	密度
+Two Colours	双色
+Dark colour	暗部颜色
+Light colour	亮部颜色
+Light on Dark	暗底亮色

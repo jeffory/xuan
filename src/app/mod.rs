@@ -13,6 +13,7 @@ mod develop_preview;
 mod dialogs;
 mod drops;
 mod eyedropper;
+mod filter_controls;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;

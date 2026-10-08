@@ -62,6 +62,9 @@ mod stroke;
 #[path = "tests/crop.rs"]
 mod crop;
 
+#[path = "tests/compositor_filters.rs"]
+mod compositor_filters;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -668,6 +671,14 @@ fn benchmark_large_image_filter_layers() {
             distortion: 10.0,
             vignette: 15.0,
         },
+        Filter::VIGNETTE,
+        Filter::BLOOM,
+        Filter::TONAL_CONTRAST,
+        Filter::Dither(Box::new(xuan::effects::DitherSettings {
+            style: xuan::effects::DitherStyle::Bayer8,
+            ..Default::default()
+        })),
+        Filter::Dither(Box::default()),
     ] {
         app.start_filter_layer(filter.clone());
         for _ in 0..3 {
@@ -682,6 +693,10 @@ fn benchmark_large_image_filter_layers() {
                 Filter::MotionBlur { angle, .. } => *angle = 30.0 + value,
                 Filter::Noise { amount, .. } => *amount = 10.0 + value,
                 Filter::LensCorrection { distortion, .. } => *distortion = 10.0 + value,
+                Filter::Vignette { amount, .. }
+                | Filter::Bloom { amount, .. }
+                | Filter::TonalContrast { amount, .. } => *amount = 30.0 + value,
+                Filter::Dither(settings) => settings.density = value,
             }
             edit.refresh = true;
             let start = std::time::Instant::now();

@@ -310,3 +310,36 @@ reads as 1. Folders and mask, adjustment and filter layers have no fill: a value
 than 1 on one, or one outside 0-1, fails validation on load and save. A version 13
 document may also carry anything the earlier versions can. The reader accepts versions
 1-13.
+
+## Compositor filters (version 14)
+
+Four filters come from upstream Compositor's Filter menu (`Document/Filters.swift`), with its
+settings, ranges and defaults. On a filter layer or an attached filter they are stored as:
+
+- `{"Vignette": {"amount", "color", "midpoint", "roundness", "feather", "highlights"}}`:
+  `amount` 0-100 (35), `color` an `[r, g, b]` byte triple (black), `midpoint` 0-100 (50),
+  `roundness` -100-100 (100), `feather` 0-100 (60) and `highlights` 0-100 (25). A filter
+  layer frames the whole canvas and also paints its transparent areas, as upstream's
+  vignette on an empty layer does; an attached Vignette frames and recolors its layer's
+  pixels.
+- `{"Bloom": {"amount", "radius"}}` (Bloom / Glow): `amount` 0-100 (40), `radius` 1-150
+  pixels (24).
+- `{"TonalContrast": {"amount", "radius", "shadows", "midtones", "highlights"}}`: `amount`
+  0-100 (50), `radius` 1-100 pixels (16), and the three strengths -100-100 (40, 60, 30).
+- `{"Dither": {...}}`: `style` (`Atkinson`, `FloydSteinberg`, `Bayer2`, `Bayer4`, `Bayer8`,
+  `HalftoneDots`, `HalftoneLines`, `HalftoneDiamonds`, `MacPatterns`, `Ascii` or
+  `Scanlines`; `Atkinson`), `pixel_size` 1-32 (2), `pixel_shape` (`Square` or `Dot`),
+  `cell_size` 4-64 (8), `text_size` 6-64 (14), `line_spacing` 2-32 (4), `glow` 0-100 (35),
+  `dots` 0-100 (0), `wobble` 0-64 (0), `angle` -90-90 (45), `levels` 2-8 (2), `diffusion`
+  0-100 (100), `density` and `contrast` -100-100 (0), `colors` (`BlackWhite`, `TwoColors` or
+  `Original`), `dark` and `light` `[r, g, b]` (black and white), `light_on_dark` (true) and
+  `characters` (at most 64, one line; `" .:-=+*#%@"`). Missing Dither fields take these
+  defaults.
+
+A document in which any layer uses one of them is written as version 14, so older builds
+report an unsupported version instead of failing on a filter they do not know; everything
+else keeps the lowest version its content needs (1-13). A version 14 document may also
+carry anything the earlier versions can, such as a layer's Fill. The reader accepts
+versions 1-14. Upstream's
+packages (`.comp` version 11 and earlier) keep these filters only as edits to pixels, not as
+adjustment records, so an import has none to bring across as filter layers.

@@ -324,7 +324,7 @@ pub(crate) fn render_pixels(document: &Document, width: u32, height: u32) -> Rgb
             let filter = filter.scaled(width as f32 / document.width as f32);
             steps.push(CompositeStep::Filtered(
                 layer,
-                crate::effects::filtered(&backdrop, &filter),
+                crate::effects::filtered_backdrop(&backdrop, &filter),
             ));
         } else {
             steps.push(step);

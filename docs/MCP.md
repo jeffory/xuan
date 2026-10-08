@@ -112,7 +112,11 @@ like the existing ones, rather than anything specific to MCP:
   tools declare them as a string or an object, accept the same JSON sent as
   a string (`"\"Invert\""`), and list every variant Xuan accepts; a test in
   `src/plugins/edits.rs` reads serde's list of variants and fails when the
-  tool descriptions miss one.
+  tool descriptions miss one. Upstream Compositor's Vignette, Bloom / Glow, Tonal
+  Contrast and Dither are among them (`{"Vignette": …}`, `{"Bloom": …}`,
+  `{"TonalContrast": …}`, `{"Dither": …}`), with upstream's ranges and
+  defaults as [FORMAT.md](FORMAT.md#compositor-filters-version-14) lists them;
+  a Dither may leave out any setting to take its default.
 - **Layer creation.** `add_text_layer`, `add_shape_layer`, `add_empty_layer`
   and `add_mask_layer` make editable layers like the tools do; text is drawn
   with the editor's own renderer and counts against the pixel budget.

@@ -13,6 +13,11 @@ use crate::{
     render, selection,
 };
 
+pub mod dither;
+pub mod stylize;
+
+pub use dither::{DitherColors, DitherPixelShape, DitherSettings, DitherStyle};
+
 pub fn rgb_to_hsl(c: [f32; 3]) -> [f32; 3] {
     let high = c.into_iter().fold(f32::MIN, f32::max);
     let low = c.into_iter().fold(f32::MAX, f32::min);
@@ -397,31 +402,158 @@ pub fn apply_adjustment(
 
 /// As in Photoshop, a negative Lens Correction `vignette` darkens the corners and a positive
 /// one brightens them. Format 11 and earlier stored the opposite sign; `io::load` negates it.
+/// Vignette, Bloom, Tonal Contrast and Dither are upstream Compositor's filters, with its
+/// settings, ranges and defaults (`Document/Filters.swift`); they need format 14.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
-    GaussianBlur { radius: f32 },
-    MotionBlur { distance: f32, angle: f32 },
-    Noise { amount: f32, monochrome: bool },
-    LensCorrection { distortion: f32, vignette: f32 },
+    GaussianBlur {
+        radius: f32,
+    },
+    MotionBlur {
+        distance: f32,
+        angle: f32,
+    },
+    Noise {
+        amount: f32,
+        monochrome: bool,
+    },
+    LensCorrection {
+        distortion: f32,
+        vignette: f32,
+    },
+    /// Colors the edges toward `color`: Amount 0–100%, Midpoint 0–100 (where the falloff
+    /// starts), Roundness −100 (rectangle) to 100 (ellipse), Feather 0–100 and Highlights
+    /// 0–100 (how much bright pixels are spared). It frames the layer's pixels, or the canvas
+    /// for a filter layer, which also paints transparent areas.
+    Vignette {
+        amount: f32,
+        color: [u8; 3],
+        midpoint: f32,
+        roundness: f32,
+        feather: f32,
+        highlights: f32,
+    },
+    /// Bloom / Glow: Amount 0–100% and blur Radius 1–150 px.
+    Bloom {
+        amount: f32,
+        radius: f32,
+    },
+    /// Local contrast: Amount 0–100%, detail Radius 1–100 px, and strengths −100–100 in the
+    /// shadows, midtones and highlights.
+    TonalContrast {
+        amount: f32,
+        radius: f32,
+        shadows: f32,
+        midtones: f32,
+        highlights: f32,
+    },
+    Dither(Box<DitherSettings>),
 }
 
 impl Filter {
+    /// Upstream's defaults for the new filters, as the Filter menu opens them.
+    pub const VIGNETTE: Self = Self::Vignette {
+        amount: 35.0,
+        color: [0; 3],
+        midpoint: 50.0,
+        roundness: 100.0,
+        feather: 60.0,
+        highlights: 25.0,
+    };
+    pub const BLOOM: Self = Self::Bloom {
+        amount: 40.0,
+        radius: 24.0,
+    };
+    pub const TONAL_CONTRAST: Self = Self::TonalContrast {
+        amount: 50.0,
+        radius: 16.0,
+        shadows: 40.0,
+        midtones: 60.0,
+        highlights: 30.0,
+    };
+
+    /// Every filter with the settings the Filter menu opens it with, in menu order.
+    pub fn defaults() -> [Self; 8] {
+        [
+            Self::GaussianBlur { radius: 4.0 },
+            Self::MotionBlur {
+                distance: 15.0,
+                angle: 0.0,
+            },
+            Self::Noise {
+                amount: 10.0,
+                monochrome: true,
+            },
+            Self::LensCorrection {
+                distortion: 0.0,
+                vignette: 0.0,
+            },
+            Self::VIGNETTE,
+            Self::BLOOM,
+            Self::Dither(Box::default()),
+            Self::TONAL_CONTRAST,
+        ]
+    }
+
+    /// Whether `.xuan` format 12 and earlier can hold this filter.
+    pub fn is_legacy(&self) -> bool {
+        matches!(
+            self,
+            Self::GaussianBlur { .. }
+                | Self::MotionBlur { .. }
+                | Self::Noise { .. }
+                | Self::LensCorrection { .. }
+        )
+    }
+
     /// Check the settings are in range; the error names the field and its range.
     pub fn validate(&self) -> Result<()> {
-        match *self {
-            Self::GaussianBlur { radius } => within("GaussianBlur.radius", radius, 0.0, 100.0),
-            Self::MotionBlur { distance, angle } => {
+        match self {
+            &Self::GaussianBlur { radius } => within("GaussianBlur.radius", radius, 0.0, 100.0),
+            &Self::MotionBlur { distance, angle } => {
                 within("MotionBlur.distance", distance, 0.0, 200.0)?;
                 within("MotionBlur.angle", angle, -180.0, 180.0)
             }
-            Self::Noise { amount, .. } => within("Noise.amount", amount, 0.0, 100.0),
-            Self::LensCorrection {
+            &Self::Noise { amount, .. } => within("Noise.amount", amount, 0.0, 100.0),
+            &Self::LensCorrection {
                 distortion,
                 vignette,
             } => {
                 within("LensCorrection.distortion", distortion, -50.0, 50.0)?;
                 within("LensCorrection.vignette", vignette, -100.0, 100.0)
             }
+            &Self::Vignette {
+                amount,
+                midpoint,
+                roundness,
+                feather,
+                highlights,
+                ..
+            } => {
+                within("Vignette.amount", amount, 0.0, 100.0)?;
+                within("Vignette.midpoint", midpoint, 0.0, 100.0)?;
+                within("Vignette.roundness", roundness, -100.0, 100.0)?;
+                within("Vignette.feather", feather, 0.0, 100.0)?;
+                within("Vignette.highlights", highlights, 0.0, 100.0)
+            }
+            &Self::Bloom { amount, radius } => {
+                within("Bloom.amount", amount, 0.0, 100.0)?;
+                within("Bloom.radius", radius, 1.0, 150.0)
+            }
+            &Self::TonalContrast {
+                amount,
+                radius,
+                shadows,
+                midtones,
+                highlights,
+            } => {
+                within("TonalContrast.amount", amount, 0.0, 100.0)?;
+                within("TonalContrast.radius", radius, 1.0, 100.0)?;
+                within("TonalContrast.shadows", shadows, -100.0, 100.0)?;
+                within("TonalContrast.midtones", midtones, -100.0, 100.0)?;
+                within("TonalContrast.highlights", highlights, -100.0, 100.0)
+            }
+            Self::Dither(settings) => settings.validate(),
         }
     }
 
@@ -434,6 +566,24 @@ impl Filter {
                 distance: distance * scale,
                 angle,
             },
+            Self::Bloom { amount, radius } => Self::Bloom {
+                amount,
+                radius: radius * scale,
+            },
+            Self::TonalContrast {
+                amount,
+                radius,
+                shadows,
+                midtones,
+                highlights,
+            } => Self::TonalContrast {
+                amount,
+                radius: radius * scale,
+                shadows,
+                midtones,
+                highlights,
+            },
+            Self::Dither(ref settings) => Self::Dither(Box::new(settings.scaled(scale))),
             _ => self.clone(),
         }
     }
@@ -444,12 +594,62 @@ impl Filter {
             Self::MotionBlur { .. } => "Motion Blur",
             Self::Noise { .. } => "Add Noise",
             Self::LensCorrection { .. } => "Lens Correction",
+            Self::Vignette { .. } => "Vignette",
+            Self::Bloom { .. } => "Bloom / Glow",
+            Self::TonalContrast { .. } => "Tonal Contrast",
+            Self::Dither(_) => "Dither",
+        }
+    }
+
+    /// How far past the layer the filter reaches, in layer pixels: room is made for it so
+    /// it spreads rather than stopping at the layer's edge.
+    pub fn padding(&self) -> u32 {
+        match *self {
+            Self::GaussianBlur { radius } | Self::Bloom { radius, .. } => {
+                (radius * 3.0).ceil() as u32
+            }
+            Self::MotionBlur { distance, .. } => (distance * 0.5).ceil() as u32 + 1,
+            _ => 0,
         }
     }
 }
 
+/// A Gaussian blur of straight pixels with standard deviation `sigma`, done on premultiplied
+/// colors so transparent edges do not darken. Gaussian Blur, Bloom and Tonal Contrast share it.
+pub(crate) fn gaussian_blurred(image: &RgbaImage, sigma: f32) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    let premul = RgbaImage::from_fn(w, h, |x, y| {
+        let p = image.get_pixel(x, y).0;
+        Rgba([
+            ((p[0] as u16 * p[3] as u16) / 255) as u8,
+            ((p[1] as u16 * p[3] as u16) / 255) as u8,
+            ((p[2] as u16 * p[3] as u16) / 255) as u8,
+            p[3],
+        ])
+    });
+    let mut result = image::imageops::blur(&premul, sigma.max(0.01));
+    for pixel in result.pixels_mut() {
+        if pixel[3] > 0 {
+            for i in 0..3 {
+                pixel[i] = ((pixel[i] as u32 * 255) / pixel[3] as u32).min(255) as u8;
+            }
+        }
+    }
+    result
+}
+
+/// The filter as a filter layer runs it, on the composite below: as `filtered`, except that a
+/// Vignette frames the whole backdrop and paints its transparent areas too.
+pub fn filtered_backdrop(image: &RgbaImage, filter: &Filter) -> RgbaImage {
+    filtered_with(image, filter, true)
+}
+
 pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
-    if let Some(result) = crate::gpu::filter(image, filter) {
+    filtered_with(image, filter, false)
+}
+
+fn filtered_with(image: &RgbaImage, filter: &Filter, fills_clear: bool) -> RgbaImage {
+    if let Some(result) = crate::gpu::filter_with(image, filter, fills_clear) {
         return result;
     }
     if crate::gpu::cancelled() {
@@ -457,27 +657,7 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
     }
     let (w, h) = image.dimensions();
     match filter {
-        Filter::GaussianBlur { radius } => {
-            // Blur premultiplied pixels to prevent dark fringes at transparent edges.
-            let premul = RgbaImage::from_fn(w, h, |x, y| {
-                let p = image.get_pixel(x, y).0;
-                Rgba([
-                    ((p[0] as u16 * p[3] as u16) / 255) as u8,
-                    ((p[1] as u16 * p[3] as u16) / 255) as u8,
-                    ((p[2] as u16 * p[3] as u16) / 255) as u8,
-                    p[3],
-                ])
-            });
-            let mut result = image::imageops::blur(&premul, radius.max(0.01));
-            for pixel in result.pixels_mut() {
-                if pixel[3] > 0 {
-                    for i in 0..3 {
-                        pixel[i] = ((pixel[i] as u32 * 255) / pixel[3] as u32).min(255) as u8;
-                    }
-                }
-            }
-            result
-        }
+        Filter::GaussianBlur { radius } => gaussian_blurred(image, *radius),
         Filter::MotionBlur { distance, angle } => {
             motion_blur(image, *distance, *angle, &AtomicBool::new(false))
                 .expect("Motion blur was not cancelled")
@@ -510,6 +690,39 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
             }
             Rgba(p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
         }),
+        &Filter::Vignette {
+            amount,
+            color,
+            midpoint,
+            roundness,
+            feather,
+            highlights,
+        } => stylize::vignette(
+            image,
+            amount,
+            color,
+            midpoint,
+            roundness,
+            feather,
+            highlights,
+            fills_clear,
+        ),
+        &Filter::Bloom { amount, radius } => {
+            stylize::bloom(image, &gaussian_blurred(image, radius), amount)
+        }
+        &Filter::TonalContrast {
+            amount,
+            radius,
+            shadows,
+            midtones,
+            highlights,
+        } => stylize::tonal_contrast(
+            image,
+            &gaussian_blurred(image, radius),
+            amount,
+            [shadows, midtones, highlights],
+        ),
+        Filter::Dither(settings) => dither::dither(image, settings),
     }
 }
 
@@ -683,11 +896,7 @@ fn apply_filter_impl(
     ensure_pixels(layer)?;
     let original_transform = layer.transform;
     let original = layer.pixels.as_ref().unwrap();
-    let padding = match filter {
-        Filter::GaussianBlur { radius } => (radius * 3.0).ceil() as u32,
-        Filter::MotionBlur { distance, .. } => (distance * 0.5).ceil() as u32 + 1,
-        _ => 0,
-    };
+    let padding = filter.padding();
     // Sides that reach the canvas edge repeat their edge pixels and do not grow,
     // so a layer that fills the canvas stays opaque up to its edges.
     let edges = if padding > 0 {

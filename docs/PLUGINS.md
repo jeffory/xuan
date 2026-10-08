@@ -1271,9 +1271,14 @@ layer, so text and shape layers become pixel layers):
 Filters and adjustments are written as `.xuan` files store them on filter and
 adjustment layers. Filters: `{"GaussianBlur": {"radius"}}` (0–100),
 `{"MotionBlur": {"distance", "angle"}}` (0–200, ±180°), `{"Noise": {"amount",
-"monochrome"}}` (0–100) and `{"LensCorrection": {"distortion", "vignette"}}`
+"monochrome"}}` (0–100), `{"LensCorrection": {"distortion", "vignette"}}`
 (±50, ±100; as in Photoshop, a negative vignette darkens the corners and a positive one
-brightens them). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",
+brightens them), and upstream Compositor's `{"Vignette": {"amount", "color": [r, g, b],
+"midpoint", "roundness", "feather", "highlights"}}`, `{"Bloom": {"amount", "radius"}}`,
+`{"TonalContrast": {"amount", "radius", "shadows", "midtones", "highlights"}}` and
+`{"Dither": {…}}` (any Dither setting left out takes upstream's default, so `{"Dither":
+{}}` is Atkinson in black and white); their ranges and defaults are in
+[FORMAT.md](FORMAT.md#compositor-filters-version-14). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",
 "lightness", "colorize"}}`, `{"Levels": {"black", "gamma", "white",
 "output_black", "output_white"}}` (levels 0–255), `{"Curves": {"points": [{"x",
 "y"}, …]}}` (0–1), `{"Exposure": {"exposure", "offset", "gamma"}}`,

@@ -73,6 +73,28 @@ fn filter_layers_match_cpu_and_reuse_sources() {
             distortion: -22.0,
             vignette: -30.0,
         },
+        Filter::VIGNETTE,
+        Filter::Vignette {
+            amount: 90.0,
+            color: [250, 200, 20],
+            midpoint: 0.0,
+            roundness: -60.0,
+            feather: 30.0,
+            highlights: 0.0,
+        },
+        Filter::BLOOM,
+        Filter::Bloom {
+            amount: 100.0,
+            radius: 3.0,
+        },
+        Filter::TONAL_CONTRAST,
+        Filter::TonalContrast {
+            amount: 100.0,
+            radius: 30.0,
+            shadows: -60.0,
+            midtones: 100.0,
+            highlights: 40.0,
+        },
     ] {
         document.layers[2].filter = Some(filter.clone());
         document.validate().unwrap();
@@ -145,6 +167,100 @@ fn filter_layers_match_cpu_and_reuse_sources() {
         }
         if let Some(index) = hidden {
             document.layers[index].visible = true;
+        }
+    }
+}
+
+/// Dither as a filter layer: the GPU styles draw on the resident composite, the CPU ones (error
+/// diffusion, ASCII, glowing scanlines) read it back and upload their result. Threshold styles
+/// may flip a few pixels where the GPU's arithmetic differs by an ulp.
+#[test]
+#[ignore = "requires a Vulkan or OpenGL compute adapter"]
+fn dither_filter_layers_match_cpu() {
+    use crate::effects::{DitherColors, DitherSettings, DitherStyle};
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let mut compositor = GpuCompositor::new(device, queue);
+    let mut document = Document::new(150, 110).unwrap();
+    let source = Layer::image(
+        "Source",
+        RgbaImage::from_fn(150, 110, |x, y| {
+            Rgba([(x * 3 / 2) as u8, (y * 2) as u8, 160, 255])
+        }),
+    );
+    let effect = Layer::blank("Dither", 150, 110);
+    document.select(source.id, false);
+    document.layers = vec![source, effect];
+    for settings in [
+        DitherSettings::default(),
+        DitherSettings {
+            style: DitherStyle::FloydSteinberg,
+            levels: 3.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Ascii,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Bayer8,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDots,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+    ] {
+        let cpu_only = !settings.runs_on_gpu();
+        document.layers[1].filter = Some(Filter::Dither(Box::new(settings)));
+        // A second CPU filter layer reads back what the first one uploaded. At full opacity
+        // the backdrop it reads is exactly the CPU's.
+        for stacked in [false, true] {
+            if stacked && !cpu_only {
+                continue;
+            }
+            document.layers[1].opacity = if stacked { 1.0 } else { 0.9 };
+            if stacked {
+                let mut second = Layer::blank("Second", 150, 110);
+                second.filter = Some(Filter::Dither(Box::new(DitherSettings {
+                    style: DitherStyle::Atkinson,
+                    pixel_size: 1.0,
+                    ..Default::default()
+                })));
+                document.layers.push(second);
+            }
+            compositor.render(&document, [150, 110]);
+            let actual = readback(&compositor);
+            let expected = render::render(&document);
+            let differing = actual
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(expected.pixels())
+                .filter(|(a, b)| {
+                    let expected = [
+                        (b[0] as f32 * b[3] as f32 / 255.0).round() as u8,
+                        (b[1] as f32 * b[3] as f32 / 255.0).round() as u8,
+                        (b[2] as f32 * b[3] as f32 / 255.0).round() as u8,
+                        b[3],
+                    ];
+                    a.iter().zip(expected).any(|(a, b)| a.abs_diff(b) > 3)
+                })
+                .count();
+            let allowed = if cpu_only { 0 } else { 150 * 110 / 100 };
+            assert!(
+                differing <= allowed,
+                "{:?} stacked {stacked}: {differing} pixels differ",
+                document.layers[1].filter
+            );
+            document.layers.truncate(2);
         }
     }
 }

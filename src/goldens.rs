@@ -88,6 +88,8 @@ const SCENES: &[&str] = &[
     "path_shapes",
     "text_on_path",
     "remove_background",
+    "compositor_filters",
+    "dither_styles",
     "raw_default",
     "raw_negative",
     "raw_quarter_turn",
@@ -155,6 +157,13 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("path_shapes", path_shapes()),
         composite("text_on_path", text_on_path()),
         composite("remove_background", remove_background()),
+        composite("compositor_filters", compositor_filters()),
+        Scene {
+            // Thresholds: a pixel one level off on the GPU can land on the other side of a
+            // dither threshold, which moves it by a whole tone.
+            gpu: Tolerance::new(4, 0.02),
+            ..composite("dither_styles", dither_styles())
+        },
     ];
     if let Some(raw) = raw_fixture() {
         let raw = Arc::new(raw);
@@ -570,6 +579,176 @@ fn black_white_color_balance() -> Document {
         preserving,
         shifting,
     ])
+}
+
+/// A mask showing one cell of a `columns` × `rows` grid, counted along rows.
+fn cell_mask(columns: u32, rows: u32, index: u32) -> Mask {
+    Mask {
+        pixels: Arc::new(GrayImage::from_fn(columns * 16, rows * 16, |x, y| {
+            Luma([if x / 16 + y / 16 * columns == index {
+                255
+            } else {
+                0
+            }])
+        })),
+        ..Mask::white()
+    }
+}
+
+fn filter_layer(filter: crate::effects::Filter, mask: Option<Mask>) -> Layer {
+    let mut layer = Layer::blank(filter.name(), SIZE, SIZE);
+    layer.filter = Some(filter);
+    layer.mask = mask;
+    layer
+}
+
+/// Upstream Compositor's filters as filter layers over the hue ramp: Bloom / Glow around white
+/// spots (top left), Tonal Contrast on a fine checker (top right), a card with a Vignette
+/// attached to it (bottom left, framing the card), and a Vignette filter layer over the
+/// whole canvas.
+fn compositor_filters() -> Document {
+    use crate::effects::Filter;
+    let spots = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let (dx, dy) = (x % 40, y % 40);
+        Rgba(
+            if x < 128 && y < 128 && (14..26).contains(&dx) && (14..26).contains(&dy) {
+                [255, 255, 240, 255]
+            } else {
+                [0, 0, 0, 0]
+            },
+        )
+    });
+    let detail = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if x >= 128 && y < 128 && (x / 6 + y / 6) % 2 == 0 {
+            [40, 40, 40, 90]
+        } else {
+            [0, 0, 0, 0]
+        })
+    });
+    let card = placed(
+        Layer::image(
+            "Card",
+            RgbaImage::from_fn(96, 96, |x, y| {
+                Rgba([200, (x * 2) as u8, (y * 2) as u8, 255])
+            }),
+        ),
+        16.0,
+        144.0,
+    );
+    let mut attached = filter_layer(
+        Filter::Vignette {
+            amount: 80.0,
+            color: [20, 30, 120],
+            midpoint: 20.0,
+            roundness: -40.0,
+            feather: 50.0,
+            highlights: 25.0,
+        },
+        None,
+    );
+    attached.parent = Some(card.id);
+    document(vec![
+        Layer::image("Hues", hue_ramp(SIZE, SIZE)),
+        Layer::image("Spots", spots),
+        Layer::image("Detail", detail),
+        filter_layer(
+            Filter::Bloom {
+                amount: 70.0,
+                radius: 6.0,
+            },
+            Some(cell_mask(2, 2, 0)),
+        ),
+        filter_layer(
+            Filter::TonalContrast {
+                amount: 100.0,
+                radius: 5.0,
+                shadows: 60.0,
+                midtones: 100.0,
+                highlights: -50.0,
+            },
+            Some(cell_mask(2, 2, 1)),
+        ),
+        card,
+        attached,
+        filter_layer(
+            Filter::Vignette {
+                amount: 55.0,
+                color: [30, 10, 0],
+                midpoint: 40.0,
+                roundness: 60.0,
+                feather: 60.0,
+                highlights: 25.0,
+            },
+            None,
+        ),
+    ])
+}
+
+/// Dither as filter layers over the gradient, one style per cell of a 4 × 2 grid, from the
+/// top left: Atkinson in 2 px chunky pixels, Bayer 4 × 4 in two colors, halftone dots in the
+/// image's colors, Mac patterns as ink on paper, then thin and glowing wobbly scanlines,
+/// ASCII, and three-level Floyd–Steinberg in the image's colors with round chunky pixels.
+fn dither_styles() -> Document {
+    use crate::effects::{DitherColors, DitherPixelShape, DitherSettings, DitherStyle, Filter};
+    let styles = [
+        DitherSettings::default(),
+        DitherSettings {
+            style: DitherStyle::Bayer4,
+            pixel_size: 1.0,
+            colors: DitherColors::TwoColors,
+            dark: [30, 20, 80],
+            light: [250, 220, 160],
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDots,
+            pixel_size: 1.0,
+            cell_size: 6.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::MacPatterns,
+            pixel_size: 1.0,
+            light_on_dark: false,
+            density: 20.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            glow: 0.0,
+            dots: 50.0,
+            wobble: 3.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            line_spacing: 6.0,
+            contrast: 30.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Ascii,
+            text_size: 10.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::FloydSteinberg,
+            pixel_size: 3.0,
+            pixel_shape: DitherPixelShape::Dot,
+            levels: 3.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+    ];
+    let mut layers = vec![Layer::image("Gradient", gradient())];
+    for (index, settings) in styles.into_iter().enumerate() {
+        layers.push(filter_layer(
+            Filter::Dither(Box::new(settings)),
+            Some(cell_mask(4, 2, index as u32)),
+        ));
+    }
+    document(layers)
 }
 
 /// A rounded rectangle of `color` at (`x`, `y`), `width` by `height`.
