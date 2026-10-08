@@ -1077,14 +1077,14 @@ impl EditorApp {
             return;
         }
         let plugin_formats = self.plugin_export_formats();
-        let formats: Vec<(String, String)> = ["png", "jpg", "tiff", "webp"]
+        let formats: Vec<(String, String)> = ["png", "jpg", "tiff", "webp", "ora"]
             .iter()
             .map(|f| (f.to_string(), f.to_uppercase()))
             .chain(
                 plugin_formats
                     .iter()
                     .filter(|(extension, ..)| {
-                        !["png", "jpg", "tiff", "webp"].contains(&extension.as_str())
+                        !["png", "jpg", "tiff", "webp", "ora"].contains(&extension.as_str())
                     })
                     .map(|(extension, label, ..)| (extension.clone(), label.clone())),
             )
@@ -1198,6 +1198,20 @@ impl EditorApp {
                     });
                     let lossy = self.export_format == "jpg"
                         || (self.export_format == "webp" && !self.export_options.webp_lossless);
+                    if self.export_format == "ora" {
+                        let report = io::ora::export_report(&self.session().unwrap().document);
+                        let mut note =
+                            tr("OpenRaster keeps layers, folders, blend modes and opacity")
+                                .to_owned();
+                        if !report.is_empty() {
+                            note.push_str(" · ");
+                            note.push_str(tr("These are flattened:"));
+                            for line in report.lines() {
+                                note.push_str(&format!("\n• {line}"));
+                            }
+                        }
+                        ui.label(RichText::new(note).small().color(ui.palette().muted));
+                    }
                     if lossy {
                         let note = if self.export_format == "jpg" {
                             tr("JPEG preview · transparency is flattened onto white")
@@ -1248,13 +1262,10 @@ impl EditorApp {
                             Err(error) => self.error = Some(format!("{error:#}")),
                         }
                     }
-                    None => match io::export(
-                        &self.session().unwrap().document,
-                        &path,
-                        &self.export_options,
-                    ) {
-                        Ok(()) => {
+                    None => match self.export_to(&path) {
+                        Ok(notice) => {
                             self.status = format!("{} {}", tr("Exported"), path.display());
+                            self.notice = notice;
                             self.dialog = None;
                         }
                         Err(error) => self.error = Some(format!("{error:#}")),
@@ -1264,6 +1275,17 @@ impl EditorApp {
         }
         if !open || cancel {
             self.dialog = None;
+        }
+    }
+
+    /// Export the current document in Xuan's own encoders, returning what an OpenRaster
+    /// export flattened, for the notice.
+    pub(super) fn export_to(&self, path: &std::path::Path) -> anyhow::Result<Option<String>> {
+        let document = &self.session().unwrap().document;
+        if io::is_openraster(path) {
+            Ok(io::ora::export(document, path)?.summary())
+        } else {
+            io::export(document, path, &self.export_options).map(|()| None)
         }
     }
 

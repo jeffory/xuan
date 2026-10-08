@@ -229,7 +229,7 @@ impl EditorApp {
                 self.clipboard = None;
                 if paths
                     .iter()
-                    .any(|p| xuan::raw::is_raw(p) || io::is_photoshop(p))
+                    .any(|p| xuan::raw::is_raw(p) || io::is_photoshop(p) || io::is_openraster(p))
                 {
                     for path in paths {
                         self.open_path(&path, true);

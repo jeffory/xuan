@@ -652,7 +652,7 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("save_as", "Save As…", C::File).keys(&[ctrl_shift(Key::S)]),
     cmd("export", "Export Image…", C::File)
         .keys(&[chord(CTRL.plus(ALT).plus(SHIFT), Key::S)])
-        .aliases(&["png", "jpeg", "webp"]),
+        .aliases(&["png", "jpeg", "webp", "ora", "openraster"]),
     cmd("close", "Close Project", C::File)
         .keys(&[ctrl(Key::W)])
         .both()

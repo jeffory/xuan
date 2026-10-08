@@ -1016,7 +1016,7 @@ impl EditorApp {
             self.queue_raw(path, as_layer);
             return;
         }
-        if io::is_photoshop(path) {
+        if io::is_photoshop(path) || io::is_openraster(path) {
             self.open_photoshop(path, as_layer);
             return;
         }
@@ -1198,7 +1198,7 @@ impl EditorApp {
     fn open_dialog(&mut self, as_layer: bool) {
         let extensions = [
             "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif",
-            "hif", "psd", "psb",
+            "hif", "psd", "psb", "ora",
         ];
         // Portal file filters may be case-sensitive; cameras commonly use uppercase.
         let plugin_extensions = self.plugin_import_extensions();
@@ -2132,6 +2132,7 @@ fn builtin_extension(path: &Path) -> bool {
     path.is_dir()
         || xuan::raw::is_raw(path)
         || io::is_photoshop(path)
+        || io::is_openraster(path)
         || path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
             matches!(
                 e.to_ascii_lowercase().as_str(),
