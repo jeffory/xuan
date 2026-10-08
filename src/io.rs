@@ -27,9 +27,11 @@ pub(crate) fn max_asset() -> u64 {
 mod compositor;
 mod heif;
 pub mod psd;
+pub mod svg;
 
 pub use compositor::{Dropped, ImportReport, ImportSource};
 pub use psd::is_photoshop;
+pub use svg::is_svg;
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -89,6 +91,9 @@ fn reserve_pixels(width: u32, height: u32, used: &mut u64) -> Result<()> {
 }
 
 pub fn import_image(path: &Path) -> Result<RgbaImage> {
+    if is_svg(path) {
+        return Ok(svg::load(path, svg::SvgSize::Natural)?.image);
+    }
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
     // Opening a FIFO or device could block forever.
     ensure!(
