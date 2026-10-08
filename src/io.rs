@@ -506,7 +506,8 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
         return ora::export(document, path).map(drop);
     }
     check_export_size(&extension, document.width, document.height)?;
-    let image = render::render(document);
+    let image = render::unaltered(document)
+        .map_or_else(|| render::render(document), |pixels| (*pixels).clone());
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -615,6 +616,50 @@ mod tests {
         assert_eq!(density.unit, png::Unit::Meter);
     }
 
+    #[test]
+    fn packed_rgba_pngs_round_trip_every_channel_unchanged() {
+        // A mask map: independent data in every channel, colour under zero alpha included.
+        let packed = RgbaImage::from_fn(16, 16, |x, y| {
+            Rgba([
+                (x * 17) as u8,
+                (y * 13 + 3) as u8,
+                ((x * y) % 256) as u8,
+                if x < 4 { 0 } else { (x * 16 + y) as u8 },
+            ])
+        });
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("mask.png");
+        packed.save(&source).unwrap();
+        // Opened as the editor opens an image, saved as a project, reopened, exported.
+        let image = import_image(&source).unwrap();
+        assert_eq!(image, packed);
+        let mut document = Document::new(16, 16).unwrap();
+        let layer = Layer::image("mask", image);
+        document.select(layer.id, false);
+        document.layers = vec![layer];
+        let project = temporary.path().join("mask.xuan");
+        save(&document, &project).unwrap();
+        let document = load(&project).unwrap();
+        let exported = temporary.path().join("out.png");
+        export(&document, &exported, &ExportOptions::default()).unwrap();
+        assert_eq!(import_image(&exported).unwrap(), packed);
+        for extension in ["tiff", "webp"] {
+            let path = temporary.path().join(format!("out.{extension}"));
+            export(&document, &path, &ExportOptions::default()).unwrap();
+            assert_eq!(import_image(&path).unwrap(), packed, "{extension}");
+        }
+        // A layer that is moved, faded or masked is composited as before.
+        let mut faded = document.clone();
+        faded.layers[0].opacity = 0.5;
+        assert!(render::unaltered(&faded).is_none());
+        let mut moved = document.clone();
+        moved.layers[0].transform.x = 1.0;
+        assert!(render::unaltered(&moved).is_none());
+        let mut masked = document;
+        masked.layers[0].mask = Some(Mask::white());
+        assert!(render::unaltered(&masked).is_none());
+    }
+
     /// A photo-like test image: smooth gradients, a soft disc and grain,
     /// transparent on the left, fading in, then opaque.
     fn photo_like(width: u32, height: u32) -> RgbaImage {
@@ -687,11 +732,12 @@ mod tests {
 
         let temporary = tempfile::tempdir().unwrap();
         let mut doc = Document::new(64, 48).unwrap();
-        doc.layers[0].pixels = Some(Arc::new(image));
+        doc.layers[0].pixels = Some(Arc::new(image.clone()));
         let path = temporary.path().join("image.webp");
         export(&doc, &path, &ExportOptions::default()).unwrap();
+        // One plain layer exports as its own pixels (see `render::unaltered`).
         let mut expected = Vec::new();
-        DynamicImage::ImageRgba8(render::render(&doc))
+        DynamicImage::ImageRgba8(image)
             .write_to(&mut Cursor::new(&mut expected), ImageFormat::WebP)
             .unwrap();
         assert_eq!(fs::read(&path).unwrap(), expected);

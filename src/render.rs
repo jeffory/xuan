@@ -280,6 +280,28 @@ pub fn source_size(document: &Document, layer: &Layer, size: [u32; 2]) -> [u32; 
     [target(width, image.width()), target(height, image.height())]
 }
 
+/// The canvas as exactly the one layer's pixels, when the document is a single plain layer that
+/// covers the canvas pixel for pixel. Compositing would round colours and drop the colour under
+/// fully transparent pixels, where packed channel maps keep data, so exports use these instead.
+pub fn unaltered(document: &Document) -> Option<std::sync::Arc<RgbaImage>> {
+    let [layer] = document.layers.as_slice() else {
+        return None;
+    };
+    let pixels = layer.pixels.as_ref()?;
+    (layer.visible
+        && !layer.group
+        && !layer.is_effect()
+        && layer.opacity == 1.0
+        && layer.fill == 1.0
+        && layer.blend == crate::blend::BlendMode::Normal
+        && layer.mask.is_none()
+        && layer.clip_to.is_none()
+        && layer.effects.as_ref().is_none_or(|e| e.is_empty())
+        && pixels.dimensions() == (document.width, document.height)
+        && layer.transform == crate::document::Transform::new(document.width, document.height))
+    .then(|| pixels.clone())
+}
+
 pub fn render(document: &Document) -> RgbaImage {
     render_scaled(document, document.width, document.height)
 }
