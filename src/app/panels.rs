@@ -153,6 +153,7 @@ impl EditorApp {
                                                 &[
                                                     (PaintMode::Blur, tr("Blur")),
                                                     (PaintMode::Smudge, tr("Smudge")),
+                                                    (PaintMode::Liquify, tr("Liquify")),
                                                 ],
                                             );
                                         }
@@ -201,7 +202,10 @@ impl EditorApp {
                                                 .percentage(),
                                             );
                                         }
-                                        ui.label(tr("Opacity"));
+                                        // Liquify's strength is how far the pixels follow the brush.
+                                        let liquify = self.tool == Tool::Blur
+                                            && self.blur_mode == PaintMode::Liquify;
+                                        ui.label(if liquify { tr("Strength") } else { tr("Opacity") });
                                         ui.add(
                                             widgets::Slider::new(
                                                 &mut self.brush.opacity,

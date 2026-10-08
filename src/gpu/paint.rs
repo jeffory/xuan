@@ -203,6 +203,8 @@ pub(crate) fn stroke(
         PaintMode::Dodge => 6,
         PaintMode::Burn => 7,
         PaintMode::Sponge => 8,
+        // Warped on the CPU by `paint::liquify`.
+        PaintMode::Liquify => return false,
     };
     let minimum = if mode == 3 || mode == 4 {
         16_384

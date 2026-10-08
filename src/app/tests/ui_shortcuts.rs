@@ -88,6 +88,13 @@ fn app_effect(id: &str) -> Option<Effect> {
             },
             |app| app.tool == Tool::Dodge && app.tone_mode == PaintMode::Sponge,
         ),
+        "switch_blur" => State(
+            |app| {
+                app.tool = Tool::Blur;
+                app.blur_mode = PaintMode::Smudge;
+            },
+            |app| app.tool == Tool::Blur && app.blur_mode == PaintMode::Liquify,
+        ),
         "crop_mode" => State(
             |app| {
                 app.tool = Tool::Crop;
