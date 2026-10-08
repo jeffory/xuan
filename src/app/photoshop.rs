@@ -2,6 +2,10 @@
 //! (`UI/PSDConversionSheet.swift`, `EditorSession.finishPSDReading`), what the import changes is
 //! shown before anything is applied, and Cancel leaves the open documents untouched. Files Xuan
 //! represents completely open without asking.
+//!
+//! A Photoshop file with artboards opens one tab per artboard, the first reusing an untouched
+//! empty tab. Imported as a layer, each artboard becomes a folder named after it, laid out as on
+//! the Photoshop canvas, inside the folder named after the file.
 use super::theme::PaletteExt as _;
 use std::{
     collections::VecDeque,
@@ -14,7 +18,7 @@ use xuan::{
     i18n::tr,
     io::{
         ImportReport, ImportSource, ora,
-        psd::{self, PixelBudget},
+        psd::{self, Artboards, Imported, PixelBudget},
     },
 };
 
@@ -23,7 +27,8 @@ use super::{EditorApp, Session, widgets};
 /// A read Photoshop or OpenRaster file waiting for the user to accept its conversion report.
 pub(super) struct PendingImport {
     path: PathBuf,
-    document: Document,
+    /// The whole file, or one document per artboard.
+    documents: Vec<Imported>,
     report: ImportReport,
     as_layer: bool,
 }
@@ -49,15 +54,27 @@ impl EditorApp {
             None => PixelBudget::default(),
         };
         let read = if ora::is_openraster(path) {
-            ora::load(path, budget)
+            ora::load(path, budget).map(|(document, report)| {
+                let whole = Imported {
+                    artboard: None,
+                    origin: (0, 0),
+                    document,
+                };
+                (vec![whole], report)
+            })
         } else {
-            psd::load(path, budget)
+            let artboards = if as_layer {
+                Artboards::Folders
+            } else {
+                Artboards::Documents
+            };
+            psd::load_documents(path, budget, artboards)
         };
         match read {
-            Ok((document, report)) => {
+            Ok((documents, report)) => {
                 let pending = PendingImport {
                     path: path.to_path_buf(),
-                    document,
+                    documents,
                     report,
                     as_layer,
                 };
@@ -80,19 +97,36 @@ impl EditorApp {
     fn apply_photoshop(&mut self, pending: PendingImport) {
         let name = file_stem(&pending.path);
         let changed = !pending.report.is_empty();
+        let artboards = pending.documents.iter().any(|d| d.artboard.is_some());
         if pending.as_layer && !self.sessions.is_empty() {
-            let imported = pending.document;
+            let (layers, size) = lay_out(pending.documents);
             let action = match pending.report.source() {
                 ImportSource::OpenRaster => tr("Import OpenRaster File"),
                 _ => tr("Import Photoshop File"),
             };
             self.edit(action, |document| {
-                insert_as_folder(document, imported, name)
+                insert_as_folder(document, layers, size, name)
             });
         } else {
-            self.sessions
-                .push(Session::new(pending.document, name, None));
-            self.current = self.sessions.len() - 1;
+            // The first artboard takes the place of a new document nobody has touched.
+            let mut reuse =
+                artboards && self.sessions.len() == 1 && self.sessions[0].is_untouched();
+            let mut first = None;
+            for imported in pending.documents {
+                let title = imported.artboard.unwrap_or_else(|| name.clone());
+                let session = Session::new(imported.document, title, None);
+                if reuse {
+                    self.sessions[0] = session;
+                    reuse = false;
+                    first.get_or_insert(0);
+                } else {
+                    self.sessions.push(session);
+                    first.get_or_insert(self.sessions.len() - 1);
+                }
+            }
+            if let Some(first) = first {
+                self.current = first;
+            }
             self.mask_target = false;
             self.dialog = None;
         }
@@ -167,29 +201,83 @@ impl EditorApp {
     }
 }
 
-/// Add a Photoshop or OpenRaster document's layers to `document` inside a new folder named after the file,
-/// centered on the canvas and placed like any new layer.
+/// The layers of an import as one stack, and the size of the area they were laid out on. A file
+/// without artboards keeps its layers and canvas; artboards become folders named after them, at
+/// their place on the Photoshop canvas within the smallest area holding them all.
+fn lay_out(documents: Vec<Imported>) -> (Vec<Layer>, (f32, f32)) {
+    if let [whole] = documents.as_slice()
+        && whole.artboard.is_none()
+    {
+        let document = documents.into_iter().next().unwrap().document;
+        return (
+            document.layers,
+            (document.width as f32, document.height as f32),
+        );
+    }
+    let left = documents.iter().map(|d| d.origin.0).min().unwrap_or(0);
+    let top = documents.iter().map(|d| d.origin.1).min().unwrap_or(0);
+    let right = documents
+        .iter()
+        .map(|d| d.origin.0 + i64::from(d.document.width))
+        .max()
+        .unwrap_or(0);
+    let bottom = documents
+        .iter()
+        .map(|d| d.origin.1 + i64::from(d.document.height))
+        .max()
+        .unwrap_or(0);
+    let mut layers = Vec::new();
+    // The documents come top first; layers are stored bottom first.
+    for imported in documents.into_iter().rev() {
+        let document = imported.document;
+        let mut folder = Layer::blank(
+            imported.artboard.unwrap_or_default(),
+            document.width,
+            document.height,
+        );
+        folder.group = true;
+        let (dx, dy) = (
+            (imported.origin.0 - left) as f32,
+            (imported.origin.1 - top) as f32,
+        );
+        for mut layer in document.layers {
+            shift(&mut layer, dx, dy);
+            layer.parent.get_or_insert(folder.id);
+            layers.push(layer);
+        }
+        // Folders follow their contents.
+        layers.push(folder);
+    }
+    (layers, ((right - left) as f32, (bottom - top) as f32))
+}
+
+fn shift(layer: &mut Layer, dx: f32, dy: f32) {
+    layer.transform.x += dx;
+    layer.transform.y += dy;
+    if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
+        placement.x += dx;
+        placement.y += dy;
+    }
+}
+
+/// Add an import's layers, laid out on an area of `size`, to `document` inside a new folder named
+/// after the file, centered on the canvas and placed like any new layer.
 fn insert_as_folder(
     document: &mut Document,
-    imported: Document,
+    mut layers: Vec<Layer>,
+    (width, height): (f32, f32),
     name: String,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
-        document.layers.len() + imported.layers.len() < MAX_LAYERS,
+        document.layers.len() + layers.len() < MAX_LAYERS,
         tr("Too many layers")
     );
-    let dx = ((document.width as f32 - imported.width as f32) * 0.5).round();
-    let dy = ((document.height as f32 - imported.height as f32) * 0.5).round();
+    let dx = ((document.width as f32 - width) * 0.5).round();
+    let dy = ((document.height as f32 - height) * 0.5).round();
     let mut folder = Layer::blank(name, document.width, document.height);
     folder.group = true;
-    let mut layers = imported.layers;
     for layer in &mut layers {
-        layer.transform.x += dx;
-        layer.transform.y += dy;
-        if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
-            placement.x += dx;
-            placement.y += dy;
-        }
+        shift(layer, dx, dy);
         if layer.parent.is_none() {
             layer.parent = Some(folder.id);
         }

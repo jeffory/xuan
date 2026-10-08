@@ -388,6 +388,261 @@ fn photoshop_files_import_as_a_centered_folder_and_drop_like_images() {
     assert_eq!(app.session().unwrap().document.layers.len(), 3);
 }
 
+/// A descriptor key or class ID: a length (0 for four characters), then the characters.
+fn descriptor_id(out: &mut Vec<u8>, key: &str) {
+    let length = if key.len() == 4 { 0 } else { key.len() as u32 };
+    out.extend(length.to_be_bytes());
+    out.extend(key.as_bytes());
+}
+
+/// An `artb` block: a versioned descriptor with the artboard's rectangle and background type.
+fn artboard_block(left: f64, top: f64, right: f64, bottom: f64, background: i32) -> Vec<u8> {
+    let mut out = 16_u32.to_be_bytes().to_vec();
+    out.extend(0_u32.to_be_bytes());
+    descriptor_id(&mut out, "artboard");
+    out.extend(2_u32.to_be_bytes());
+    descriptor_id(&mut out, "artboardRect");
+    out.extend(b"Objc");
+    out.extend(0_u32.to_be_bytes());
+    descriptor_id(&mut out, "classFloatRect");
+    out.extend(4_u32.to_be_bytes());
+    for (key, value) in [
+        ("Top ", top),
+        ("Left", left),
+        ("Btom", bottom),
+        ("Rght", right),
+    ] {
+        descriptor_id(&mut out, key);
+        out.extend(b"doub");
+        out.extend(value.to_be_bytes());
+    }
+    descriptor_id(&mut out, "artboardBackgroundType");
+    out.extend(b"long");
+    out.extend(background.to_be_bytes());
+    out
+}
+
+/// A layer record's additional information block: its key and data.
+type PhotoshopBlock = (&'static [u8; 4], Vec<u8>);
+
+/// One layer record (`rect` is top, left, bottom, right; raw RGB channels of one gray) and its
+/// channel data.
+fn photoshop_record(
+    info: &mut Vec<u8>,
+    data: &mut Vec<u8>,
+    name: &str,
+    rect: [i32; 4],
+    blocks: &[PhotoshopBlock],
+) {
+    for v in rect {
+        info.extend(v.to_be_bytes());
+    }
+    let area = ((rect[3] - rect[1]) * (rect[2] - rect[0])) as usize;
+    let channels: &[i16] = if area > 0 { &[0, 1, 2] } else { &[] };
+    info.extend((channels.len() as u16).to_be_bytes());
+    for &id in channels {
+        info.extend(id.to_be_bytes());
+        info.extend(((2 + area) as u32).to_be_bytes());
+        data.extend([0, 0]);
+        data.extend(vec![60; area]);
+    }
+    info.extend(b"8BIMnorm");
+    info.extend([255, 0, 0, 0]);
+    let mut extra = vec![0; 8]; // no mask or blending ranges
+    extra.push(name.len() as u8);
+    extra.extend(name.as_bytes());
+    while !extra.len().is_multiple_of(4) {
+        extra.push(0);
+    }
+    for (key, block) in blocks {
+        extra.extend(b"8BIM");
+        extra.extend(*key);
+        extra.extend((block.len() as u32).to_be_bytes());
+        extra.extend(block);
+        if block.len() % 2 == 1 {
+            extra.push(0);
+        }
+    }
+    info.extend((extra.len() as u32).to_be_bytes());
+    info.extend(extra);
+}
+
+/// A 30×10 Photoshop file with two 10×10 artboards: "Left" at (0, 0) with a white background and
+/// a 2×2 layer at (2, 1), and "Right" at (20, 0), transparent, with a 2×2 layer at (22, 3); and
+/// a layer, "Loose", outside them.
+fn photoshop_artboards() -> Vec<u8> {
+    let divider = || (b"lsct", 3_u32.to_be_bytes().to_vec());
+    let folder = |left: f64, background| {
+        let mut section = 1_u32.to_be_bytes().to_vec();
+        section.extend(b"8BIMpass");
+        [
+            (b"lsct", section),
+            (
+                b"artb",
+                artboard_block(left, 0.0, left + 10.0, 10.0, background),
+            ),
+        ]
+    };
+    let mut info = 7_i16.to_be_bytes().to_vec();
+    let mut data = Vec::new();
+    let records: [(&str, [i32; 4], Vec<PhotoshopBlock>); 7] = [
+        ("Loose", [0, 0, 1, 1], vec![]),
+        ("</Layer group>", [0; 4], vec![divider()]),
+        ("Left art", [1, 2, 3, 4], vec![]),
+        ("Left", [0; 4], folder(0.0, 1).to_vec()),
+        ("</Layer group>", [0; 4], vec![divider()]),
+        ("Right art", [3, 22, 5, 24], vec![]),
+        ("Right", [0; 4], folder(20.0, 3).to_vec()),
+    ];
+    for (name, rect, blocks) in &records {
+        photoshop_record(&mut info, &mut data, name, *rect, blocks);
+    }
+    info.extend(data);
+    if info.len() % 2 == 1 {
+        info.push(0);
+    }
+    let mut out = b"8BPS\0\x01\0\0\0\0\0\0\0\x03".to_vec();
+    out.extend(10_u32.to_be_bytes());
+    out.extend(30_u32.to_be_bytes());
+    out.extend(8_u16.to_be_bytes());
+    out.extend(3_u16.to_be_bytes());
+    out.extend([0; 8]); // no color mode data or image resources
+    let mut section = (info.len() as u32).to_be_bytes().to_vec();
+    section.extend(info);
+    section.extend([0; 4]);
+    out.extend((section.len() as u32).to_be_bytes());
+    out.extend(section);
+    out.extend([0, 0]);
+    out.extend([255; 900]);
+    out
+}
+
+#[test]
+fn photoshop_artboards_open_as_tabs_and_take_an_untouched_tab() {
+    let (_, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Boards.psd");
+    std::fs::write(&path, photoshop_artboards()).unwrap();
+    let titles =
+        |app: &EditorApp| -> Vec<String> { app.sessions.iter().map(|s| s.title.clone()).collect() };
+
+    // The report lists the artboards and what is left out before anything opens.
+    app.dimensions = [64, 48];
+    app.new_document();
+    app.open_path(&path, false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(
+        lines.contains(&"Artboards (each opened as its own document): 2 (“Right”, “Left”)".into()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"Layers outside every artboard (left out): 1 (“Loose”)".into()),
+        "{lines:?}"
+    );
+    assert_eq!(titles(&app), ["Untitled"]);
+    app.finish_photoshop(true);
+
+    // The untouched new document gives its tab to the first artboard.
+    assert_eq!(titles(&app), ["Right", "Left"]);
+    assert_eq!(app.current, 0);
+    let right = &app.sessions[0];
+    assert!(right.path.is_none() && right.source.is_none());
+    assert_eq!((right.document.width, right.document.height), (10, 10));
+    let art = &right.document.layers[0];
+    assert_eq!(art.name, "Right art");
+    assert_eq!((art.transform.x, art.transform.y), (2.0, 3.0));
+    let left = &app.sessions[1].document;
+    let names: Vec<_> = left.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Artboard Background", "Left art"]);
+    assert_eq!(
+        (left.layers[1].transform.x, left.layers[1].transform.y),
+        (2.0, 1.0)
+    );
+    assert_eq!(app.status, "Imported with changes");
+
+    // Tabs with work in them stay.
+    app.open_path(&path, false);
+    app.finish_photoshop(true);
+    assert_eq!(titles(&app), ["Right", "Left", "Right", "Left"]);
+    assert_eq!(app.current, 2);
+
+    // So does an edited new document, or one of several.
+    for edited in [true, false] {
+        app.sessions.clear();
+        app.new_document();
+        if edited {
+            app.sessions[0].history.mark_modified();
+        } else {
+            app.new_document();
+        }
+        app.open_path(&path, false);
+        app.finish_photoshop(true);
+        assert_eq!(app.sessions.len(), if edited { 3 } else { 4 });
+        assert_eq!(app.sessions[app.current].title, "Right");
+    }
+
+    // With no tabs open, each artboard opens in a new one.
+    app.sessions.clear();
+    app.open_path(&path, false);
+    app.finish_photoshop(true);
+    assert_eq!(titles(&app), ["Right", "Left"]);
+    assert_eq!(app.current, 0);
+}
+
+#[test]
+fn photoshop_artboards_import_as_layer_as_folders_in_their_layout() {
+    let (_, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Boards.psd");
+    std::fs::write(&path, photoshop_artboards()).unwrap();
+    app.dimensions = [40, 20];
+    app.new_document();
+    app.open_path(&path, true);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(
+        lines.contains(&"Artboards (each imported as a folder): 2 (“Right”, “Left”)".into()),
+        "{lines:?}"
+    );
+    app.finish_photoshop(true);
+    assert_eq!(app.sessions.len(), 1);
+    let document = &app.session().unwrap().document;
+    let names: Vec<_> = document.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Layer 1",
+            "Artboard Background",
+            "Left art",
+            "Left",
+            "Right art",
+            "Right",
+            "Boards"
+        ]
+    );
+    let find = |name| document.layers.iter().find(|l| l.name == name).unwrap();
+    let file = find("Boards");
+    assert!(file.group && file.parent.is_none());
+    for (board, art, at) in [
+        ("Left", "Left art", (7.0, 6.0)),
+        ("Right", "Right art", (27.0, 8.0)),
+    ] {
+        let folder = find(board);
+        assert!(folder.group);
+        assert_eq!(folder.parent, Some(file.id));
+        let art = find(art);
+        assert_eq!(art.parent, Some(folder.id));
+        // The artboards keep their layout, 30 × 10 centered on the 40 × 20 canvas.
+        assert_eq!((art.transform.x, art.transform.y), at);
+    }
+    let background = find("Artboard Background");
+    assert_eq!((background.transform.x, background.transform.y), (5.0, 5.0));
+    assert_eq!(background.parent, Some(find("Left").id));
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
 /// An OpenRaster file with one 2 × 1 layer at (1, 1) drawn with `op`.
 fn openraster_file(op: &str) -> Vec<u8> {
     use std::io::Write as _;

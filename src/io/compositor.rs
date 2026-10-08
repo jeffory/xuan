@@ -98,6 +98,20 @@ pub enum Dropped {
     CroppedToCanvas,
     /// A clipped folder, or a clipping mask whose base was left out, released.
     ClippingBase,
+    /// A Photoshop artboard, opened as a document of its own (named).
+    ArtboardDocument,
+    /// A Photoshop artboard, imported as a folder of its own (named).
+    ArtboardFolder,
+    /// A layer or folder outside every artboard, left out (named).
+    OutsideArtboards,
+    /// An artboard too large for Xuan's limits, left out (named).
+    ArtboardTooLarge,
+    /// A layer cropped to the artboard it is in, as the artboard shows it.
+    CroppedToArtboard,
+    /// An artboard's white, black or custom background, added as its bottom layer.
+    ArtboardBackground,
+    /// An artboard background Xuan cannot read, left out.
+    ArtboardBackgroundLeftOut,
     // OpenRaster imports (`super::ora`).
     /// An OpenRaster layer whose composite operation Xuan does not have, drawn as Normal.
     OpenRasterBlendMode(&'static str),
@@ -161,6 +175,19 @@ impl Dropped {
                 tr("Layers cropped to the canvas to fit the memory limit").into()
             }
             Self::ClippingBase => tr("Clipping masks on folders or left-out layers").into(),
+            Self::ArtboardDocument => tr("Artboards (each opened as its own document)").into(),
+            Self::ArtboardFolder => tr("Artboards (each imported as a folder)").into(),
+            Self::OutsideArtboards => tr("Layers outside every artboard (left out)").into(),
+            Self::ArtboardTooLarge => {
+                tr("Artboards too large for the memory limit (left out)").into()
+            }
+            Self::CroppedToArtboard => tr("Layers cropped to their artboard").into(),
+            Self::ArtboardBackground => {
+                tr("Artboard background colours (added as a layer)").into()
+            }
+            Self::ArtboardBackgroundLeftOut => {
+                tr("Artboard backgrounds Xuan can't read (left out)").into()
+            }
             Self::OpenRasterBlendMode(name) => {
                 format!("{} “{name}” ({})", tr("Blend mode"), tr("drawn as Normal"))
             }
@@ -189,7 +216,12 @@ pub enum ImportSource {
 pub struct ImportReport {
     source: ImportSource,
     dropped: BTreeMap<Dropped, usize>,
+    /// What some kinds of change apply to (artboard and layer names), in the order found.
+    names: BTreeMap<Dropped, Vec<String>>,
 }
+
+/// Names listed per line of an [`ImportReport`]; further ones are counted only.
+const MAX_LISTED_NAMES: usize = 10;
 
 impl ImportReport {
     /// An empty report for a file of this kind.
@@ -197,6 +229,7 @@ impl ImportReport {
         Self {
             source,
             dropped: BTreeMap::new(),
+            names: BTreeMap::new(),
         }
     }
 
@@ -208,12 +241,38 @@ impl ImportReport {
         *self.dropped.entry(item).or_default() += 1;
     }
 
-    /// One translated line per kind of change, with how often it occurred.
+    /// Count `item` for something named `name`, which its line lists.
+    pub(super) fn add_named(&mut self, item: Dropped, name: impl Into<String>) {
+        self.add(item);
+        self.names.entry(item).or_default().push(name.into());
+    }
+
+    /// One translated line per kind of change, with how often it occurred and, for some, what
+    /// it applies to.
     pub fn lines(&self) -> Vec<String> {
         self.dropped
             .iter()
-            .map(|(item, count)| format!("{}: {count}", item.label()))
+            .map(|(item, count)| {
+                let mut line = format!("{}: {count}", item.label());
+                if let Some(names) = self.names.get(item) {
+                    let mut listed: Vec<String> = names
+                        .iter()
+                        .take(MAX_LISTED_NAMES)
+                        .map(|name| format!("“{name}”"))
+                        .collect();
+                    if names.len() > MAX_LISTED_NAMES {
+                        listed.push("…".into());
+                    }
+                    line.push_str(&format!(" ({})", listed.join(", ")));
+                }
+                line
+            })
             .collect()
+    }
+
+    /// The names counted for `item`, in the order found.
+    pub fn names(&self, item: Dropped) -> &[String] {
+        self.names.get(&item).map_or(&[], Vec::as_slice)
     }
 
     pub fn is_empty(&self) -> bool {

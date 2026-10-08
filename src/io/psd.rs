@@ -14,6 +14,10 @@
 //!   Smart objects, fill layers, other vector content and type Xuan cannot edit are imported as
 //!   Photoshop's pixels.
 //! - When the layers do not fit Xuan's pixel budget, every layer is cropped to the canvas.
+//! - As upstream does (Compositor issue #65), each artboard opens as a document of its own
+//!   ([`read_documents`]): named after the artboard, the artboard's size, its layers cropped to it
+//!   and placed relative to its corner, and its background color as the bottom layer. Layers
+//!   outside every artboard, and artboards beyond the pixel budget, are left out by name.
 //!
 //! Everything changed is counted in the shared [`ImportReport`].
 //!
@@ -24,6 +28,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::Read,
+    ops::Range,
     path::Path,
     sync::Arc,
 };
@@ -149,7 +154,12 @@ impl Default for PixelBudget {
 impl PixelBudget {
     /// What is left after the pixels and masks `document` already holds.
     pub fn remaining(document: &Document) -> Self {
-        let mut budget = Self::default();
+        Self::default().less(document)
+    }
+
+    /// What is left of this budget after the pixels and masks `document` holds.
+    pub fn less(self, document: &Document) -> Self {
+        let mut budget = self;
         for layer in &document.layers {
             if let Some(pixels) = &layer.pixels {
                 let area = u64::from(pixels.width()) * u64::from(pixels.height());
@@ -173,6 +183,19 @@ pub fn is_photoshop(path: &Path) -> bool {
 
 /// Read a Photoshop file from disk; see [`read`].
 pub fn load(path: &Path, budget: PixelBudget) -> Result<(Document, ImportReport)> {
+    read(&load_bytes(path)?, budget)
+}
+
+/// Read a Photoshop file from disk, one document per artboard; see [`read_documents`].
+pub fn load_documents(
+    path: &Path,
+    budget: PixelBudget,
+    artboards: Artboards,
+) -> Result<(Vec<Imported>, ImportReport)> {
+    read_documents(&load_bytes(path)?, budget, artboards)
+}
+
+fn load_bytes(path: &Path) -> Result<Vec<u8>> {
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
     // The whole file is read into memory, so how large it may be follows the memory.
     let limit = crate::limits::get().photoshop_file_bytes();
@@ -184,7 +207,7 @@ pub fn load(path: &Path, budget: PixelBudget) -> Result<(Document, ImportReport)
     let mut bytes = Vec::new();
     File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
     ensure!(bytes.len() as u64 <= limit, too_big());
-    read(&bytes, budget)
+    Ok(bytes)
 }
 
 pub(crate) fn damaged() -> anyhow::Error {
@@ -1318,11 +1341,11 @@ fn fill_polygons(polygons: &[Vec<(f64, f64)>], area: Rect, color: [u8; 4]) -> Rg
     })
 }
 
-/// Draw a solid-filled vector shape Photoshop stored without pixels, within the canvas.
-fn draw_vector(record: &Record<'_>, canvas: Rect, pixels_left: u64) -> Option<(RgbaImage, Rect)> {
+/// Draw a solid-filled vector shape Photoshop stored without pixels, within the frame's bounds.
+fn draw_vector(record: &Record<'_>, frame: Frame, pixels_left: u64) -> Option<(RgbaImage, Rect)> {
     let color = fill_color(record)?;
     let data = VECTOR_KEYS.iter().find_map(|key| record.get(key))?;
-    let polygons = vector_path(data, canvas)?;
+    let polygons = vector_path(data, frame.canvas)?;
     let (mut left, mut top, mut right, mut bottom) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for &(x, y) in polygons.iter().flatten() {
         left = left.min(x);
@@ -1336,7 +1359,7 @@ fn draw_vector(record: &Record<'_>, canvas: Rect, pixels_left: u64) -> Option<(R
         right: right.ceil().min(1e9) as i64,
         bottom: bottom.ceil().min(1e9) as i64,
     }
-    .intersect(canvas);
+    .intersect(frame.bounds);
     // Filling visits every edge on every sample row in the worst case.
     let edges: usize = polygons.iter().map(Vec::len).sum();
     let work = (edges as u64).saturating_mul(area.height().max(0) as u64 * 4);
@@ -1708,9 +1731,15 @@ struct Built {
     kept: bool,
 }
 
-/// Read a Photoshop document, reporting what Xuan changed. `budget` is what the destination may
-/// still hold; when the layers exceed it, they are cropped to the canvas.
-pub fn read(bytes: &[u8], budget: PixelBudget) -> Result<(Document, ImportReport)> {
+/// A Photoshop file's header, resources and layer records; `reader` stands at the merged image.
+struct Parsed<'a> {
+    header: Header,
+    resources: Resources,
+    records: Vec<Record<'a>>,
+    reader: Reader<'a>,
+}
+
+fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
     let mut reader = Reader::new(bytes);
     let header = header(&mut reader)?;
     let psb = header.psb;
@@ -1727,27 +1756,66 @@ pub fn read(bytes: &[u8], budget: PixelBudget) -> Result<(Document, ImportReport
     } else {
         Vec::new()
     };
+    Ok(Parsed {
+        header,
+        resources,
+        records,
+        reader,
+    })
+}
+
+/// Read a Photoshop document, reporting what Xuan changed. `budget` is what the destination may
+/// still hold; when the layers exceed it, they are cropped to the canvas. Artboards stay folders
+/// on the whole canvas here; [`read_documents`] opens them one by one.
+pub fn read(bytes: &[u8], budget: PixelBudget) -> Result<(Document, ImportReport)> {
+    let mut parsed = parse(bytes)?;
     let mut report = ImportReport::new(ImportSource::Photoshop);
+    let document = whole_canvas(&mut parsed, budget, &mut report)?;
+    Ok((document, report))
+}
+
+/// The whole canvas as one document, as [`read`] gives it.
+fn whole_canvas(
+    parsed: &mut Parsed<'_>,
+    budget: PixelBudget,
+    report: &mut ImportReport,
+) -> Result<Document> {
+    let header = &parsed.header;
     let mut document = Document::new(header.width, header.height)?;
-    document.resolution = resources.resolution;
+    document.resolution = parsed.resources.resolution;
     document.layers.clear();
-    if records.is_empty() {
+    if parsed.records.is_empty() {
         ensure!(
             u64::from(header.width) * u64::from(header.height) <= budget.layers,
             too_large()
         );
-        let image = merged_image(&mut reader, &header)?;
+        let image = merged_image(&mut parsed.reader, header)?;
         document.layers.push(Layer::image(tr("Background"), image));
     } else {
         build(
             &mut document,
-            &records,
-            psb,
+            &parsed.records,
+            Frame::whole(canvas_rect(header)),
+            header.psb,
             budget,
-            resources.global_angle,
-            &mut report,
+            parsed.resources.global_angle,
+            report,
         )?;
     }
+    finish(document)
+}
+
+fn canvas_rect(header: &Header) -> Rect {
+    Rect {
+        left: 0,
+        top: 0,
+        right: i64::from(header.width),
+        bottom: i64::from(header.height),
+    }
+}
+
+/// Select the top layer and check the result.
+fn finish(mut document: Document) -> Result<Document> {
     document.active = document
         .layers
         .iter()
@@ -1756,24 +1824,290 @@ pub fn read(bytes: &[u8], budget: PixelBudget) -> Result<(Document, ImportReport
         .map(|l| l.id);
     document.selected = document.active.into_iter().collect();
     document.validate()?;
-    Ok((document, report))
+    Ok(document)
 }
 
+/// How [`read_documents`] brings in a file's artboards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Artboards {
+    /// One new document each, each with the whole budget.
+    Documents,
+    /// Folders for one document, sharing the budget.
+    Folders,
+}
+
+/// A document read from a Photoshop file: its whole canvas, or one artboard.
+pub struct Imported {
+    /// The artboard's name; `None` for a file without artboards.
+    pub artboard: Option<String>,
+    /// Where the document's top-left corner lies on the Photoshop canvas.
+    pub origin: (i64, i64),
+    pub document: Document,
+}
+
+/// Read a Photoshop document as [`read`] does, but with one document per artboard, in the
+/// Layers panel's order (top first). A file without artboards gives its whole canvas, exactly as
+/// [`read`] does. Layers outside every artboard are left out, and artboards that don't fit the
+/// budget are skipped; both are reported by name. With [`Artboards::Folders`], `budget` covers all
+/// the artboards together.
+pub fn read_documents(
+    bytes: &[u8],
+    budget: PixelBudget,
+    artboards: Artboards,
+) -> Result<(Vec<Imported>, ImportReport)> {
+    let mut parsed = parse(bytes)?;
+    let mut report = ImportReport::new(ImportSource::Photoshop);
+    let items = top_level(&parsed.records)?;
+    let records = &parsed.records;
+    if !items
+        .iter()
+        .any(|item| artboard_info(&records[item.end - 1]).is_some())
+    {
+        let document = whole_canvas(&mut parsed, budget, &mut report)?;
+        let whole = Imported {
+            artboard: None,
+            origin: (0, 0),
+            document,
+        };
+        return Ok((vec![whole], report));
+    }
+    let canvas = canvas_rect(&parsed.header);
+    let mut left = budget;
+    let mut documents = Vec::new();
+    // Photoshop stores layers bottom first; the Layers panel lists the top one first.
+    for item in items.into_iter().rev() {
+        let folder = &records[item.end - 1];
+        let Some(info) = artboard_info(folder) else {
+            report.add_named(Dropped::OutsideArtboards, folder.name.clone());
+            continue;
+        };
+        // The artboard's own folder and end divider are the document itself.
+        let children = if item.len() >= 2 {
+            &records[item.start + 1..item.end - 1]
+        } else {
+            &[]
+        };
+        let frame = Frame {
+            canvas,
+            bounds: info.rect,
+            artboard: true,
+        };
+        let built =
+            artboard_document(children, frame, info.background, &parsed, left, &mut report)?;
+        let Some(document) = built else {
+            report.add_named(Dropped::ArtboardTooLarge, folder.name.clone());
+            continue;
+        };
+        if artboards == Artboards::Folders {
+            left = left.less(&document);
+        }
+        report.add_named(
+            match artboards {
+                Artboards::Documents => Dropped::ArtboardDocument,
+                Artboards::Folders => Dropped::ArtboardFolder,
+            },
+            folder.name.clone(),
+        );
+        documents.push(Imported {
+            artboard: Some(folder.name.clone()),
+            origin: (info.rect.left, info.rect.top),
+            document,
+        });
+    }
+    ensure!(!documents.is_empty(), too_large());
+    Ok((documents, report))
+}
+
+/// One artboard's layers as a document of the artboard's size, or `None` when they don't fit
+/// `budget` even cropped to the artboard. Only the part of each layer inside the artboard is
+/// decoded.
+fn artboard_document(
+    records: &[Record<'_>],
+    frame: Frame,
+    background: Background,
+    parsed: &Parsed<'_>,
+    budget: PixelBudget,
+    report: &mut ImportReport,
+) -> Result<Option<Document>> {
+    let bounds = frame.bounds;
+    if !bounds.fits_document() {
+        return Ok(None);
+    }
+    let fill = match background {
+        Background::Color(color) => Some(color),
+        Background::Transparent | Background::Unreadable => None,
+    };
+    let fill_area = if fill.is_some() { bounds.area() } else { 0 };
+    let Some(layers) = budget.layers.checked_sub(fill_area) else {
+        return Ok(None);
+    };
+    let budget = PixelBudget { layers, ..budget };
+    if !fits(records, true, bounds, budget) {
+        return Ok(None);
+    }
+    let (width, height) = (bounds.width() as u32, bounds.height() as u32);
+    let mut document = Document::new(width, height)?;
+    document.resolution = parsed.resources.resolution;
+    document.layers.clear();
+    build(
+        &mut document,
+        records,
+        frame,
+        parsed.header.psb,
+        budget,
+        parsed.resources.global_angle,
+        report,
+    )?;
+    // Layers sit relative to the artboard's corner; folders already span the document.
+    let (dx, dy) = (bounds.left as f32, bounds.top as f32);
+    for layer in &mut document.layers {
+        if !layer.group {
+            layer.transform.x -= dx;
+            layer.transform.y -= dy;
+        }
+        if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
+            placement.x -= dx;
+            placement.y -= dy;
+        }
+    }
+    match background {
+        Background::Color(_) => report.add(Dropped::ArtboardBackground),
+        Background::Unreadable => report.add(Dropped::ArtboardBackgroundLeftOut),
+        Background::Transparent => {}
+    }
+    if let Some(color) = fill {
+        let pixels = RgbaImage::from_pixel(width, height, image::Rgba(color));
+        document
+            .layers
+            .insert(0, Layer::image(tr("Artboard Background"), pixels));
+    }
+    finish(document).map(Some)
+}
+
+/// The top-level layers and folders, bottom first, as ranges of `records`: a folder's runs from
+/// its end divider to its own record.
+fn top_level(records: &[Record<'_>]) -> Result<Vec<Range<usize>>> {
+    let mut items = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = 0;
+    for (index, record) in records.iter().enumerate() {
+        if record.section == 3 {
+            if depth == 0 {
+                start = index;
+            }
+            depth += 1;
+        } else if is_group(record) && depth > 0 {
+            depth -= 1;
+            if depth == 0 {
+                items.push(start..index + 1);
+            }
+        } else if depth == 0 {
+            // A layer, or a folder without an end divider, which holds nothing.
+            items.push(index..index + 1);
+        }
+    }
+    ensure!(depth == 0, damaged());
+    Ok(items)
+}
+
+/// Blocks holding an artboard's descriptor: `artb`, and `artd` and `abdd`, which Photoshop also
+/// writes. The last one with a rectangle wins, as in psd-tools.
+const ARTBOARD_KEYS: [&[u8; 4]; 3] = [b"artb", b"artd", b"abdd"];
+
+/// An artboard's background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Background {
+    Transparent,
+    Color([u8; 4]),
+    /// A background type or color Xuan cannot read; left out.
+    Unreadable,
+}
+
+/// An artboard folder's bounds on the canvas and its background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ArtboardInfo {
+    rect: Rect,
+    background: Background,
+}
+
+/// The artboard a folder is: `artboardRect` (`Top `, `Left`, `Btom`, `Rght`, in canvas pixels)
+/// and `artboardBackgroundType`, which is 1 for white, 2 black, 3 transparent and 4 the `Clr `
+/// color (as the files Photoshop writes in ag-psd's tests show). An empty rectangle is no
+/// artboard.
+fn artboard_info(record: &Record<'_>) -> Option<ArtboardInfo> {
+    if !is_group(record) {
+        return None;
+    }
+    let descriptor = ARTBOARD_KEYS
+        .iter()
+        .rev()
+        .filter_map(|key| record.get(key))
+        .filter_map(block_descriptor)
+        .find(|d| d.object("artboardRect").is_some())?;
+    let bounds = descriptor.object("artboardRect")?;
+    let side = |key| {
+        bounds
+            .double(key)
+            .filter(|v| v.abs() <= MAX_POSITION as f64)
+            .map(|v| v.round() as i64)
+    };
+    let rect = Rect {
+        left: side("Left")?,
+        top: side("Top ")?,
+        right: side("Rght")?,
+        bottom: side("Btom")?,
+    };
+    if rect.is_empty() {
+        return None;
+    }
+    let background = match descriptor.double("artboardBackgroundType") {
+        Some(1.0) => Background::Color([255, 255, 255, 255]),
+        Some(2.0) => Background::Color([0, 0, 0, 255]),
+        Some(3.0) => Background::Transparent,
+        Some(4.0) => descriptor
+            .object("Clr ")
+            .and_then(rgb)
+            .map_or(Background::Unreadable, Background::Color),
+        _ => Background::Unreadable,
+    };
+    Some(ArtboardInfo { rect, background })
+}
+
+/// The part of the Photoshop canvas one document shows: all of it, or an artboard.
+#[derive(Clone, Copy, Debug)]
+struct Frame {
+    /// The Photoshop canvas, which vector paths are measured against.
+    canvas: Rect,
+    /// What the document shows, in canvas pixels.
+    bounds: Rect,
+    /// An artboard, which crops everything to its bounds.
+    artboard: bool,
+}
+
+impl Frame {
+    /// The whole canvas, for a file without artboards.
+    fn whole(canvas: Rect) -> Self {
+        Self {
+            canvas,
+            bounds: canvas,
+            artboard: false,
+        }
+    }
+}
+
+/// Add `records`' layers to `document`, at their place on the Photoshop canvas. Within an
+/// artboard, everything is cropped to it.
 fn build(
     document: &mut Document,
     records: &[Record<'_>],
+    frame: Frame,
     psb: bool,
     budget: PixelBudget,
     global_angle: f64,
     report: &mut ImportReport,
 ) -> Result<()> {
-    let canvas = Rect {
-        left: 0,
-        top: 0,
-        right: i64::from(document.width),
-        bottom: i64::from(document.height),
-    };
-    let crop = !fits(records, false, canvas, budget);
+    let canvas = frame.bounds;
+    let crop = frame.artboard || !fits(records, false, canvas, budget);
     ensure!(!crop || fits(records, true, canvas, budget), too_large());
     let mut pixels_left = budget.layers;
     let mut open: Vec<Uuid> = Vec::new();
@@ -1859,7 +2193,7 @@ fn build(
             layer.transform = image.transform();
         }
         if !group && layer.adjustment.is_none() {
-            content(record, &mut layer, image, canvas, &mut pixels_left, report);
+            content(record, &mut layer, image, frame, &mut pixels_left, report);
         }
         if let Some(mask) = record.mask {
             if mask.from_vector {
@@ -1873,7 +2207,11 @@ fn build(
             }
         }
         if cropped {
-            report.add(Dropped::CroppedToCanvas);
+            report.add(if frame.artboard {
+                Dropped::CroppedToArtboard
+            } else {
+                Dropped::CroppedToCanvas
+            });
         }
         if let Some(imported) = effects {
             if imported.left_out {
@@ -1929,10 +2267,11 @@ fn content(
     record: &Record<'_>,
     layer: &mut Layer,
     image: Rect,
-    canvas: Rect,
+    frame: Frame,
     pixels_left: &mut u64,
     report: &mut ImportReport,
 ) {
+    let canvas = frame.bounds;
     if let Some(data) = record.get(b"TySh") {
         // Xuan's text layers keep pixels; until edited they show Photoshop's rendering.
         let style = layer
@@ -1975,7 +2314,7 @@ fn content(
         }
         // Older files store shapes without pixels; upstream draws the path itself.
         if layer.pixels.is_none() {
-            match draw_vector(record, canvas, *pixels_left) {
+            match draw_vector(record, frame, *pixels_left) {
                 Some((pixels, area)) => {
                     *pixels_left -= area.area();
                     layer.pixels = Some(Arc::new(pixels));
