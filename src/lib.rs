@@ -17,6 +17,7 @@ pub mod io;
 pub mod layer_effects;
 pub mod layout;
 pub mod limits;
+pub mod lut;
 pub mod operations;
 pub mod paint;
 pub mod panes;
