@@ -94,7 +94,7 @@ the document takes effect on the next frame and is drawn at once.
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
 | provenance | `document/get` lists each generated layer's `provenance` |
-| run a plugin action | not exposed: `host/run` only starts the calling plugin's own actions |
+| run another plugin's action (#124) | `plugins/actions`, `host/run` with `<plugin>/<action>`, `jobs/list` (new), behind the grant setting **Run other plugins' actions** (MCP `list_plugin_actions`, `run_plugin_action`, `get_jobs`) |
 
 Panes give the plugin its status and connection page; settings hold the port.
 
@@ -458,6 +458,102 @@ discards. The MCP server gains no access to the provider plugin, and the
 provider none to the MCP client; offline mode makes the command fall back to
 the built-in algorithm.
 
+## Running other plugins' actions (#124)
+
+With the Comfy Cloud plugin installed, an agent could paint, mask and filter
+through the server but not run **Generate Image…**, **Edit Image…**,
+**Split into Layers** or the AI Region actions: `host/run` refuses another
+plugin's action on purpose (a plugin should not drive another one, with its
+own network hosts, secrets and costs, without the user knowing), and
+`run_command` takes only built-in commands. The rule stays the default; the
+exception is explicit and visible.
+
+- **Two grant settings, off by default.** **Run other plugins' actions**
+  (`run_other_actions`) lets the plugin list other plugins' actions, start
+  them and follow their jobs. Without it, `plugins/actions`, `jobs/list` and
+  such a `host/run` fail with an error that names the setting. **Always
+  Allow** in the run prompt stores the second, `run_without_asking`, shown as
+  **Run them without asking** under the first. The issue named one setting
+  and an Always Allow that "sets the grant"; that cannot be one flag, since
+  without the setting the request fails and the prompt could never offer to
+  turn it on, so the pair mirrors edits (`edit_prompt = "session"` and
+  `edit_without_asking`). Both belong to the grant like
+  `save_without_asking`: kept while the folder, command and permissions stay
+  the same, dropped otherwise. The settings are generic, but **Manage
+  Plugins** offers them only to plugins that ask before edits (the MCP
+  server), and shows them for any plugin while they are on.
+- **Checked before anything waits.** The plugin and action must exist, the
+  plugin must be enabled and not held back by offline mode, and the inputs
+  must fit the manifest as given. Inputs from a project file or a plugin's own
+  `host/run` are coerced (a wrong type falls back to the default, numbers are
+  clamped); a run for a client is not, so a bad enum or an out-of-range number
+  fails at once with the input's name instead of running with something
+  else. `path` inputs cannot be set: they name a file the user chooses, and a
+  client could otherwise have a network plugin read and upload any file.
+  `into` is required for actions with `result.into = "ask"`, and is `layer`
+  or `document`, what the action's dialog offers; the issue also listed
+  `replace`, which that dialog never offers. A disabled or offline plugin is
+  refused before the prompt, so the user is not asked about a run that
+  cannot happen.
+- **A prompt per session and plugin.** The first run in a session asks **Run
+  “Generate Image” for MCP Server (plugin mcp-server)?**, naming the other
+  plugin with its id, the texts and options, where the result goes, the
+  layers it selects, the session, and for a network plugin its hosts and that
+  a run can send document data and use paid credits. **Allow** covers that
+  session's runs of that plugin only: allowing Comfy Cloud does not allow
+  every plugin. **Always Allow** sets `run_without_asking`; **Cancel**
+  refuses with `-32800` and starts the 30-second cooldown edits and files
+  use. It behaves like the other plugin prompts: it waits until no other
+  dialog, editor job or plugin action is open, comes back after another
+  dialog replaced it (#56), and `request/cancel` closes it so a late answer
+  does nothing (#57). One run per plugin may wait for it, so runs that may
+  cost money cannot stack up behind one answer.
+- **The other plugin's rules, as from its menu.** The run takes the path a
+  surface run takes (`run_from_surface`), not `start_plugin_action_with` as
+  the issue suggested: that function opens the action's dialog for any action
+  with inputs, reports problems only to the user and resumes a newly allowed
+  plugin as a menu run. The checks are the menu's, in its order, and use the
+  other plugin's grant, never the server's: a plugin that is not allowed yet
+  shows its permission prompt (nothing resumes after it; the client runs the
+  action again), an action that needs an image layer or a selection is
+  refused as its menu item would be, missing models are offered for download
+  (once ready, the action's dialog opens with the client's inputs for the user
+  to run, as when a menu run waited for them), and a network plugin asks
+  **Send to *Plugin*?** before anything is sent, saying which plugin started
+  the run. So a run goes ahead without a prompt only where the menu item
+  would too; with "Don't ask again" for Comfy Cloud and Always Allow for the
+  server, neither asks.
+- **Answered when the job runs.** `host/run` answers `{ok, running: true,
+  job, …}` once the job runs, or an error that says why nothing ran. While the
+  send prompt is up the request waits, and the server keeps the client
+  informed with progress notifications as for every prompt; **Cancel**, the
+  action closing or the server stopping answer `-32800`, and
+  `request/cancel` closes the send prompt. Failures go to the client, not to
+  the user as error dialogs.
+- **Following the job.** Cloud jobs take 30–120 seconds or more. `jobs/list`
+  reports what the status bar shows (each job's label, progress and message,
+  which one the bar shows and "1 of N"), finished results waiting for the
+  editor, the open proposal, and what became of the jobs this plugin started:
+  waiting, proposed, done, accepted, discarded, failed (with the error) or
+  cancelled. Other plugins' finished jobs are not reported. `get_jobs` wraps
+  it, so a client can wait without guessing; `run_plugin_action` returns at
+  once, like `content_fill`.
+- **Visible to the user.** The job is in the status bar like any other, with
+  Cancel, and hovering it names the plugin that started it; the server's log
+  in **Manage Plugins** notes each run; the MCP Server pane lists "run_plugin_action:
+  started Generate Image… from Comfy Cloud" and says when clients may run
+  other plugins' actions; and the result is a proposal the user accepts or
+  discards.
+- **MCP tools.** `list_plugin_actions` turns each action's declared inputs
+  into a JSON schema (enum ids with their labels, bounds, defaults, regions as
+  boxes with their fields). `run_plugin_action` takes `plugin`, `action`,
+  `inputs`, `into` and `layers`, and is marked open-world. `get_jobs` wraps
+  `jobs/list`. None can be a `batch` step.
+
+Left out: plugins other than the MCP server calling each other (the setting
+is generic, but nothing offers it to them), and Xuan as an MCP client of
+outside servers.
+
 ## Network and the sandbox
 
 The server listens on `127.0.0.1`, so the plugin declares `network =
@@ -474,6 +570,6 @@ usually sends what it reads (previews included) to a model in the cloud:
 
 ## Not in v1
 
-MCP client support (Xuan calling external MCP tools), stdio transport, running
-other plugins' actions from MCP, watching `.xuan` files on disk, and MCP
-sampling or elicitation.
+MCP client support (Xuan calling external MCP tools), stdio transport,
+watching `.xuan` files on disk, and MCP sampling or elicitation. Running other
+plugins' actions came later (#124, above).

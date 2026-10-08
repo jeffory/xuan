@@ -146,7 +146,23 @@ follow instructions hidden in something it read.
   did not write itself since Xuan started (one you saved, say) asks you
   again. The client learns only file names,
   never folders, in answers and in error messages. Xuan's other file
-  commands, the clipboard, settings and other plugins are out of reach.
+  commands, the clipboard and settings are out of reach.
+- **Other plugins' actions** are out of reach too, unless you turn on **Run
+  other plugins' actions** for the MCP Server in **Plugins → Manage
+  Plugins…**. Then a client may list your other plugins' actions and run them,
+  such as Comfy Cloud's **Generate Image…**, which can send your image to a
+  third party and spend credits. The first run of each plugin in a client
+  session asks **Run “Generate Image” for MCP Server (plugin mcp-server)?**,
+  showing the plugin, the prompt and options, and where the result goes, with
+  **Allow**, **Always Allow** and **Cancel**. **Always Allow** shows as **Run
+  them without asking** in Manage Plugins. The plugin's own rules still apply,
+  exactly as from its menu: it must itself be allowed, offline mode stops a
+  network plugin, model downloads are confirmed, a plugin that uses the
+  network asks before the image is sent to it (naming the MCP Server as who
+  started the run), and the result is a proposal you accept or discard. The
+  job shows in the status bar, where you can cancel it, and in the MCP Server
+  pane. Both settings are dropped if the plugin's folder, command or
+  permissions change. A client cannot set an action's file inputs.
 - **Switching documents** is limited to once a second, so a client cannot
   flip your tabs about while you work.
 - **Providers.** `run_command` `remove_background` and `modify_selection`
@@ -226,6 +242,9 @@ larger tool arguments with a tool error saying the request is too large.
 | `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
 | `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/export` |
 | `open_document` | Open an image or project, after the user agrees | `file/open` |
+| `list_plugin_actions` | Other plugins' actions, each with a JSON schema of its inputs; needs **Run other plugins' actions** | `plugins/actions` |
+| `run_plugin_action` | Run one, as from its menu without its dialog, after the user allows it; returns once the job runs | `host/run` |
+| `get_jobs` | The status bar's jobs, and what became of the runs this server started | `jobs/list` |
 
 Filters and adjustments use the shapes `.xuan` files store, for example
 `{"GaussianBlur": {"radius": 4}}`, `"Invert"`, `{"HueSaturation": {"hue": 20,
@@ -359,6 +378,40 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
   limit. Split larger work into several calls.
 - The answer lists the ids of the layers created, in order, and the selection
   or canvas size when a step changed them.
+
+### Other plugins' actions
+
+Once the user turned on **Run other plugins' actions**, `list_plugin_actions`
+lists what the other installed plugins offer, for example Comfy Cloud:
+
+```json
+{"plugin": "comfy-cloud", "action": "generate", "label": "Generate Image…",
+ "kind": "generate", "source": "none", "result": "ask", "into": ["layer", "document"],
+ "network": true, "allowed": true, "available": true,
+ "inputs": {"type": "object", "additionalProperties": false, "properties": {
+   "prompt": {"type": "string", "title": "Prompt", "description": "For example: A lighthouse on a cliff at dusk, painted in gouache"},
+   "model": {"type": "string", "enum": ["seedream-pro", "seedream-flash", "ideogram"], "default": "seedream-pro", …},
+   "aspect": {…}, "resolution": {…}, "seed": {"type": "integer", "title": "Seed"}}}}
+```
+
+- `run_plugin_action` with `plugin`, `action` and `inputs` runs it. Inputs
+  left out take their defaults; a wrong value fails at once and names the
+  input. An action whose `result` is `"ask"` needs `into`: `"layer"` (a new
+  layer in the current document) or `"document"`. `layers` selects layers
+  first, for actions that work on the active layer (`source: "layer"`).
+- The first run of each plugin in a session waits for the user, and a plugin
+  that uses the network asks before the image is sent; the call keeps the
+  client informed meanwhile, as other prompts do. A refusal says nothing ran:
+  ask the user before trying again.
+- The call returns as soon as the job runs, with its `job` id. Cloud jobs
+  often take 30–120 seconds. Call `get_jobs` every 10 seconds or so: `running`
+  has the job's progress and latest message, and `finished` says what became
+  of it: `proposed` (its result is shown to the user), then `accepted` or
+  `discarded`, or `failed` with the error, or `cancelled`. The result is in
+  the document only once the user accepted it; check with `get_document` or
+  `get_preview` then. Other edits keep working while a job runs.
+- These runs may cost the user money. Run what they asked for, not
+  variations to choose from, unless they asked for those.
 
 ### Resources
 
