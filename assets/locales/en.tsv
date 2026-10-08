@@ -1118,6 +1118,21 @@ Tabloid / Ledger
 Half Letter
 Executive
 Some canvas presets could not be read and were skipped
+Save current size as preset…
+Delete preset
+Manage presets…
+Canvas presets
+Pixel sizes
+Print sizes
+No presets in this list.
+Move up
+Move down
+Group
+Current size: {size}
+Saving replaces the preset of this name.
+Save current size
+Delete the presets file and offer the built-in lists again
+Open presets file
 Swap
 Swap width and height (portrait / landscape)
 Keep aspect ratio

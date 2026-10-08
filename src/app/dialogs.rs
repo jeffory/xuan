@@ -120,6 +120,7 @@ impl EditorApp {
                 Dialog::Collage => self.collage_dialog(ctx),
                 Dialog::Paths => self.paths_dialog(ctx),
                 Dialog::AdjustmentPresets => self.presets_dialog(ctx),
+                Dialog::CanvasPresets => self.canvas_presets_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::Update => self.update_dialog(ctx),
                 Dialog::About => {

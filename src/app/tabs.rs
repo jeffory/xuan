@@ -886,7 +886,7 @@ impl EditorApp {
 }
 
 /// Opens the file manager at `path`, with the file selected where the platform allows.
-fn show_in_folder(path: &Path) -> std::io::Result<()> {
+pub(super) fn show_in_folder(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     {
         // Tests never start a file manager.

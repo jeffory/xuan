@@ -1115,6 +1115,21 @@ Tabloid / Ledger	小报 / 账簿 (Tabloid / Ledger)
 Half Letter	半信纸 (Half Letter)
 Executive	行政 (Executive)
 Some canvas presets could not be read and were skipped	部分画布预设无法读取，已跳过
+Save current size as preset…	将当前尺寸存为预设…
+Delete preset	删除预设
+Manage presets…	管理预设…
+Canvas presets	画布预设
+Pixel sizes	像素尺寸
+Print sizes	打印尺寸
+No presets in this list.	此列表中没有预设。
+Move up	上移
+Move down	下移
+Group	分组
+Current size: {size}	当前尺寸：{size}
+Saving replaces the preset of this name.	保存将替换同名预设。
+Save current size	保存当前尺寸
+Delete the presets file and offer the built-in lists again	删除预设文件，恢复内置列表
+Open presets file	打开预设文件
 Swap	交换
 Swap width and height (portrait / landscape)	交换宽度和高度（竖向 / 横向）
 Keep aspect ratio	保持宽高比

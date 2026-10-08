@@ -498,6 +498,8 @@ enum Dialog {
     Paths,
     /// Layer → Adjustment Presets….
     AdjustmentPresets,
+    /// File → New → Preset → Manage presets…; closing it returns to File → New.
+    CanvasPresets,
     /// Edit → Stroke….
     Stroke,
     /// File → New Collage… and Image → Collage Layout….
