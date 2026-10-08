@@ -1305,6 +1305,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
                 "Without `path`, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
                 "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
+                " `quality` (1-100) sets jpg and lossy webp quality, and webp is lossy when `quality` is given unless `lossless: true`; what is left out follows Xuan's Export dialog.",
                 " Returns the file name (never the folder), with `asked: false` when it was written without asking."
             ),
             properties: json!({
@@ -1313,13 +1314,23 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
                 "path": {"type": "string", "description": "Where to export, an absolute path with an image extension"},
                 "overwrite": {"type": "boolean", "description": "Allow replacing an existing file at `path`"},
+                "quality": {"type": "integer", "minimum": 1, "maximum": 100, "description": "jpg and lossy webp quality; Xuan's Export dialog setting when left out"},
+                "lossless": {"type": "boolean", "description": "webp only: lossless (true) or lossy (false); lossy when `quality` is given, else Xuan's Export dialog setting"},
             }),
             required: &[],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
                 let args = pick(
                     args,
-                    &["document", "format", "suggested_name", "path", "overwrite"],
+                    &[
+                        "document",
+                        "format",
+                        "suggested_name",
+                        "path",
+                        "overwrite",
+                        "quality",
+                        "lossless",
+                    ],
                 )?;
                 text(cx.call("file/export", Value::Object(args))?)
             }),

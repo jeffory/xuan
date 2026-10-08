@@ -55,6 +55,7 @@ else
     install -Dm644 "$xuan_root/licenses/tabler-icons-MIT.txt" "$xuan_prefix/share/licenses/xuan/tabler-icons-MIT.txt"
     install -Dm644 "$xuan_root/licenses/seccompiler-BSD-3-Clause.txt" "$xuan_prefix/share/licenses/xuan/seccompiler-BSD-3-Clause.txt"
     install -Dm644 "$xuan_root/licenses/kurbo-MIT.txt" "$xuan_prefix/share/licenses/xuan/kurbo-MIT.txt"
+    install -Dm644 "$xuan_root/licenses/libwebp-BSD-3-Clause.txt" "$xuan_prefix/share/licenses/xuan/libwebp-BSD-3-Clause.txt"
     install -Dm644 "$xuan_root/licenses/Hack-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/Hack-LICENSE.txt"
     install -Dm644 "$xuan_root/assets/fonts/Inter-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/Inter-LICENSE.txt"
     install -Dm644 "$xuan_root/assets/fonts/DroidSansFallback-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/DroidSansFallback-LICENSE.txt"

@@ -290,6 +290,9 @@ Export…	导出…
 Format	格式
 Quality	质量
 JPEG preview · transparency is flattened onto white	JPEG 预览 · 透明区域将合成为白色
+WebP preview · transparency is kept	WebP 预览 · 保留透明区域
+Lossless	无损
+Estimated size:	预计大小：
 sRGB · Transparent	sRGB · 透明
 Keyboard shortcuts	键盘快捷键
 New / Open / Save	新建 / 打开 / 保存

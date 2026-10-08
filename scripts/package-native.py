@@ -162,7 +162,7 @@ def build_rpm(payload, output, version, architecture, temporary):
     spec.write_text(
         f"Name: xuan\nVersion: {version}\nRelease: 1\nBuildArch: {architecture}\n"
         "Summary: Native Linux image editor\n"
-        "License: MIT AND LGPL-2.1-only AND OFL-1.1 AND Apache-2.0 AND ISC\n"
+        "License: MIT AND LGPL-2.1-only AND OFL-1.1 AND Apache-2.0 AND ISC AND BSD-3-Clause\n"
         "URL: https://github.com/silverling/xuan\n"
         f"{requires}\nRecommends: xdg-desktop-portal\nRecommends: ca-certificates\n"
         "\n%description\n"

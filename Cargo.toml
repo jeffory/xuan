@@ -39,6 +39,9 @@ tempfile = "3"
 toml = "0.8"
 url = "2.5"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+# Lossy WebP export (src/io.rs): libwebp, built by libwebp-sys from its bundled C
+# source, so no system libwebp is needed. Lossless WebP stays with `image`.
+webp = { version = "0.3.1", default-features = false }
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 

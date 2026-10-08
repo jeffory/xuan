@@ -1099,21 +1099,34 @@ impl EditorApp {
             );
             let mut preview = image.clone();
             let mut bytes = Vec::new();
+            let options = self.export_options;
             if self.export_format == "jpg" {
                 let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                     &mut bytes,
-                    self.jpeg_quality,
+                    options.jpeg_quality,
                 );
                 if encoder.encode_image(&render::flatten_white(&image)).is_ok()
                     && let Ok(decoded) = image::load_from_memory(&bytes)
                 {
                     preview = decoded.to_rgba8();
                 }
+            } else if self.export_format == "webp" && !options.webp_lossless {
+                if let Ok(encoded) = io::encode_webp(&image, false, options.webp_quality)
+                    && let Ok(decoded) = image::load_from_memory(&encoded)
+                {
+                    preview = decoded.to_rgba8();
+                    bytes = encoded;
+                }
             } else {
                 let _ = image::DynamicImage::ImageRgba8(image)
                     .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png);
             }
-            self.export_bytes = bytes.len();
+            // The preview is at most 700 pixels a side: scale its size up to the
+            // document's, a rough guide to the file's.
+            let area = |w: u32, h: u32| f64::from(w) * f64::from(h);
+            self.export_bytes = (bytes.len() as f64 * area(doc.width, doc.height)
+                / area(preview.width(), preview.height()))
+            .round() as usize;
             self.export_texture = Some(ctx.load_texture(
                 "export_preview",
                 egui::ColorImage::from_rgba_unmultiplied(
@@ -1156,22 +1169,46 @@ impl EditorApp {
                                     .changed();
                                 }
                             });
-                        if self.export_format == "jpg" {
+                        if self.export_format == "webp" {
+                            self.export_changed |= widgets::checkbox(
+                                ui,
+                                &mut self.export_options.webp_lossless,
+                                tr("Lossless"),
+                            )
+                            .changed();
+                        }
+                        let quality = match self.export_format.as_str() {
+                            "jpg" => Some(&mut self.export_options.jpeg_quality),
+                            "webp" if !self.export_options.webp_lossless => {
+                                Some(&mut self.export_options.webp_quality)
+                            }
+                            _ => None,
+                        };
+                        if let Some(quality) = quality {
                             ui.spacing_mut().slider_width =
                                 (ui.available_width() - widgets::SLIDER_FIELD_WIDTH).max(90.0);
                             self.export_changed |= ui
                                 .add(
-                                    widgets::Slider::new(&mut self.jpeg_quality, 1..=100)
+                                    widgets::Slider::new(quality, io::EXPORT_QUALITY)
                                         .text(tr("Quality"))
                                         .suffix("%"),
                                 )
                                 .changed();
                         }
                     });
-                    if self.export_format == "jpg" {
+                    let lossy = self.export_format == "jpg"
+                        || (self.export_format == "webp" && !self.export_options.webp_lossless);
+                    if lossy {
+                        let note = if self.export_format == "jpg" {
+                            tr("JPEG preview · transparency is flattened onto white")
+                        } else {
+                            tr("WebP preview · transparency is kept")
+                        };
                         ui.label(
-                            RichText::new(tr(
-                                "JPEG preview · transparency is flattened onto white",
+                            RichText::new(format!(
+                                "{note} · {} {}",
+                                tr("Estimated size:"),
+                                estimated_size(self.export_bytes)
                             ))
                             .small()
                             .color(ui.palette().muted),
@@ -1214,7 +1251,7 @@ impl EditorApp {
                     None => match io::export(
                         &self.session().unwrap().document,
                         &path,
-                        self.jpeg_quality,
+                        &self.export_options,
                     ) {
                         Ok(()) => {
                             self.status = format!("{} {}", tr("Exported"), path.display());
@@ -1408,4 +1445,15 @@ fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
         }
     }
     changed
+}
+
+/// An estimated file size for the Export dialog: "12 KiB", "1.4 MiB".
+pub(super) fn estimated_size(bytes: usize) -> String {
+    const KIB: f64 = 1024.0;
+    let bytes = bytes as f64;
+    if bytes < KIB * KIB {
+        format!("{} KiB", (bytes / KIB).ceil().max(1.0))
+    } else {
+        format!("{:.1} MiB", bytes / (KIB * KIB))
+    }
 }

@@ -649,9 +649,11 @@ pub struct EditorApp {
     /// Whole layers copied with those pixels, pasted while the system clipboard still holds them.
     copied_layers: Option<clipboard::CopiedLayers>,
     system_clipboard: Option<arboard::Clipboard>,
-    jpeg_quality: u8,
+    /// The Export dialog's JPEG and WebP choices, kept while Xuan runs.
+    export_options: io::ExportOptions,
     export_format: String,
     export_texture: Option<TextureHandle>,
+    /// The export's estimated size: the preview's, scaled up to the document.
     export_bytes: usize,
     export_changed: bool,
     screenshot: Option<PathBuf>,
@@ -858,7 +860,7 @@ impl EditorApp {
             clipboard: None,
             copied_layers: None,
             system_clipboard: None,
-            jpeg_quality: 90,
+            export_options: io::ExportOptions::default(),
             export_format: "png".into(),
             export_texture: None,
             export_bytes: 0,
