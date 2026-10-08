@@ -189,9 +189,15 @@ Select Subject, Remove Background and Object mode use Xuan's built-in classical 
 ### Rulers, guides and grid
 
 **View → Rulers** (Ctrl+R) shows rulers along the top and left of the canvas,
-measured in document pixels from the image's top-left corner. Numbered ticks are
-roughly 70 points apart at any zoom, in steps of 1, 2, 5, 10, 20, 25, 50, 100 pixels
-and so on, with ten small ticks between them.
+measured from the image's top-left corner in document pixels, or in the unit chosen
+under **Settings → Units & Rulers** or by right-clicking either ruler: inches,
+centimetres, millimetres, points, picas or percent of the document's width (top) and
+height (left). Print units are converted through the document's resolution, so their
+ticks sit over the same pixels at any zoom. Numbered ticks are roughly 70 points apart
+at any zoom, in steps of 1, 2, 5, 10, 20, 25, 50, 100 pixels and so on (1-2-5 steps of
+the other units), with ten small ticks between them and a longer one at the half: a
+centimetre ruler marks each millimetre, 5 mm and the centimetre. Inches, and halves or
+quarters of one when zoomed in, are split in eighths.
 
 Drag from the top ruler to create a horizontal guide, or from the left ruler for a
 vertical one. With the Move tool, drag a guide to move it (the pointer changes over
@@ -229,8 +235,8 @@ within 10 screen points, whatever the zoom; the nearest one wins, and a guide wi
 a tie over the canvas, layers and grid. A magenta line marks what the drag snapped
 to. Hold Ctrl while dragging to move freely.
 
-The rulers, grid and guide visibility, Lock Guides, the snap settings and the
-default grid are app preferences, saved in the configuration file.
+The rulers and their unit, grid and guide visibility, Lock Guides, the snap settings
+and the default grid are app preferences, saved in the configuration file.
 
 ### Crop tool
 

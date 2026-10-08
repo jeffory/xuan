@@ -204,6 +204,8 @@ pub struct UnitSettings {
     /// File → New: the resolution of the last canvas created, in pixels per inch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_canvas_resolution: Option<f32>,
+    /// What View → Rulers measure in.
+    pub rulers: crate::units::Unit,
 }
 
 impl UnitSettings {
@@ -680,6 +682,7 @@ mod tests {
                 size: Unit::Millimeters,
                 resolution: ResolutionUnit::PerCentimeter,
                 new_canvas_resolution: Some(300.0),
+                rulers: Unit::Inches,
             },
             ..Config::default()
         };

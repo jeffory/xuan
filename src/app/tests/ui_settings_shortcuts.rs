@@ -35,6 +35,7 @@ fn settings_window_keeps_its_height_on_every_page() {
         for page in [
             SettingsPage::Appearance,
             SettingsPage::Selection,
+            SettingsPage::Units,
             SettingsPage::Keyboard,
             SettingsPage::General,
         ] {
@@ -79,6 +80,11 @@ fn general_and_appearance_controls_start_at_the_same_x() {
         "Appearance has few controls: {appearance:?}"
     );
     all.extend(appearance);
+    show_settings_page(&ui.ctx(), SettingsPage::Units);
+    ui.settle();
+    let units = control_lefts(&ui);
+    assert_eq!(units.len(), 2, "Units & Rulers controls: {units:?}");
+    all.extend(units);
     for x in &all {
         assert!(
             (x - all[0]).abs() <= 1.0,

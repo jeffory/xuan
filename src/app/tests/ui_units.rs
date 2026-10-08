@@ -254,3 +254,54 @@ fn canvas_size_adds_a_relative_percentage() {
     ui.settle();
     assert!(ui.has_role(Role::ComboBox, "Pixels"));
 }
+
+#[test]
+fn right_clicking_a_ruler_chooses_its_unit() {
+    use crate::app::rulers::RULER_SIZE;
+    let (directory, mut ui) = editor(Some([20, 16]), 300.0);
+    ui.app_mut().config.rulers = true;
+    ui.settle();
+    let viewport = ui.app().canvas_viewport.unwrap();
+    let top = egui::pos2(viewport.center().x, viewport.top() - RULER_SIZE / 2.0);
+    let button = |pressed| egui::Event::PointerButton {
+        pos: top,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    ui.harness
+        .input_mut()
+        .events
+        .extend([egui::Event::PointerMoved(top), button(true)]);
+    ui.harness.step();
+    ui.harness.input_mut().events.push(button(false));
+    ui.settle();
+    ui.click("Centimetres");
+    assert_eq!(ui.app().config.units.rulers, xuan::units::Unit::Centimeters);
+    let saved = xuan::config::Config::load(&directory.path().join("config.toml")).unwrap();
+    assert_eq!(saved.units.rulers, xuan::units::Unit::Centimeters);
+    // The rulers still make guides.
+    assert!(ui.app().guide_drag.is_none());
+}
+
+#[test]
+fn settings_units_page_sets_the_ruler_and_resolution_units() {
+    let (directory, mut ui) = editor(None, 72.0);
+    crate::app::settings::show_settings_page(&ui.ctx(), crate::app::settings::SettingsPage::Units);
+    ui.app_mut().command("settings");
+    ui.settle();
+    assert!(ui.has("Rulers"));
+    choose(&mut ui, "Pixels", "Inches");
+    choose(&mut ui, "Pixels/inch", "Pixels/cm");
+    ui.click("Done");
+    let saved = xuan::config::Config::load(&directory.path().join("config.toml")).unwrap();
+    assert_eq!(saved.units.rulers, xuan::units::Unit::Inches);
+    assert_eq!(
+        saved.units.resolution,
+        xuan::units::ResolutionUnit::PerCentimeter
+    );
+    // File → New shows resolutions per centimetre now.
+    ui.app_mut().command("new");
+    ui.settle();
+    assert!(ui.has_role(Role::ComboBox, "Pixels/cm"));
+}

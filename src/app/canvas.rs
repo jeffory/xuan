@@ -387,10 +387,24 @@ impl EditorApp {
                     ui.interact(viewport, ui.id().with("canvas"), Sense::click_and_drag());
                 let ruler_responses = rulers.map(|layout| {
                     (
-                        ui.interact(layout.top, ui.id().with("ruler_top"), Sense::drag()),
-                        ui.interact(layout.left, ui.id().with("ruler_left"), Sense::drag()),
+                        ui.interact(
+                            layout.top,
+                            ui.id().with("ruler_top"),
+                            Sense::click_and_drag(),
+                        ),
+                        ui.interact(
+                            layout.left,
+                            ui.id().with("ruler_left"),
+                            Sense::click_and_drag(),
+                        ),
                     )
                 });
+                // Right-click either ruler to choose what both measure in.
+                if let Some((top, left)) = &ruler_responses {
+                    for ruler in [top, left] {
+                        ruler.context_menu(|ui| self.ruler_unit_menu(ui));
+                    }
+                }
                 self.release_sample_caches();
                 let mask_target = self.transforming_mask();
                 let session = &mut self.sessions[self.current];
@@ -646,7 +660,12 @@ impl EditorApp {
                     );
                 }
                 if let Some(layout) = &rulers {
-                    super::rulers::paint(ui.painter(), layout, origin, zoom);
+                    let document = &self.sessions[self.current].document;
+                    let unit = self.config.units.rulers;
+                    let scales = [document.width, document.height].map(|side| {
+                        super::rulers::RulerScale::new(unit, document.resolution, side)
+                    });
+                    super::rulers::paint(ui.painter(), layout, origin, zoom, scales);
                 }
                 let crop_cursor = if self.tool == Tool::Crop {
                     let hover = response
