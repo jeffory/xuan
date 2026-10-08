@@ -56,6 +56,11 @@ pub mod symmetry;
 pub use symmetry::{Symmetry, SymmetryMode};
 pub mod tone;
 pub use tone::{Tone, ToneRange};
+pub mod liquify;
+
+#[cfg(test)]
+#[path = "paint/liquify_tests.rs"]
+mod liquify_tests;
 
 #[cfg(test)]
 #[path = "paint/tone_tests.rs"]
@@ -76,6 +81,9 @@ pub enum PaintMode {
     Dodge,
     Burn,
     Sponge,
+    /// Forward warp: the pixels under the brush move with it, by the
+    /// brush's opacity as its strength; see [`liquify`]. Not on masks.
+    Liquify,
 }
 
 #[derive(Clone, Debug)]
@@ -292,6 +300,19 @@ fn stroke_segment(
     if mask_target && tone::is_tone(mode) {
         // As upstream: a mask has no tones or colours to change.
         bail!("Dodge, Burn and Sponge work on layer pixels, not masks");
+    }
+    if mode == PaintMode::Liquify {
+        if mask_target {
+            bail!("Liquify works on layer pixels, not masks");
+        }
+        // At zero strength nothing moves: leave text and shapes live.
+        let dabs = liquify::dabs(from, to, from_brush, brush);
+        if dabs.is_empty() {
+            return Ok(());
+        }
+        ensure_pixels(layer)?;
+        liquify::segment(layer, selection.as_deref(), &dabs);
+        return Ok(());
     }
     if mask_target {
         prepare_mask(layer)?;
@@ -522,6 +543,8 @@ fn stroke_segment(
                         continue;
                     }
                 }
+                // Warped above, before the brush's coverage is worked out.
+                PaintMode::Liquify => continue,
                 PaintMode::Paint | PaintMode::Pencil => {}
             }
             color[3] *= amount;
