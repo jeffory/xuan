@@ -478,6 +478,17 @@ fn switch_brush(app: &mut EditorApp) {
     };
     app.set_tool(tool);
 }
+fn gradient_tool(app: &mut EditorApp) {
+    app.set_tool(app.gradient_variant);
+}
+fn switch_gradient(app: &mut EditorApp) {
+    let tool = if app.tool == Tool::Gradient {
+        Tool::Bucket
+    } else {
+        Tool::Gradient
+    };
+    app.set_tool(tool);
+}
 fn marquee_shape(app: &mut EditorApp) {
     app.ellipse = !app.ellipse;
     app.set_tool(Tool::Marquee);
@@ -959,12 +970,20 @@ pub(super) const COMMANDS: &[Command] = &[
         &[bare(Key::R)],
         Run::Tool(Tool::Blur),
     ),
+    // G selects whichever of Gradient and Paint Bucket was used last.
     tool(
         "tool_gradient",
         "Gradient",
         &[bare(Key::G)],
-        Run::Tool(Tool::Gradient),
+        Run::App(gradient_tool),
     ),
+    tool(
+        "switch_gradient",
+        "Switch between Gradient and Paint Bucket",
+        &[shift(Key::G)],
+        Run::App(switch_gradient),
+    )
+    .aliases(&["paint bucket", "bucket", "flood fill"]),
     tool(
         "tool_shape",
         "Shape",
@@ -1116,6 +1135,7 @@ pub(super) fn tool_command(tool: Tool) -> Option<&'static str> {
         Tool::Clone => "tool_clone",
         Tool::Blur => "tool_blur",
         Tool::Gradient => "tool_gradient",
+        Tool::Bucket => "switch_gradient",
         Tool::Shape => "tool_shape",
         Tool::Pen => "tool_pen",
         Tool::Text => "tool_text",

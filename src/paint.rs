@@ -30,6 +30,12 @@ mod dynamics_tests;
 #[path = "paint/symmetry_tests.rs"]
 mod symmetry_tests;
 
+#[cfg(test)]
+#[path = "paint/bucket_tests.rs"]
+mod bucket_tests;
+
+mod bucket;
+pub use bucket::{BucketOptions, bucket, bucket_coverage};
 pub mod dynamics;
 pub use dynamics::Dynamics;
 mod pencil;

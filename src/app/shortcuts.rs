@@ -186,7 +186,7 @@ impl EditorApp {
         {
             if pressed(key) {
                 let opacity = (index + 1) as f32 / 10.0;
-                if self.tool.is_brush() || self.tool == Tool::Gradient {
+                if self.tool.is_brush() || matches!(self.tool, Tool::Gradient | Tool::Bucket) {
                     self.brush.opacity = opacity;
                 } else {
                     self.edit(tr("Layer Opacity"), |doc| {

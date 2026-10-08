@@ -1230,6 +1230,7 @@ impl EditorApp {
                     );
                 });
             }
+            Tool::Bucket => self.bucket_fill(point),
             Tool::Zoom => {
                 if let Some(s) = self.session_mut() {
                     s.zoom = (s.zoom * if modifiers.alt { 0.8 } else { 1.25 })
@@ -1321,6 +1322,38 @@ impl EditorApp {
         });
     }
 
+    /// A Paint Bucket click: one undo step, or none when nothing was filled.
+    fn bucket_fill(&mut self, point: Point) {
+        let options = paint::BucketOptions {
+            color: self.brush.color,
+            opacity: self.brush.opacity,
+            tolerance: self.bucket.tolerance,
+            contiguous: self.bucket.contiguous,
+            anti_alias: self.bucket.anti_alias,
+            all_layers: self.bucket.all_layers,
+            mask_target: self.editing_mask(),
+        };
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        session.history.begin(tr("Paint Bucket"), &session.document);
+        match paint::bucket(&mut session.document, point, options)
+            .and_then(|filled| paint::refresh_shapes(&mut session.document).map(|()| filled))
+        {
+            Ok(true) => {
+                session.history.commit();
+                session.invalidate();
+                self.status = tr("Paint Bucket").into();
+            }
+            Ok(false) => session.history.cancel(&mut session.document),
+            Err(error) => {
+                session.history.cancel(&mut session.document);
+                session.invalidate();
+                self.error = Some(error.to_string());
+            }
+        }
+    }
+
     fn begin_gesture(
         &mut self,
         point: Point,
@@ -1366,7 +1399,8 @@ impl EditorApp {
             });
             return;
         }
-        if tool == Tool::Text {
+        // The Paint Bucket fills on a click; a drag does nothing.
+        if matches!(tool, Tool::Text | Tool::Bucket) {
             return;
         }
         if tool == Tool::Region {

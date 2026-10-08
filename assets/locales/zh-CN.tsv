@@ -1112,3 +1112,8 @@ Banner	横幅
 Swap	交换
 Swap width and height (portrait / landscape)	交换宽度和高度（竖向 / 横向）
 Keep aspect ratio	保持宽高比
+Paint Bucket	油漆桶
+Click to fill similar colours with the foreground colour · 1–0 opacity · Shift+G switches to Gradient	单击用前景色填充相似颜色 · 1–0 不透明度 · Shift+G 切换到渐变
+Switch between Gradient and Paint Bucket	在渐变与油漆桶之间切换
+Anti-alias	消除锯齿
+Current Layer	当前图层

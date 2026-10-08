@@ -304,6 +304,34 @@ impl EditorApp {
                                             .percentage(),
                                         );
                                     }
+                                    Tool::Bucket => {
+                                        widgets::color_well(ui, &mut self.brush.color);
+                                        ui.label(tr("Opacity"));
+                                        ui.add(
+                                            widgets::Slider::new(
+                                                &mut self.brush.opacity,
+                                                0.01..=1.0,
+                                            )
+                                            .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                                            .percentage(),
+                                        );
+                                        ui.separator();
+                                        ui.label(tr("Tolerance"));
+                                        ui.add(
+                                            widgets::Number::new(&mut self.bucket.tolerance)
+                                                .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
+                                                .range(0..=255),
+                                        );
+                                        widgets::checkbox(ui, &mut self.bucket.contiguous, tr("Contiguous"));
+                                        widgets::checkbox(ui, &mut self.bucket.anti_alias, tr("Anti-alias"));
+                                        ui.separator();
+                                        ui.label(tr("Sample"));
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.bucket.all_layers,
+                                            &[(false, tr("Current Layer")), (true, tr("All Layers"))],
+                                        );
+                                    }
                                     Tool::Shape => {
                                         widgets::segmented(
                                             ui,
