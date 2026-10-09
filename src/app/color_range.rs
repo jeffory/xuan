@@ -212,8 +212,12 @@ impl EditorApp {
                     } else {
                         egui::vec2(PREVIEW.x, PREVIEW.x * aspect)
                     };
+                    let hint = tr("Click the image to pick the colour to select.");
+                    // Before a pick the matte is empty, so the hint goes inside it; a sliver
+                    // too narrow to hold it keeps the hint underneath.
+                    let hint_inside = edit.preview.is_none() && size.x >= 120.0;
                     ui.vertical_centered(|ui| {
-                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
                         ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
                         if let Some(texture) = &edit.preview {
                             ui.painter().image(
@@ -225,6 +229,24 @@ impl EditorApp {
                                 ),
                                 Color32::WHITE,
                             );
+                        } else if hint_inside {
+                            // Light grey reads on the black matte in either theme.
+                            let ink = Color32::from_gray(170);
+                            let mut job = egui::text::LayoutJob::simple(
+                                hint.to_owned(),
+                                egui::TextStyle::Body.resolve(ui.style()),
+                                ink,
+                                rect.width() - 32.0,
+                            );
+                            // Centred lines, laid out around x = 0.
+                            job.halign = egui::Align::Center;
+                            let galley = ui.painter().layout_job(job);
+                            let top = rect.center().y - galley.size().y / 2.0;
+                            ui.painter()
+                                .galley(egui::pos2(rect.center().x, top), galley, ink);
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, hint)
+                            });
                         }
                         ui.painter().rect_stroke(
                             rect,
@@ -233,15 +255,17 @@ impl EditorApp {
                             egui::StrokeKind::Inside,
                         );
                     });
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(if edit.range.include.is_empty() {
-                            tr("Click the image to pick the colour to select.")
-                        } else {
-                            tr("Shift-click adds a colour, Alt-click takes one away.")
-                        })
-                        .color(ui.palette().muted),
-                    );
+                    if !hint_inside {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(if edit.range.include.is_empty() {
+                                hint
+                            } else {
+                                tr("Shift-click adds a colour, Alt-click takes one away.")
+                            })
+                            .color(ui.palette().muted),
+                        );
+                    }
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(tr("Fuzziness"));

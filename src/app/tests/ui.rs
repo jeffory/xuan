@@ -1380,6 +1380,24 @@ mod color_range {
     }
 
     #[test]
+    fn the_hint_sits_inside_the_empty_matte_until_a_pick() {
+        let mut ui = halves();
+        ui.open_menu("Select");
+        ui.click("Colour Range…");
+        let hint = "Click the image to pick the colour to select.";
+        let node = ui.harness.get_by_label(hint).rect();
+        // The hint is the matte preview itself, between the mode buttons and Fuzziness.
+        let fuzziness = ui.harness.get_by_label("Fuzziness").rect();
+        let pick = ui.harness.get_by_label("Pick").rect();
+        assert!(node.height() > 100.0, "{node:?}");
+        assert!(node.top() > pick.bottom() && node.bottom() < fuzziness.top());
+        let pos = at(&ui, 3.5, 4.5);
+        ui.click_at(pos);
+        assert!(!ui.has(hint));
+        assert!(ui.has("Shift-click adds a colour, Alt-click takes one away."));
+    }
+
+    #[test]
     fn cancel_puts_back_the_old_selection() {
         let mut ui = halves();
         ui.open_menu("Select");
