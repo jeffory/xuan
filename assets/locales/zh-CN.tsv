@@ -1017,7 +1017,10 @@ Make Selection	建立选区
 Shape Layer from Path	从路径创建形状图层
 Rename Path	重命名路径
 Delete Path	删除路径
-This document has no paths yet.	此文档还没有路径。
+No paths yet	还没有路径
+Draw one with the Pen, or trace the selection's outline.	用钢笔绘制一条，或描摹选区的轮廓。
+Draw with Pen	用钢笔绘制
+From selection	从选区建立
 Name	名称
 Rename	重命名
 Shape Layer	形状图层
