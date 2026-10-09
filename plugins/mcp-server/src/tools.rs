@@ -217,7 +217,7 @@ fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
 }
 fn above() -> Value {
-    json!({"type": "string", "description": "Put it above this layer id (default: above the active layer)"})
+    json!({"type": "string", "description": "Put it directly above this layer id, in that layer's group (default: above the active layer, or at the top of the active group)"})
 }
 /// An adjustment or filter: a name for those without settings, else an
 /// object.
