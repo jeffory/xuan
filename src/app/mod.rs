@@ -1,6 +1,7 @@
 use theme::PaletteExt as _;
 use xuan::i18n::tr;
 mod ai_regions;
+mod anchor_picker;
 mod canvas;
 mod canvas_presets_dialog;
 mod channel_pane;

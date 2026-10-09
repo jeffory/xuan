@@ -424,25 +424,7 @@ impl EditorApp {
                     if dialog == Dialog::CanvasSize {
                         ui.add_space(12.0);
                         ui.label(tr("Anchor"));
-                        egui::Grid::new("anchor_grid")
-                            .spacing(vec2(3.0, 3.0))
-                            .show(ui, |ui| {
-                                for y in 0..3 {
-                                    for x in 0..3 {
-                                        let anchor = [x as f32 * 0.5, y as f32 * 0.5];
-                                        if ui
-                                            .selectable_label(
-                                                self.anchor == anchor,
-                                                if self.anchor == anchor { "●" } else { "·" },
-                                            )
-                                            .clicked()
-                                        {
-                                            self.anchor = anchor;
-                                        }
-                                    }
-                                    ui.end_row();
-                                }
-                            });
+                        super::anchor_picker::anchor_picker(ui, &mut self.anchor);
                     }
                     let mut ready = true;
                     if let Some((plugin, action)) = chosen.clone().filter(|_| generating) {

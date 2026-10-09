@@ -93,6 +93,9 @@ mod text_runs;
 #[path = "ui_paths.rs"]
 mod paths;
 
+#[path = "ui_anchor.rs"]
+mod anchor;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;
