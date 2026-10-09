@@ -123,30 +123,7 @@ impl EditorApp {
                 Dialog::CanvasPresets => self.canvas_presets_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::Update => self.update_dialog(ctx),
-                Dialog::About => {
-                    let mut open = true;
-                    widgets::Window::new(tr("About Xuan"))
-                        .open(&mut open)
-                        .show(ctx, |ui| {
-                            ui.heading("Xuan");
-                            ui.label(tr("A space for your next composition."));
-                            ui.add_space(12.0);
-                            ui.label(tr("Native image editor · Rust + egui + wgpu"));
-                            let build = xuan::buildinfo::current();
-                            ui.horizontal(|ui| {
-                                ui.label(build.display_with(|text| tr(text).to_owned()));
-                                if ui.small_button(tr("Copy version")).clicked() {
-                                    ui.ctx().copy_text(build.cli());
-                                }
-                            });
-                            ui.add_space(12.0);
-                            ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
-                            ui.label(tr("Free and open source, under the MIT license."));
-                        });
-                    if !open {
-                        self.dialog = None;
-                    }
-                }
+                Dialog::About => self.about_dialog(ctx),
             }
         }
         self.close_dialog(ctx);
@@ -195,6 +172,55 @@ impl EditorApp {
             if dismiss {
                 self.error = None;
             }
+        }
+    }
+
+    /// Help → About: the icon, name and version as a header, then the credits and links to the
+    /// project, its licences and its issue tracker.
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let build = xuan::buildinfo::current();
+        widgets::Window::new(tr("About Xuan"))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let icon = app_icon(ui.ctx());
+                    ui.add(egui::Image::new(&icon).fit_to_exact_size(vec2(64.0, 64.0)));
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Xuan").size(24.0).strong());
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            let muted = ui.palette().muted;
+                            ui.label(
+                                RichText::new(build.display_with(|text| tr(text).to_owned()))
+                                    .color(muted),
+                            );
+                            if ui.small_button(tr("Copy version")).clicked() {
+                                ui.ctx().copy_text(build.cli());
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.label(tr("A space for your next composition."));
+                    });
+                });
+                ui.add_space(16.0);
+                ui.label(tr("Native image editor · Rust + egui + wgpu"));
+                ui.add_space(4.0);
+                ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
+                ui.add_space(4.0);
+                ui.label(tr("Free and open source, under the MIT licence."));
+                ui.add_space(12.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    for (label, url) in about_links(xuan::update::REPOSITORY, &build) {
+                        ui.hyperlink_to(tr(label), url);
+                    }
+                });
+            });
+        if !open {
+            self.dialog = None;
         }
     }
 
@@ -1579,4 +1605,44 @@ pub(super) fn estimated_size(bytes: usize) -> String {
     } else {
         format!("{:.1} MiB", bytes / (KIB * KIB))
     }
+}
+
+/// Xuan's icon for About, decoded from the bundled 128 px PNG once per context.
+fn app_icon(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("about_app_icon");
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return texture;
+    }
+    let icon = image::load_from_memory(include_bytes!(
+        "../../assets/icons/hicolor/128x128/apps/me.silverl.xuan.png"
+    ))
+    .expect("bundled application icon")
+    .to_rgba8();
+    let size = [icon.width() as usize, icon.height() as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, icon.as_raw());
+    let texture = ctx.load_texture("about_app_icon", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    texture
+}
+
+/// About's links: the project page, the licence notices and a new issue, on `repository`'s
+/// GitHub. A release links the notices at its own tag, other builds at the main branch.
+pub(super) fn about_links(
+    repository: &str,
+    build: &xuan::buildinfo::BuildInfo,
+) -> [(&'static str, String); 3] {
+    let site = format!("https://github.com/{repository}");
+    let tree = if build.release {
+        format!("v{}", build.version)
+    } else {
+        "main".to_owned()
+    };
+    [
+        ("Project site", site.clone()),
+        (
+            "Licences and third-party notices",
+            format!("{site}/blob/{tree}/THIRD_PARTY.md"),
+        ),
+        ("Report a bug", format!("{site}/issues/new")),
+    ]
 }

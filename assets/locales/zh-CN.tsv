@@ -305,7 +305,10 @@ Apply crop / Cancel gesture	应用裁剪 / 取消操作
 A space for your next composition.	为下一幅创作留一方天地。
 Native image editor · Rust + egui + wgpu	原生图像编辑器 · Rust + egui + wgpu
 Ported from Compositor by Wonder Assembly LLC.	移植自 Wonder Assembly LLC 的 Compositor。
-Free and open source, under the MIT license.	基于 MIT 许可证的免费开源软件。
+Free and open source, under the MIT licence.	基于 MIT 许可证的免费开源软件。
+Project site	项目主页
+Licences and third-party notices	许可证与第三方声明
+Report a bug	报告问题
 Add text…	添加文字…
 Edit Text	编辑文字
 Font	字体
