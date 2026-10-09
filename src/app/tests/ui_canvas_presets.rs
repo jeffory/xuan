@@ -341,3 +341,125 @@ fn edits_never_overwrite_a_broken_presets_file() {
     assert_eq!(names(&ui, xuan::canvas_presets::Kind::Pixel).len(), 12);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "version = 99\n");
 }
+
+/// The image on the clipboard is offered as a preset, and picking it sets its size (issue 91).
+#[test]
+fn the_clipboard_image_size_is_a_preset() {
+    let (_directory, mut ui) = editor(None, 72.0);
+    // No clipboard image: no Clipboard group.
+    ui.app_mut().dimensions = [1920, 1080];
+    ui.app_mut().command("new");
+    ui.settle();
+    ui.harness
+        .get_by_role_and_label(Role::ComboBox, "Full High Definition (1920 × 1080)")
+        .click();
+    ui.settle();
+    assert!(ui.has("Screens"), "the menu is open");
+    assert!(!ui.has("Clipboard"));
+    ui.key(egui::Key::Escape);
+    ui.key(egui::Key::Escape);
+
+    // Pixels copied within Xuan stand in for the system clipboard, which tests never read.
+    ui.app_mut().clipboard = Some((RgbaImage::new(640, 427), Point::new(0.0, 0.0)));
+    ui.app_mut().dimensions = [1920, 1080];
+    ui.app_mut().command("new");
+    ui.settle();
+    choose(
+        &mut ui,
+        "Full High Definition (1920 × 1080)",
+        "Clipboard image (640 × 427)",
+    );
+    assert_eq!(ui.app().dimensions, [640, 427]);
+    assert!(ui.has_role(Role::ComboBox, "Clipboard image (640 × 427)"));
+    commit(&mut ui, "Create canvas");
+    assert_eq!(document(&ui), (640, 427, 72.0));
+}
+
+/// Whether File → New shows a label `text`, rather than the welcome screen behind it.
+fn in_dialog(ui: &UiTest, text: &str) -> bool {
+    let dialog = super::units::dialog_rect(ui);
+    (ui.harness.query_all_by_label(text)).any(|node| dialog.contains_rect(node.rect()))
+}
+
+/// The background choice fills the new canvas, and is remembered for the next one
+/// (issue 91).
+#[test]
+fn the_background_choice_fills_the_canvas_and_is_remembered() {
+    let (directory, mut ui) = new_canvas([4, 3]);
+    let layer = |ui: &UiTest| {
+        let document = &ui.app().session().unwrap().document;
+        let pixels = document.layers[0].pixels.clone();
+        pixels.map(|pixels| *pixels.get_pixel(2, 1))
+    };
+    // The welcome screen behind the dialog says the same.
+    assert!(in_dialog(&ui, "Transparent canvas · sRGB"));
+    choose(&mut ui, "Transparent", "White");
+    assert!(in_dialog(&ui, "White canvas · sRGB"));
+    commit(&mut ui, "Create canvas");
+    assert_eq!(layer(&ui), Some(image::Rgba([255; 4])));
+    let saved = std::fs::read_to_string(directory.path().join("config.toml")).unwrap();
+    assert!(
+        saved.contains("new_canvas_background = \"white\""),
+        "{saved}"
+    );
+
+    // Custom starts from the background colour swatch.
+    ui.app_mut().background = [10, 120, 200, 255];
+    ui.app_mut().command("new");
+    ui.settle();
+    assert!(ui.has_role(Role::ComboBox, "White"), "remembered");
+    choose(&mut ui, "White", "Custom colour");
+    assert!(in_dialog(&ui, "Coloured canvas · sRGB"));
+    commit(&mut ui, "Create canvas");
+    assert_eq!(layer(&ui), Some(image::Rgba([10, 120, 200, 255])));
+
+    ui.app_mut().command("new");
+    ui.settle();
+    choose(&mut ui, "Custom colour", "Black");
+    commit(&mut ui, "Create canvas");
+    assert_eq!(layer(&ui), Some(image::Rgba([0, 0, 0, 255])));
+
+    // Transparent leaves the layer clear, and is written as no setting at all.
+    ui.app_mut().command("new");
+    ui.settle();
+    choose(&mut ui, "Black", "Transparent");
+    commit(&mut ui, "Create canvas");
+    assert!(layer(&ui).is_none_or(|pixel| pixel[3] == 0));
+    let saved = std::fs::read_to_string(directory.path().join("config.toml")).unwrap();
+    assert!(!saved.contains("new_canvas_background"), "{saved}");
+}
+
+/// Width, Height, Resolution and Background all have their labels above their fields.
+#[test]
+fn new_canvas_labels_sit_above_their_fields() {
+    let (_directory, ui) = new_canvas([1920, 1080]);
+    let fields = super::units::fields(&ui);
+    let (width, resolution) = (fields[0].rect(), fields[2].rect());
+    let dialog = super::units::dialog_rect(&ui);
+    let label = |text: &str| {
+        (ui.harness.query_all_by_label(text))
+            .map(|node| node.rect())
+            .find(|rect| dialog.contains_rect(*rect))
+            .unwrap_or_else(|| panic!("no {text} label in the dialog"))
+    };
+    for (text, field) in [("Width", width), ("Resolution", resolution)] {
+        let label = label(text);
+        assert!(
+            label.bottom() <= field.top() + 1.0,
+            "{text} {label:?} beside {field:?}"
+        );
+        assert!(
+            (label.left() - field.left()).abs() < 2.0,
+            "{text} {label:?} over {field:?}"
+        );
+    }
+    let background = ui
+        .harness
+        .get_by_role_and_label(Role::ComboBox, "Transparent")
+        .rect();
+    assert!(label("Background").bottom() <= background.top() + 1.0);
+    assert!(
+        (background.center().y - resolution.center().y).abs() < 3.0,
+        "one row"
+    );
+}

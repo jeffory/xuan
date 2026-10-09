@@ -522,6 +522,10 @@ pub struct ExportOptions {
     pub webp_quality: u8,
     /// WebP without loss, as Xuan always wrote it before lossy WebP.
     pub webp_lossless: bool,
+    /// The image's size in percent of the document's, within [`EXPORT_SCALE`]: the Export
+    /// dialog's Scale. The print size stays, so the resolution written scales with it.
+    /// Layered OpenRaster ignores it, and plugin exports are at 100.
+    pub scale: u16,
 }
 
 impl Default for ExportOptions {
@@ -530,8 +534,26 @@ impl Default for ExportOptions {
             jpeg_quality: 90,
             webp_quality: 85,
             webp_lossless: true,
+            scale: 100,
         }
     }
+}
+
+/// The Export dialog's Scale range, in percent; values outside it are clamped.
+pub const EXPORT_SCALE: std::ops::RangeInclusive<u16> = 1..=400;
+
+/// The pixel size of a `width` × `height` document exported at `scale` percent: each side
+/// rounded, and at least one pixel.
+pub fn export_size(width: u32, height: u32, scale: u16) -> (u32, u32) {
+    let scale = f64::from(scale.clamp(*EXPORT_SCALE.start(), *EXPORT_SCALE.end())) / 100.0;
+    let side = |side: u32| ((f64::from(side) * scale).round() as u32).max(1);
+    (side(width), side(height))
+}
+
+/// The resolution an export at `scale` percent states, so that it prints at the document's
+/// size: 300 ppi at 50 % is 150 ppi.
+pub fn export_resolution(ppi: f32, scale: u16) -> f32 {
+    ppi * f32::from(scale.clamp(*EXPORT_SCALE.start(), *EXPORT_SCALE.end())) / 100.0
 }
 
 /// The quality range of lossy JPEG and WebP exports; values outside it are clamped.
@@ -568,33 +590,64 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
     if extension == "ora" {
         return ora::export(document, path).map(drop);
     }
-    check_export_size(&extension, document.width, document.height)?;
-    let image = render::unaltered(document)
-        .map_or_else(|| render::render(document), |pixels| (*pixels).clone());
+    let (width, height) = export_size(document.width, document.height, options.scale);
+    if (width, height) != (document.width, document.height) {
+        crate::document::validate_size(width, height)
+            .context("Choose a smaller Scale to export at this size")?;
+    }
+    check_export_size(&extension, width, height)?;
+    let image = if (width, height) == (document.width, document.height) {
+        render::unaltered(document)
+            .map_or_else(|| render::render(document), |pixels| (*pixels).clone())
+    } else {
+        render::render_scaled(document, width, height)
+    };
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    match extension.as_str() {
+    let resolution = export_resolution(document.resolution, options.scale);
+    encode(
+        temporary.as_file_mut(),
+        &image,
+        &extension,
+        options,
+        resolution,
+    )?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Writes `image` as the format `extension` names (`png`, `jpg`, `tiff`, `webp`), as
+/// [`export`] does, stating `ppi` where the format can. The Export dialog encodes its preview
+/// and size estimate with it too.
+pub fn encode<W: Write + Seek>(
+    mut writer: W,
+    image: &RgbaImage,
+    extension: &str,
+    options: &ExportOptions,
+    ppi: f32,
+) -> Result<()> {
+    match extension {
         "jpg" | "jpeg" => {
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                temporary.as_file_mut(),
+                &mut writer,
                 options
                     .jpeg_quality
                     .clamp(*EXPORT_QUALITY.start(), *EXPORT_QUALITY.end()),
             );
             encoder.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(
-                document.resolution.round() as u16,
+                ppi.round().max(1.0) as u16
             ));
-            encoder.encode_image(&render::flatten_white(&image))?;
+            encoder.encode_image(&render::flatten_white(image))?;
         }
         "png" => {
-            let mut encoder =
-                png::Encoder::new(temporary.as_file_mut(), image.width(), image.height());
+            let mut encoder = png::Encoder::new(&mut writer, image.width(), image.height());
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
-            let pixels_per_meter = (document.resolution / 0.0254).round() as u32;
+            let pixels_per_meter = (ppi / 0.0254).round() as u32;
             encoder.set_pixel_dims(Some(png::PixelDimensions {
                 xppu: pixels_per_meter,
                 yppu: pixels_per_meter,
@@ -602,22 +655,21 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
             }));
             encoder.write_header()?.write_image_data(image.as_raw())?;
         }
-        "tif" | "tiff" => write_tiff(temporary.as_file_mut(), &image, document.resolution)?,
-        "webp" => temporary.write_all(&encode_webp(
-            &image,
+        "tif" | "tiff" => write_tiff(&mut writer, image, ppi)?,
+        "webp" => writer.write_all(&encode_webp(
+            image,
             options.webp_lossless,
             options.webp_quality,
         )?)?,
         _ => bail!("Export as PNG, JPEG, TIFF, WebP or OpenRaster"),
     }
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|e| e.error)?;
+    writer.flush()?;
     Ok(())
 }
 
 /// An uncompressed RGBA TIFF, as `image` writes one, stating `ppi` as its resolution in pixels
 /// per inch (to a hundredth).
-fn write_tiff(file: &mut File, image: &RgbaImage, ppi: f32) -> Result<()> {
+fn write_tiff<W: Write + Seek>(file: W, image: &RgbaImage, ppi: f32) -> Result<()> {
     use tiff::{
         encoder::{Rational, TiffEncoder, colortype::RGBA8},
         tags::{ResolutionUnit, Tag},
@@ -886,6 +938,51 @@ mod tests {
         };
         assert_eq!(size("jpg", jpeg(0)), size("jpg", jpeg(1)));
         assert_eq!(size("jpg", jpeg(255)), size("jpg", jpeg(100)));
+    }
+
+    #[test]
+    fn exports_are_scaled_and_keep_their_print_size() {
+        assert_eq!(EXPORT_SCALE, 1..=400);
+        assert_eq!(export_size(1920, 1080, 50), (960, 540));
+        assert_eq!(export_size(3, 3, 50), (2, 2), "rounded");
+        assert_eq!(export_size(10, 1, 1), (1, 1), "never empty");
+        assert_eq!(export_size(10, 10, 0), (1, 1), "clamped to 1 %");
+        assert_eq!(export_size(10, 10, 1000), (40, 40), "clamped to 400 %");
+        assert_eq!(export_resolution(300.0, 50), 150.0);
+
+        let temporary = tempfile::tempdir().unwrap();
+        let mut doc = Document::new(40, 30).unwrap();
+        doc.resolution = 300.0;
+        doc.layers[0].pixels = Some(Arc::new(photo_like(40, 30)));
+        for (scale, size, ppi) in [
+            (50, (20, 15), 150.0),
+            (200, (80, 60), 600.0),
+            (100, (40, 30), 300.0),
+        ] {
+            let options = ExportOptions {
+                scale,
+                ..ExportOptions::default()
+            };
+            for extension in ["png", "jpg", "tiff", "webp"] {
+                let path = temporary.path().join(format!("scaled.{extension}"));
+                export(&doc, &path, &options).unwrap();
+                let (image, resolution) = import_image_with_resolution(&path).unwrap();
+                assert_eq!(image.dimensions(), size, "{extension} at {scale} %");
+                if extension != "webp" {
+                    assert_eq!(resolution, Some(ppi), "{extension} at {scale} %");
+                }
+            }
+        }
+        // A scale past what a canvas may be is refused before anything is written.
+        let mut huge = Document::new(crate::document::MAX_SIDE, 2).unwrap();
+        huge.resolution = 72.0;
+        let path = temporary.path().join("huge.png");
+        let options = ExportOptions {
+            scale: 200,
+            ..ExportOptions::default()
+        };
+        assert!(export(&huge, &path, &options).is_err());
+        assert!(!path.exists());
     }
 
     #[test]

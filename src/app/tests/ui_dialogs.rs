@@ -592,31 +592,39 @@ fn edit_stroke_dialog_previews_and_applies_from_the_menu() {
 }
 
 /// WebP export: Lossless hides the Quality slider, turning it off shows the
-/// slider with a lossy preview and size, and the choice stays for the next
-/// export (issue 115).
+/// slider with a lossy preview note, and the choice stays for the next
+/// export (issue 115). Every format has an estimated size (issue 91).
 #[test]
 fn webp_export_lossless_checkbox_shows_and_hides_quality() {
     let (_directory, mut ui) = small_with_document();
-    let estimated = |ui: &UiTest| {
-        (ui.harness)
-            .query_by_label_contains("Estimated size:")
-            .is_some()
-    };
     ui.app_mut().export_format = "webp".into();
     ui.app_mut().command("export");
     ui.settle();
     assert!(ui.has_role(Role::CheckBox, "Lossless"));
     assert!(ui.app().export_options.webp_lossless, "lossless by default");
-    assert!(!ui.has("Quality") && !estimated(&ui));
+    assert!(!ui.has("Quality"));
+    // The preview arrives from a worker; the controls must not move when it does, or a click
+    // aimed before it lands hits whatever moved under the pointer.
+    let checkbox =
+        |ui: &UiTest| (ui.harness.get_by_role_and_label(Role::CheckBox, "Lossless")).rect();
+    let before = (checkbox(&ui), ui.app().export_texture.is_none());
+    wait_for_estimate(&mut ui);
+    assert!(ui.app().export_texture.is_some());
+    assert_eq!(
+        checkbox(&ui),
+        before.0,
+        "moved when the preview arrived: {before:?}"
+    );
 
     ui.click_role(Role::CheckBox, "Lossless");
     assert!(!ui.app().export_options.webp_lossless);
-    assert!(ui.has("Quality") && estimated(&ui));
+    assert!(ui.has("Quality"));
     assert!(
         (ui.harness)
             .query_by_label_contains("WebP preview · transparency is kept")
             .is_some()
     );
+    wait_for_estimate(&mut ui);
     assert_eq!(ui.app().export_options.webp_quality, 85);
     assert_commit_visible(&ui, "Export image", "Export…");
     ui.click("Cancel");
@@ -626,15 +634,103 @@ fn webp_export_lossless_checkbox_shows_and_hides_quality() {
     ui.settle();
     assert!(ui.has("Quality") && !ui.app().export_options.webp_lossless);
     ui.click_role(Role::CheckBox, "Lossless");
-    assert!(!ui.has("Quality") && !estimated(&ui));
+    assert!(!ui.has("Quality"));
     ui.click("Cancel");
 
     // JPEG has its quality and size, and no Lossless.
     ui.app_mut().export_format = "jpg".into();
     ui.app_mut().command("export");
     ui.settle();
-    assert!(ui.has("Quality") && estimated(&ui));
+    assert!(ui.has("Quality"));
     assert!(!ui.has_role(Role::CheckBox, "Lossless"));
+    wait_for_estimate(&mut ui);
+}
+
+/// Runs frames until the Export dialog shows an estimated size, made in the background, and
+/// returns its text.
+#[track_caller]
+fn wait_for_estimate(ui: &mut UiTest) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(node) = ui.harness.query_by_label_contains("Estimated size: ≈") {
+            // A label's text is its value.
+            let node = node.accesskit_node();
+            return node.value().or_else(|| node.label()).unwrap_or_default();
+        }
+        assert!(std::time::Instant::now() < deadline, "no estimated size");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        ui.settle();
+    }
+}
+
+/// The Export dialog shows an approximate size, made off the UI thread, and Scale sets the
+/// exported image's size (issue 91).
+#[test]
+fn export_shows_an_estimated_size_and_scale_changes_the_output_size() {
+    let (directory, mut ui) = small_with_document();
+    ui.app_mut().export_format = "png".into();
+    ui.open_menu("File");
+    ui.click(super::EXPORT);
+    // The status bar names the document's size too.
+    assert!(ui.harness.query_all_by_label("32 × 24 px").count() >= 2);
+    let full = wait_for_estimate(&mut ui);
+    assert!(full.ends_with(" KiB"), "{full:?}");
+
+    // Type 50 into Scale: the size shown and the export follow.
+    ui.harness
+        .get(
+            egui_kittest::kittest::By::new()
+                .role(Role::SpinButton)
+                .value("100 %"),
+        )
+        .focus();
+    ui.settle();
+    ui.type_keys("50");
+    ui.key(egui::Key::Enter);
+    assert_eq!(ui.app().export_options.scale, 50);
+    assert!(ui.has("16 × 12 px"));
+    wait_for_estimate(&mut ui);
+    let path = directory.path().join("half.png");
+    ui.app().export_to(&path).unwrap();
+    assert_eq!(
+        xuan::io::import_image(&path).unwrap().dimensions(),
+        (16, 12)
+    );
+
+    // Past the range, the field keeps the largest scale.
+    ui.harness
+        .get(
+            egui_kittest::kittest::By::new()
+                .role(Role::SpinButton)
+                .value("50 %"),
+        )
+        .focus();
+    ui.settle();
+    ui.type_keys("900");
+    ui.key(egui::Key::Enter);
+    assert_eq!(ui.app().export_options.scale, 400);
+    assert!(ui.has("128 × 96 px"));
+    assert!(ui.enabled("Export…"));
+
+    // A scale past what an image may be says so, and Export waits for a smaller one.
+    ui.app_mut().session_mut().unwrap().document.width = xuan::document::MAX_SIDE;
+    ui.settle();
+    assert!(
+        (ui.harness)
+            .query_by_label_contains("Dimensions must be between")
+            .is_some()
+    );
+    assert!(!ui.enabled("Export…"));
+    ui.app_mut().session_mut().unwrap().document.width = 32;
+    ui.settle();
+
+    // OpenRaster keeps the layers at the document's size: no Scale and no estimate.
+    ui.click("Cancel");
+    ui.app_mut().export_format = "ora".into();
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(!ui.has("Scale"));
+    assert!(ui.harness.query_by_label_contains("Estimat").is_none());
 }
 
 #[test]
@@ -647,4 +743,114 @@ fn export_sizes_read_in_kib_then_mib() {
     assert_eq!(estimated_size(340 * 1024), "340 KiB");
     assert_eq!(estimated_size(1024 * 1024), "1.0 MiB");
     assert_eq!(estimated_size(1_500_000), "1.4 MiB");
+}
+
+/// The error dialog shows an alert icon, and Copy details puts the message, the version and the
+/// platform on the clipboard (issue 91).
+#[test]
+fn the_error_dialog_has_an_icon_and_copies_its_details() {
+    let mut ui = UiTest::new();
+    ui.app_mut().error = Some("Cannot read photo.png: bad header".into());
+    ui.settle();
+    assert!(ui.has("Couldn't complete the operation"));
+    assert!(ui.has_role(Role::Image, "Error"));
+    ui.click_and_stop("Copy details");
+    let copied = ui.copied_text().expect("Copy details copies text");
+    assert!(
+        copied.contains("Cannot read photo.png: bad header"),
+        "{copied}"
+    );
+    assert!(
+        copied.contains(&xuan::buildinfo::current().cli()),
+        "{copied}"
+    );
+    assert!(copied.contains(std::env::consts::OS), "{copied}");
+    // Copying leaves the dialog open; OK closes it.
+    ui.settle();
+    assert!(ui.app().error.is_some());
+    ui.click("OK");
+    assert!(ui.app().error.is_none());
+}
+
+/// Manage Plugins: a port-like integer setting (0–65535) is a number field that keeps typed
+/// values in range, a narrow one stays a slider, and the status line has a dot (issue 91).
+#[test]
+fn a_port_setting_is_a_number_field_and_the_status_has_a_dot() {
+    use egui_kittest::kittest::By;
+    let config = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("plugin.toml"),
+        r#"
+[plugin]
+id = "server"
+name = "Server"
+version = "0.1.0"
+command = ["sh", "plugin.sh"]
+
+[[settings]]
+id = "port"
+type = "integer"
+label = "Port"
+default = 8765
+min = 0
+max = 65535
+
+[[settings]]
+id = "level"
+type = "integer"
+label = "Level"
+default = 5
+min = 0
+max = 10
+"#,
+    )
+    .unwrap();
+    let mut ui = UiTest::new();
+    ui.isolate_config(config.path());
+    let manifest = xuan::plugins::Manifest::load(dir.path()).unwrap();
+    ui.app_mut().install_plugins(vec![manifest], vec![]);
+    let sliders = |ui: &UiTest| ui.harness.query_all_by_role(Role::Slider).count();
+    let outside = sliders(&ui);
+    ui.app_mut().plugins.manager_selected = Some("server".into());
+    ui.app_mut().command("plugins");
+    ui.settle();
+    assert!(ui.has("Not running"));
+    // A muted dot just before the status.
+    let status = ui.harness.get_by_label("Not running").rect();
+    let muted = super::super::theme::palette(&ui.ctx()).muted;
+    let dot = ui
+        .harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::Circle(circle) => {
+                circle.fill == muted
+                    && (circle.center.y - status.center().y).abs() < 3.0
+                    && (status.left() - 16.0..status.left()).contains(&circle.center.x)
+            }
+            _ => false,
+        });
+    assert!(dot, "no status dot before {status:?}");
+    // Level is a slider; Port is not.
+    assert_eq!(sliders(&ui), outside + 1);
+
+    let port = |ui: &UiTest| {
+        (ui.app().config.plugins.get("server"))
+            .and_then(|plugin| plugin.settings.get("port"))
+            .and_then(toml::Value::as_integer)
+    };
+    for (typed, kept) in [("9000", 9000), ("70000", 65535), ("-3", 0)] {
+        // Focused, the field selects its text, so typing replaces it.
+        let shown = port(&ui).unwrap_or(8765).to_string();
+        ui.harness
+            .get(By::new().role(Role::SpinButton).value(&shown))
+            .focus();
+        ui.settle();
+        ui.type_keys(typed);
+        ui.key(egui::Key::Enter);
+        assert_eq!(port(&ui), Some(kept), "typed {typed}");
+    }
+    assert!(ui.has("Not running"));
 }

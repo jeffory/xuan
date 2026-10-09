@@ -131,6 +131,26 @@ impl EditorApp {
         }
     }
 
+    /// The size of the image on the clipboard, for File → New's Clipboard preset: the system
+    /// clipboard's, or the pixels last copied within Xuan when there is no system clipboard.
+    pub(super) fn clipboard_image_size(&mut self) -> Option<[u32; 2]> {
+        // Tests never read the developer's own clipboard.
+        #[cfg(not(test))]
+        {
+            self.connect_clipboard();
+            if let Some(clipboard) = &mut self.system_clipboard {
+                let image = clipboard.get_image().ok()?;
+                let size = [
+                    u32::try_from(image.width).ok()?,
+                    u32::try_from(image.height).ok()?,
+                ];
+                return validate_size(size[0], size[1]).is_ok().then_some(size);
+            }
+        }
+        let (pixels, _) = self.clipboard.as_ref()?;
+        Some([pixels.width(), pixels.height()])
+    }
+
     pub(super) fn paste_clipboard(&mut self, text: Option<&str>) {
         self.connect_clipboard();
         match read_clipboard(self.system_clipboard.as_mut(), text) {

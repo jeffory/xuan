@@ -709,6 +709,9 @@ impl SliderTrack {
     }
 }
 
+/// How strongly the selected segment is tinted with the accent.
+pub const SEGMENT_TINT: f32 = 0.18;
+
 pub fn segmented<T: Copy + PartialEq>(
     ui: &mut Ui,
     value: &mut T,
@@ -776,6 +779,16 @@ pub fn segmented<T: Copy + PartialEq>(
                     },
                     4.0,
                     false,
+                );
+                // On the light track the raised bezel alone is faint: tint it with the
+                // accent, and outline it in the accent, which reaches 3:1 on the track.
+                let face = rect.shrink(1.0);
+                painter.rect_filled(face, 4.0, p.accent.gamma_multiply(SEGMENT_TINT));
+                painter.rect_stroke(
+                    face,
+                    4.0,
+                    Stroke::new(1.0_f32, p.accent),
+                    StrokeKind::Inside,
                 );
             } else if index > 0 {
                 painter.line_segment(
@@ -1574,6 +1587,34 @@ pub fn menu_choice<T: PartialEq>(
     if response.clicked() {
         ui.close();
     }
+    response
+}
+
+/// A small filled circle in `color` before a status such as a plugin's "Running" or "Not
+/// running". The text beside it says the same, for those who cannot tell the colours apart.
+pub fn status_dot(ui: &mut Ui, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(8.0, 12.0), Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
+    response
+}
+
+/// The side of [`alert_icon`], in points.
+pub const ALERT_ICON_SIZE: f32 = 28.0;
+
+/// An error alert's icon: an exclamation mark on a disc in the palette's error colour, named
+/// "Error" for assistive technology.
+pub fn alert_icon(ui: &mut Ui) -> Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::Vec2::splat(ALERT_ICON_SIZE), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, tr("Error")));
+    let p = ui.palette();
+    let painter = ui.painter();
+    let center = rect.center();
+    painter.circle_filled(center, ALERT_ICON_SIZE / 2.0, p.error);
+    // The mark in the window's colour, which reads on the error disc in either theme.
+    let stroke = Stroke::new(3.0_f32, p.window);
+    painter.line_segment([center - vec2(0.0, 7.0), center + vec2(0.0, 2.5)], stroke);
+    painter.circle_filled(center + vec2(0.0, 7.0), 1.75, p.window);
     response
 }
 

@@ -194,6 +194,10 @@ pub struct Config {
     /// File → New: the size of the last canvas created, in pixels. Absent until one is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_canvas_size: Option<[u32; 2]>,
+    /// File → New: the background of the last canvas created. Transparent, as canvases were
+    /// before there was a choice, is not written.
+    #[serde(default, deserialize_with = "lenient_background")]
+    pub new_canvas_background: CanvasBackground,
     /// Move tool options: Auto Select.
     pub auto_select: bool,
     /// Move tool options: Ignore Transparent Pixels.
@@ -282,6 +286,73 @@ impl UpdateSettings {
         }
         toml::Value::Table(table)
     }
+}
+
+/// What File → New fills the canvas with, saved as `"transparent"`, `"white"`, `"black"` or a
+/// `"#rrggbb"` colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum CanvasBackground {
+    #[default]
+    Transparent,
+    White,
+    Black,
+    /// An opaque colour of the user's choosing.
+    Custom([u8; 3]),
+}
+
+impl CanvasBackground {
+    /// The colour the canvas is filled with; `None` leaves it transparent.
+    pub fn pixel(self) -> Option<[u8; 4]> {
+        match self {
+            Self::Transparent => None,
+            Self::White => Some([255; 4]),
+            Self::Black => Some([0, 0, 0, 255]),
+            Self::Custom([r, g, b]) => Some([r, g, b, 255]),
+        }
+    }
+}
+
+impl From<String> for CanvasBackground {
+    /// Text that is none of the choices reads as transparent.
+    fn from(text: String) -> Self {
+        let text = text.trim().to_ascii_lowercase();
+        match text.as_str() {
+            "white" => Self::White,
+            "black" => Self::Black,
+            _ => text
+                .strip_prefix('#')
+                .filter(|hex| hex.len() == 6 && hex.is_ascii())
+                .and_then(|hex| {
+                    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+                    Some(Self::Custom([channel(0)?, channel(2)?, channel(4)?]))
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl From<CanvasBackground> for String {
+    fn from(background: CanvasBackground) -> Self {
+        match background {
+            CanvasBackground::Transparent => "transparent".into(),
+            CanvasBackground::White => "white".into(),
+            CanvasBackground::Black => "black".into(),
+            CanvasBackground::Custom([r, g, b]) => format!("#{r:02x}{g:02x}{b:02x}"),
+        }
+    }
+}
+
+/// A background that is not text, such as a number written by hand, reads as transparent
+/// rather than making the whole configuration unreadable.
+fn lenient_background<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<CanvasBackground, D::Error> {
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .map(|text| CanvasBackground::from(text.to_owned()))
+        .unwrap_or_default())
 }
 
 fn lenient_time<'de, D: serde::Deserializer<'de>>(
@@ -376,6 +447,7 @@ impl Default for Config {
             recent_commands: Vec::new(),
             recent_files: Vec::new(),
             new_canvas_size: None,
+            new_canvas_background: CanvasBackground::Transparent,
             auto_select: true,
             ignore_transparent_pixels: true,
             show_controls: true,
@@ -640,6 +712,14 @@ impl Config {
                 table.remove("new_canvas_size");
             }
         }
+        if self.new_canvas_background == CanvasBackground::Transparent {
+            table.remove("new_canvas_background");
+        } else {
+            table.insert(
+                "new_canvas_background".into(),
+                toml::Value::String(self.new_canvas_background.into()),
+            );
+        }
         if self.units == UnitSettings::default() {
             table.remove("units");
         } else {
@@ -791,6 +871,64 @@ mod tests {
                 .contains("new_canvas_size")
         );
         assert_eq!(Config::load(&path).unwrap().new_canvas_size, None);
+    }
+
+    #[test]
+    fn the_new_canvas_background_roundtrips_and_transparent_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (background, text) in [
+            (CanvasBackground::White, "\"white\""),
+            (CanvasBackground::Black, "\"black\""),
+            (CanvasBackground::Custom([18, 52, 171]), "\"#1234ab\""),
+        ] {
+            let config = Config {
+                new_canvas_background: background,
+                ..Config::default()
+            };
+            config.save(&path).unwrap();
+            let saved = fs::read_to_string(&path).unwrap();
+            assert!(
+                saved.contains(&format!("new_canvas_background = {text}")),
+                "{saved}"
+            );
+            assert_eq!(
+                Config::load(&path).unwrap().new_canvas_background,
+                background
+            );
+        }
+        // Transparent, the default, removes the key; older configurations have none.
+        Config::default().save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_background")
+        );
+        assert_eq!(
+            Config::load(&path).unwrap().new_canvas_background,
+            CanvasBackground::Transparent
+        );
+        // Values that are not a choice read as transparent and leave the rest readable.
+        for bad in ["\"purple\"", "\"#12345\"", "\"#gg0000\"", "7", "[1, 2]"] {
+            fs::write(
+                &path,
+                format!("new_canvas_background = {bad}\nrulers = true\n"),
+            )
+            .unwrap();
+            let loaded = Config::load(&path).unwrap();
+            assert_eq!(
+                loaded.new_canvas_background,
+                CanvasBackground::Transparent,
+                "{bad}"
+            );
+            assert!(loaded.rulers, "{bad}");
+        }
+        assert_eq!(
+            CanvasBackground::from(" #FFFFFF ".to_owned()),
+            CanvasBackground::Custom([255; 3])
+        );
+        assert_eq!(CanvasBackground::Transparent.pixel(), None);
+        assert_eq!(CanvasBackground::Black.pixel(), Some([0, 0, 0, 255]));
     }
 
     #[test]
