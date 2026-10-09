@@ -12,6 +12,7 @@ mod color_lookup;
 mod color_range;
 mod commands;
 mod crop_tool;
+mod curves_controls;
 mod develop;
 mod develop_controls;
 mod develop_preview;
@@ -512,7 +513,8 @@ enum Dialog {
 
 struct EffectEdit {
     original: Document,
-    // The histogram uses the immutable original, independent of live preview edits.
+    // Levels' and Curves' histograms use the immutable original, independent of live
+    // preview edits.
     levels_source: Option<RgbaImage>,
     adjustment: Option<Adjustment>,
     filter: Option<Filter>,

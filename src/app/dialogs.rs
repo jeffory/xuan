@@ -3,9 +3,9 @@ use std::sync::Arc;
 use xuan::canvas_presets as presets;
 use xuan::i18n::tr;
 
-use egui::{RichText, Stroke, vec2};
+use egui::{RichText, vec2};
 use xuan::{
-    document::{Adjustment, Layer, Point},
+    document::{Adjustment, Layer},
     effects::{self, Filter},
     io, operations, render,
     units::{self, Unit},
@@ -827,7 +827,15 @@ impl EditorApp {
                             }
                             Adjustment::CurvesChannels { channels } => {
                                 channel_picker(ui, &mut edit.channel);
-                                changed |= curve_editor(ui, &mut channels[edit.channel]);
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                changed |= super::curves_controls::editor(
+                                    ui,
+                                    &mut channels[edit.channel],
+                                    source,
+                                    edit.channel,
+                                );
                             }
                             Adjustment::HueSaturation {
                                 hue,
@@ -879,7 +887,10 @@ impl EditorApp {
                                 [*black, *gamma, *white, *output_black, *output_white] = range;
                             }
                             Adjustment::Curves { points } => {
-                                changed |= curve_editor(ui, points);
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                changed |= super::curves_controls::editor(ui, points, source, 0);
                             }
                             Adjustment::Exposure {
                                 exposure,
@@ -1591,85 +1602,6 @@ fn channel_picker(ui: &mut egui::Ui, channel: &mut usize) {
                 widgets::menu_choice(ui, channel, index, *name);
             }
         });
-}
-
-fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
-    let mut changed = false;
-
-    ui.label(
-        RichText::new(tr(
-            "Click to add a point · Drag points to reshape the curve",
-        ))
-        .color(ui.palette().muted),
-    );
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(360.0, 220.0), egui::Sense::click_and_drag());
-    let palette = ui.palette();
-    ui.painter().rect_filled(rect, 4.0, palette.plot);
-    for i in 1..4 {
-        let t = i as f32 / 4.0;
-        ui.painter().line_segment(
-            [
-                rect.left_top() + vec2(rect.width() * t, 0.0),
-                rect.left_bottom() + vec2(rect.width() * t, 0.0),
-            ],
-            Stroke::new(1.0_f32, palette.plot_grid),
-        );
-        ui.painter().line_segment(
-            [
-                rect.left_top() + vec2(0.0, rect.height() * t),
-                rect.right_top() + vec2(0.0, rect.height() * t),
-            ],
-            Stroke::new(1.0_f32, palette.plot_grid),
-        );
-    }
-    let map = |p: Point| {
-        egui::pos2(
-            rect.left() + p.x * rect.width(),
-            rect.bottom() - p.y * rect.height(),
-        )
-    };
-    ui.painter().line_segment(
-        [rect.left_bottom(), rect.right_top()],
-        Stroke::new(1.0_f32, palette.plot_diagonal),
-    );
-    ui.painter().add(egui::Shape::line(
-        (0..=255)
-            .map(|i| {
-                let x = i as f32 / 255.0;
-                map(Point::new(x, effects::curve_value(points, x)))
-            })
-            .collect(),
-        Stroke::new(1.5_f32, palette.text),
-    ));
-    for p in points.iter() {
-        ui.painter().circle_filled(map(*p), 3.0, palette.text);
-    }
-    if let Some(p) = response.interact_pointer_pos() {
-        let point = Point::new(
-            ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
-            ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0),
-        );
-        if response.clicked()
-            && points.len() < 32
-            && !points.iter().any(|v| (v.x - point.x).abs() < 0.025)
-        {
-            points.push(point);
-            points.sort_by(|a, b| a.x.total_cmp(&b.x));
-            changed = true;
-        }
-        if response.dragged()
-            && let Some(index) = points
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| (a.x - point.x).abs().total_cmp(&(b.x - point.x).abs()))
-                .map(|(i, _)| i)
-        {
-            points[index].y = point.y;
-            changed = true;
-        }
-    }
-    changed
 }
 
 /// A New canvas background as its menu names it.

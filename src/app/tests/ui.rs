@@ -96,6 +96,9 @@ mod paths;
 #[path = "ui_anchor.rs"]
 mod anchor;
 
+#[path = "ui_curves.rs"]
+mod curves;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;

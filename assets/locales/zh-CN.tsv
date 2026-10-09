@@ -382,6 +382,9 @@ Falloff start	衰减起点
 Falloff end	衰减终点
 Invert selected colour range	反转所选颜色范围
 Click to add a point · Drag points to reshape the curve	单击添加控制点 · 拖动控制点调整曲线
+Curve	曲线
+In	输入
+Out	输出
 Amount	数量
 Distance	距离
 Monochromatic	单色

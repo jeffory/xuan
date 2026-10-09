@@ -93,7 +93,9 @@ fn field(
     );
 }
 
-fn histogram(ui: &mut Ui, image: &image::RgbaImage, channel: usize) {
+/// The alpha-weighted histogram of `image`'s luminosity (channel 0) or of red, green or blue
+/// (1 to 3).
+pub fn bins(image: &image::RgbaImage, channel: usize) -> [f32; 256] {
     let mut bins = [0.0_f32; 256];
     for pixel in image.pixels() {
         let index = match channel {
@@ -103,6 +105,11 @@ fn histogram(ui: &mut Ui, image: &image::RgbaImage, channel: usize) {
         };
         bins[index] += pixel[3] as f32 / 255.0;
     }
+    bins
+}
+
+fn histogram(ui: &mut Ui, image: &image::RgbaImage, channel: usize) {
+    let bins = bins(image, channel);
     let peak = bins.iter().copied().fold(1.0_f32, f32::max);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 150.0), Sense::hover());
     let palette = ui.palette();
