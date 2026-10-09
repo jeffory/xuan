@@ -270,6 +270,10 @@ Image size
 Create canvas
 Resolution
 Anchor
+Top left
+Top right
+Bottom left
+Bottom right
 Transparent canvas · sRGB
 White canvas · sRGB
 Black canvas · sRGB
@@ -318,7 +322,10 @@ Apply crop / Cancel gesture
 A space for your next composition.
 Native image editor · Rust + egui + wgpu
 Ported from Compositor by Wonder Assembly LLC.
-Free and open source, under the MIT license.
+Free and open source, under the MIT licence.
+Project site
+Licences and third-party notices
+Report a bug
 Add text…
 Edit Text
 Font
@@ -377,6 +384,9 @@ Falloff start
 Falloff end
 Invert selected colour range
 Click to add a point · Drag points to reshape the curve
+Curve
+In
+Out
 Amount
 Distance
 Monochromatic
@@ -1017,7 +1027,10 @@ Make Selection
 Shape Layer from Path
 Rename Path
 Delete Path
-This document has no paths yet.
+No paths yet
+Draw one with the Pen, or trace the selection's outline.
+Draw with Pen
+From selection
 Name
 Rename
 Shape Layer

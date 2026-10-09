@@ -3,9 +3,9 @@ use std::sync::Arc;
 use xuan::canvas_presets as presets;
 use xuan::i18n::tr;
 
-use egui::{RichText, Stroke, vec2};
+use egui::{RichText, vec2};
 use xuan::{
-    document::{Adjustment, Layer, Point},
+    document::{Adjustment, Layer},
     effects::{self, Filter},
     io, operations, render,
     units::{self, Unit},
@@ -123,30 +123,7 @@ impl EditorApp {
                 Dialog::CanvasPresets => self.canvas_presets_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
                 Dialog::Update => self.update_dialog(ctx),
-                Dialog::About => {
-                    let mut open = true;
-                    widgets::Window::new(tr("About Xuan"))
-                        .open(&mut open)
-                        .show(ctx, |ui| {
-                            ui.heading("Xuan");
-                            ui.label(tr("A space for your next composition."));
-                            ui.add_space(12.0);
-                            ui.label(tr("Native image editor · Rust + egui + wgpu"));
-                            let build = xuan::buildinfo::current();
-                            ui.horizontal(|ui| {
-                                ui.label(build.display_with(|text| tr(text).to_owned()));
-                                if ui.small_button(tr("Copy version")).clicked() {
-                                    ui.ctx().copy_text(build.cli());
-                                }
-                            });
-                            ui.add_space(12.0);
-                            ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
-                            ui.label(tr("Free and open source, under the MIT license."));
-                        });
-                    if !open {
-                        self.dialog = None;
-                    }
-                }
+                Dialog::About => self.about_dialog(ctx),
             }
         }
         self.close_dialog(ctx);
@@ -208,6 +185,55 @@ impl EditorApp {
             if dismiss {
                 self.error = None;
             }
+        }
+    }
+
+    /// Help → About: the icon, name and version as a header, then the credits and links to the
+    /// project, its licences and its issue tracker.
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let build = xuan::buildinfo::current();
+        widgets::Window::new(tr("About Xuan"))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let icon = app_icon(ui.ctx());
+                    ui.add(egui::Image::new(&icon).fit_to_exact_size(vec2(64.0, 64.0)));
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Xuan").size(24.0).strong());
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            let muted = ui.palette().muted;
+                            ui.label(
+                                RichText::new(build.display_with(|text| tr(text).to_owned()))
+                                    .color(muted),
+                            );
+                            if ui.small_button(tr("Copy version")).clicked() {
+                                ui.ctx().copy_text(build.cli());
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.label(tr("A space for your next composition."));
+                    });
+                });
+                ui.add_space(16.0);
+                ui.label(tr("Native image editor · Rust + egui + wgpu"));
+                ui.add_space(4.0);
+                ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
+                ui.add_space(4.0);
+                ui.label(tr("Free and open source, under the MIT licence."));
+                ui.add_space(12.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    for (label, url) in about_links(xuan::update::REPOSITORY, &build) {
+                        ui.hyperlink_to(tr(label), url);
+                    }
+                });
+            });
+        if !open {
+            self.dialog = None;
         }
     }
 
@@ -398,25 +424,7 @@ impl EditorApp {
                     if dialog == Dialog::CanvasSize {
                         ui.add_space(12.0);
                         ui.label(tr("Anchor"));
-                        egui::Grid::new("anchor_grid")
-                            .spacing(vec2(3.0, 3.0))
-                            .show(ui, |ui| {
-                                for y in 0..3 {
-                                    for x in 0..3 {
-                                        let anchor = [x as f32 * 0.5, y as f32 * 0.5];
-                                        if ui
-                                            .selectable_label(
-                                                self.anchor == anchor,
-                                                if self.anchor == anchor { "●" } else { "·" },
-                                            )
-                                            .clicked()
-                                        {
-                                            self.anchor = anchor;
-                                        }
-                                    }
-                                    ui.end_row();
-                                }
-                            });
+                        super::anchor_picker::anchor_picker(ui, &mut self.anchor);
                     }
                     let mut ready = true;
                     if let Some((plugin, action)) = chosen.clone().filter(|_| generating) {
@@ -819,7 +827,15 @@ impl EditorApp {
                             }
                             Adjustment::CurvesChannels { channels } => {
                                 channel_picker(ui, &mut edit.channel);
-                                changed |= curve_editor(ui, &mut channels[edit.channel]);
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                changed |= super::curves_controls::editor(
+                                    ui,
+                                    &mut channels[edit.channel],
+                                    source,
+                                    edit.channel,
+                                );
                             }
                             Adjustment::HueSaturation {
                                 hue,
@@ -871,7 +887,10 @@ impl EditorApp {
                                 [*black, *gamma, *white, *output_black, *output_white] = range;
                             }
                             Adjustment::Curves { points } => {
-                                changed |= curve_editor(ui, points);
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                changed |= super::curves_controls::editor(ui, points, source, 0);
                             }
                             Adjustment::Exposure {
                                 exposure,
@@ -1585,85 +1604,6 @@ fn channel_picker(ui: &mut egui::Ui, channel: &mut usize) {
         });
 }
 
-fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
-    let mut changed = false;
-
-    ui.label(
-        RichText::new(tr(
-            "Click to add a point · Drag points to reshape the curve",
-        ))
-        .color(ui.palette().muted),
-    );
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(360.0, 220.0), egui::Sense::click_and_drag());
-    let palette = ui.palette();
-    ui.painter().rect_filled(rect, 4.0, palette.plot);
-    for i in 1..4 {
-        let t = i as f32 / 4.0;
-        ui.painter().line_segment(
-            [
-                rect.left_top() + vec2(rect.width() * t, 0.0),
-                rect.left_bottom() + vec2(rect.width() * t, 0.0),
-            ],
-            Stroke::new(1.0_f32, palette.plot_grid),
-        );
-        ui.painter().line_segment(
-            [
-                rect.left_top() + vec2(0.0, rect.height() * t),
-                rect.right_top() + vec2(0.0, rect.height() * t),
-            ],
-            Stroke::new(1.0_f32, palette.plot_grid),
-        );
-    }
-    let map = |p: Point| {
-        egui::pos2(
-            rect.left() + p.x * rect.width(),
-            rect.bottom() - p.y * rect.height(),
-        )
-    };
-    ui.painter().line_segment(
-        [rect.left_bottom(), rect.right_top()],
-        Stroke::new(1.0_f32, palette.plot_diagonal),
-    );
-    ui.painter().add(egui::Shape::line(
-        (0..=255)
-            .map(|i| {
-                let x = i as f32 / 255.0;
-                map(Point::new(x, effects::curve_value(points, x)))
-            })
-            .collect(),
-        Stroke::new(1.5_f32, palette.text),
-    ));
-    for p in points.iter() {
-        ui.painter().circle_filled(map(*p), 3.0, palette.text);
-    }
-    if let Some(p) = response.interact_pointer_pos() {
-        let point = Point::new(
-            ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
-            ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0),
-        );
-        if response.clicked()
-            && points.len() < 32
-            && !points.iter().any(|v| (v.x - point.x).abs() < 0.025)
-        {
-            points.push(point);
-            points.sort_by(|a, b| a.x.total_cmp(&b.x));
-            changed = true;
-        }
-        if response.dragged()
-            && let Some(index) = points
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| (a.x - point.x).abs().total_cmp(&(b.x - point.x).abs()))
-                .map(|(i, _)| i)
-        {
-            points[index].y = point.y;
-            changed = true;
-        }
-    }
-    changed
-}
-
 /// A New canvas background as its menu names it.
 fn background_name(background: xuan::config::CanvasBackground) -> &'static str {
     use xuan::config::CanvasBackground as Background;
@@ -1708,4 +1648,44 @@ pub(super) fn estimated_size(bytes: usize) -> String {
     } else {
         format!("{:.1} MiB", bytes / (KIB * KIB))
     }
+}
+
+/// Xuan's icon for About, decoded from the bundled 128 px PNG once per context.
+fn app_icon(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("about_app_icon");
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return texture;
+    }
+    let icon = image::load_from_memory(include_bytes!(
+        "../../assets/icons/hicolor/128x128/apps/me.silverl.xuan.png"
+    ))
+    .expect("bundled application icon")
+    .to_rgba8();
+    let size = [icon.width() as usize, icon.height() as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, icon.as_raw());
+    let texture = ctx.load_texture("about_app_icon", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    texture
+}
+
+/// About's links: the project page, the licence notices and a new issue, on `repository`'s
+/// GitHub. A release links the notices at its own tag, other builds at the main branch.
+pub(super) fn about_links(
+    repository: &str,
+    build: &xuan::buildinfo::BuildInfo,
+) -> [(&'static str, String); 3] {
+    let site = format!("https://github.com/{repository}");
+    let tree = if build.release {
+        format!("v{}", build.version)
+    } else {
+        "main".to_owned()
+    };
+    [
+        ("Project site", site.clone()),
+        (
+            "Licences and third-party notices",
+            format!("{site}/blob/{tree}/THIRD_PARTY.md"),
+        ),
+        ("Report a bug", format!("{site}/issues/new")),
+    ]
 }

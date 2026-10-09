@@ -268,6 +268,10 @@ Image size	图像大小
 Create canvas	创建画布
 Resolution	分辨率
 Anchor	锚点
+Top left	左上
+Top right	右上
+Bottom left	左下
+Bottom right	右下
 Transparent canvas · sRGB	透明画布 · sRGB
 White canvas · sRGB	白色画布 · sRGB
 Black canvas · sRGB	黑色画布 · sRGB
@@ -316,7 +320,10 @@ Apply crop / Cancel gesture	应用裁剪 / 取消操作
 A space for your next composition.	为下一幅创作留一方天地。
 Native image editor · Rust + egui + wgpu	原生图像编辑器 · Rust + egui + wgpu
 Ported from Compositor by Wonder Assembly LLC.	移植自 Wonder Assembly LLC 的 Compositor。
-Free and open source, under the MIT license.	基于 MIT 许可证的免费开源软件。
+Free and open source, under the MIT licence.	基于 MIT 许可证的免费开源软件。
+Project site	项目主页
+Licences and third-party notices	许可证与第三方声明
+Report a bug	报告问题
 Add text…	添加文字…
 Edit Text	编辑文字
 Font	字体
@@ -375,6 +382,9 @@ Falloff start	衰减起点
 Falloff end	衰减终点
 Invert selected colour range	反转所选颜色范围
 Click to add a point · Drag points to reshape the curve	单击添加控制点 · 拖动控制点调整曲线
+Curve	曲线
+In	输入
+Out	输出
 Amount	数量
 Distance	距离
 Monochromatic	单色
@@ -1014,7 +1024,10 @@ Make Selection	建立选区
 Shape Layer from Path	从路径创建形状图层
 Rename Path	重命名路径
 Delete Path	删除路径
-This document has no paths yet.	此文档还没有路径。
+No paths yet	还没有路径
+Draw one with the Pen, or trace the selection's outline.	用钢笔绘制一条，或描摹选区的轮廓。
+Draw with Pen	用钢笔绘制
+From selection	从选区建立
 Name	名称
 Rename	重命名
 Shape Layer	形状图层
