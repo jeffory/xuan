@@ -1695,13 +1695,33 @@ fn referenced(id: &Uuid) -> Option<u32> {
 /// Parse the `edits` of a `document/edit` request. Besides layer ids, the
 /// layer fields (`layer`, `above`, `below`, `parent` and the items of
 /// `layers`) may say `"$n"`: the n-th layer (from 1) this request added
-/// before that edit, counted as the answer's `layers` lists them.
+/// before that edit, counted as the answer's `layers` lists them. Each edit
+/// is parsed on its own, so when one of several is wrong the error says
+/// which, as `Edit 3 (stroke): …` like [`apply`].
 pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
-    let mut edits = edits;
-    for edit in edits.as_array_mut().into_iter().flatten() {
-        let Some(edit) = edit.as_object_mut() else {
-            continue;
-        };
+    let Value::Array(edits) = edits else {
+        return Ok(serde_json::from_value(edits)?);
+    };
+    let several = edits.len() > 1;
+    (edits.into_iter().enumerate())
+        .map(|(index, edit)| {
+            let op = (edit.get("op").and_then(Value::as_str))
+                .unwrap_or("no op")
+                .to_owned();
+            parse_edit(edit).map_err(|error| {
+                if several {
+                    anyhow::anyhow!("Edit {} ({op}): {error:#}", index + 1)
+                } else {
+                    error
+                }
+            })
+        })
+        .collect()
+}
+
+/// One edit of [`parse_edits`], with its `"$n"` references read.
+fn parse_edit(mut edit: Value) -> Result<Edit> {
+    if let Some(edit) = edit.as_object_mut() {
         let fields = edit.iter_mut().flat_map(|(key, value)| {
             if key == "layers" {
                 match value {
@@ -1726,7 +1746,7 @@ pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
             *field = json!(reference(n));
         }
     }
-    Ok(serde_json::from_value(edits)?)
+    Ok(serde_json::from_value(edit)?)
 }
 
 /// The layer ids an edit names, by reference (`as_ref`, `iter`) or mutably
@@ -4081,6 +4101,22 @@ mod tests {
                 "{bad}: {error:#}"
             );
         }
+        // A wrong value in one of several edits names that edit too.
+        let error = parse_edits(json!([
+            {"op": "add_empty_layer"},
+            {"op": "gradient", "start": {"item": [0, 0]}, "end": [0, 1],
+             "stops": [{"position": 0, "color": "#000000"}, {"position": 1, "color": "#ffffff"}]},
+        ]))
+        .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.starts_with("Edit 2 (gradient): "), "{error}");
+        let error =
+            parse_edits(json!([{"op": "add_empty_layer"}, {"op": "select", "layer": "$x"}]))
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").starts_with("Edit 2 (select): `$x` is not"),
+            "{error:#}"
+        );
         // Text is never taken for a reference; a single failing edit is
         // reported as before, without an edit number.
         let text = parse_edits(json!([{"op": "add_text_layer", "text": "$1"}])).unwrap();
