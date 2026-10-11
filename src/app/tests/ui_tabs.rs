@@ -216,7 +216,7 @@ fn many_tabs_overflow_into_a_list() {
 }
 
 #[test]
-fn the_tab_bar_sits_between_the_tool_options_and_the_canvas() {
+fn the_tab_bar_sits_above_the_tool_options_and_the_canvas() {
     let mut ui = three_tabs();
     ui.app_mut().tool = Tool::Move;
     ui.settle();
@@ -224,12 +224,12 @@ fn the_tab_bar_sits_between_the_tool_options_and_the_canvas() {
     let tab = tab_rect(&ui, "Gamma");
     let canvas = ui.app().canvas_rect.expect("the canvas was drawn");
     assert!(
-        options.bottom() <= tab.top(),
-        "tool options {options:?} above the tabs {tab:?}"
+        tab.bottom() <= options.top(),
+        "tabs {tab:?} above the tool options {options:?}"
     );
     assert!(
-        tab.bottom() <= canvas.top(),
-        "tabs {tab:?} above the document {canvas:?}"
+        options.bottom() <= canvas.top(),
+        "tool options {options:?} above the document {canvas:?}"
     );
     assert!((34.0..=36.5).contains(&tab.height()), "about 36 px tall");
 }

@@ -2311,9 +2311,9 @@ impl EditorApp {
             self.tabs(ctx);
             self.develop_workspace(ctx);
         } else {
-            // Tool options, then the tabs as the canvas's own header.
-            self.tool_options(ctx);
+            // The tabs, then the tool options, as in the Develop workspace.
             self.tabs(ctx);
+            self.tool_options(ctx);
             self.reload_bar(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);

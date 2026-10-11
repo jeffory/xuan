@@ -52,7 +52,7 @@ impl EditorApp {
             .min_height(42.0)
             .frame(theme::frame(&ctx.palette()))
             .show(ctx, |ui| {
-                // The bar keeps its height with no document, so the tabs and canvas do not move
+                // The bar keeps its height with no document, so the canvas does not move
                 // when the first one opens; there is just nothing in it to use yet.
                 if self.session().is_none() {
                     return;
