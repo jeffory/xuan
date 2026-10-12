@@ -24,6 +24,9 @@ jobs:
       # Only the tag-triggered Release workflow (which calls this one) builds a release.
       XUAN_BUILD_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'dev' }}
       XUAN_MAX_GLIBC: '2.35'
+      # The AppImage names this repository's latest release as its source of updates
+      # (scripts/package-native.py), and a .zsync file is made for that release.
+      XUAN_APPIMAGE_UPDATE_REPOSITORY: ${{ github.repository }}
       # Missing real-camera fixtures fail the RAW tests instead of skipping.
       XUAN_REQUIRE_RAW_FIXTURES: '1'
     steps:
@@ -36,7 +39,7 @@ jobs:
       - name: Install Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libvulkan1 mesa-vulkan-drivers desktop-file-utils xvfb dpkg rpm cpio binutils squashfs-tools
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libvulkan1 mesa-vulkan-drivers desktop-file-utils xvfb dpkg rpm cpio binutils squashfs-tools zsync
       - name: Set up AppImage packaging
         run: |
           mkdir -p "$RUNNER_TEMP/appimage-tools"
