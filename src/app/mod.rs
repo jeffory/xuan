@@ -36,6 +36,9 @@ mod levels_controls;
 #[cfg(target_os = "macos")]
 mod macos;
 mod menu_model;
+// The macOS menu bar uses it; until it exists, only the tests do.
+#[cfg(test)]
+mod menu_sync;
 mod menus;
 mod navigator;
 mod palette;

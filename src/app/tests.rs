@@ -93,6 +93,9 @@ mod update_check;
 #[path = "tests/menu_bar.rs"]
 mod menu_bar;
 
+#[path = "tests/menu_changes.rs"]
+mod menu_changes;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
