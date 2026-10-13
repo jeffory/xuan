@@ -52,3 +52,16 @@ fn the_language_picker_offers_every_locale_and_applies_the_choice_at_once() {
     );
     xuan::i18n::set_language(&Language::english());
 }
+
+#[test]
+fn the_selection_modes_follow_the_language() {
+    let mut ui = UiTest::with_document();
+    ui.app_mut().config.language = Language::new("zh-CN");
+    ui.app_mut().tool = Tool::Marquee;
+    ui.settle();
+    // New, Add, Subtract, Intersect.
+    for label in ["新建", "添加", "减去", "交集"] {
+        assert!(shows(&ui, label), "{label}");
+    }
+    xuan::i18n::set_language(&Language::english());
+}

@@ -259,7 +259,7 @@ impl EditorApp {
                                             ui,
                                             &mut self.selection_mode,
                                             &[
-                                                (SelectionMode::Replace, "New"),
+                                                (SelectionMode::Replace, tr("New")),
                                                 (SelectionMode::Add, tr("Add")),
                                                 (SelectionMode::Subtract, tr("Subtract")),
                                                 (SelectionMode::Intersect, tr("Intersect")),
