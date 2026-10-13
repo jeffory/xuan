@@ -105,14 +105,14 @@ APT or DNF.
 
 ## Workspace
 
-Xuan has charcoal and light themes (Settings → Appearance → Theme), contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
+Xuan has charcoal and light themes (Settings → Appearance → Theme), contextual controls above the canvas, a vertical tool rail, document tabs, and a sidebar of panes on the right. The menu bar shares the titlebar with the window controls. On macOS the menus are in the menu bar at the top of the screen, and the document tabs share the title row with the window buttons. Drag the titlebar to move the window, double-click to maximize, or drag an edge to resize.
 
 The sidebar is a stack of panes, each with a header. Click a header to collapse or expand the pane, drag a header up or down to reorder the stack, and drag the line between two panes to resize them; the Layers pane takes whatever space is left. The **Navigator** pane above it shows the whole image with the visible area outlined, and the **Channels** pane (collapsed at first) the active layer's channels. The **Window** menu shows or hides each pane, and **Window → Reset Panel Layout** restores the default (Navigator, Channels collapsed, then Layers, then any plugin panes). The arrangement is saved with your settings. Plugins can add panes of their own (see [plugins](PLUGINS.md)).
 
 ### Document tabs
 
 Each open document and RAW Develop session has a tab, in a bar below the title bar and
-above the tool options. The tabs are styled after KDE's: flat, with a document icon, the
+above the tool options (on macOS, in the title row itself). The tabs are styled after KDE's: flat, with a document icon, the
 title and a **✕**, thin separators between them, and the selected tab a little lighter than
 the bar with an accent line along its top edge, open onto the tool options below. The others
 get a faint fill under the pointer. The **+** button after the last tab starts a new canvas.
@@ -767,8 +767,9 @@ It also sets the **Window title bar**:
 - **Compact** (the default): the menus share the title bar with minimize,
   maximize, and close buttons on the right. Under GNOME the buttons follow the
   desktop's `button-layout` setting for side and order, and under KDE Plasma the
-  `ButtonsOnLeft` / `ButtonsOnRight` of `kwinrc`. On macOS the menus sit beside the
-  system's own window buttons instead.
+  `ButtonsOnLeft` / `ButtonsOnRight` of `kwinrc`. On macOS the menus are in the menu bar
+  at the top of the screen, and the document tabs sit beside the system's own window buttons
+  instead.
 - **System**: the desktop draws the title bar, window buttons, and resize borders,
   and the menus sit in a normal bar below it.
 

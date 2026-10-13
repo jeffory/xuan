@@ -35,8 +35,14 @@ and the library. The work is in four parts.
   full-size content view, with Xuan's menus beside them; System keeps a standard title bar. The
   content view is fixed when the window is created, so a change applies after restarting.
   Configuration files that say `title_bar = "macos"` load as Compact.
-- [ ] A native menu bar at the top of the screen, generated from the command registry (for example
-  with `muda`), with About, Settings… (⌘,) and the Window menu where Mac users expect them.
+- [x] **Native menu bar.** The menus are in the menu bar at the top of the screen, made from the
+  same list as the in-window menus (`src/app/menu_model.rs`) with muda. The Xuan menu holds
+  About, Check for Updates, Settings… (⌘,), Services, Hide, Hide Others, Show All and Quit; the
+  Window menu adds Minimize, Zoom, Bring All to Front and the window list. An item chosen by
+  its shortcut gives the key back to egui, so text fields and the command palette keep their
+  keys. ⌘M stays on Curves, so Minimize has no shortcut. In the Compact style the document tabs
+  take the title row beside the window buttons. If the menu bar cannot be built, the window
+  keeps its own menus. muda needs Rust 1.90, so macOS builds do too.
 - [ ] Double-clicking the title follows the system's "Double-click a window's title bar to" setting
   (`AppleActionOnDoubleClick`) rather than always zooming.
 
@@ -49,6 +55,14 @@ These need a real Mac; CI only builds, tests and screenshots the app.
   corner handle distorts.
 - With unsaved changes, ⌘Q, Quit in the Dock and logging out show the prompt; Cancel keeps Xuan
   open. Without changes they quit at once and the window size is remembered.
+- Every menu opens from the menu bar and every item works. The ⌘ hints show, and items grey
+  out as in the window's menus (no document, a dialog open, Develop).
+- In a text field, ⌘C, ⌘X, ⌘V, ⌘A and ⌘Z edit the text.
+- "Black & White" shows its `&`. Changing the language relabels the menus at once.
+- Installing or turning off a plugin updates its menu items, and Open Recent updates after an
+  open.
+- The tab row lines up with the window buttons, moves the window, zooms on a double-click and
+  starts at the left edge in full screen.
 - The red, yellow and green buttons sit at the left of Xuan's title bar, line up with the menus
   and work, including full screen; the window resizes from every edge; dragging the title moves
   it and double-clicking zooms.
