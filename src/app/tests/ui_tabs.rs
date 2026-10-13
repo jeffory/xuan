@@ -326,3 +326,60 @@ fn double_clicking_the_empty_title_row_zooms_the_window() {
         "and starts no document"
     );
 }
+
+#[test]
+fn dragging_a_tab_in_the_title_row_reorders_and_does_not_move_the_window() {
+    let mut ui = mac_title_row();
+    let alpha = tab_rect(&ui, "Alpha");
+    let gamma = tab_rect(&ui, "Gamma");
+    ui.click("Alpha");
+    let mut moved = false;
+    let from = alpha.center();
+    let to = gamma.center() + egui::vec2(gamma.width() * 0.4, 0.0);
+    ui.harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(from));
+    ui.harness.step();
+    ui.harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerButton {
+            pos: from,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+    for step in 1..=8 {
+        let pos = from + (to - from) * (step as f32 / 8.0);
+        ui.harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(pos));
+        ui.harness.step();
+        let dragging_window = ui
+            .harness
+            .output()
+            .viewport_output
+            .values()
+            .any(|viewport| {
+                viewport
+                    .commands
+                    .iter()
+                    .any(|command| matches!(command, egui::ViewportCommand::StartDrag))
+            });
+        moved |= dragging_window;
+    }
+    ui.harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerButton {
+            pos: to,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+    ui.settle();
+    assert!(!moved, "a tab drag must not move the window");
+    assert_eq!(titles(&ui), ["Beta", "Gamma", "Alpha"]);
+}

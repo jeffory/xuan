@@ -834,6 +834,8 @@ impl EditorApp {
         #[cfg(target_os = "macos")]
         macos::install_quit_handler(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
+        macos::keep_title_bar_drags();
+        #[cfg(target_os = "macos")]
         app.install_native_menu(&cc.egui_ctx);
         // Install the native renderer before the first RAW worker is started.
         xuan::gpu::scope(app.processor.clone(), || {
