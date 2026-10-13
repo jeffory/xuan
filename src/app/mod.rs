@@ -35,12 +35,14 @@ mod layout_grid;
 mod levels_controls;
 #[cfg(target_os = "macos")]
 mod macos;
-// The macOS menu bar uses it; until it exists, only the tests do.
-#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod macos_menu;
+// The macOS menu bar's logic, tested on every platform.
+#[cfg(any(target_os = "macos", test))]
 mod menu_keys;
 mod menu_model;
-// The macOS menu bar uses it; until it exists, only the tests do.
-#[cfg(test)]
+// The macOS menu bar's logic, tested on every platform.
+#[cfg(any(target_os = "macos", test))]
 mod menu_sync;
 mod menus;
 mod navigator;
@@ -764,6 +766,11 @@ pub struct EditorApp {
     decorated: bool,
     /// The system draws the window buttons and resize edges (macOS), see [`chrome::NATIVE_BUTTONS`].
     native_buttons: bool,
+    /// Whether the menus are in the system menu bar, so the window draws none (macOS).
+    system_menu_bar: bool,
+    /// The macOS menu bar, while the menus are there.
+    #[cfg(target_os = "macos")]
+    native_menu: Option<macos_menu::NativeMenu>,
     /// The title bar style the window was created with.
     startup_title_bar: xuan::config::TitleBar,
     button_layout: chrome::ButtonLayout,
@@ -826,6 +833,8 @@ impl EditorApp {
         app.tablet = tablet::TabletInput::new(cc);
         #[cfg(target_os = "macos")]
         macos::install_quit_handler(&cc.egui_ctx);
+        #[cfg(target_os = "macos")]
+        app.install_native_menu(&cc.egui_ctx);
         // Install the native renderer before the first RAW worker is started.
         xuan::gpu::scope(app.processor.clone(), || {
             for path in paths {
@@ -991,6 +1000,9 @@ impl EditorApp {
             decorated: false,
             // Tests see the Linux and Windows title bar wherever they run.
             native_buttons: chrome::NATIVE_BUTTONS && !cfg!(test),
+            system_menu_bar: false,
+            #[cfg(target_os = "macos")]
+            native_menu: None,
             startup_title_bar: xuan::config::TitleBar::Compact,
             button_layout: Default::default(),
             #[cfg(target_os = "linux")]
@@ -2267,6 +2279,9 @@ impl EditorApp {
     }
 
     fn show_with_processor(&mut self, ctx: &egui::Context) {
+        // Keys the macOS menu bar took come back before anything reads this frame's input.
+        #[cfg(target_os = "macos")]
+        self.take_native_menu_input(ctx);
         self.forget_crop_of_other_documents();
         self.sync_move_options();
         self.sync_palette(ctx);
@@ -2312,7 +2327,11 @@ impl EditorApp {
         self.window_resize(ctx);
         self.poll_plugins();
         self.poll_updates();
-        self.menus(ctx);
+        #[cfg(target_os = "macos")]
+        self.sync_native_menu();
+        if !self.system_menu_bar {
+            self.menus(ctx);
+        }
         if self.develop.is_some() {
             // The Develop workspace has its own toolbar; RAW tabs stay reachable above it.
             self.tabs(ctx);

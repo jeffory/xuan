@@ -19,8 +19,8 @@ use super::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MenuLayout {
     /// The macOS menu bar: an app menu first, which takes About, Settings and Quit.
-    // Built only by the macOS menu bar (`macos_menu.rs`) and the tests.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // Used by the macOS menu bar (`macos_menu.rs`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Mac,
     /// The window's own menu row.
     InWindow,
@@ -60,8 +60,8 @@ pub(super) struct MenuBar {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct TopMenu {
-    // Read by the macOS menu bar (`macos_menu.rs`) and the tests.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // Used by the macOS menu bar (`macos_menu.rs`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub role: Role,
     pub label: String,
     /// Whether the menu opens at all: not while a job, a dialog or a prompt is up. Its items
@@ -82,8 +82,8 @@ pub(super) enum MenuEntry {
     /// Greyed text, such as "No recent files".
     Placeholder(String),
     /// A macOS item that AppKit runs itself. Only in [`MenuLayout::Mac`].
-    // Read by the macOS menu bar (`macos_menu.rs`) and the tests.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // Used by the macOS menu bar (`macos_menu.rs`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     System {
         item: SystemItem,
         label: String,
