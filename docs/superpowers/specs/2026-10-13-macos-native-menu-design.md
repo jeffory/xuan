@@ -27,7 +27,8 @@ Success means:
 - One shared menu list feeds both renderers.
 - The "Xuan" app menu holds About, Check for Updates, Settings… (⌘,), Services, Hide, Hide Others,
   Show All and Quit.
-- ⌘M stays on Curves, as in Photoshop. Minimize has no shortcut.
+- ⌘M stays on Curves, as in Photoshop. Minimize has no shortcut. muda's built-in Minimize
+  answers ⌘M and cannot drop it, so Minimize is Xuan's own item.
 - In the Compact style on macOS, the tab bar is the title row, 32 px tall, so its centre lines up
   with the window buttons. On macOS 26.6 the buttons are centred 16 px from the top of a 32 px
   title bar (measured with a full-size content view and a hidden, transparent title bar).
@@ -76,7 +77,7 @@ pub(super) enum MenuEntry {
     Placeholder(String),
     /// A macOS item that AppKit runs itself: Services, Hide, Hide Others, Show All, Minimize,
     /// Zoom, Bring All to Front. Only in `MenuLayout::Mac`.
-    System(SystemItem),
+    System { item: SystemItem, label: String },
 }
 
 pub(super) struct MenuItem {
@@ -85,10 +86,8 @@ pub(super) struct MenuItem {
     /// and `command_enabled`.
     pub enabled: bool,
     pub checked: Option<bool>,
-    /// The first binding, for the native key equivalent.
+    /// The first binding: the hint egui shows (`Chord::label`) and the native key equivalent.
     pub chord: Option<Chord>,
-    /// The hint as egui shows it, from `Keymap::shortcut`.
-    pub shortcut: String,
     /// egui only: a plugin's source, a recent file's full path.
     pub hover: Option<String>,
     pub action: MenuAction,
@@ -102,6 +101,7 @@ pub(super) enum MenuAction {
     Filter { filter: Filter, layer: bool },
     Pane { id: String, hidden: bool },
     Snap(SnapTarget), // Guides, Grid, Layers, Bounds
+    Minimize,         // the macOS Window menu
 }
 ```
 
@@ -120,11 +120,14 @@ encloses it today.
   Services, separator, Hide Xuan, Hide Others, Show All, separator, Quit Xuan.
 - File has no Quit, Edit has no Settings, and Help has no Check for Updates or About (nor the
   separator before them).
-- Window starts with Minimize and Zoom and a separator, and ends with a separator and Bring All to
-  Front.
+- Window starts with Minimize (Xuan's own item) and Zoom and a separator, and ends with a
+  separator and Bring All to Front.
+- No menu or submenu starts or ends with a separator, or has two together, so moving an item
+  leaves no stray line.
 
-The app menu's own items follow the blocked state like the rest of the bar. The `System` items are
-always on.
+The app menu's own items follow the blocked state like the rest of the bar. Minimize and the
+`System` items are always on. `System` entries carry their translated label, so a language change
+relabels them too.
 
 ### 2. The egui renderer: `src/app/menus.rs`
 
@@ -144,8 +147,15 @@ showed. Once per frame, with the new list:
 - Entries were added, removed or changed kind in a top-level menu (plugins, recent files, Develop
   mode): that top-level menu is rebuilt.
 
-The decision is a pure function, `diff(old: &MenuBar, new: &MenuBar) -> Vec<Change>`, so it is
-tested on every platform. Only applying the changes needs muda.
+The decision is a pure function, `diff(old: &MenuBar, new: &MenuBar) -> Sync` in
+`src/app/menu_sync.rs`, so it is tested on every platform. Only applying the changes needs muda.
+
+Two muda details:
+
+- muda reads `&` in a label as a mnemonic marker and drops it, so every label goes through
+  `menu_text`, which writes `&` as `&&` ("Black & White", plugin labels).
+- muda turns a check item's tick over by itself when it is chosen. After any event, the renderer
+  sets every tick again from the list, so a toggle whose command did not run keeps its true tick.
 
 Setup happens where `macos::install_quit_handler` runs today (`src/app/mod.rs`, in the app's
 creation, after NSApp has launched):
@@ -160,7 +170,7 @@ The event handler runs on the main thread, inside AppKit's menu action. At that 
 
 ### Running a choice
 
-`EditorApp::run_menu_action(MenuAction)` replaces the block at the end of today's `menus()`. Both
+`EditorApp::run_menu_action(ctx, MenuAction)` replaces the block at the end of today's `menus()`. Both
 renderers end in it. A `Command` runs through `run_command` as today.
 
 ### Frame order
@@ -178,15 +188,16 @@ bypassed.
 
 The rule:
 
-- **From a key** (`NSApp.currentEvent` is a key-down that matches the item's key equivalent): the
-  key press is replayed into egui at the start of the next frame, as winit would have sent it.
+- **From a key** (`NSApp.currentEvent` is a key-down; an item runs during a key-down only through
+  its own key equivalent): the key press is replayed into egui at the start of the next frame, as winit would have sent it.
   ⌘C, ⌘X and ⌘V become `Event::Copy`, `Event::Cut` and `Event::Paste(clipboard text)`, as
   egui-winit makes them. egui then handles the key exactly as today: text fields, the palette,
   `shortcuts()` and its scopes.
 - **From a click**: the item's `MenuAction` runs.
 
-This is the pure function `route(from_key: Option<Chord>, action) -> Route` (`Replay(events)` or
-`Run(action)`), tested on every platform. A disabled native item takes no key, so the press reaches
+This is the pure function `route(from_key: bool, chord: Option<Chord>, action) -> Route`
+(`Replay(chord)` or `Run(action)`) in `src/app/menu_keys.rs`, beside `replay` and
+`key_equivalent`, all tested on every platform. A disabled native item takes no key, so the press reaches
 egui directly, which gives the same result.
 
 Every item with a binding gets a key equivalent, so the menus show every hint. A chord that has no
@@ -221,8 +232,8 @@ keeps 36 px under the title bar.
 - If muda fails to build or attach the menu, Xuan logs the error with `eprintln!` (as
   `src/app/macos.rs` does) and falls back to the egui menu row and today's title row. The user is
   never left without menus.
-- A failed in-place update or rebuild is logged, and the next frame rebuilds the whole menu from the
-  list.
+- A failed in-place update or rebuild is logged, and the whole menu is rebuilt from the list at
+  once. If that fails too, Xuan removes the native menu and shows the in-window menus.
 - A muda event whose id is not in the map (an item from a menu that was just rebuilt) is ignored.
 
 ## Testing
@@ -244,9 +255,10 @@ On every platform (no Mac needed):
   after the window buttons' space.
 - The existing menu UI tests pass unchanged. They show the egui renderer still draws the same menus.
 
-On macOS CI (`.github/workflows/macos.yml`, which already runs the tests):
-
-- Every default chord of every menu item converts to a muda `Accelerator`.
+- Every menu shortcut, in both layouts and in Develop, has a Mac key equivalent
+  (`menu_keys::key_equivalent` is pure, so this runs on every platform too).
+- A key given back to egui still edits a focused text field, and still runs its command
+  otherwise (kittest).
 
 `scripts/check.sh --gpu` passes.
 
@@ -256,6 +268,7 @@ On macOS CI (`.github/workflows/macos.yml`, which already runs the tests):
   on a Mac".
 - `docs/USAGE.md`: on macOS the menus are in the menu bar, and in the Compact style the tabs share
   the row with the window buttons.
+- `THIRD_PARTY.md` and `licenses/muda-MIT.txt`: muda and its licence, as for kurbo.
 - When the work is on `develop` and CI passes, #128 gets a comment naming the commits and keeps the
   `needs-qa` label, with this "To test" list:
   - Every menu opens from the top bar and every item works.
@@ -275,6 +288,8 @@ On macOS CI (`.github/workflows/macos.yml`, which already runs the tests):
   `objc2-foundation`, `png`, `dpi`, `thiserror`) are already in `Cargo.lock`.
 - macOS only (`[target.'cfg(target_os = "macos")'.dependencies]`). Windows and Linux builds do not
   compile it.
+- `menu_sync.rs` and `menu_keys.rs` compile on macOS and in tests only; `macos_menu.rs` on macOS
+  only.
 - Pinned exactly, with `Cargo.lock` committed. Review the crate before the first build, and review
   any later bump the same way.
 - No network or file access. Plugin labels from third-party manifests reach `NSMenuItem` titles as
