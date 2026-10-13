@@ -10,7 +10,7 @@ use xuan::{
 use super::{
     EditorApp,
     commands::Chord,
-    menu_model::{MenuAction, MenuEntry, MenuItem},
+    menu_model::{MenuAction, MenuEntry, MenuItem, MenuLayout},
     theme, widgets,
 };
 
@@ -101,6 +101,8 @@ fn draw_entries(ui: &mut egui::Ui, entries: &[MenuEntry], chosen: &mut Option<Me
             MenuEntry::Placeholder(text) => {
                 ui.add_enabled(false, Button::new(text.as_str()));
             }
+            // AppKit's own items exist only in the macOS menu bar.
+            MenuEntry::System { .. } => {}
         }
     }
 }
@@ -220,7 +222,7 @@ pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<AdjustmentChoice> {
 
 impl EditorApp {
     pub(super) fn menus(&mut self, ctx: &egui::Context) {
-        let bar = self.menu_bar();
+        let bar = self.menu_bar(MenuLayout::InWindow);
         let enabled = bar.menus.iter().all(|menu| menu.enabled);
         let mut chosen = None;
         super::chrome::title_bar(&ctx.palette(), self.window_corner_radius(ctx), "menubar").show(
@@ -247,7 +249,7 @@ impl EditorApp {
             },
         );
         if let Some(action) = chosen {
-            self.run_menu_action(action);
+            self.run_menu_action(ctx, action);
         }
     }
 }

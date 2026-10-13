@@ -1,7 +1,7 @@
 //! The menu list (`menu_model.rs`): what each menu holds, and when its items can run.
 
 use super::*;
-use crate::app::menu_model::{MenuAction, MenuBar, MenuEntry, MenuItem, TopMenu};
+use crate::app::menu_model::{MenuAction, MenuBar, MenuEntry, MenuItem, MenuLayout, Role, TopMenu};
 
 /// A menu's entries as short lines: a command's id, `---` for a separator, `> Label` for a
 /// submenu, `(text)` for a placeholder, and the label of any other item.
@@ -17,6 +17,7 @@ fn outline(entries: &[MenuEntry]) -> Vec<String> {
             MenuEntry::Submenu { label, .. } => format!("> {label}"),
             MenuEntry::Separator => "---".to_owned(),
             MenuEntry::Placeholder(text) => format!("({text})"),
+            MenuEntry::System { item, .. } => format!("[{item:?}]"),
         })
         .collect()
 }
@@ -67,7 +68,7 @@ fn assert_tidy(entries: &[MenuEntry], name: &str) {
 #[test]
 fn the_menus_keep_their_order_and_contents() {
     let (_, mut app) = app_with_document();
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(MenuLayout::InWindow);
     let labels: Vec<&str> = bar.menus.iter().map(|menu| menu.label.as_str()).collect();
     assert_eq!(
         labels,
@@ -146,7 +147,7 @@ fn the_menus_keep_their_order_and_contents() {
 #[test]
 fn items_without_a_document_are_greyed() {
     let (_, mut app) = app();
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(MenuLayout::InWindow);
     assert!(bar.find_command("new").unwrap().enabled);
     assert!(!bar.find_command("save").unwrap().enabled);
     assert!(!bar.find_command("image_size").unwrap().enabled);
@@ -160,7 +161,7 @@ fn items_without_a_document_are_greyed() {
 fn a_prompt_greys_every_menu() {
     let (_, mut app) = app_with_document();
     app.close_app = true;
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(MenuLayout::InWindow);
     assert!(bar.menus.iter().all(|menu| !menu.enabled));
     assert!(bar.items().iter().all(|item| !item.enabled));
 }
@@ -168,10 +169,18 @@ fn a_prompt_greys_every_menu() {
 #[test]
 fn undo_and_redo_name_the_step() {
     let (_, mut app) = app_with_document();
-    let undo = app.menu_bar().find_command("undo").cloned().unwrap();
+    let undo = app
+        .menu_bar(MenuLayout::InWindow)
+        .find_command("undo")
+        .cloned()
+        .unwrap();
     assert_eq!((undo.label.as_str(), undo.enabled), ("Undo ", false));
     app.command("new_layer");
-    let undo = app.menu_bar().find_command("undo").cloned().unwrap();
+    let undo = app
+        .menu_bar(MenuLayout::InWindow)
+        .find_command("undo")
+        .cloned()
+        .unwrap();
     assert!(
         undo.label.starts_with("Undo ") && undo.label.len() > "Undo ".len(),
         "{}",
@@ -187,14 +196,14 @@ fn open_recent_lists_files_and_greys_missing_ones() {
     std::fs::write(&here, b"").unwrap();
     let gone = directory.path().join("gone.png");
     let (_, mut app) = app();
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(MenuLayout::InWindow);
     assert_eq!(
         outline(submenu(&menu(&bar, "File").entries, "Open Recent")),
         ["(No recent files)", "---", "clear_recent"]
     );
 
     app.config.recent_files = vec![here.clone(), gone.clone()];
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(MenuLayout::InWindow);
     let entries = submenu(&menu(&bar, "File").entries, "Open Recent");
     let [MenuEntry::Item(first), MenuEntry::Item(second), ..] = entries else {
         panic!("{entries:?}");
@@ -220,7 +229,7 @@ fn toggles_show_their_ticks() {
     let (_, mut app) = app_with_document();
     app.config.rulers = true;
     app.config.snap.enabled = false;
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(MenuLayout::InWindow);
     assert_eq!(
         bar.find_command("toggle_rulers").unwrap().checked,
         Some(true)
@@ -254,7 +263,7 @@ fn toggles_show_their_ticks() {
 fn develop_offers_close_raw_develop_and_greys_the_editor_items() {
     let (context, mut app) = app();
     app.develop = Some(crate::app::develop::tests::ready(&context));
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(MenuLayout::InWindow);
     let closes: Vec<&MenuItem> = menu(&bar, "File")
         .entries
         .iter()
@@ -273,16 +282,120 @@ fn develop_offers_close_raw_develop_and_greys_the_editor_items() {
 #[test]
 fn separators_never_start_end_or_double_up() {
     let (context, mut app) = app();
-    for menu in app.menu_bar().menus {
-        assert_tidy(&menu.entries, &menu.label);
+    for layout in [MenuLayout::InWindow, MenuLayout::Mac] {
+        for menu in app.menu_bar(layout).menus {
+            assert_tidy(&menu.entries, &menu.label);
+        }
     }
     app.dimensions = [20, 16];
     app.new_document();
-    for menu in app.menu_bar().menus {
-        assert_tidy(&menu.entries, &menu.label);
+    for layout in [MenuLayout::InWindow, MenuLayout::Mac] {
+        for menu in app.menu_bar(layout).menus {
+            assert_tidy(&menu.entries, &menu.label);
+        }
     }
     app.develop = Some(crate::app::develop::tests::ready(&context));
-    for menu in app.menu_bar().menus {
-        assert_tidy(&menu.entries, &menu.label);
+    for layout in [MenuLayout::InWindow, MenuLayout::Mac] {
+        for menu in app.menu_bar(layout).menus {
+            assert_tidy(&menu.entries, &menu.label);
+        }
     }
+}
+
+fn top(bar: &MenuBar, role: Role) -> &[MenuEntry] {
+    &bar.menus
+        .iter()
+        .find(|menu| menu.role == role)
+        .expect("menu")
+        .entries
+}
+
+#[test]
+fn the_mac_layout_adds_the_app_menu_and_moves_its_items() {
+    let (_, mut app) = app_with_document();
+    let bar = app.menu_bar(MenuLayout::Mac);
+    let roles: Vec<Role> = bar.menus.iter().map(|menu| menu.role).collect();
+    assert_eq!(
+        roles,
+        [
+            Role::App,
+            Role::File,
+            Role::Edit,
+            Role::Image,
+            Role::Layer,
+            Role::Select,
+            Role::Filter,
+            Role::View,
+            Role::Plugins,
+            Role::Window,
+            Role::Help,
+        ]
+    );
+    assert_eq!(
+        outline(top(&bar, Role::App)),
+        [
+            "about",
+            "check_updates",
+            "---",
+            "settings",
+            "---",
+            "[Services]",
+            "---",
+            "[Hide]",
+            "[HideOthers]",
+            "[ShowAll]",
+            "---",
+            "quit",
+        ]
+    );
+    assert_eq!(bar.find_command("quit").unwrap().label, "Quit Xuan");
+    assert_eq!(
+        outline(top(&bar, Role::File)).last().map(String::as_str),
+        Some("close")
+    );
+    // Settings has gone, and so has the separator that followed it.
+    assert_eq!(outline(top(&bar, Role::Edit))[..2], ["undo", "redo"]);
+    assert_eq!(
+        outline(top(&bar, Role::Help)),
+        ["command_palette", "shortcuts"]
+    );
+    let window = outline(top(&bar, Role::Window));
+    assert_eq!(window[..3], ["Minimize", "[Zoom]", "---"]);
+    assert_eq!(
+        window[window.len() - 3..],
+        ["reset_panels", "---", "[BringAllToFront]"]
+    );
+}
+
+#[test]
+fn minimize_stays_on_while_a_prompt_greys_the_rest() {
+    let (_, mut app) = app_with_document();
+    app.close_app = true;
+    let bar = app.menu_bar(MenuLayout::Mac);
+    for item in bar.items() {
+        assert_eq!(
+            item.enabled,
+            item.action == MenuAction::Minimize,
+            "{}",
+            item.label
+        );
+    }
+}
+
+#[test]
+fn the_in_window_layout_has_no_mac_items() {
+    let (_, mut app) = app_with_document();
+    let bar = app.menu_bar(MenuLayout::InWindow);
+    assert!(bar.menus.iter().all(|menu| menu.role != Role::App));
+    assert!(
+        bar.items()
+            .iter()
+            .all(|item| item.action != MenuAction::Minimize)
+    );
+    assert!(
+        bar.menus
+            .iter()
+            .flat_map(|menu| &menu.entries)
+            .all(|entry| !matches!(entry, MenuEntry::System { .. }))
+    );
 }

@@ -336,7 +336,7 @@ fn an_override_changes_dispatch_menu_label_and_resets() {
     app.rebuild_keymap();
     assert_eq!(app.keymap.shortcut("merge"), "Ctrl+Shift+M");
     assert!(app.keymap.keys("invert_selection").is_empty());
-    let bar = app.menu_bar();
+    let bar = app.menu_bar(crate::app::menu_model::MenuLayout::InWindow);
     let merge = bar.find_command("merge").unwrap();
     assert_eq!(
         (merge.enabled, merge.chord.map(Chord::label).as_deref()),

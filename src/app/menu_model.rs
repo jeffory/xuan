@@ -15,6 +15,44 @@ use super::{
     plugins::PluginMenuItem,
 };
 
+/// Which shape of menus to build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MenuLayout {
+    /// The macOS menu bar: an app menu first, which takes About, Settings and Quit.
+    // Built only by the macOS menu bar (`macos_menu.rs`) and the tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Mac,
+    /// The window's own menu row.
+    InWindow,
+}
+
+/// What a top-level menu is, for the menus macOS treats specially.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Role {
+    App,
+    File,
+    Edit,
+    Image,
+    Layer,
+    Select,
+    Filter,
+    View,
+    Plugins,
+    Window,
+    Help,
+}
+
+/// A macOS item that AppKit runs itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SystemItem {
+    Services,
+    Hide,
+    HideOthers,
+    ShowAll,
+    Zoom,
+    BringAllToFront,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct MenuBar {
     pub menus: Vec<TopMenu>,
@@ -22,6 +60,9 @@ pub(super) struct MenuBar {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct TopMenu {
+    // Read by the macOS menu bar (`macos_menu.rs`) and the tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub role: Role,
     pub label: String,
     /// Whether the menu opens at all: not while a job, a dialog or a prompt is up. Its items
     /// are greyed then too.
@@ -40,6 +81,13 @@ pub(super) enum MenuEntry {
     Separator,
     /// Greyed text, such as "No recent files".
     Placeholder(String),
+    /// A macOS item that AppKit runs itself. Only in [`MenuLayout::Mac`].
+    // Read by the macOS menu bar (`macos_menu.rs`) and the tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    System {
+        item: SystemItem,
+        label: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +127,8 @@ pub(super) enum MenuAction {
     },
     /// Turns one View → Snap To target over.
     Snap(SnapTarget),
+    /// Minimizes the window (the macOS Window menu).
+    Minimize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +159,8 @@ struct State<'a> {
     has_doc: bool,
     plugins: HashMap<Menu, Vec<PluginMenuItem>>,
     recent: &'a [(PathBuf, bool)],
+    /// Building [`MenuLayout::Mac`].
+    mac: bool,
 }
 
 /// Builds one menu's entries. `enabled` is the AND of every condition around the entries
@@ -174,6 +226,14 @@ impl<'a> Entries<'a> {
         self.entries.push(MenuEntry::Separator);
     }
 
+    /// One of AppKit's own items: always on.
+    fn system(&mut self, item: SystemItem, label: &str) {
+        self.entries.push(MenuEntry::System {
+            item,
+            label: label.to_owned(),
+        });
+    }
+
     /// Entries added by `add` also need `condition`.
     fn when(&mut self, condition: bool, add: impl FnOnce(&mut Self)) {
         let outer = self.enabled;
@@ -189,7 +249,7 @@ impl<'a> Entries<'a> {
         self.entries.push(MenuEntry::Submenu {
             label: label.to_owned(),
             enabled: inner.enabled,
-            entries: inner.entries,
+            entries: tidy(inner.entries),
         });
     }
 
@@ -260,18 +320,35 @@ impl<'a> Entries<'a> {
     }
 
     fn finish(self) -> Vec<MenuEntry> {
-        self.entries
+        tidy(self.entries)
     }
+}
+
+/// Drops separators at the start or end of a list and next to another one: an item that moved
+/// to the macOS app menu can leave one behind.
+fn tidy(entries: Vec<MenuEntry>) -> Vec<MenuEntry> {
+    let mut tidy: Vec<MenuEntry> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let separator = matches!(entry, MenuEntry::Separator);
+        if separator && matches!(tidy.last(), None | Some(MenuEntry::Separator)) {
+            continue;
+        }
+        tidy.push(entry);
+    }
+    if matches!(tidy.last(), Some(MenuEntry::Separator)) {
+        tidy.pop();
+    }
+    tidy
 }
 
 impl EditorApp {
     /// The menus as the menu bar shows them this frame.
-    pub(super) fn menu_bar(&mut self) -> MenuBar {
+    pub(super) fn menu_bar(&mut self, layout: MenuLayout) -> MenuBar {
         let recent = self.recent_status();
-        self.build_menu_bar(&recent)
+        self.build_menu_bar(layout, &recent)
     }
 
-    fn build_menu_bar(&self, recent: &[(PathBuf, bool)]) -> MenuBar {
+    fn build_menu_bar(&self, layout: MenuLayout, recent: &[(PathBuf, bool)]) -> MenuBar {
         let developing = self.develop.is_some();
         let blocked = self.job.is_some()
             || self.dialog.is_some()
@@ -284,26 +361,49 @@ impl EditorApp {
             has_doc: self.session().is_some() && !developing,
             plugins: self.plugin_menu_items(),
             recent,
+            mac: layout == MenuLayout::Mac,
         };
-        let menu = |label: &str, entries: Vec<MenuEntry>| TopMenu {
+        let menu = |role: Role, label: &str, entries: Vec<MenuEntry>| TopMenu {
+            role,
             label: label.to_owned(),
             enabled: state.enabled,
             entries,
         };
-        MenuBar {
-            menus: vec![
-                menu(tr("File"), self.file_entries(&state)),
-                menu(tr("Edit"), self.edit_entries(&state)),
-                menu(tr("Image"), self.image_entries(&state)),
-                menu(tr("Layer"), self.layer_entries(&state)),
-                menu(tr("Select"), self.select_entries(&state)),
-                menu(tr("Filter"), self.filter_entries(&state)),
-                menu(tr("View"), self.view_entries(&state)),
-                menu(tr("Plugins"), self.plugins_entries(&state)),
-                menu(tr("Window"), self.window_entries(&state)),
-                menu(tr("Help"), self.help_entries(&state)),
-            ],
+        let mut menus = Vec::new();
+        if state.mac {
+            // macOS shows the app's own name as this menu's title.
+            menus.push(menu(Role::App, "Xuan", self.app_entries(&state)));
         }
+        menus.extend([
+            menu(Role::File, tr("File"), self.file_entries(&state)),
+            menu(Role::Edit, tr("Edit"), self.edit_entries(&state)),
+            menu(Role::Image, tr("Image"), self.image_entries(&state)),
+            menu(Role::Layer, tr("Layer"), self.layer_entries(&state)),
+            menu(Role::Select, tr("Select"), self.select_entries(&state)),
+            menu(Role::Filter, tr("Filter"), self.filter_entries(&state)),
+            menu(Role::View, tr("View"), self.view_entries(&state)),
+            menu(Role::Plugins, tr("Plugins"), self.plugins_entries(&state)),
+            menu(Role::Window, tr("Window"), self.window_entries(&state)),
+            menu(Role::Help, tr("Help"), self.help_entries(&state)),
+        ]);
+        MenuBar { menus }
+    }
+
+    fn app_entries(&self, state: &State) -> Vec<MenuEntry> {
+        let mut e = Entries::new(self, state.enabled);
+        e.command("about");
+        e.command("check_updates");
+        e.separator();
+        e.command("settings");
+        e.separator();
+        e.system(SystemItem::Services, tr("Services"));
+        e.separator();
+        e.system(SystemItem::Hide, tr("Hide Xuan"));
+        e.system(SystemItem::HideOthers, tr("Hide Others"));
+        e.system(SystemItem::ShowAll, tr("Show All"));
+        e.separator();
+        e.labelled(tr("Quit Xuan"), "quit");
+        e.finish()
     }
 
     fn file_entries(&self, state: &State) -> Vec<MenuEntry> {
@@ -331,14 +431,18 @@ impl EditorApp {
             e.labelled(tr("Close RAW Develop"), "close");
         }
         e.when(state.has_doc, |e| e.plugins(state.plugins.get(&Menu::File)));
-        e.separator();
-        e.command("quit");
+        if !state.mac {
+            e.separator();
+            e.command("quit");
+        }
         e.finish()
     }
 
     fn edit_entries(&self, state: &State) -> Vec<MenuEntry> {
         let mut e = Entries::new(self, state.enabled);
-        e.command("settings");
+        if !state.mac {
+            e.command("settings");
+        }
         e.plugins(state.plugins.get(&Menu::Edit));
         e.separator();
         let (undo, redo) = if let Some(d) = &self.develop {
@@ -562,6 +666,20 @@ impl EditorApp {
 
     fn window_entries(&self, state: &State) -> Vec<MenuEntry> {
         let mut e = Entries::new(self, state.enabled);
+        if state.mac {
+            // AppKit's own Minimize answers ⌘M, which Curves keeps (as in Photoshop), so this one
+            // is Xuan's. Like AppKit's items it works while a prompt greys the rest.
+            e.entries.push(MenuEntry::Item(MenuItem {
+                label: tr("Minimize").to_owned(),
+                enabled: true,
+                checked: None,
+                chord: None,
+                hover: None,
+                action: MenuAction::Minimize,
+            }));
+            e.system(SystemItem::Zoom, tr("Zoom"));
+            e.separator();
+        }
         e.when(!state.developing, |e| {
             for (id, title, shown) in self.pane_entries() {
                 e.action(&title, Some(shown), MenuAction::Pane { id, hidden: shown });
@@ -569,6 +687,10 @@ impl EditorApp {
             e.separator();
             e.command("reset_panels");
         });
+        if state.mac {
+            e.separator();
+            e.system(SystemItem::BringAllToFront, tr("Bring All to Front"));
+        }
         e.finish()
     }
 
@@ -576,14 +698,17 @@ impl EditorApp {
         let mut e = Entries::new(self, state.enabled);
         e.command("command_palette");
         e.command("shortcuts");
-        e.separator();
-        e.command("check_updates");
-        e.command("about");
+        if !state.mac {
+            e.separator();
+            e.command("check_updates");
+            e.command("about");
+        }
         e.finish()
     }
 
-    /// Does what a menu item stands for.
-    pub(super) fn run_menu_action(&mut self, action: MenuAction) {
+    /// Does what a menu item stands for. The window's menus and the macOS menu bar both end
+    /// here.
+    pub(super) fn run_menu_action(&mut self, ctx: &egui::Context, action: MenuAction) {
         match action {
             MenuAction::Command(id) => self.run_command(id),
             MenuAction::Plugin { plugin, action } => self.start_plugin_action(&plugin, &action),
@@ -605,6 +730,7 @@ impl EditorApp {
                 let flag = target.flag(&mut config.snap);
                 *flag = !*flag;
             }),
+            MenuAction::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
         }
     }
 }

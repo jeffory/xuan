@@ -4213,7 +4213,7 @@ done
             "{error}"
         );
         // Its menu item shows no shortcut.
-        let bar = app.menu_bar();
+        let bar = app.menu_bar(crate::app::menu_model::MenuLayout::InWindow);
         let echo = bar
             .items()
             .into_iter()
