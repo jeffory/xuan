@@ -399,3 +399,33 @@ fn the_in_window_layout_has_no_mac_items() {
             .all(|entry| !matches!(entry, MenuEntry::System { .. }))
     );
 }
+
+#[test]
+fn the_mac_items_follow_the_language() {
+    let (_, mut app) = app_with_document();
+    xuan::i18n::set_language(&xuan::config::Language::new("zh-CN"));
+    let bar = app.menu_bar(MenuLayout::Mac);
+    xuan::i18n::set_language(&xuan::config::Language::english());
+    let system: Vec<&str> = bar
+        .menus
+        .iter()
+        .flat_map(|menu| &menu.entries)
+        .filter_map(|entry| match entry {
+            MenuEntry::System { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        system,
+        [
+            "服务",
+            "隐藏 Xuan",
+            "隐藏其他",
+            "全部显示",
+            "缩放",
+            "前置全部窗口"
+        ]
+    );
+    assert_eq!(bar.find_command("quit").unwrap().label, "退出 Xuan");
+    assert!(bar.items().iter().any(|item| item.label == "最小化"));
+}
