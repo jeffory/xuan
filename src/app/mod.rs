@@ -35,6 +35,9 @@ mod layout_grid;
 mod levels_controls;
 #[cfg(target_os = "macos")]
 mod macos;
+// The macOS menu bar uses it; until it exists, only the tests do.
+#[cfg(test)]
+mod menu_keys;
 mod menu_model;
 // The macOS menu bar uses it; until it exists, only the tests do.
 #[cfg(test)]
