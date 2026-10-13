@@ -23,7 +23,7 @@ use super::{
     commands::Chord,
     menu_keys::{self, Route},
     menu_model::{MenuAction, MenuBar, MenuEntry, MenuLayout, Role, SystemItem},
-    menu_sync::{MenuChange, Sync, diff, menu_text},
+    menu_sync::{MenuChange, Sync, diff, item_at, menu_text},
 };
 
 /// A native item, beside the entry it shows.
@@ -88,10 +88,13 @@ pub(super) struct NativeMenu {
     tops: Vec<(Submenu, Vec<Native>)>,
     /// The list the menu shows now.
     shown: MenuBar,
-    /// Each item's action and key equivalent, by its muda id.
-    actions: HashMap<MenuId, (MenuAction, Option<Chord>)>,
+    /// Each item's path in `shown` (see [`item_at`]), by its muda id. Paths last until a menu
+    /// is rebuilt, and an event reads the item, with its current shortcut, from `shown`.
+    paths: HashMap<MenuId, Vec<usize>>,
     /// Items chosen since the last frame, and whether a key press chose each.
     events: Arc<Mutex<Vec<(MenuId, bool)>>>,
+    /// Items clicked, waiting for the frame to run them.
+    clicked: Vec<MenuAction>,
     /// An item was chosen. muda turns a check item's tick over by itself when it is chosen,
     /// whether or not the action then runs, so every tick is set again from the list.
     recheck: bool,
@@ -117,8 +120,9 @@ impl NativeMenu {
             menu: Menu::new(),
             tops: Vec::new(),
             shown: MenuBar::default(),
-            actions: HashMap::new(),
+            paths: HashMap::new(),
             events,
+            clicked: Vec::new(),
             recheck: false,
         };
         // muda gives the Window and Help menus their roles only in the app's own menu.
@@ -139,11 +143,7 @@ impl NativeMenu {
             let submenu = Submenu::new(menu_text(&top.label), true);
             let items = build(&submenu, &top.entries)?;
             self.menu.append(&submenu)?;
-            match top.role {
-                Role::Window => submenu.set_as_windows_menu_for_nsapp(),
-                Role::Help => submenu.set_as_help_menu_for_nsapp(),
-                _ => {}
-            }
+            give_role(&submenu, top.role);
             self.tops.push((submenu, items));
         }
         self.shown = bar;
@@ -188,9 +188,15 @@ impl NativeMenu {
                     update(items, &old.entries, &top.entries)?;
                 }
                 MenuChange::Rebuild => {
-                    while submenu.remove_at(0).is_some() {}
-                    submenu.set_text(menu_text(&top.label));
-                    *items = build(submenu, &top.entries)?;
+                    // AppKit adds items of its own to some menus (the window list in Window),
+                    // and muda removes items by position, so the menu is replaced whole.
+                    let replacement = Submenu::new(menu_text(&top.label), true);
+                    let replacement_items = build(&replacement, &top.entries)?;
+                    self.menu.remove(submenu)?;
+                    self.menu.insert(&replacement, index)?;
+                    give_role(&replacement, top.role);
+                    *submenu = replacement;
+                    *items = replacement_items;
                     rebuilt = true;
                 }
             }
@@ -205,11 +211,11 @@ impl NativeMenu {
         Ok(())
     }
 
-    /// Records each item's action and key equivalent by its muda id.
+    /// Records each item's path by its muda id.
     fn map_actions(&mut self) {
-        self.actions.clear();
-        for ((_, items), top) in self.tops.iter().zip(&self.shown.menus) {
-            map_items(items, &top.entries, &mut self.actions);
+        self.paths.clear();
+        for (index, (_, items)) in self.tops.iter().enumerate() {
+            map_items(items, &mut vec![index], &mut self.paths);
         }
     }
 
@@ -225,8 +231,8 @@ impl NativeMenu {
             .into_iter()
             .filter_map(|(id, from_key)| {
                 // An item of a menu rebuilt since it was chosen is gone: nothing to do.
-                let (action, chord) = self.actions.get(&id)?.clone();
-                Some(menu_keys::route(from_key, chord, action))
+                let item = item_at(&self.shown, self.paths.get(&id)?)?;
+                Some(menu_keys::route(from_key, item.chord, item.action.clone()))
             })
             .collect()
     }
@@ -278,6 +284,7 @@ fn system_item(item: SystemItem, label: &str) -> PredefinedMenuItem {
         SystemItem::Hide => PredefinedMenuItem::hide(text),
         SystemItem::HideOthers => PredefinedMenuItem::hide_others(text),
         SystemItem::ShowAll => PredefinedMenuItem::show_all(text),
+        SystemItem::Quit => PredefinedMenuItem::quit(text),
         // AppKit's Zoom (`performZoom:`); muda calls it Maximize.
         SystemItem::Zoom => PredefinedMenuItem::maximize(text),
         SystemItem::BringAllToFront => PredefinedMenuItem::bring_all_to_front(text),
@@ -352,24 +359,31 @@ fn recheck_ticks(items: &[Native], entries: &[MenuEntry]) {
     }
 }
 
-fn map_items(
-    items: &[Native],
-    entries: &[MenuEntry],
-    actions: &mut HashMap<MenuId, (MenuAction, Option<Chord>)>,
-) {
-    for (native, entry) in items.iter().zip(entries) {
-        match (native, entry) {
-            (Native::Item(native), MenuEntry::Item(item)) => {
-                actions.insert(native.id().clone(), (item.action.clone(), item.chord));
+/// Records the path of every item in `items`, which sit at `path` (a top-level menu's index,
+/// then the submenus' on the way).
+fn map_items(items: &[Native], path: &mut Vec<usize>, paths: &mut HashMap<MenuId, Vec<usize>>) {
+    for (index, native) in items.iter().enumerate() {
+        path.push(index);
+        match native {
+            Native::Item(item) => {
+                paths.insert(item.id().clone(), path.clone());
             }
-            (Native::Check(native), MenuEntry::Item(item)) => {
-                actions.insert(native.id().clone(), (item.action.clone(), item.chord));
+            Native::Check(item) => {
+                paths.insert(item.id().clone(), path.clone());
             }
-            (Native::Submenu(_, children), MenuEntry::Submenu { entries, .. }) => {
-                map_items(children, entries, actions);
-            }
-            _ => {}
+            Native::Submenu(_, children) => map_items(children, path, paths),
+            Native::System(_) | Native::Separator(_) => {}
         }
+        path.pop();
+    }
+}
+
+/// Lets AppKit fill the Window menu with its window list, and the Help menu with its search.
+fn give_role(submenu: &Submenu, role: Role) {
+    match role {
+        Role::Window => submenu.set_as_windows_menu_for_nsapp(),
+        Role::Help => submenu.set_as_help_menu_for_nsapp(),
+        _ => {}
     }
 }
 
@@ -411,26 +425,38 @@ impl EditorApp {
         }
     }
 
-    /// Does what the menu bar was asked to do since the last frame. Call before anything reads
-    /// this frame's keys, so a key given back is handled like any other.
-    pub(super) fn take_native_menu_input(&mut self, ctx: &egui::Context) {
-        let routes = self
+    /// Gives egui the keys the menu bar took since the last frame, in order and ahead of this
+    /// frame's input, as winit would have sent them; clicked items wait for the frame
+    /// ([`EditorApp::run_native_menu_clicks`]). Called from `raw_input_hook`, before egui reads
+    /// the input.
+    pub(super) fn give_back_native_menu_keys(&mut self, input: &mut egui::RawInput) {
+        let Some(menu) = &mut self.native_menu else {
+            return;
+        };
+        let mut chords = Vec::new();
+        for route in menu.take_routes() {
+            match route {
+                Route::Replay(chord) => chords.push(chord),
+                Route::Run(action) => menu.clicked.push(action),
+            }
+        }
+        if chords.is_empty() {
+            return;
+        }
+        let events = menu_keys::replay_all(chords, || self.clipboard_text());
+        let later = std::mem::replace(&mut input.events, events);
+        input.events.extend(later);
+    }
+
+    /// Runs the items clicked in the menu bar since the last frame.
+    pub(super) fn run_native_menu_clicks(&mut self, ctx: &egui::Context) {
+        let clicked = self
             .native_menu
             .as_mut()
-            .map(NativeMenu::take_routes)
+            .map(|menu| std::mem::take(&mut menu.clicked))
             .unwrap_or_default();
-        for route in routes {
-            match route {
-                Route::Replay(chord) => {
-                    let events = menu_keys::replay(chord, || self.clipboard_text());
-                    // The key came before anything else in this frame's input.
-                    ctx.input_mut(|input| {
-                        let later = std::mem::replace(&mut input.events, events);
-                        input.events.extend(later);
-                    });
-                }
-                Route::Run(action) => self.run_menu_action(ctx, action),
-            }
+        for action in clicked {
+            self.run_menu_action(ctx, action);
         }
     }
 

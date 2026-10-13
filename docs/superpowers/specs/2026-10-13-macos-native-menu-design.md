@@ -99,7 +99,7 @@ pub(super) enum MenuAction {
     Recent(PathBuf),
     Adjustment { choice: AdjustmentChoice, layer: bool },
     Filter { filter: Filter, layer: bool },
-    Pane { id: String, hidden: bool },
+    Pane { id: String }, // no state, so a toggle changes the tick in place
     Snap(SnapTarget), // Guides, Grid, Layers, Bounds
     Minimize,         // the macOS Window menu
 }
@@ -117,7 +117,10 @@ encloses it today.
 `MenuLayout::Mac` differs from `MenuLayout::InWindow` in these ways only:
 
 - A leading `Role::App` menu: About Xuan, Check for Updates…, separator, Settings…, separator,
-  Services, separator, Hide Xuan, Hide Others, Show All, separator, Quit Xuan.
+  Services, separator, Hide Xuan, Hide Others, Show All, separator, Quit Xuan. Quit is AppKit's
+  own (`terminate:`), answered by the existing `applicationShouldTerminate:` handler, so ⌘Q
+  quits or prompts exactly as Quit in the Dock does, even with a text field focused or a dialog
+  open.
 - File has no Quit, Edit has no Settings, and Help has no Check for Updates or About (nor the
   separator before them).
 - Window starts with Minimize (Xuan's own item) and Zoom and a separator, and ends with a
@@ -145,7 +148,9 @@ showed. Once per frame, with the new list:
 - Only labels, `enabled`, `checked` or key equivalents differ: those items are updated in place
   (`set_text`, `set_enabled`, `set_checked`, `set_accelerator`).
 - Entries were added, removed or changed kind in a top-level menu (plugins, recent files, Develop
-  mode): that top-level menu is rebuilt.
+  mode), or an item lost its shortcut: that top-level menu is replaced whole. AppKit adds items
+  of its own to some menus (the window list in Window) and muda removes items by position, so a
+  menu is never emptied and refilled.
 
 The decision is a pure function, `diff(old: &MenuBar, new: &MenuBar) -> Sync` in
 `src/app/menu_sync.rs`, so it is tested on every platform. Only applying the changes needs muda.

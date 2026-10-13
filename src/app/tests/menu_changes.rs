@@ -1,10 +1,12 @@
 //! What the macOS menu bar changes to show a new menu list (`menu_sync.rs`).
 
 use super::*;
+use crate::app::{commands::Chord, menu_model::MenuAction};
 use crate::app::{
     menu_model::{MenuBar, MenuEntry, MenuLayout, Role},
-    menu_sync::{MenuChange, Sync, diff, menu_text},
+    menu_sync::{MenuChange, Sync, diff, item_at, menu_text},
 };
+use egui::{Key, Modifiers};
 
 fn per_menu(old: &MenuBar, new: &MenuBar) -> Vec<MenuChange> {
     match diff(old, new) {
@@ -119,4 +121,79 @@ fn a_tick_changes_in_place_but_a_toggle_turning_plain_rebuilds() {
 fn an_ampersand_survives_muda() {
     assert_eq!(menu_text("Black & White"), "Black && White");
     assert_eq!(menu_text("Save"), "Save");
+}
+
+#[test]
+fn showing_or_hiding_a_panel_changes_the_window_menu_in_place() {
+    let (_, mut app) = app_with_document();
+    let old = app.menu_bar(MenuLayout::Mac);
+    let (id, _, shown) = app.pane_entries().into_iter().next().expect("a pane");
+    app.config.panes.set_hidden(&id, shown);
+    let new = app.menu_bar(MenuLayout::Mac);
+    // A rebuild would scramble the window list AppKit keeps in this menu.
+    assert_eq!(
+        per_menu(&old, &new)[position(&old, Role::Window)],
+        MenuChange::State
+    );
+}
+
+/// The first item with a shortcut in a top-level menu.
+fn first_shortcut(bar: &mut MenuBar, menu: usize) -> &mut Option<Chord> {
+    bar.menus[menu]
+        .entries
+        .iter_mut()
+        .find_map(|entry| match entry {
+            MenuEntry::Item(item) if item.chord.is_some() => Some(&mut item.chord),
+            _ => None,
+        })
+        .expect("a shortcut")
+}
+
+#[test]
+fn a_changed_shortcut_changes_in_place_but_a_removed_one_rebuilds() {
+    let (_, mut app) = app_with_document();
+    let old = app.menu_bar(MenuLayout::Mac);
+    let file = position(&old, Role::File);
+    let mut changed = old.clone();
+    *first_shortcut(&mut changed, file) = Some(Chord {
+        mods: Modifiers::CTRL.plus(Modifiers::ALT),
+        key: Key::N,
+    });
+    assert_eq!(per_menu(&old, &changed)[file], MenuChange::State);
+    // muda cannot clear a key equivalent in place.
+    let mut removed = old.clone();
+    *first_shortcut(&mut removed, file) = None;
+    assert_eq!(per_menu(&old, &removed)[file], MenuChange::Rebuild);
+}
+
+#[test]
+fn an_item_is_found_by_its_path_with_its_current_shortcut() {
+    let (_, mut app) = app_with_document();
+    let mut bar = app.menu_bar(MenuLayout::Mac);
+    let file = position(&bar, Role::File);
+    assert_eq!(
+        item_at(&bar, &[file, 0]).map(|item| &item.action),
+        Some(&MenuAction::Command("new"))
+    );
+    let recent = bar.menus[file]
+        .entries
+        .iter()
+        .position(|entry| matches!(entry, MenuEntry::Submenu { .. }))
+        .unwrap();
+    assert_eq!(
+        item_at(&bar, &[file, recent, 2]).map(|item| &item.action),
+        Some(&MenuAction::Command("clear_recent"))
+    );
+    // After an in-place change, the same path finds the new shortcut.
+    let chord = Chord {
+        mods: Modifiers::CTRL.plus(Modifiers::ALT),
+        key: Key::N,
+    };
+    if let MenuEntry::Item(item) = &mut bar.menus[file].entries[0] {
+        item.chord = Some(chord);
+    }
+    assert_eq!(item_at(&bar, &[file, 0]).unwrap().chord, Some(chord));
+    assert!(item_at(&bar, &[file, 999]).is_none());
+    assert!(item_at(&bar, &[file]).is_none(), "a menu is not an item");
+    assert!(item_at(&bar, &[file, recent]).is_none(), "nor is a submenu");
 }

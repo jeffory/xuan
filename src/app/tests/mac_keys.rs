@@ -3,7 +3,7 @@
 use super::*;
 use crate::app::{
     commands::Chord,
-    menu_keys::{KeyEquivalent, Route, key_equivalent, replay, route},
+    menu_keys::{KeyEquivalent, Route, key_equivalent, replay, replay_all, route},
     menu_model::{MenuAction, MenuLayout},
 };
 use egui::{Event, Key, Modifiers};
@@ -123,5 +123,32 @@ fn replayed_keys_arrive_as_winit_sends_them() {
     assert_eq!(
         replay(chord(Modifiers::CTRL, Key::V), || None),
         [Event::Paste(String::new())]
+    );
+}
+
+#[test]
+fn several_keys_given_back_keep_their_order() {
+    let command = Modifiers {
+        mac_cmd: true,
+        command: true,
+        ..Modifiers::NONE
+    };
+    let key = |key, pressed| Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed,
+        repeat: false,
+        modifiers: command,
+    };
+    // ⌘A then ⌘C in a slow frame: select all, then copy what was selected.
+    assert_eq!(
+        replay_all(
+            [
+                chord(Modifiers::CTRL, Key::A),
+                chord(Modifiers::CTRL, Key::C)
+            ],
+            || None
+        ),
+        [key(Key::A, true), key(Key::A, false), Event::Copy]
     );
 }

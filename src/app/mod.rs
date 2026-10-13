@@ -835,6 +835,9 @@ impl EditorApp {
         macos::install_quit_handler(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
         macos::keep_title_bar_drags();
+        // Before the menu bar is built: AppKit would add Show Tab Bar to the View menu.
+        #[cfg(target_os = "macos")]
+        macos::disallow_window_tabs();
         #[cfg(target_os = "macos")]
         app.install_native_menu(&cc.egui_ctx);
         // Install the native renderer before the first RAW worker is started.
@@ -2199,6 +2202,8 @@ impl EditorApp {
 
 impl eframe::App for EditorApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        #[cfg(target_os = "macos")]
+        self.give_back_native_menu_keys(input);
         if let Some(tablet) = &mut self.tablet {
             self.pen_samples = tablet.update(ctx, input);
         }
@@ -2281,9 +2286,9 @@ impl EditorApp {
     }
 
     fn show_with_processor(&mut self, ctx: &egui::Context) {
-        // Keys the macOS menu bar took come back before anything reads this frame's input.
+        // Items clicked in the macOS menu bar; the keys it took came back in `raw_input_hook`.
         #[cfg(target_os = "macos")]
-        self.take_native_menu_input(ctx);
+        self.run_native_menu_clicks(ctx);
         self.forget_crop_of_other_documents();
         self.sync_move_options();
         self.sync_palette(ctx);

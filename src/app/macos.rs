@@ -138,3 +138,26 @@ pub(super) fn keep_title_bar_drags() {
         }
     }
 }
+
+/// Turns off macOS's own window tabs. Xuan has document tabs of its own, and AppKit would add
+/// Show Tab Bar and Show All Tabs to the View menu and could draw its tab bar over Xuan's.
+pub(super) fn disallow_window_tabs() {
+    // NSWindowTabbingModeDisallowed.
+    const TABBING_DISALLOWED: isize = 2;
+    // SAFETY: called on the main thread. `setAllowsAutomaticWindowTabbing:` is NSWindow's class
+    // setter (BOOL), and `windows`, `count`, `objectAtIndex:` and `setTabbingMode:`
+    // (NSInteger) are NSApplication's, NSArray's and NSWindow's, with these types.
+    unsafe {
+        let _: () = msg_send![class!(NSWindow), setAllowsAutomaticWindowTabbing: Bool::NO];
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let windows: *mut AnyObject = msg_send![app, windows];
+        let Some(windows) = windows.as_ref() else {
+            return;
+        };
+        let count: usize = msg_send![windows, count];
+        for index in 0..count {
+            let window: *mut AnyObject = msg_send![windows, objectAtIndex: index];
+            let _: () = msg_send![window, setTabbingMode: TABBING_DISALLOWED];
+        }
+    }
+}

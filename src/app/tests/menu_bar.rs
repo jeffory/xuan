@@ -345,10 +345,11 @@ fn the_mac_layout_adds_the_app_menu_and_moves_its_items() {
             "[HideOthers]",
             "[ShowAll]",
             "---",
-            "quit",
+            "[Quit]",
         ]
     );
-    assert_eq!(bar.find_command("quit").unwrap().label, "Quit Xuan");
+    // AppKit's own Quit asks the quit handler, as Quit in the Dock does.
+    assert!(bar.find_command("quit").is_none());
     assert_eq!(
         outline(top(&bar, Role::File)).last().map(String::as_str),
         Some("close")
@@ -422,10 +423,10 @@ fn the_mac_items_follow_the_language() {
             "隐藏 Xuan",
             "隐藏其他",
             "全部显示",
+            "退出 Xuan",
             "缩放",
             "前置全部窗口"
         ]
     );
-    assert_eq!(bar.find_command("quit").unwrap().label, "退出 Xuan");
     assert!(bar.items().iter().any(|item| item.label == "最小化"));
 }

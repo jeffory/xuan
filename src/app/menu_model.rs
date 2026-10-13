@@ -49,6 +49,9 @@ pub(super) enum SystemItem {
     Hide,
     HideOthers,
     ShowAll,
+    /// AppKit's Quit (`terminate:`), which asks the quit handler (`macos.rs`) as Quit in the
+    /// Dock does, so ⌘Q quits or prompts even while a text field has focus or a dialog is open.
+    Quit,
     Zoom,
     BringAllToFront,
 }
@@ -120,10 +123,10 @@ pub(super) enum MenuAction {
         filter: Filter,
         layer: bool,
     },
-    /// Shows or hides a panel.
+    /// Shows or hides a panel. It carries no state, so a panel shown or hidden changes the
+    /// item's tick in place on macOS rather than rebuilding the Window menu.
     Pane {
         id: String,
-        hidden: bool,
     },
     /// Turns one View → Snap To target over.
     Snap(SnapTarget),
@@ -402,7 +405,7 @@ impl EditorApp {
         e.system(SystemItem::HideOthers, tr("Hide Others"));
         e.system(SystemItem::ShowAll, tr("Show All"));
         e.separator();
-        e.labelled(tr("Quit Xuan"), "quit");
+        e.system(SystemItem::Quit, tr("Quit Xuan"));
         e.finish()
     }
 
@@ -682,7 +685,7 @@ impl EditorApp {
         }
         e.when(!state.developing, |e| {
             for (id, title, shown) in self.pane_entries() {
-                e.action(&title, Some(shown), MenuAction::Pane { id, hidden: shown });
+                e.action(&title, Some(shown), MenuAction::Pane { id });
             }
             e.separator();
             e.command("reset_panels");
@@ -722,8 +725,13 @@ impl EditorApp {
                 filter,
                 layer: false,
             } => self.start_filter(filter),
-            MenuAction::Pane { id, hidden } => {
-                self.config.panes.set_hidden(&id, hidden);
+            MenuAction::Pane { id } => {
+                // A shown panel hides, a hidden one shows.
+                let shown = self
+                    .pane_entries()
+                    .into_iter()
+                    .any(|(pane, _, shown)| pane == id && shown);
+                self.config.panes.set_hidden(&id, shown);
                 self.save_config();
             }
             MenuAction::Snap(target) => self.set_view_option(|config| {

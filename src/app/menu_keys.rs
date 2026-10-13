@@ -183,3 +183,14 @@ pub(super) fn replay(chord: Chord, clipboard: impl FnOnce() -> Option<String>) -
         })
         .to_vec()
 }
+
+/// The events for several keys given back, in the order they were pressed.
+pub(super) fn replay_all(
+    chords: impl IntoIterator<Item = Chord>,
+    mut clipboard: impl FnMut() -> Option<String>,
+) -> Vec<Event> {
+    chords
+        .into_iter()
+        .flat_map(|chord| replay(chord, &mut clipboard))
+        .collect()
+}

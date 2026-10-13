@@ -559,6 +559,16 @@ impl EditorApp {
                         });
                     });
                 });
+                // While something blocks the tabs, the title row still moves and zooms the window:
+                // macOS has no other place to grab it.
+                if blocked && self.tabs_in_title_row() {
+                    let response = ui.interact(
+                        bar,
+                        ui.id().with("title_row_while_blocked"),
+                        Sense::click_and_drag(),
+                    );
+                    super::chrome::title_row_gesture(ui.ctx(), &response);
+                }
                 // Where egui draws a panel's line: inside its bottom edge.
                 let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
                 let y = bar.bottom() - 0.5 * stroke.width;

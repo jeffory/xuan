@@ -1,7 +1,7 @@
 //! What the macOS menu bar (`macos_menu.rs`) must change to show a new menu list, and the text
 //! it gives muda. Kept apart from AppKit so it is tested on every platform.
 
-use super::menu_model::{MenuBar, MenuEntry};
+use super::menu_model::{MenuBar, MenuEntry, MenuItem};
 
 /// What the menu bar must do.
 #[derive(Debug, PartialEq, Eq)]
@@ -54,7 +54,10 @@ fn same_shape(old: &[MenuEntry], new: &[MenuEntry]) -> bool {
     old.len() == new.len()
         && old.iter().zip(new).all(|pair| match pair {
             (MenuEntry::Item(old), MenuEntry::Item(new)) => {
-                old.action == new.action && old.checked.is_some() == new.checked.is_some()
+                old.action == new.action
+                    && old.checked.is_some() == new.checked.is_some()
+                    // muda cannot clear a key equivalent in place, only set one.
+                    && !(old.chord.is_some() && new.chord.is_none())
             }
             (MenuEntry::Submenu { entries: old, .. }, MenuEntry::Submenu { entries: new, .. }) => {
                 same_shape(old, new)
@@ -72,4 +75,25 @@ fn same_shape(old: &[MenuEntry], new: &[MenuEntry]) -> bool {
 /// `&` (Black & White, a plugin's label) is written `&&`.
 pub(super) fn menu_text(label: &str) -> String {
     label.replace('&', "&&")
+}
+
+/// The item at `path`: a top-level menu's index, then an index into each submenu on the way.
+/// The menu bar records each native item's path, so an event always finds the item as it is now.
+pub(super) fn item_at<'a>(bar: &'a MenuBar, path: &[usize]) -> Option<&'a MenuItem> {
+    let (&top, rest) = path.split_first()?;
+    let (&last, submenus) = rest.split_last()?;
+    let mut entries = bar.menus.get(top)?.entries.as_slice();
+    for &index in submenus {
+        let MenuEntry::Submenu {
+            entries: children, ..
+        } = entries.get(index)?
+        else {
+            return None;
+        };
+        entries = children;
+    }
+    match entries.get(last)? {
+        MenuEntry::Item(item) => Some(item),
+        _ => None,
+    }
 }

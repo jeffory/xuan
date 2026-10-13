@@ -383,3 +383,46 @@ fn dragging_a_tab_in_the_title_row_reorders_and_does_not_move_the_window() {
     assert!(!moved, "a tab drag must not move the window");
     assert_eq!(titles(&ui), ["Beta", "Gamma", "Alpha"]);
 }
+
+#[test]
+fn the_title_row_still_moves_the_window_while_a_job_runs() {
+    let mut ui = mac_title_row();
+    ui.app_mut().start_job("Wait", |_, cancel| {
+        while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(())
+    });
+    ui.harness.step();
+    let gamma = tab_rect(&ui, "Gamma");
+    let pos = gamma.right_center() + egui::vec2(60.0, 0.0);
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    ui.harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(pos));
+    ui.harness.step();
+    for pressed in [true, false, true, false] {
+        ui.harness.input_mut().events.push(button(pressed));
+    }
+    ui.harness.step();
+    let zoomed = ui
+        .harness
+        .output()
+        .viewport_output
+        .values()
+        .any(|viewport| {
+            viewport
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Maximized(true)))
+        });
+    let job = ui.app().job.as_ref().expect("the job is running");
+    job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(zoomed, "a double-click zooms the window during a job");
+}
