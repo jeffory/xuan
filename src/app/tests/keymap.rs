@@ -18,12 +18,12 @@ fn overrides(pairs: &[(&str, &str)]) -> toml::Table {
         .collect()
 }
 
-/// Command ids in the menu source: `item(ui, &items, "id", …)`, `labelled(…, "id", …)`,
-/// `check_item(…, "id", …)` and the tab bar's `action = Some("id")`.
+/// Command ids in the menu list's source: `command("id")`, `labelled(…, "id")`,
+/// `check(…, "id")` and the ids of `for id in [ … ]` loops.
 pub(super) fn menu_commands() -> Vec<String> {
-    let source = include_str!("../menus.rs");
+    let source = include_str!("../menu_model.rs");
     let mut ids = Vec::new();
-    for start in ["item(", "labelled(", "check_item(", "action = Some("] {
+    for start in ["command(", "labelled(", "check(", "for id in ["] {
         for (index, _) in source.match_indices(start) {
             let call = &source[index + start.len()..];
             let call = &call[..call.find(";").unwrap_or(call.len())];
@@ -336,9 +336,18 @@ fn an_override_changes_dispatch_menu_label_and_resets() {
     app.rebuild_keymap();
     assert_eq!(app.keymap.shortcut("merge"), "Ctrl+Shift+M");
     assert!(app.keymap.keys("invert_selection").is_empty());
-    let items = app.menu_items();
-    assert_eq!(items.get("merge"), (true, "Ctrl+Shift+M"));
-    assert_eq!(items.get("invert_selection").1, "");
+    let bar = app.menu_bar();
+    let merge = bar.find_command("merge").unwrap();
+    assert_eq!(
+        (merge.enabled, merge.chord.map(Chord::label).as_deref()),
+        (true, Some("Ctrl+Shift+M"))
+    );
+    assert!(
+        bar.find_command("invert_selection")
+            .unwrap()
+            .chord
+            .is_none()
+    );
 
     app.command_trace = Some(Vec::new());
     keyboard_frame(

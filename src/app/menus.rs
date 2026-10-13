@@ -1,15 +1,18 @@
 use super::theme::PaletteExt as _;
-use std::collections::HashMap;
 
 use egui::Button;
 use xuan::i18n::tr;
 use xuan::{
     document::{Adjustment, Point},
     effects::Filter,
-    plugins::manifest::Menu,
 };
 
-use super::{EditorApp, commands, theme, widgets};
+use super::{
+    EditorApp,
+    commands::Chord,
+    menu_model::{MenuAction, MenuEntry, MenuItem},
+    theme, widgets,
+};
 
 fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
     let background = ui.painter().add(egui::Shape::Noop);
@@ -78,108 +81,64 @@ pub(super) fn item_button(
     response
 }
 
-/// Entries plugins added to a menu.
-fn plugin_items(
-    ui: &mut egui::Ui,
-    items: Option<&Vec<super::plugins::PluginMenuItem>>,
-    action: &mut Option<(String, String)>,
-) {
-    let Some(items) = items.filter(|items| !items.is_empty()) else {
-        return;
+/// Draws a menu's entries and records the item chosen.
+fn draw_entries(ui: &mut egui::Ui, entries: &[MenuEntry], chosen: &mut Option<MenuAction>) {
+    for entry in entries {
+        match entry {
+            MenuEntry::Item(item) => draw_item(ui, item, chosen),
+            MenuEntry::Submenu {
+                label,
+                enabled,
+                entries,
+            } => {
+                ui.add_enabled_ui(*enabled, |ui| {
+                    ui.menu_button(label.as_str(), |ui| draw_entries(ui, entries, chosen));
+                });
+            }
+            MenuEntry::Separator => {
+                ui.separator();
+            }
+            MenuEntry::Placeholder(text) => {
+                ui.add_enabled(false, Button::new(text.as_str()));
+            }
+        }
+    }
+}
+
+/// Draws one item: a toggle with its tick, a panel's checkbox, or a row with its shortcut hint.
+fn draw_item(ui: &mut egui::Ui, item: &MenuItem, chosen: &mut Option<MenuAction>) {
+    let shortcut = item.chord.map(Chord::label).unwrap_or_default();
+    let pane = matches!(item.action, MenuAction::Pane { .. });
+    let response = match item.checked {
+        Some(mut checked) if pane => {
+            ui.add_enabled_ui(item.enabled, |ui| {
+                widgets::checkbox(ui, &mut checked, &item.label)
+            })
+            .inner
+        }
+        Some(checked) => {
+            ui.add_enabled_ui(item.enabled, |ui| {
+                widgets::menu_check(ui, checked, &item.label, &shortcut)
+            })
+            .inner
+        }
+        None => item_button(ui, item.enabled, &item.label, &shortcut),
     };
-    ui.separator();
-    for item in items {
-        let response = item_button(ui, item.enabled, &item.label, &item.shortcut)
-            .on_hover_text(&item.source)
-            .on_disabled_hover_text(&item.source);
-        if response.clicked() {
-            *action = Some((item.plugin.clone(), item.action.clone()));
+    let response = match &item.hover {
+        Some(hover) => response.on_hover_text(hover).on_disabled_hover_text(hover),
+        None => response,
+    };
+    let picked = if pane {
+        response.changed()
+    } else {
+        response.clicked()
+    };
+    if picked {
+        *chosen = Some(item.action.clone());
+        // Snap To stays open, so several targets can be set in one go.
+        if !matches!(item.action, MenuAction::Snap(_)) {
             ui.close();
         }
-    }
-}
-
-/// The entries of File → Open Recent: a shortened path each, the whole path as the tooltip.
-/// Files that are gone are greyed out.
-fn recent_items(
-    ui: &mut egui::Ui,
-    recent: &[(std::path::PathBuf, bool)],
-    choice: &mut Option<std::path::PathBuf>,
-) {
-    if recent.is_empty() {
-        ui.add_enabled(false, Button::new(tr("No recent files")));
-        return;
-    }
-    for (path, exists) in recent {
-        let label = super::recent::elide_path(path, super::recent::LABEL_CHARS);
-        let full = super::recent::safe_path(path);
-        let response = ui
-            .add_enabled(*exists, Button::new(label))
-            .on_hover_text(&full)
-            .on_disabled_hover_text(format!("{full}\n{}", tr("File not found")));
-        if response.clicked() {
-            *choice = Some(path.clone());
-            ui.close();
-        }
-    }
-}
-
-/// What the menus need from the command registry this frame: whether each command can run
-/// and its shortcut hint.
-pub(super) struct MenuItems(HashMap<&'static str, (bool, String)>);
-
-impl MenuItems {
-    pub(super) fn get(&self, command: &str) -> (bool, &str) {
-        self.0
-            .get(command)
-            .map_or((false, ""), |(enabled, shortcut)| (*enabled, shortcut))
-    }
-}
-
-/// A menu item for a registry command, with the registry's label.
-fn item(
-    ui: &mut egui::Ui,
-    items: &MenuItems,
-    command: &'static str,
-    action: &mut Option<&'static str>,
-) {
-    let label = commands::find(command).map_or(command, |c| tr(c.label));
-    labelled(ui, items, label, command, action);
-}
-
-/// A menu item for a registry command, with a label of its own.
-fn labelled(
-    ui: &mut egui::Ui,
-    items: &MenuItems,
-    label: &str,
-    command: &'static str,
-    action: &mut Option<&'static str>,
-) {
-    let (enabled, shortcut) = items.get(command);
-    let response = item_button(ui, enabled, label, shortcut);
-    if response.clicked() {
-        *action = Some(command);
-        ui.close();
-    }
-}
-
-/// A menu toggle with a shortcut hint, run as a command so the key chord does the same thing.
-fn check_item(
-    ui: &mut egui::Ui,
-    items: &MenuItems,
-    checked: bool,
-    label: Option<&str>,
-    command: &'static str,
-    action: &mut Option<&'static str>,
-) {
-    let label = label.unwrap_or_else(|| commands::find(command).map_or(command, |c| tr(c.label)));
-    let (enabled, shortcut) = items.get(command);
-    let response = ui.add_enabled_ui(enabled, |ui| {
-        widgets::menu_check(ui, checked, label, shortcut)
-    });
-    if response.inner.clicked() {
-        *action = Some(command);
-        ui.close();
     }
 }
 
@@ -196,14 +155,16 @@ pub(super) fn filter_menu(ui: &mut egui::Ui) -> Option<Filter> {
 
 /// What an adjustment menu chose: an adjustment to set up, or a Color Lookup, whose table
 /// is chosen first.
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum AdjustmentChoice {
     Settings(Adjustment),
     ColorLookup,
 }
 
-pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<AdjustmentChoice> {
-    let mut result = None;
-    for adjustment in [
+/// The entries of an adjustment menu, in order, with their labels: each adjustment, then
+/// Colour Lookup….
+pub(super) fn adjustment_choices() -> Vec<(String, AdjustmentChoice)> {
+    let mut choices: Vec<(String, AdjustmentChoice)> = [
         Adjustment::HueRanges {
             settings: Box::default(),
         },
@@ -230,62 +191,38 @@ pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<AdjustmentChoice> {
         },
         Adjustment::BLACK_WHITE,
         Adjustment::COLOR_BALANCE,
-    ] {
-        if ui.button(tr(adjustment.name())).clicked() {
-            result = Some(AdjustmentChoice::Settings(adjustment));
+    ]
+    .into_iter()
+    .map(|adjustment| {
+        (
+            tr(adjustment.name()).to_owned(),
+            AdjustmentChoice::Settings(adjustment),
+        )
+    })
+    .collect();
+    choices.push((
+        tr("Colour Lookup…").to_owned(),
+        AdjustmentChoice::ColorLookup,
+    ));
+    choices
+}
+
+pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<AdjustmentChoice> {
+    let mut result = None;
+    for (label, choice) in adjustment_choices() {
+        if ui.button(label).clicked() {
+            result = Some(choice);
             ui.close();
         }
-    }
-    if ui.button(tr("Colour Lookup…")).clicked() {
-        result = Some(AdjustmentChoice::ColorLookup);
-        ui.close();
     }
     result
 }
 
 impl EditorApp {
-    pub(super) fn menu_items(&self) -> MenuItems {
-        MenuItems(
-            commands::COMMANDS
-                .iter()
-                .map(|c| {
-                    (
-                        c.id,
-                        (self.command_enabled(c.id), self.keymap.shortcut(c.id)),
-                    )
-                })
-                .collect(),
-        )
-    }
-
     pub(super) fn menus(&mut self, ctx: &egui::Context) {
-        let items = self.menu_items();
-        let mut action = None;
-        let mut adjustment = None;
-        let mut filter = None;
-        let mut adjustment_layer = false;
-        let mut filter_layer = false;
-        let developing = self.develop.is_some();
-        let has_doc = self.session().is_some() && !developing;
-        let can_view = self.develop.as_ref().is_none_or(|d| d.ready());
-        let pane_entries = self.pane_entries();
-        let channel_targets = self
-            .session()
-            .map_or(xuan::channels::Channels::ALL, |s| s.channel_targets);
-        let mut pane_toggle = None;
-        let plugin_menu = self.plugin_menu_items();
-        let recent = self.recent_status();
-        let mut recent_choice: Option<std::path::PathBuf> = None;
-        let mut plugin_action: Option<(String, String)> = None;
-        let can_rerun = self
-            .session()
-            .and_then(|s| s.document.active())
-            .is_some_and(|layer| layer.generated.is_some());
-        let blocked = self.job.is_some()
-            || self.dialog.is_some()
-            || self.close_app
-            || self.develop_close_requested.is_some()
-            || self.close_tab.is_some();
+        let bar = self.menu_bar();
+        let enabled = bar.menus.iter().all(|menu| menu.enabled);
+        let mut chosen = None;
         super::chrome::title_bar(&ctx.palette(), self.window_corner_radius(ctx), "menubar").show(
             ctx,
             |ui| {
@@ -296,457 +233,21 @@ impl EditorApp {
                     }))
                     .ui(ui, |ui| {
                         self.leading_window_controls(ui);
-                        ui.add_enabled_ui(!blocked, |ui| {
+                        ui.add_enabled_ui(enabled, |ui| {
                             // Leave a small gap between the expanded highlights.
                             ui.spacing_mut().item_spacing.x += 2.0;
-                            menu_bar_button(ui, tr("File"), |ui| {
-                                item(ui, &items, "new", &mut action);
-                                item(ui, &items, "new_collage", &mut action);
-                                item(ui, &items, "open", &mut action);
-                                item(ui, &items, "open_clipboard", &mut action);
-                                item(ui, &items, "open_comp", &mut action);
-                                ui.add_enabled_ui(!developing, |ui| {
-                                    item(ui, &items, "import", &mut action);
+                            for menu in &bar.menus {
+                                menu_bar_button(ui, &menu.label, |ui| {
+                                    draw_entries(ui, &menu.entries, &mut chosen);
                                 });
-                                ui.add_enabled_ui(items.get("open").0, |ui| {
-                                    ui.menu_button(tr("Open Recent"), |ui| {
-                                        recent_items(ui, &recent, &mut recent_choice);
-                                        ui.separator();
-                                        item(ui, &items, "clear_recent", &mut action);
-                                    });
-                                });
-                                ui.separator();
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    item(ui, &items, "save", &mut action);
-                                    item(ui, &items, "save_as", &mut action);
-                                    item(ui, &items, "export", &mut action);
-                                    ui.separator();
-                                    item(ui, &items, "close", &mut action);
-                                });
-                                if developing {
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Close RAW Develop"),
-                                        "close",
-                                        &mut action,
-                                    );
-                                }
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    plugin_items(
-                                        ui,
-                                        plugin_menu.get(&Menu::File),
-                                        &mut plugin_action,
-                                    );
-                                });
-                                ui.separator();
-                                item(ui, &items, "quit", &mut action);
-                            });
-                            menu_bar_button(ui, tr("Edit"), |ui| {
-                                item(ui, &items, "settings", &mut action);
-                                plugin_items(ui, plugin_menu.get(&Menu::Edit), &mut plugin_action);
-                                ui.separator();
-                                let (undo, redo) = if let Some(d) = &self.develop {
-                                    (
-                                        (d.ready() && !d.undo.is_empty())
-                                            .then_some(tr("RAW adjustment")),
-                                        (d.ready() && !d.redo.is_empty())
-                                            .then_some(tr("RAW adjustment")),
-                                    )
-                                } else {
-                                    (
-                                        self.session().and_then(|s| s.history.undo_name()),
-                                        self.session().and_then(|s| s.history.redo_name()),
-                                    )
-                                };
-                                ui.add_enabled_ui(undo.is_some(), |ui| {
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        &format!("{} {}", tr("Undo"), tr(undo.unwrap_or(""))),
-                                        "undo",
-                                        &mut action,
-                                    )
-                                });
-                                ui.add_enabled_ui(redo.is_some(), |ui| {
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        &format!("{} {}", tr("Redo"), tr(redo.unwrap_or(""))),
-                                        "redo",
-                                        &mut action,
-                                    )
-                                });
-                                ui.separator();
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    item(ui, &items, "cut", &mut action);
-                                    item(ui, &items, "copy", &mut action);
-                                    item(ui, &items, "copy_merged", &mut action);
-                                });
-                                ui.add_enabled_ui(!developing, |ui| {
-                                    item(ui, &items, "paste", &mut action);
-                                });
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    ui.separator();
-                                    item(ui, &items, "fill_fg", &mut action);
-                                    item(ui, &items, "fill_bg", &mut action);
-                                    item(ui, &items, "clear", &mut action);
-                                    item(ui, &items, "stroke", &mut action);
-                                    item(ui, &items, "content_fill", &mut action);
-                                });
-                            });
-                            menu_bar_button(ui, tr("Image"), |ui| {
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    ui.menu_button(tr("Adjustments"), |ui| {
-                                        adjustment = adjustment_menu(ui);
-                                        ui.separator();
-                                        item(ui, &items, "invert", &mut action);
-                                    });
-                                    ui.separator();
-                                    item(ui, &items, "image_size", &mut action);
-                                    item(ui, &items, "canvas_size", &mut action);
-                                    item(ui, &items, "trim", &mut action);
-                                    item(ui, &items, "collage_layout", &mut action);
-                                    item(ui, &items, "crop_to_selection", &mut action);
-                                    ui.separator();
-                                    ui.menu_button(tr("Rotate Canvas"), |ui| {
-                                        item(ui, &items, "rotate_canvas_cw", &mut action);
-                                        item(ui, &items, "rotate_canvas_ccw", &mut action);
-                                        item(ui, &items, "rotate_canvas_180", &mut action);
-                                    });
-                                    item(ui, &items, "flip_canvas_h", &mut action);
-                                    item(ui, &items, "flip_canvas_v", &mut action);
-                                    plugin_items(
-                                        ui,
-                                        plugin_menu.get(&Menu::Image),
-                                        &mut plugin_action,
-                                    );
-                                });
-                            });
-                            menu_bar_button(ui, tr("Layer"), |ui| {
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    item(ui, &items, "new_layer", &mut action);
-                                    item(ui, &items, "duplicate", &mut action);
-                                    item(ui, &items, "delete_layer", &mut action);
-                                    ui.add_enabled_ui(
-                                        self.session()
-                                            .and_then(|s| s.document.active())
-                                            .is_some_and(|l| l.raw.is_some() && !l.locked),
-                                        |ui| {
-                                            item(ui, &items, "develop", &mut action);
-                                            item(ui, &items, "rasterize_raw", &mut action);
-                                        },
-                                    );
-                                    item(ui, &items, "layer_effects", &mut action);
-                                    ui.separator();
-                                    item(ui, &items, "group", &mut action);
-                                    item(ui, &items, "ungroup", &mut action);
-                                    item(ui, &items, "merge", &mut action);
-                                    item(ui, &items, "flatten", &mut action);
-                                    ui.separator();
-                                    ui.menu_button(tr("New Adjustment Layer"), |ui| {
-                                        adjustment = adjustment_menu(ui);
-                                        adjustment_layer = true;
-                                    });
-                                    ui.menu_button(tr("New Filter Layer"), |ui| {
-                                        filter = filter_menu(ui);
-                                        filter_layer = true;
-                                    });
-                                    item(ui, &items, "adjustment_presets", &mut action);
-                                    ui.menu_button(tr("Layer Mask"), |ui| {
-                                        item(ui, &items, "new_mask_layer", &mut action);
-                                        item(ui, &items, "mask", &mut action);
-                                        labelled(
-                                            ui,
-                                            &items,
-                                            tr("Enable / Disable"),
-                                            "disable_mask",
-                                            &mut action,
-                                        );
-                                        labelled(
-                                            ui,
-                                            &items,
-                                            tr("Link / Unlink"),
-                                            "link_mask",
-                                            &mut action,
-                                        );
-                                        item(ui, &items, "delete_mask", &mut action);
-                                    });
-                                    item(ui, &items, "clip", &mut action);
-                                    ui.separator();
-                                    item(ui, &items, "flip_h", &mut action);
-                                    item(ui, &items, "flip_v", &mut action);
-                                    ui.separator();
-                                    ui.add_enabled_ui(can_rerun, |ui| {
-                                        item(ui, &items, "rerun_plugin", &mut action);
-                                    });
-                                    plugin_items(
-                                        ui,
-                                        plugin_menu.get(&Menu::Layer),
-                                        &mut plugin_action,
-                                    );
-                                });
-                            });
-                            menu_bar_button(ui, tr("Select"), |ui| {
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    labelled(ui, &items, tr("All"), "select_all", &mut action);
-                                    item(ui, &items, "deselect", &mut action);
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Inverse"),
-                                        "invert_selection",
-                                        &mut action,
-                                    );
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Layer's Pixels"),
-                                        "select_layer_pixels",
-                                        &mut action,
-                                    );
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Mask's Black Areas"),
-                                        "select_mask_black",
-                                        &mut action,
-                                    );
-                                    item(ui, &items, "load_channel_selection", &mut action);
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Subject"),
-                                        "select_subject",
-                                        &mut action,
-                                    );
-                                    item(ui, &items, "color_range", &mut action);
-                                    item(ui, &items, "load_selection", &mut action);
-                                    ui.separator();
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Expand…"),
-                                        "expand_selection",
-                                        &mut action,
-                                    );
-                                    labelled(
-                                        ui,
-                                        &items,
-                                        tr("Contract…"),
-                                        "contract_selection",
-                                        &mut action,
-                                    );
-                                    item(ui, &items, "feather", &mut action);
-                                    ui.separator();
-                                    item(ui, &items, "paths", &mut action);
-                                    plugin_items(
-                                        ui,
-                                        plugin_menu.get(&Menu::Select),
-                                        &mut plugin_action,
-                                    );
-                                });
-                            });
-                            menu_bar_button(ui, tr("Filter"), |ui| {
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    item(ui, &items, "remove_background", &mut action);
-                                    item(ui, &items, "remove_flat_background", &mut action);
-                                    ui.separator();
-                                    item(ui, &items, "camera_raw_filter", &mut action);
-                                    ui.separator();
-                                    for f in Filter::defaults() {
-                                        if ui.button(format!("{}…", tr(f.name()))).clicked() {
-                                            filter = Some(f);
-                                            ui.close();
-                                        }
-                                    }
-                                    plugin_items(
-                                        ui,
-                                        plugin_menu.get(&Menu::Filter),
-                                        &mut plugin_action,
-                                    );
-                                });
-                            });
-                            menu_bar_button(ui, tr("View"), |ui| {
-                                ui.add_enabled_ui(can_view, |ui| {
-                                    item(ui, &items, "fit", &mut action);
-                                    item(ui, &items, "actual", &mut action);
-                                    item(ui, &items, "zoom_in", &mut action);
-                                    item(ui, &items, "zoom_out", &mut action);
-                                });
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    ui.menu_button(tr("Channels"), |ui| {
-                                        for id in [
-                                            "channel_composite",
-                                            "channel_red",
-                                            "channel_green",
-                                            "channel_blue",
-                                            "channel_alpha",
-                                        ] {
-                                            let checked = match super::channel_pane::row(id) {
-                                                Some(None) => {
-                                                    channel_targets == xuan::channels::Channels::ALL
-                                                }
-                                                Some(Some(channel)) => {
-                                                    channel_targets.single() == Some(channel)
-                                                }
-                                                None => false,
-                                            };
-                                            check_item(ui, &items, checked, None, id, &mut action);
-                                        }
-                                    });
-                                });
-                                ui.separator();
-                                check_item(
-                                    ui,
-                                    &items,
-                                    self.config.pixel_grid,
-                                    None,
-                                    "toggle_pixel_grid",
-                                    &mut action,
-                                );
-                                check_item(
-                                    ui,
-                                    &items,
-                                    self.show_controls,
-                                    None,
-                                    "toggle_controls",
-                                    &mut action,
-                                );
-                                // Rulers, grid, guides and snapping, as upstream's View menu.
-                                ui.separator();
-                                ui.add_enabled_ui(has_doc, |ui| {
-                                    ui.menu_button(tr("Show"), |ui| {
-                                        check_item(
-                                            ui,
-                                            &items,
-                                            self.config.show_grid,
-                                            Some(tr("Grid")),
-                                            "toggle_grid",
-                                            &mut action,
-                                        );
-                                        check_item(
-                                            ui,
-                                            &items,
-                                            self.config.show_guides,
-                                            Some(tr("Guides")),
-                                            "toggle_guides",
-                                            &mut action,
-                                        );
-                                    });
-                                    item(ui, &items, "grid_settings", &mut action);
-                                    check_item(
-                                        ui,
-                                        &items,
-                                        self.config.rulers,
-                                        None,
-                                        "toggle_rulers",
-                                        &mut action,
-                                    );
-                                    ui.separator();
-                                    check_item(
-                                        ui,
-                                        &items,
-                                        self.config.snap.enabled,
-                                        None,
-                                        "toggle_snap",
-                                        &mut action,
-                                    );
-                                    let mut snap = self.config.snap;
-                                    ui.menu_button(tr("Snap To"), |ui| {
-                                        ui.add_enabled_ui(snap.enabled, |ui| {
-                                            for (value, label) in [
-                                                (&mut snap.guides, tr("Guides")),
-                                                (&mut snap.grid, tr("Grid")),
-                                                (&mut snap.layers, tr("Layers")),
-                                                (&mut snap.bounds, tr("Document Bounds")),
-                                            ] {
-                                                if widgets::menu_check(ui, *value, label, "")
-                                                    .clicked()
-                                                {
-                                                    *value = !*value;
-                                                }
-                                            }
-                                        });
-                                    });
-                                    if snap != self.config.snap {
-                                        self.set_view_option(|config| config.snap = snap);
-                                    }
-                                    ui.separator();
-                                    check_item(
-                                        ui,
-                                        &items,
-                                        self.config.lock_guides,
-                                        None,
-                                        "lock_guides",
-                                        &mut action,
-                                    );
-                                    let has_guides = self
-                                        .session()
-                                        .is_some_and(|s| !s.document.guides.is_empty());
-                                    ui.add_enabled_ui(has_guides, |ui| {
-                                        item(ui, &items, "clear_guides", &mut action);
-                                    });
-                                });
-                            });
-                            menu_bar_button(ui, tr("Plugins"), |ui| {
-                                item(ui, &items, "plugins", &mut action);
-                                item(ui, &items, "install_plugin", &mut action);
-                                ui.add_enabled_ui(!developing, |ui| {
-                                    plugin_items(
-                                        ui,
-                                        plugin_menu.get(&Menu::Plugins),
-                                        &mut plugin_action,
-                                    );
-                                });
-                            });
-                            menu_bar_button(ui, tr("Window"), |ui| {
-                                ui.add_enabled_ui(!developing, |ui| {
-                                    for (id, title, shown) in &pane_entries {
-                                        let mut shown = *shown;
-                                        if widgets::checkbox(ui, &mut shown, title).changed() {
-                                            pane_toggle = Some((id.clone(), !shown));
-                                            ui.close();
-                                        }
-                                    }
-                                    ui.separator();
-                                    item(ui, &items, "reset_panels", &mut action);
-                                });
-                            });
-                            menu_bar_button(ui, tr("Help"), |ui| {
-                                item(ui, &items, "command_palette", &mut action);
-                                item(ui, &items, "shortcuts", &mut action);
-                                ui.separator();
-                                item(ui, &items, "check_updates", &mut action);
-                                item(ui, &items, "about", &mut action);
-                            });
+                            }
                         });
                         self.trailing_window_controls(ui);
                     });
             },
         );
-        if let Some((id, hidden)) = pane_toggle {
-            self.config.panes.set_hidden(&id, hidden);
-            self.save_config();
-        }
-        if let Some((plugin, action)) = plugin_action {
-            self.start_plugin_action(&plugin, &action);
-        }
-        if let Some(path) = recent_choice {
-            self.open_recent(&path);
-        }
-        if let Some(action) = action {
-            self.run_command(action);
-        }
-        if let Some(choice) = adjustment {
-            self.choose_adjustment(choice, adjustment_layer);
-        }
-        if let Some(filter) = filter {
-            if filter_layer {
-                self.start_filter_layer(filter);
-            } else {
-                self.start_filter(filter);
-            }
+        if let Some(action) = chosen {
+            self.run_menu_action(action);
         }
     }
 }

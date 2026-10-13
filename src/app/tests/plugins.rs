@@ -4212,11 +4212,20 @@ done
             error.contains("Ctrl+Shift+I") && error.contains("invert_selection"),
             "{error}"
         );
-        let items = app.plugin_menu_items();
-        assert_eq!(
-            items[&xuan::plugins::manifest::Menu::Filter][0].shortcut,
-            ""
-        );
+        // Its menu item shows no shortcut.
+        let bar = app.menu_bar();
+        let echo = bar
+            .items()
+            .into_iter()
+            .find(|item| {
+                matches!(
+                    &item.action,
+                    crate::app::menu_model::MenuAction::Plugin { plugin, action }
+                        if plugin == "mock" && action == "echo"
+                )
+            })
+            .expect("the plugin's menu item");
+        assert!(echo.chord.is_none());
 
         // The built-in keeps working and the plugin does not start.
         app.command("select_all");

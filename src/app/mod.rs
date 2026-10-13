@@ -35,6 +35,7 @@ mod layout_grid;
 mod levels_controls;
 #[cfg(target_os = "macos")]
 mod macos;
+mod menu_model;
 mod menus;
 mod navigator;
 mod palette;
