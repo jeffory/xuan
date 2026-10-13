@@ -253,3 +253,76 @@ fn the_new_canvas_button_is_square_and_still_works() {
         Some(&["new".to_owned()][..])
     );
 }
+
+/// Three tabs on macOS, with the menus in the system menu bar.
+fn mac_title_row() -> UiTest {
+    let mut ui = three_tabs();
+    ui.app_mut().native_buttons = true;
+    ui.app_mut().system_menu_bar = true;
+    ui.settle();
+    ui
+}
+
+#[test]
+fn with_the_mac_menu_bar_the_tabs_are_the_title_row() {
+    let mut ui = mac_title_row();
+    assert!(!ui.has("File"), "the menus are in the system menu bar");
+    let alpha = tab_rect(&ui, "Alpha");
+    assert!(alpha.top().abs() < 0.5, "the top row: {alpha:?}");
+    assert!(
+        (31.5..=32.5).contains(&alpha.height()),
+        "32 px, centred on the window buttons: {alpha:?}"
+    );
+    assert!(alpha.left() >= 75.5, "after the window buttons: {alpha:?}");
+    // In full screen macOS hides the buttons, and the tabs move left.
+    ui.harness
+        .input_mut()
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .fullscreen = Some(true);
+    ui.settle();
+    let alpha = tab_rect(&ui, "Alpha");
+    assert!(alpha.left() < 1.0, "{alpha:?}");
+}
+
+#[test]
+fn double_clicking_the_empty_title_row_zooms_the_window() {
+    let mut ui = mac_title_row();
+    ui.app_mut().command_trace = Some(Vec::new());
+    let gamma = tab_rect(&ui, "Gamma");
+    let pos = gamma.right_center() + egui::vec2(60.0, 0.0);
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    ui.harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(pos));
+    ui.harness.step();
+    for pressed in [true, false, true, false] {
+        ui.harness.input_mut().events.push(button(pressed));
+    }
+    ui.harness.step();
+    let zoomed = ui
+        .harness
+        .output()
+        .viewport_output
+        .values()
+        .any(|viewport| {
+            viewport
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Maximized(true)))
+        });
+    assert!(zoomed, "a double-click zooms the window");
+    ui.settle();
+    assert_eq!(
+        ui.app().command_trace.as_deref(),
+        Some(&[][..]),
+        "and starts no document"
+    );
+}
