@@ -165,6 +165,10 @@ impl Editor for FakeEditor {
                 "ok": true, "layers": ["new-layer"], "running": params["action"] == "remove_background",
             })),
             "document/activate" => Ok(json!({"ok": true})),
+            "raw/develop" => Ok(json!({
+                "ok": true,
+                "layer": {"id": params["layer"], "kind": "raw", "raw": {"settings": params["settings"]}},
+            })),
             // As Xuan words a file that fails to load.
             "file/open" => Err(EditorError {
                 code: -32603,
@@ -2373,4 +2377,64 @@ fn text_layers_take_letter_runs() {
         create["properties"]["runs"]["items"]["required"],
         json!(["start", "end"])
     );
+}
+
+#[test]
+fn develop_raw_sends_the_settings_given_after_switching_documents() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "develop_raw",
+        json!({
+            "document": "doc",
+            "layer": "raw-layer",
+            // Sent as a string by some clients.
+            "settings": "{\"exposure\": 0.5, \"white_balance\": \"Temperature\", \"temperature\": 5200}",
+            "auto_exposure": false,
+            "neutral_point": [0.5, 0.25],
+        }),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let requests = editor.requests();
+    let methods: Vec<&str> = requests.iter().map(|(_, m, _)| m.as_str()).collect();
+    assert_eq!(methods, ["document/activate", "raw/develop"]);
+    assert_eq!(requests[0].2, json!({"document": "doc"}));
+    assert_eq!(
+        requests[1].2,
+        json!({
+            "layer": "raw-layer",
+            "settings": {"exposure": 0.5, "white_balance": "Temperature", "temperature": 5200},
+            "auto_exposure": false,
+            "neutral_point": [0.5, 0.25],
+        })
+    );
+    // In the client's edit session, like every edit.
+    assert_eq!(requests[1].0.as_deref(), Some("s"));
+    assert!(text_of(&result).contains("\"kind\": \"raw\""));
+
+    let unknown = call_tool(&editor, "develop_raw", json!({"exposure": 1}));
+    assert_eq!(unknown.is_error, Some(true));
+    assert!(text_of(&unknown).contains("Unknown argument `exposure`"));
+
+    let tools = tools::list();
+    let tool = tools.iter().find(|t| t.name == "develop_raw").unwrap();
+    assert!(
+        tool.description
+            .as_deref()
+            .unwrap()
+            .contains("waits until the user answers")
+    );
+    let settings = tool.input_schema["properties"]["settings"]["description"]
+        .as_str()
+        .unwrap();
+    for name in [
+        "exposure",
+        "temperature",
+        "highlights",
+        "crop",
+        "hsl",
+        "negative",
+    ] {
+        assert!(settings.contains(name), "{name}");
+    }
 }

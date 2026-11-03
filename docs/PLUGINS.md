@@ -244,6 +244,7 @@ from connecting either. Install plugins you trust.
 | `document/edit`, including its `set_selection` op | no | yes |
 | `extend_canvas`, in `document/edit` or in a result's `edit` output | no | yes |
 | `host/run` commands that edit the document | no | yes |
+| `raw/develop` | no | yes |
 | `document/list`, `document/activate`, and `file/save_as`, `file/export` and `file/open` after the user's choice | yes | yes |
 
 A plugin with `document = "read"` can read the document and propose
@@ -1067,7 +1068,7 @@ wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
-| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, fill, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
+| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, fill, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, raw, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
 | `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips; an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
 | `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
@@ -1080,7 +1081,8 @@ wait for the user's answer (see [Network](#network)).
 | `file/save_as` | `{document?, suggested_name?}` or `{document?, path, overwrite?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; with `path`, `{name, asked}` once it was saved there after Xuan's prompt (`asked: true`) or without asking (`asked: false`); see [Files the user chooses](#files-the-user-chooses) |
 | `file/export` | `{document?, format?, suggested_name?, quality?, lossless?}` or `{document?, format?, path, overwrite?, quality?, lossless?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff`, `webp` or layered OpenRaster `ora`); with `path`, `{name, asked}` as for `file/save_as` |
 | `file/save` | `{document?}` | `{name, asked}` once the document was saved back to its own `.xuan` file, as **File → Save**, after Xuan's prompt or without asking |
-| `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
+| `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path`; a camera RAW file opens as a document with one RAW layer developed with the default settings, not in a Develop tab |
+| `raw/develop` | `{layer?, settings?, reset?, auto_exposure?, neutral_point?, name?}` | `{ok: true, layer}` (the layer as `document/get` describes it) once the RAW layer (the active one by default) was developed again from its camera file; see [Camera RAW layers](#camera-raw-layers). Needs `document = "edit"`, waits for the session's answer like `document/edit`, and runs in the background like a `host/run` job: other edits fail with "The editor is busy" until it ends |
 
 ### Layer descriptions
 
@@ -1346,6 +1348,27 @@ the menu commands do):
   **Image → Trim…**. `based_on` is `transparent` (the default), `top_left` or
   `bottom_right`, the pixel whose colour the margins have; the sides default
   to `true`. Nothing changes when there is nothing to trim.
+
+### Camera RAW layers
+
+A layer of kind `raw` keeps its camera file and develops it nondestructively.
+Its description has `raw`: `{filename, camera, lens, iso, aperture, shutter,
+focal_length, width, height, bits, settings}`, where `settings` are the
+Develop settings as `.xuan` files store them (`exposure`, `white_balance`,
+`temperature`, `tint`, `custom_wb`, `contrast`, `highlights`, `shadows`, …,
+`crop`, `quarter_turns`, `overlays`). Other layers have `raw: null`.
+
+`raw/develop` develops such a layer again at full size. `settings` holds only
+the settings to change, laid over the layer's own (or over Develop's defaults
+with `reset: true`); nested objects such as `negative` merge key by key. A
+setting the settings do not have is refused with the list of those they have,
+and one out of range with its name and range, before anything runs.
+`auto_exposure: true` sets the exposure from the image as Develop's **Auto**
+button does, and `neutral_point: [x, y]` (0–1 across the layer as it looks
+before the request) sets a `Custom` white balance that makes that spot
+neutral, as Develop's white balance picker does. The answer comes when the
+job ends; the user can cancel it (`-32800`). It is one undo step, named
+`name` or **Develop RAW**.
 
 ### SVG path data
 

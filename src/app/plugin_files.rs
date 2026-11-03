@@ -586,6 +586,11 @@ impl EditorApp {
         } else {
             self.file_action(&request)
         };
+        // Without a window nobody sees a dialog or a prompt.
+        let action = action.and_then(|action| match self.headless_file_refusal(&action) {
+            Some(error) => Err(error),
+            None => Ok(action),
+        });
         match action {
             Ok(action) => self.plugins.file_requests.push_back(FileRequest {
                 plugin: plugin.to_owned(),
@@ -897,7 +902,15 @@ impl EditorApp {
                 } else {
                     let before = self.sessions.len();
                     let error = self.error.take();
-                    self.open_path(path, false);
+                    // A camera file opens developed, not in a Develop tab
+                    // waiting for Apply.
+                    if xuan::raw::is_raw(path) {
+                        if let Err(failure) = self.open_raw_developed(path) {
+                            self.error = Some(format!("{failure:#}"));
+                        }
+                    } else {
+                        self.open_path(path, false);
+                    }
                     match self.error.clone() {
                         Some(message) if self.sessions.len() == before => {
                             // The plugin named the file, but not where its
