@@ -286,7 +286,6 @@ impl PluginState {
     }
 
     /// Whether the plugin's process has not answered `initialize` yet.
-    #[cfg(all(test, unix))]
     pub fn starting(&self, plugin: &str) -> bool {
         self.starting.contains_key(plugin)
     }
@@ -864,10 +863,7 @@ impl EditorApp {
                     self.plugins.held.push((plugin.to_owned(), request));
                     return;
                 }
-                let result = self.service_request(plugin, &request);
-                if let Some(process) = self.plugins.processes.get_mut(plugin) {
-                    let _ = process.respond(request.id, result);
-                }
+                self.serve_request(plugin, request);
             }
             Incoming::Message(Message::Notification(notification)) => {
                 self.handle_notification(plugin, notification);
@@ -1061,6 +1057,11 @@ impl EditorApp {
                 }
                 Ok(json!({"ok": true}))
             }
+            // Answered when its job ends; see `plugin_raw.rs`.
+            "raw/develop" => Err(RpcError::new(
+                protocol::INVALID_REQUEST,
+                "RAW develops are answered when their job ends",
+            )),
             // Answered once the user chose; see `plugin_files.rs`.
             "file/save_as" | "file/export" | "file/open" => Err(RpcError::new(
                 protocol::INVALID_REQUEST,

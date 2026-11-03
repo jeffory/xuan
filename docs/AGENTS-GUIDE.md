@@ -67,6 +67,58 @@ Most clients that speak Streamable HTTP read an `mcpServers` entry like the one
 A client that only runs servers as local commands (stdio) can reach it through
 an HTTP bridge such as `mcp-remote`, passing the same URL and header.
 
+### Without a window (`--headless`)
+
+`xuan --headless` runs the editor with no window and serves the MCP Server, for
+agents on a machine without a display, over SSH, in a container, or when the
+desktop's graphics stack will not start Xuan. It opens no window and creates
+no GPU device, so nothing loads the display server, EGL, Vulkan or GL;
+documents are edited with the CPU paths Xuan uses on computers without a
+suitable GPU, so large filters and RAW develops are slower than with a
+window.
+
+```sh
+xuan --headless photo.NEF               # serve the MCP server, with photo.NEF open
+xuan --headless --allow-files           # also let clients open and save files
+xuan --headless --mcp-port 0 --demo     # any free port, the sample document
+```
+
+It prints the server's URL, the file that holds the token, and a Claude Code
+command that reads it:
+
+```text
+MCP server: http://127.0.0.1:8765/mcp
+Token file: /home/you/.config/xuan/plugin-data/mcp-server/token
+Claude Code: claude mcp add --transport http xuan http://127.0.0.1:8765/mcp --header "Authorization: Bearer $(cat '/home/you/.config/xuan/plugin-data/mcp-server/token')"
+```
+
+The token is the one the MCP Server pane shows, so a client already set up
+for Xuan with a window connects to a headless Xuan too. Only one of them can
+have the port: while Xuan with a window serves MCP, start the headless one
+with another `--mcp-port`. Errors, the status line and the plugin's log go to standard error. Ctrl+C (or
+SIGTERM) stops it and the plugin.
+
+Nobody is there to answer Xuan's prompts, so the command line answers them:
+
+- **Edits** are allowed: starting Xuan headless is the answer to the edit
+  prompt and to the prompt before images go to the client.
+- **Files** are refused unless you add `--allow-files`. With it,
+  `open_document` opens the file it names and `save_document` and
+  `export_document` write to the absolute `path` they give, without asking;
+  replacing a file still needs `overwrite: true`. There is no save dialog, so
+  a save or export without `path` is always refused.
+- **The grant is for this run only.** The MCP Server runs even if you have
+  not allowed it in Xuan, and your settings are read but never written:
+  nothing a headless run does changes the Xuan you use with a window. Turning
+  off plugins that use the network in Xuan's settings still stops it.
+
+The plugin must be installed as for a window (a release package includes
+it; a source checkout needs `cargo build --release` in `plugins/mcp-server`
+and `XUAN_PLUGIN_PATH` pointing at the repository's `plugins` folder). Files
+named on the command line open as they would in a window, except that a
+camera RAW file opens developed with the default settings instead of in a
+Develop tab.
+
 ## Security model
 
 Xuan treats the MCP client as a remote party that should not get more than
@@ -225,7 +277,8 @@ larger tool arguments with a tool error saying the request is too large.
 | `switch_document` | Switch tabs | `document/activate` |
 | `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
 | `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file; `quality` (1–100) for JPEG and lossy WebP, `lossless` for WebP | `file/export` |
-| `open_document` | Open an image or project, after the user agrees | `file/open` |
+| `open_document` | Open an image or project, after the user agrees; a camera RAW file opens as a RAW layer developed with the default settings | `file/open` |
+| `develop_raw` | Develop a camera RAW layer again with new Develop settings (white balance, exposure, tone, colour, detail, lens, crop, rotation), `auto_exposure`, or a white balance from a `neutral_point`; only the settings given change | `raw/develop` |
 
 Filters and adjustments use the shapes `.xuan` files store, for example
 `{"GaussianBlur": {"radius": 4}}`, `"Invert"`, `{"HueSaturation": {"hue": 20,
@@ -384,6 +437,31 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
 | `xuan://document/preview.png` | The flattened image, longest side 1024 |
 | `xuan://document/selection.png` | The selection mask cropped to its bounds |
 | `xuan://layers/<id>/thumbnail.png` | Each layer's pixels, longest side 256 |
+
+### Camera RAW
+
+`open_document` opens a camera RAW file (`.nef`, `.nrw`, `.cr2`, `.cr3`,
+`.crw`, `.raf`, `.arw`) as a document with one RAW layer, developed with
+Xuan's default settings. The layer keeps the camera file, so developing it
+again loses nothing: `develop_raw` changes its Develop settings and renders
+the whole image again from the sensor data, as the Develop workspace does.
+
+- `get_document` lists the RAW layer's camera, lens, ISO, aperture, shutter
+  and focal length, and its current `settings`, under `raw`.
+- `settings` holds only what changes, by the names `.xuan` files use, e.g.
+  `{"exposure": 0.7, "highlights": -40, "shadows": 30, "vibrance": 15}`;
+  `reset: true` starts from the defaults. A misspelt or out-of-range setting
+  is refused with its name and range.
+- White balance: `{"white_balance": "Temperature", "temperature": 5200,
+  "tint": 8}`, back to the camera's with `"AsShot"`, or `neutral_point: [x,
+  y]` (0–1 across the layer as it looks now) on something that should be
+  grey or white.
+- `auto_exposure: true` sets the exposure as Develop's **Auto** button does.
+- Crop and straighten with `crop` (`[left, top, right, bottom]`, 0–1),
+  `rotation` (degrees) and `quarter_turns`; the layer changes size.
+
+A develop takes a few seconds on a large file; it runs in the background and
+the call returns when it is done. Look at the result with `get_preview`.
 
 ### Working well with Xuan
 

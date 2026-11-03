@@ -228,6 +228,9 @@ fn effect(description: &str) -> Value {
 const FILTERS: &str = "A filter as Xuan's .xuan files store it, an object with one key: {\"GaussianBlur\": {\"radius\": 0–100}}, {\"MotionBlur\": {\"distance\": 0–200, \"angle\": -180–180}}, {\"Noise\": {\"amount\": 0–100, \"monochrome\": bool}} or {\"LensCorrection\": {\"distortion\": -50–50, \"vignette\": -100–100}} (as in Photoshop, a negative vignette darkens the corners, a positive one brightens them), {\"Vignette\": {\"amount\": 0–100, \"color\": [r, g, b], \"midpoint\": 0–100, \"roundness\": -100–100, \"feather\": 0–100, \"highlights\": 0–100}} (Compositor's defaults 35, [0, 0, 0], 50, 100, 60, 25), {\"Bloom\": {\"amount\": 0–100, \"radius\": 1–150}} (Bloom / Glow, defaults 40 and 24), {\"TonalContrast\": {\"amount\": 0–100, \"radius\": 1–100, \"shadows\": -100–100, \"midtones\": -100–100, \"highlights\": -100–100}} (defaults 50, 16, 40, 60, 30) or {\"Dither\": {…}}, whose settings may be left out for Compositor's defaults: \"style\" (\"Atkinson\" by default, \"FloydSteinberg\", \"Bayer2\", \"Bayer4\", \"Bayer8\", \"HalftoneDots\", \"HalftoneLines\", \"HalftoneDiamonds\", \"MacPatterns\", \"Ascii\" or \"Scanlines\"), \"pixel_size\" 1–32 (2), \"pixel_shape\" (\"Square\" or \"Dot\"), \"levels\" 2–8 (2), \"diffusion\" 0–100 (100), \"cell_size\" 4–64 (8) and \"angle\" -90–90 (45) for halftones, \"text_size\" 6–64 (14) and \"characters\" for ASCII, \"line_spacing\" 2–32 (4), \"glow\" 0–100 (35), \"dots\" 0–100 and \"wobble\" 0–64 for scanlines, \"density\" and \"contrast\" -100–100 (0), \"colors\" (\"BlackWhite\", \"TwoColors\" with \"dark\" and \"light\" as [r, g, b], or \"Original\") and \"light_on_dark\" (true). The same JSON sent as a string is accepted too.";
 const ADJUSTMENTS: &str = r#"An adjustment as Xuan's .xuan files store it, every field given: the string "Invert", or an object with one key: {"HueSaturation": {"hue": -360–360, "saturation": -100–100, "lightness": -100–100, "colorize": bool}}; {"HueRanges": {"settings": {"range": 0–6, "colorize": bool, "invert_range": bool, "adjustments": 7 × [hue -360–360, saturation -100–100, lightness -100–100] for master, reds, yellows, greens, cyans, blues and magentas, "bands": 7 × [4 hue degrees where each range ramps in, is full, is full until, ramps out]}}}; {"Levels": {"black": 0–255, "gamma": 0.01–10, "white": 0–255 and above black, "output_black": 0–255, "output_white": 0–255}}; {"LevelsChannels": {"ranges": 4 × [black, gamma, white, output_black, output_white] for master, red, green and blue}}; {"Curves": {"points": [{"x": 0–1, "y": 0–1}, …] (2–32 points, x rising from 0 to 1)}}; {"CurvesChannels": {"channels": 4 point lists for master, red, green and blue}}; {"Exposure": {"exposure": -20–20, "offset": -1–1, "gamma": 0.01–10}}; {"GradientMap": {"shadows": [r,g,b,a], "highlights": [r,g,b,a]}} (0–255); {"Grain": {"amount": 0–100 (2 is visible, 8 is heavy), "monochrome": bool, "seed": integer}}; {"FilmGrain": {"amount": 0–100, "size": 0.1–100, "roughness": 0–100, "seed": integer}}; {"BlackWhite": {"weights": [6 numbers, -200–300], "tint": bool, "tint_hue": 0–360, "tint_saturation": 0–100}}; or {"ColorBalance": {"shadows": [3 numbers, -100–100], "midtones": […], "highlights": […], "preserve_luminosity": bool}}. The same JSON sent as a string is accepted too. A "ColorLookup" adjustment needs a .cube file opened in Xuan, so it cannot be given here."#;
 
+const RAW_DEVELOP: &str = "Develop a camera RAW layer again from its camera file with new settings, as Xuan's Develop workspace does: white balance, exposure, tone, colour, detail, lens corrections, crop and rotation. RAW layers come from opening a camera file (.nef, .nrw, .cr2, .cr3, .crw, .raf, .arw) with open_document, which opens it developed with the default settings; get_document lists each RAW layer's camera, lens, exposure data and current `settings` under `raw`. Only the settings you give change; the rest keep the layer's values (or the defaults with `reset`). The whole image is developed again at full size, which takes a few seconds for a large file; it is one undo step. Look at the result with get_preview. Returns the layer as get_document describes it.";
+const RAW_SETTINGS: &str = r#"Develop settings to change, by name, e.g. {"exposure": 0.7, "white_balance": "Temperature", "temperature": 5200, "tint": 8, "highlights": -40, "shadows": 30, "vibrance": 15}. white_balance: "AsShot" (the camera's), "Temperature" (with temperature 2000–25000 K and tint -150–150) or "Custom" (custom_wb: [r, g, b] multipliers 0.01–100). exposure -10–10 EV. -100–100: brightness, contrast, highlights, shadows, whites, blacks, saturation, vibrance, clarity, texture, dehaze, tone_balance, distortion, chromatic_red, chromatic_blue, vignette (negative darkens the corners). 0–100: luminance_noise, color_noise (default 20), defringe. sharpen 0–200 (default 25), sharpen_radius 0.3–5, sharpen_threshold 0–1. Geometry: crop [left, top, right, bottom] 0–1 of the uncropped image, keeping at least 1% each way; rotation -45–45 degrees (straighten, before the crop); quarter_turns 0–3 (clockwise, after the crop); perspective [horizontal, vertical] -100–100. Colour: curves (4 lists of 5 knots 0–1 for master, red, green, blue, evenly spaced from 0 to 1; [0, 0.25, 0.5, 0.75, 1] is unchanged), hsl (8 hue bands red, orange, yellow, green, aqua, blue, purple, magenta, each [hue, saturation, lightness] -100–100), monochrome (bool) with bw_mix [r, g, b] -1–2, shadow_tone and highlight_tone ([hue 0–360, saturation 0–100], split toning). negative (film negative inversion) takes {"enabled": true} and its own settings. A misspelt or out-of-range setting is refused with its name. The same JSON sent as a string is accepted too."#;
+
 /// `run_command` commands that start a job and return before it ends.
 const BACKGROUND: [&str; 3] = [
     "content_fill",
@@ -285,7 +288,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_document",
             title: "Describe the document",
-            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, and for generated layers their provenance). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
+            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, for generated layers their provenance, and for RAW layers under `raw` the camera file, camera, lens, ISO, aperture, shutter and focal length, and the Develop `settings` develop_raw changes). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
             properties: json!({"document": {"type": "string", "description": "A document id from list_documents"}}),
             required: &[],
             kind: Kind::Read,
@@ -1367,13 +1370,48 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "open_document",
             title: "Open a file",
-            description: "Ask the user to open the image or .xuan project at the absolute `path` as a new document; Xuan shows the path and opens it only if the user agrees.",
+            description: "Ask the user to open the image or .xuan project at the absolute `path` as a new document; Xuan shows the path and opens it only if the user agrees. A camera RAW file opens as a RAW layer developed with the default settings; change them with develop_raw.",
             properties: json!({"path": {"type": "string"}}),
             required: &["path"],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
                 let args = pick(args, &["path"])?;
                 text(cx.call("file/open", Value::Object(args))?)
+            }),
+        },
+        // Camera RAW.
+        Spec {
+            name: "develop_raw",
+            title: "Develop a camera RAW layer",
+            description: RAW_DEVELOP,
+            properties: json!({
+                "layer": {"type": "string", "description": "A RAW layer id (kind \"raw\" in get_document); the active layer when left out"},
+                "settings": {"type": "object", "description": RAW_SETTINGS},
+                "reset": {"type": "boolean", "description": "Start from Develop's default settings instead of the layer's own"},
+                "auto_exposure": {"type": "boolean", "description": "Set the exposure from the image, as Develop's Auto button does"},
+                "neutral_point": {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 2, "maxItems": 2,
+                    "description": "[x, y], each 0–1 across the layer as it looks now: a spot that should be neutral grey or white. Sets a Custom white balance from it"},
+                "document": {"type": "string", "description": "A document id from list_documents; made current first"},
+            }),
+            required: &[],
+            kind: Kind::Edit,
+            run: Action::Run(|cx, args| {
+                let mut args = pick(
+                    args,
+                    &[
+                        "layer",
+                        "settings",
+                        "reset",
+                        "auto_exposure",
+                        "neutral_point",
+                        "document",
+                    ],
+                )?;
+                if let Some(document) = args.remove("document") {
+                    cx.call("document/activate", json!({"document": document}))?;
+                }
+                let args = unquote(args, "settings");
+                text(cx.call("raw/develop", Value::Object(args))?)
             }),
         },
     ]

@@ -1513,3 +1513,54 @@ fn camera_raw_filter_applies_within_the_selection_and_only_to_the_unchanged_laye
     apply_filter(&mut whole, &original, transform, result.clone()).unwrap();
     assert_eq!(**whole.pixels.as_ref().unwrap(), result);
 }
+
+/// A plugin's `raw/develop` on a real camera file: decoded, developed with
+/// the plugin's settings and an automatic exposure, at full size.
+#[test]
+fn sample_raw_develops_for_a_plugin() {
+    let Some((fixture, bytes)) = fixture_bytes("nikon-d70-nef") else {
+        return;
+    };
+    let decoded = decode(&bytes).unwrap();
+    let asset = RawAsset {
+        filename: fixture.file.into(),
+        metadata: decoded.metadata.clone(),
+        settings: DevelopSettings::default(),
+        bytes: Arc::new(bytes),
+    };
+    let pixels = render(
+        &decoded.preview(64),
+        &asset.settings,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    let mut document = crate::document::Document::new(fixture.width, fixture.height).unwrap();
+    let mut layer = crate::document::Layer::image("raw", pixels);
+    layer.transform.width = fixture.width as f32;
+    layer.transform.height = fixture.height as f32;
+    layer.raw = Some(asset);
+    let id = layer.id;
+    document.layers = vec![layer];
+    document.select(id, false);
+    let request = crate::plugins::raw::parse(
+        &document,
+        &serde_json::json!({
+            "settings": {"white_balance": "Temperature", "temperature": 5000, "crop": [0.0, 0.0, 0.5, 1.0]},
+            "auto_exposure": true,
+        }),
+    )
+    .unwrap();
+    crate::plugins::raw::develop(&mut document, &request, decode, &AtomicBool::new(false)).unwrap();
+    let layer = &document.layers[0];
+    let settings = &layer.raw.as_ref().unwrap().settings;
+    assert_eq!(settings.temperature, 5000.0);
+    assert_ne!(settings.exposure, 0.0);
+    let pixels = layer.pixels.as_ref().unwrap();
+    assert_eq!(pixels.dimensions(), (fixture.width / 2, fixture.height));
+    let mean = pixels.pixels().map(|p| u64::from(p[1])).sum::<u64>()
+        / u64::from(pixels.width() * pixels.height());
+    assert!(
+        (20..235).contains(&mean),
+        "a photograph, not black or white: {mean}"
+    );
+}

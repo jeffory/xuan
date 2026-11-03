@@ -7,6 +7,7 @@ pub mod jobs;
 pub mod manifest;
 pub mod models;
 pub mod protocol;
+pub mod raw;
 pub mod sandbox;
 pub mod ui;
 
