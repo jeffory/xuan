@@ -287,6 +287,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
+| `auto_adjust` | Auto `contrast`, `tone` or `white_balance` (grey-world, or from a `neutral` point that should be grey), applied or as an adjustment layer | `auto_adjust` |
 | `set_adjustment` | Change an existing adjustment or filter layer's settings in place; `get_document` lists the current ones under `adjustment` and `filter` | `set_adjustment` |
 | `crop_canvas`, `resize_canvas`, `resize_image` | Crop to a rectangle, to the largest box of a `ratio` (around a `center`), or `straighten` by an angle and crop the empty corners away; Canvas Size; Image Size | `crop`, `crop_to`, `resize_canvas`, `resize_image` |
 | `rotate_canvas`, `trim_canvas` | Rotate Canvas (any angle clockwise; `expand` grows the canvas to fit, the default), Trim (transparent, top-left or bottom-right colour margins, per side); `run_command` `crop_to_selection` crops to the selection | `rotate_canvas`, `trim` |

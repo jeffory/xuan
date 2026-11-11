@@ -1166,6 +1166,90 @@ pub fn histogram(image: &RgbaImage) -> [u32; 256] {
     bins
 }
 
+/// The darkest and lightest levels of 256 counts once the outlying 0.5% at each end are
+/// left out, as [`auto_levels`] clips them.
+fn clipped_range(bins: &[u64; 256]) -> (f32, f32) {
+    let total: u64 = bins.iter().sum();
+    let cutoff = total / 200;
+    let mut sum = 0;
+    let black = bins
+        .iter()
+        .position(|n| {
+            sum += n;
+            sum > cutoff
+        })
+        .unwrap_or(0) as f32;
+    sum = 0;
+    let white = 255
+        - bins
+            .iter()
+            .rev()
+            .position(|n| {
+                sum += n;
+                sum > cutoff
+            })
+            .unwrap_or(0);
+    (black.min(254.0), (white as f32).max(black.min(254.0) + 1.0))
+}
+
+/// Auto Tone: each of red, green and blue stretched to the full range on its own, the
+/// outlying 0.5% at each end clipped. Unlike [`auto_levels`], which stretches the
+/// lightness and keeps the colours, this also removes a colour cast from the darkest and
+/// lightest tones.
+pub fn auto_tone(image: &RgbaImage) -> Adjustment {
+    let mut bins = [[0u64; 256]; 3];
+    for pixel in image.pixels().filter(|p| p[3] != 0) {
+        for channel in 0..3 {
+            bins[channel][usize::from(pixel[channel])] += 1;
+        }
+    }
+    let mut ranges = [[0.0, 1.0, 255.0, 0.0, 255.0]; 4];
+    for channel in 0..3 {
+        let (black, white) = clipped_range(&bins[channel]);
+        ranges[channel + 1] = [black, 1.0, white, 0.0, 255.0];
+    }
+    Adjustment::LevelsChannels { ranges }
+}
+
+/// The average colour of an image for a grey-world white balance: its pixels that are
+/// neither transparent nor clipped in any channel, or every visible pixel when all are
+/// clipped. `None` for an image with nothing visible.
+pub fn average_color(image: &RgbaImage) -> Option<[f32; 3]> {
+    let mean = |clipped: bool| {
+        let (mut sum, mut count) = ([0u64; 3], 0u64);
+        for pixel in image.pixels().filter(|p| p[3] != 0) {
+            if !clipped && pixel.0[..3].iter().any(|v| !(5..=250).contains(v)) {
+                continue;
+            }
+            for channel in 0..3 {
+                sum[channel] += u64::from(pixel[channel]);
+            }
+            count += 1;
+        }
+        (count > 0).then(|| sum.map(|channel| channel as f32 / count as f32))
+    };
+    mean(false).or_else(|| mean(true))
+}
+
+/// Auto white balance: per-channel levels that make `neutral`, a colour that should be
+/// grey (the image's average for a grey-world balance, or a sampled grey card), grey at
+/// the same lightness. Each channel is scaled by at most 4 either way.
+pub fn white_balance(neutral: [f32; 3]) -> Adjustment {
+    let target = 0.2126 * neutral[0] + 0.7152 * neutral[1] + 0.0722 * neutral[2];
+    let mut ranges = [[0.0, 1.0, 255.0, 0.0, 255.0]; 4];
+    for channel in 0..3 {
+        let gain = (target / neutral[channel].max(0.5)).clamp(0.25, 4.0);
+        ranges[channel + 1] = if gain >= 1.0 {
+            // Brighter: a lower white point.
+            [0.0, 1.0, (255.0 / gain).max(1.0), 0.0, 255.0]
+        } else {
+            // Darker: a lower output white.
+            [0.0, 1.0, 255.0, 0.0, 255.0 * gain]
+        };
+    }
+    Adjustment::LevelsChannels { ranges }
+}
+
 pub fn auto_levels(image: &RgbaImage) -> Adjustment {
     let bins = histogram(image);
     let total: u32 = bins.iter().sum();

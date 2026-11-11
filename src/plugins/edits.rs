@@ -1010,6 +1010,26 @@ pub enum Edit {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filter: Option<Filter>,
     },
+    /// An adjustment Xuan works out from the picture: `contrast` stretches the
+    /// lightness to the full range, `tone` stretches red, green and blue each
+    /// on their own, and `white_balance` makes the image's average colour (or
+    /// the colour at `neutral`, a document point that should be grey) grey.
+    /// It is applied to a layer's pixels inside the selection, measured from
+    /// that layer, or with `as_layer` added as an adjustment layer measured
+    /// from the visible image.
+    AutoAdjust {
+        kind: AutoKind,
+        #[serde(default)]
+        layer: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        as_layer: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        neutral: Option<[f32; 2]>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
     /// An empty pixel layer the size of the canvas.
     AddEmptyLayer {
         #[serde(default)]
@@ -1474,6 +1494,8 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
             | Edit::ApplyAdjustment { layer, .. } => {
                 (layer_area(layer, canvas).saturating_mul(2), 0)
             }
+            // Measured from the flattened image or the layer, then applied or added.
+            Edit::AutoAdjust { .. } => (canvas.saturating_mul(3), canvas),
             Edit::ApplyFilter { layer, filter } => {
                 let area = layer_area(layer, canvas);
                 let side = (area as f64).sqrt();
@@ -1719,6 +1741,15 @@ impl Edit {
     }
 }
 
+/// What an `auto_adjust` edit works out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoKind {
+    Contrast,
+    Tone,
+    WhiteBalance,
+}
+
 /// What a `stroke` edit's brush does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1850,6 +1881,9 @@ macro_rules! layer_ids {
             | Edit::Stroke { layer, .. }
             | Edit::ApplyFilter { layer, .. }
             | Edit::ApplyAdjustment { layer, .. } => layer.$option().into_iter().collect(),
+            Edit::AutoAdjust { layer, above, .. } => {
+                layer.$option().into_iter().chain(above.$option()).collect()
+            }
             Edit::AddLayer { above, .. }
             | Edit::AddAdjustmentLayer { above, .. }
             | Edit::AddEmptyLayer { above, .. }
@@ -2647,6 +2681,102 @@ fn apply_each(
                     });
                 }
                 added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AutoAdjust {
+                kind,
+                layer,
+                as_layer,
+                neutral,
+                name,
+                above,
+            } => {
+                ensure!(
+                    neutral.is_none() || *kind == AutoKind::WhiteBalance,
+                    "`neutral` goes with the white balance"
+                );
+                ensure!(
+                    *as_layer || (name.is_none() && above.is_none()),
+                    "`name` and `above` go with `as_layer`"
+                );
+                ensure!(
+                    !*as_layer || layer.is_none(),
+                    "With `as_layer` the visible image is measured: leave out `layer`"
+                );
+                // What is measured, the size of the canvas: the visible image for an
+                // adjustment layer, the layer alone when its pixels are changed.
+                let measured = if *as_layer {
+                    crate::render::render(document)
+                } else {
+                    activate(document, *layer)?;
+                    let active = document.active().context("Select a layer first")?;
+                    ensure!(
+                        active.pixels.is_some() && !active.group,
+                        "Layer {} has no pixels to adjust: use `as_layer`",
+                        active.name
+                    );
+                    crate::operations::render_layers(document, &[active.id])
+                };
+                let adjustment = match kind {
+                    AutoKind::Contrast => crate::effects::auto_levels(&measured),
+                    AutoKind::Tone => crate::effects::auto_tone(&measured),
+                    AutoKind::WhiteBalance => {
+                        let color = match neutral {
+                            Some([x, y]) => {
+                                ensure!(
+                                    x.is_finite()
+                                        && y.is_finite()
+                                        && *x >= 0.0
+                                        && *y >= 0.0
+                                        && *x < measured.width() as f32
+                                        && *y < measured.height() as f32,
+                                    "`neutral` must be a point [x, y] on the canvas"
+                                );
+                                // A 5 × 5 average, as steady as an eyedropper's.
+                                let (cx, cy) = (*x as u32, *y as u32);
+                                let patch = image::imageops::crop_imm(
+                                    &measured,
+                                    cx.saturating_sub(2),
+                                    cy.saturating_sub(2),
+                                    5.min(measured.width() - cx.saturating_sub(2)),
+                                    5.min(measured.height() - cy.saturating_sub(2)),
+                                )
+                                .to_image();
+                                let (mut sum, mut count) = ([0.0f32; 3], 0.0f32);
+                                for pixel in patch.pixels().filter(|p| p.0[3] != 0) {
+                                    for (total, value) in sum.iter_mut().zip(pixel.0) {
+                                        *total += f32::from(value);
+                                    }
+                                    count += 1.0;
+                                }
+                                ensure!(count > 0.0, "Nothing is visible at `neutral`");
+                                sum.map(|channel| channel / count)
+                            }
+                            None => crate::effects::average_color(&measured)
+                                .context("Nothing is visible to measure")?,
+                        };
+                        crate::effects::white_balance(color)
+                    }
+                };
+                if *as_layer {
+                    reader.add_layer()?;
+                    let default = match kind {
+                        AutoKind::Contrast => "Auto Contrast",
+                        AutoKind::Tone => "Auto Tone",
+                        AutoKind::WhiteBalance => "Auto White Balance",
+                    };
+                    let mut layer =
+                        Layer::blank(layer_name(name, default)?, document.width, document.height);
+                    layer.adjustment = Some(adjustment);
+                    if document.selection.is_some() {
+                        layer.mask = Some(Mask {
+                            pixels: Arc::new(crate::paint::mask_from_selection(document, &layer)),
+                            ..Mask::white()
+                        });
+                    }
+                    added.push(insert_above(document, layer, *above)?);
+                } else {
+                    crate::effects::apply_adjustment(document, &adjustment, false)?;
+                }
             }
             Edit::SetAdjustment {
                 layer,
@@ -5585,6 +5715,118 @@ mod tests {
             assert!(error.to_string().contains(says), "{bad}: {error}");
         }
         assert!(serde_json::from_value::<Edit>(json!({"op": "stroke", "mode": "smear"})).is_err());
+    }
+
+    #[test]
+    fn auto_adjust_stretches_contrast_and_tone_and_neutralises_a_cast() {
+        // A warm, flat image: every channel short of the full range, red highest.
+        let warm = || {
+            let mut document = Document::new(16, 4).unwrap();
+            let mut pixels = RgbaImage::new(16, 4);
+            for (x, _, pixel) in pixels.enumerate_pixels_mut() {
+                let v = 60 + (x as u8) * 6;
+                *pixel = image::Rgba([v + 40, v, v - 20, 255]);
+            }
+            document.layers[0].pixels = Some(Arc::new(pixels));
+            let id = document.layers[0].id;
+            (document, id)
+        };
+        let means = |document: &Document| {
+            crate::effects::average_color(&crate::render::render(document)).unwrap()
+        };
+
+        // As a layer: the pixels stay, and the settings can be read back and changed.
+        let (mut document, id) = warm();
+        let added = run(
+            &mut document,
+            &[edit(
+                json!({"op": "auto_adjust", "kind": "white_balance", "as_layer": true}),
+            )],
+        )
+        .unwrap();
+        let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+        assert_eq!(layer.name, "Auto White Balance");
+        assert!(matches!(
+            layer.adjustment,
+            Some(Adjustment::LevelsChannels { .. })
+        ));
+        let [r, g, b] = means(&document);
+        assert!((r - g).abs() < 3.0 && (b - g).abs() < 3.0, "{r} {g} {b}");
+        let original = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(
+            original.pixels.as_ref().unwrap().get_pixel(0, 0).0,
+            [100, 60, 40, 255]
+        );
+
+        // On the pixels, from a point that should be grey.
+        let (mut document, id) = warm();
+        run(
+            &mut document,
+            &[edit(json!({"op": "auto_adjust", "kind": "white_balance", "layer": id, "neutral": [8, 2]}))],
+        )
+        .unwrap();
+        let pixel = crate::render::render(&document).get_pixel(8, 2).0;
+        assert!(
+            pixel[0].abs_diff(pixel[1]) <= 3 && pixel[2].abs_diff(pixel[1]) <= 3,
+            "{pixel:?}"
+        );
+
+        // Contrast keeps the cast and fills the range; tone stretches each channel.
+        let (mut document, id) = warm();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "auto_adjust", "kind": "contrast", "layer": id}),
+            )],
+        )
+        .unwrap();
+        let flat = crate::render::render(&document);
+        let (dark, light) = (flat.get_pixel(0, 0).0, flat.get_pixel(15, 0).0);
+        // The lightness fills the range, so the lightest pixel's strongest channel tops out.
+        assert!(
+            dark[1] < 20 && light[0] == 255 && light[1] > 220,
+            "{dark:?} {light:?}"
+        );
+        assert!(light[0] > light[2], "still warm");
+        let (mut document, id) = warm();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "auto_adjust", "kind": "tone", "layer": id}),
+            )],
+        )
+        .unwrap();
+        let flat = crate::render::render(&document);
+        let (dark, light) = (flat.get_pixel(0, 0).0, flat.get_pixel(15, 0).0);
+        assert!(dark.iter().take(3).all(|v| *v < 12), "{dark:?}");
+        assert!(light.iter().take(3).all(|v| *v > 243), "{light:?}");
+
+        for (bad, says) in [
+            (
+                json!({"kind": "contrast", "neutral": [1, 1]}),
+                "white balance",
+            ),
+            (json!({"kind": "tone", "name": "x"}), "`as_layer`"),
+            (
+                json!({"kind": "tone", "as_layer": true, "layer": id}),
+                "leave out",
+            ),
+            (
+                json!({"kind": "white_balance", "neutral": [99, 1]}),
+                "on the canvas",
+            ),
+        ] {
+            let mut auto = json!({"op": "auto_adjust"});
+            auto.as_object_mut()
+                .unwrap()
+                .extend(bad.as_object().unwrap().clone());
+            let (mut document, _) = warm();
+            let error = run(&mut document, &[edit(auto)]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
+        assert!(
+            serde_json::from_value::<Edit>(json!({"op": "auto_adjust", "kind": "magic"})).is_err()
+        );
     }
 
     /// Whether every pixel of the flattened image is opaque: no corner is empty.

@@ -1316,6 +1316,17 @@ Layers and their properties:
 - `{"op": "add_adjustment_layer", "adjustment" | "filter", "name"?,
   "above"?}`: a non-destructive adjustment or filter layer, masked by the
   selection when there is one.
+- `{"op": "auto_adjust", "kind", "layer"?, "as_layer"?, "neutral"?, "name"?,
+  "above"?}`: an adjustment worked out from the picture. `kind` is
+  `contrast` (the lightness stretched to the full range, 0.5% clipped at each
+  end, as the Levels dialog's Auto), `tone` (red, green and blue each
+  stretched on their own) or `white_balance` (per-channel levels that make
+  the image's average colour grey, or the colour at `neutral`, `[x, y]` in
+  document pixels, averaged over 5 × 5 pixels). With `as_layer` the visible
+  image is measured and an adjustment layer is added (`name`, `above`),
+  masked by the selection; without, the adjustment is applied to the pixels
+  of `layer` (or the active layer) inside the selection, measured from that
+  layer.
 - `{"op": "set_adjustment", "layer", "adjustment" | "filter"}`: new settings
   for an adjustment or filter layer that is already there, as its own dialog
   sets them: an adjustment for an adjustment layer, a filter for a filter

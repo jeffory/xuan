@@ -82,6 +82,7 @@ the document takes effect on the next frame and is drawn at once.
 | create text / shape layer | `document/edit` `add_text_layer` (with an SVG `path` for text on a path), `add_shape_layer` (new) |
 | edit text, set it on a path (#64) | `document/edit` `set_text` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
+| auto contrast, tone and white balance | `document/edit` `auto_adjust` (MCP `auto_adjust`) |
 | read and change an adjustment / filter layer's settings | `document/get` lists them under `adjustment` and `filter`; `document/edit` `set_adjustment` (MCP `set_adjustment`) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
 | paint via strokes, fills and gradients | `document/edit` `stroke` (with `points` or an SVG `path`), `fill`, `fill_path`, `gradient` (new) |

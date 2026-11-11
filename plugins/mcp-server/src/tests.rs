@@ -3066,3 +3066,37 @@ fn strokes_dodge_and_burn_and_strokes_and_fills_paint_masks() {
         assert!(description.contains(word), "{word}");
     }
 }
+
+#[test]
+fn auto_adjust_sends_its_kind_and_where_to_measure() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "auto_adjust",
+        json!({"kind": "white_balance", "as_layer": true, "neutral": [120, 80], "name": "WB"}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let params = edit_requests(&editor).pop().unwrap();
+    assert_eq!(
+        params["edits"],
+        json!([{"op": "auto_adjust", "kind": "white_balance", "as_layer": true, "neutral": [120, 80], "name": "WB"}])
+    );
+    assert_eq!(params["name"], "Auto Adjust");
+    assert!(text_of(&result).contains("new-layer"), "the layer it added");
+    // In a batch, the layer it adds can be named by the next step.
+    let batch = call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "auto_adjust", "arguments": {"kind": "tone", "as_layer": true}},
+            {"tool": "set_layer", "arguments": {"layer": "$1", "opacity": 0.6}},
+        ]}),
+    );
+    assert_ne!(batch.is_error, Some(true), "{}", text_of(&batch));
+    let unknown = call_tool(
+        &editor,
+        "auto_adjust",
+        json!({"kind": "tone", "strength": 2}),
+    );
+    assert_eq!(unknown.is_error, Some(true));
+}

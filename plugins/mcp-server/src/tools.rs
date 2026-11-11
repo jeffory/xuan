@@ -1209,6 +1209,30 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             }),
         },
         Spec {
+            name: "auto_adjust",
+            title: "Auto contrast, tone or white balance",
+            description: "An adjustment Xuan works out from the picture. `kind` \"contrast\" stretches the lightness to the full range and keeps the colours (0.5% clipped at each end); \"tone\" stretches red, green and blue each on their own, which also takes a colour cast out of the darkest and lightest tones; \"white_balance\" makes the image's average colour grey (a grey-world balance, right for a scene with a mix of colours), or with `neutral` [x, y] makes the colour at that point grey: point it at something that should be white or grey, such as a wall, a shirt or a cloud, for a far more reliable balance. With `as_layer` the visible image is measured and the result is added as an adjustment layer (masked by the selection), so it can be seen, weakened with set_layer opacity, or changed with set_adjustment; get_document shows the numbers it chose. Without, it is applied to a pixel layer's own pixels inside the selection, measured from that layer.",
+            properties: json!({
+                "kind": {"type": "string", "enum": ["contrast", "tone", "white_balance"]},
+                "layer": optional_layer(),
+                "as_layer": {"type": "boolean", "description": "Add a non-destructive adjustment layer instead"},
+                "neutral": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "White balance: a point [x, y] in document pixels that should be grey"},
+                "name": name(),
+                "above": above(),
+            }),
+            required: &["kind"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["kind", "layer", "as_layer", "neutral", "name", "above"];
+                let args = pick(args, &keys)?;
+                Ok(Plan::new(
+                    "Auto Adjust",
+                    vec![Value::Object(op("auto_adjust", &args, &keys))],
+                    Reply::Added,
+                ))
+            }),
+        },
+        Spec {
             name: "set_adjustment",
             title: "Change an adjustment or filter layer",
             description: "Change the settings of an adjustment or filter layer that is already there, in place: give `adjustment` for an adjustment layer or `filter` for a filter layer, written whole as apply_adjustment and apply_filter take them. get_document lists each such layer's current settings under `adjustment` or `filter`, so read them, change the numbers and send them back. The layer keeps its place, mask, opacity and blend mode.",
@@ -1411,7 +1435,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
