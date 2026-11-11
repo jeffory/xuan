@@ -1435,7 +1435,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A selection a step makes stays active for the steps after it, and for later calls, until it is replaced or cleared (modify_selection none): strokes, fills, gradients and filters or adjustments on pixels change only what is inside it, so the answer's `notes` name each step it clipped, and a warning comes first for a step that changed nothing. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A selection a step makes stays active for the steps after it, and for later calls, until it is replaced or cleared (modify_selection none): strokes, fills, gradients and filters or adjustments on pixels change only what is inside it, so the answer's `notes` name each step that ran inside it, and a warning comes first for a step that changed nothing. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1746,10 +1746,12 @@ pub fn started(name: &str, result: &CallToolResult) -> Option<String> {
     Some(format!("started {label} from {plugin}"))
 }
 
-/// The JSON a tool answered with.
+/// The JSON a tool answered with: its first text that is JSON, since a
+/// warning in prose may come before it.
 fn answer_of(result: &CallToolResult) -> Option<Value> {
-    let text = (result.content.iter()).find_map(|content| content.as_text())?;
-    serde_json::from_str(&text.text).ok()
+    (result.content.iter())
+        .filter_map(|content| content.as_text())
+        .find_map(|text| serde_json::from_str(&text.text).ok())
 }
 
 /// Text from Xuan for the pane: without control and bidi characters, at
@@ -1869,7 +1871,7 @@ fn perform(cx: &Context, tool: &str, plan: Plan) -> Result<Vec<ContentBlock>, St
     result["changed"] = json!(clipped.unchanged.len() < clipped.noted);
     let warning = clipped
         .warning(tool, None)
-        .map(|line| format!("{line} {SELECTION_STAYS}"));
+        .map(|line| format!("{line}\n{SELECTION_STAYS}"));
     Ok((warning.into_iter().map(ContentBlock::text))
         .chain(text(result)?)
         .collect())
@@ -1973,11 +1975,12 @@ impl Clipped {
         Some(format!("{who}{which} {verb} inside {}.", self.selection()))
     }
 
-    /// A batch's note on the step: its warning, or that it was clipped.
+    /// A batch's note on the step: its warning, or that it ran inside the
+    /// selection.
     fn note(&self, tool: &str, step: usize) -> String {
         self.warning(tool, Some(step)).unwrap_or_else(|| {
             format!(
-                "{} was clipped to {}.",
+                "{} ran inside {}.",
                 Self::who(tool, Some(step)),
                 self.selection()
             )

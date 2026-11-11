@@ -453,7 +453,7 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
   or canvas size when a step changed them.
 - A selection a step makes stays active for the steps after it, and for later
   calls, until it is replaced or cleared. The answer's `notes` name each step
-  it clipped (`"Step 2 (fill) was clipped to the selection (448, 292,
+  that ran inside it (`"Step 2 (fill) ran inside the selection (448, 292,
   184×216)."`), and a warning comes before the JSON for a step that changed
   nothing inside it.
 

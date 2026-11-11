@@ -68,7 +68,8 @@ impl FakeEditor {
     /// Xuan's notes on the edits that paint while a selection is active,
     /// following the selection through the request. A stroke changed
     /// something when one of its points is within its radius of the
-    /// selected rectangle; other painting edits always do.
+    /// selected rectangle; other painting edits do unless their `layer` is
+    /// `empty`.
     fn notes(&self, edits: &[Value]) -> Vec<Value> {
         let mut selection = self.selection.lock().unwrap();
         let mut notes = Vec::new();
@@ -87,8 +88,8 @@ impl FakeEditor {
                         continue;
                     };
                     let radius = edit["size"].as_f64().unwrap_or(20.0) / 2.0;
-                    let changed = op != "stroke"
-                        || edit.get("points").is_none()
+                    let changed = (op != "stroke" && edit["layer"] != "empty")
+                        || (op == "stroke" && edit.get("points").is_none())
                         || (edit["points"].as_array().into_iter().flatten()).any(|point| {
                             let (px, py) = (point[0].as_f64().unwrap(), point[1].as_f64().unwrap());
                             px + radius > x
@@ -2012,7 +2013,7 @@ fn a_stroke_the_selection_keeps_out_is_warned_about_first_naming_the_step() {
     assert_eq!(
         answer["notes"],
         json!([
-            "Step 2 (fill) was clipped to the selection (448, 292, 184×216).",
+            "Step 2 (fill) ran inside the selection (448, 292, 184×216).",
             "Step 3 (paint_stroke) painted nothing inside the selection (448, 292, 184×216).",
         ])
     );
@@ -2029,7 +2030,7 @@ fn a_stroke_the_selection_keeps_out_is_warned_about_first_naming_the_step() {
         panic!("{}", text_of(&alone));
     };
     assert!(
-        warning.starts_with("paint_stroke painted nothing inside the selection (0, 0, 10×10). "),
+        warning.starts_with("paint_stroke painted nothing inside the selection (0, 0, 10×10).\n"),
         "{warning}"
     );
     assert_eq!(
@@ -2061,6 +2062,78 @@ fn a_stroke_the_selection_keeps_out_is_warned_about_first_naming_the_step() {
 }
 
 #[test]
+fn every_step_that_changed_nothing_is_warned_about_and_many_strokes_are_counted() {
+    let editor = FakeEditor::new(false);
+    let select = json!({"tool": "select_shape", "arguments": {"shape": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}});
+    let result = call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            select,
+            {"tool": "paint_stroke", "arguments": {"points": [[30, 30]], "size": 4}},
+            {"tool": "fill", "arguments": {"color": "#000000"}},
+            {"tool": "apply_filter", "arguments": {"layer": "empty", "filter": {"GaussianBlur": {"radius": 2}}}},
+            {"tool": "apply_adjustment", "arguments": {"layer": "empty", "adjustment": "Invert"}},
+        ]}),
+    );
+    let [warning, answer] = &texts_of(&result)[..] else {
+        panic!("{}", text_of(&result));
+    };
+    let lines: Vec<&str> = warning.lines().collect();
+    assert_eq!(
+        lines[..3],
+        [
+            "Step 2 (paint_stroke) painted nothing inside the selection (0, 0, 10×10).",
+            "Step 4 (apply_filter) changed nothing inside the selection (0, 0, 10×10).",
+            "Step 5 (apply_adjustment) changed nothing inside the selection (0, 0, 10×10).",
+        ]
+    );
+    assert!(lines[3].contains("stays active"), "{warning}");
+    assert_eq!(lines.len(), 4, "{warning}");
+    let answer: Value = serde_json::from_str(answer).unwrap();
+    assert_eq!(
+        answer["notes"][1],
+        "Step 3 (fill) ran inside the selection (0, 0, 10×10)."
+    );
+    assert_eq!(answer["notes"].as_array().unwrap().len(), 4);
+    // On its own, a filter that changed nothing says so, the advice on its
+    // own line as in a batch.
+    let filter = call_tool(
+        &editor,
+        "apply_filter",
+        json!({"layer": "empty", "filter": {"GaussianBlur": {"radius": 2}}}),
+    );
+    let [warning, answer] = &texts_of(&filter)[..] else {
+        panic!("{}", text_of(&filter));
+    };
+    let (first, advice) = warning.split_once('\n').unwrap();
+    assert_eq!(
+        first,
+        "apply_filter changed nothing inside the selection (0, 0, 10×10)."
+    );
+    assert!(advice.starts_with("Strokes, fills"), "{advice}");
+    assert_eq!(
+        serde_json::from_str::<Value>(answer).unwrap()["changed"],
+        false
+    );
+    // More than eight strokes that painted nothing are counted, not listed.
+    let mut strokes = vec![json!({"points": [[30, 30]]}); 9];
+    strokes.push(json!({"points": [[5, 5]]}));
+    let many = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"size": 4, "strokes": strokes}),
+    );
+    assert!(
+        texts_of(&many)[0].starts_with(
+            "paint_stroke: 9 of its 10 strokes painted nothing inside the selection (0, 0, 10×10).\n"
+        ),
+        "{}",
+        text_of(&many)
+    );
+}
+
+#[test]
 fn a_stroke_partly_inside_the_selection_is_clipped_without_a_warning() {
     let editor = FakeEditor::new(false);
     let select = json!({"tool": "select_shape", "arguments": {"shape": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}});
@@ -2073,7 +2146,7 @@ fn a_stroke_partly_inside_the_selection_is_clipped_without_a_warning() {
     let answer: Value = serde_json::from_str(answer).unwrap();
     assert_eq!(
         answer["notes"],
-        json!(["Step 2 (paint_stroke) was clipped to the selection (0, 0, 10×10)."])
+        json!(["Step 2 (paint_stroke) ran inside the selection (0, 0, 10×10)."])
     );
     let alone = call_tool(&editor, "paint_stroke", across["arguments"].clone());
     let [answer] = &texts_of(&alone)[..] else {
