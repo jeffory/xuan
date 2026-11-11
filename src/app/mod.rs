@@ -20,6 +20,8 @@ mod dialogs;
 mod drops;
 mod export_preview;
 mod eyedropper;
+#[cfg(target_os = "linux")]
+mod file_drop;
 mod filter_controls;
 mod filter_preview;
 mod font_picker;
@@ -618,6 +620,9 @@ pub struct EditorApp {
     /// Checks for a newer release and the update dialog.
     updates: updates::Updates,
     tablet: Option<tablet::TabletInput>,
+    /// Files dragged onto a Wayland window, which winit does not report.
+    #[cfg(target_os = "linux")]
+    file_drops: Option<file_drop::FileDrops>,
     context: egui::Context,
     window_title: String,
     /// The colours installed in the egui context, switched by `sync_palette`.
@@ -838,6 +843,10 @@ impl EditorApp {
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
+        #[cfg(target_os = "linux")]
+        {
+            app.file_drops = file_drop::FileDrops::new(cc);
+        }
         #[cfg(target_os = "macos")]
         macos::install_quit_handler(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
@@ -901,6 +910,8 @@ impl EditorApp {
             plugins: Default::default(),
             updates: Default::default(),
             tablet: None,
+            #[cfg(target_os = "linux")]
+            file_drops: None,
             context: ctx.clone(),
             window_title: String::new(),
             palette_applied: theme::Palette::DARK,
@@ -2215,11 +2226,19 @@ impl eframe::App for EditorApp {
         if let Some(tablet) = &mut self.tablet {
             self.pen_samples = tablet.update(ctx, input);
         }
+        #[cfg(target_os = "linux")]
+        if let Some(drops) = &mut self.file_drops {
+            drops.update(input);
+        }
     }
 
     fn on_exit(&mut self) {
-        // Stop the tablet queue before eframe destroys its Wayland window/display.
+        // Stop the tablet and file drop queues before eframe destroys its Wayland window/display.
         self.tablet = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.file_drops = None;
+        }
         self.plugins.stop_all();
     }
 
