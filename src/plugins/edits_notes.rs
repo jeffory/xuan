@@ -4,12 +4,13 @@
 //! bounds, and whether the edit changed any pixel at all, so that a plugin
 //! learns when a selection it forgot about kept a stroke from painting.
 //!
-//! Such an edit can change a pixel only where the selection reaches, so that
-//! is all that is compared, never the whole layer. Keeping the pixels from
-//! before costs nothing while the document the request started from still
-//! shares them (the first edit of each layer in a request, which copies them
-//! anyway when it paints); after that, only the part the selection covers is
-//! copied.
+//! Such an edit can change a pixel only inside the selection, and a stroke
+//! only within its brush's reach of its points, so only that part of the
+//! layer is compared, never the whole layer. Keeping the pixels from before
+//! costs nothing while the document the request started from still shares
+//! them (the first edit of each layer in a request, which copies them anyway
+//! when it paints); after that, only that part is copied. A stroke's check
+//! therefore costs about as much as the stroke, however large the selection.
 use std::sync::Arc;
 
 use image::{GrayImage, RgbaImage};
@@ -17,7 +18,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::Reader;
-use crate::document::{Document, Layer, Point, Transform};
+use crate::{
+    document::{Document, Layer, Point, Transform},
+    paint::Brush,
+};
 
 /// The answer's note on one edit that ran while a selection was active.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -48,6 +52,19 @@ pub(super) struct Notes {
     /// The last selection seen and its bounds, worked out once for all the
     /// edits it clips.
     last: Option<(Arc<GrayImage>, Option<[u32; 4]>)>,
+    /// Pixels copied and compared so far, for the tests that keep the cost
+    /// of the check in sight.
+    #[cfg(test)]
+    work: usize,
+}
+
+impl Notes {
+    fn count(&mut self, _pixels: usize) {
+        #[cfg(test)]
+        {
+            self.work += _pixels;
+        }
+    }
 }
 
 /// An edit about to run, with what to compare it with afterwards.
@@ -55,8 +72,11 @@ pub(super) struct Watch {
     layer: Uuid,
     mask: bool,
     /// The selection's bounds, `[x0, y0, x1, y1]`; `None` when it is empty.
-    bounds: Option<[u32; 4]>,
-    /// The layer's pixels (or mask) before; `None` when it had none yet.
+    selection: Option<[u32; 4]>,
+    /// Where in the document the edit can change pixels: the selection's
+    /// bounds, cut to a stroke's reach. `None` when that is nowhere.
+    area: Option<[u32; 4]>,
+    /// The layer's pixels (or mask) there before; `None` when it had none yet.
     before: Option<Snapshot>,
 }
 
@@ -77,7 +97,14 @@ impl Reader {
 
     /// Before an edit paints the active layer's pixels (or its `mask`): what
     /// to compare it with, when notes are kept and a selection is active.
-    pub(super) fn watch(&mut self, document: &Document, mask: bool) -> Option<Watch> {
+    /// A stroke gives its samples, so that only what it can reach is kept
+    /// and compared.
+    pub(super) fn watch(
+        &mut self,
+        document: &Document,
+        mask: bool,
+        stroke: Option<&[(Point, Brush)]>,
+    ) -> Option<Watch> {
         let notes = self.notes.as_mut()?;
         let selection = document.selection.as_ref()?;
         let bounds = match &notes.last {
@@ -89,12 +116,17 @@ impl Reader {
                 bounds
             }
         };
+        let reach = stroke.map(|samples| stroke_reach(samples, document.width, document.height));
+        let area = bounds.and_then(|bounds| within(bounds, reach));
         let layer = document.active()?;
+        let before = area.and_then(|area| Snapshot::take(layer, mask, area));
+        notes.count(before.as_ref().map_or(0, Snapshot::copied));
         Some(Watch {
             layer: layer.id,
             mask,
-            bounds,
-            before: bounds.and_then(|bounds| Snapshot::take(layer, mask, bounds)),
+            selection: bounds,
+            area,
+            before,
         })
     }
 
@@ -109,7 +141,10 @@ impl Reader {
         let (Some(notes), Some(watch)) = (self.notes.as_mut(), watch) else {
             return;
         };
-        let [x0, y0, x1, y1] = watch.bounds.unwrap_or_default();
+        let [x0, y0, x1, y1] = watch.selection.unwrap_or_default();
+        let mut compared = 0;
+        let changed = watch.changed(document, &mut compared);
+        notes.count(compared);
         notes.list.push(Note {
             edit: index + 1,
             op,
@@ -119,16 +154,90 @@ impl Reader {
                 width: x1 - x0,
                 height: y1 - y0,
             },
-            changed: watch.changed(document),
+            changed,
         });
     }
 }
 
+/// The document rectangle a stroke through `samples` can paint, `[x0, y0,
+/// x1, y1]`, with two pixels to spare. Its dabs lie on the lines between the
+/// samples, each at most the largest sample's diameter across (taper, jitter
+/// and pressure only make them smaller) and scattered at most `scatter`
+/// diameters off the line, and each symmetric copy is that turned or
+/// mirrored about the centre.
+fn stroke_reach(samples: &[(Point, Brush)], width: u32, height: u32) -> [f32; 4] {
+    let Some((_, first)) = samples.first() else {
+        return [0.0; 4];
+    };
+    let largest = |value: fn(&Brush) -> f32| {
+        (samples.iter())
+            .map(|(_, brush)| value(brush))
+            .fold(0.0, f32::max)
+    };
+    let diameter = largest(|brush| brush.diameter);
+    let reach =
+        (diameter * 0.5).max(0.5) + largest(|brush| brush.dynamics.scatter) * diameter + 2.0;
+    let (low, high) = (samples.iter()).fold(
+        (
+            Point::new(f32::MAX, f32::MAX),
+            Point::new(f32::MIN, f32::MIN),
+        ),
+        |(low, high), (point, _)| {
+            (
+                Point::new(low.x.min(point.x), low.y.min(point.y)),
+                Point::new(high.x.max(point.x), high.y.max(point.y)),
+            )
+        },
+    );
+    let corners = [
+        Point::new(low.x - reach, low.y - reach),
+        Point::new(high.x + reach, low.y - reach),
+        Point::new(high.x + reach, high.y + reach),
+        Point::new(low.x - reach, high.y + reach),
+    ];
+    let copies = if first.symmetry.active() {
+        first.symmetry.copies(width, height)
+    } else {
+        Vec::new()
+    };
+    let mut rect = [low.x - reach, low.y - reach, high.x + reach, high.y + reach];
+    for copy in &copies {
+        for corner in corners {
+            let point = copy.point(corner);
+            rect = [
+                rect[0].min(point.x),
+                rect[1].min(point.y),
+                rect[2].max(point.x),
+                rect[3].max(point.y),
+            ];
+        }
+    }
+    rect
+}
+
+/// The selection's `bounds` cut to a stroke's `reach` (whole pixels, rounded
+/// outwards), or `None` when they do not meet.
+fn within(bounds: [u32; 4], reach: Option<[f32; 4]>) -> Option<[u32; 4]> {
+    let Some(reach) = reach.filter(|reach| reach.iter().all(|v| v.is_finite())) else {
+        return Some(bounds);
+    };
+    let [x0, y0, x1, y1] = bounds.map(|v| v as f32);
+    let area = [
+        reach[0].floor().clamp(x0, x1),
+        reach[1].floor().clamp(y0, y1),
+        reach[2].ceil().clamp(x0, x1),
+        reach[3].ceil().clamp(y0, y1),
+    ]
+    .map(|v| v as u32);
+    (area[0] < area[2] && area[1] < area[3]).then_some(area)
+}
+
 impl Watch {
-    /// Whether the edit changed a pixel where the selection reaches.
-    fn changed(&self, document: &Document) -> bool {
-        // An empty selection lets nothing change.
-        let Some(bounds) = self.bounds else {
+    /// Whether the edit changed a pixel where it could, adding to `compared`
+    /// how many it looked at.
+    fn changed(&self, document: &Document, compared: &mut usize) -> bool {
+        // An empty selection, or one the stroke does not reach, lets nothing change.
+        let Some(area) = self.area else {
             return false;
         };
         let Some(layer) = document.layers.iter().find(|layer| layer.id == self.layer) else {
@@ -139,7 +248,8 @@ impl Watch {
         };
         let size = after.size();
         let channels = after.channels();
-        let [x0, y0, x1, y1] = region(bounds, transform, size);
+        let [x0, y0, x1, y1] = region(area, transform, size);
+        *compared += (x1 - x0) as usize * (y1 - y0) as usize;
         let row = |y| span(after.raw(), size.0, channels, y, x0, x1);
         let Some(before) = &self.before else {
             // The layer had no pixels (or no mask): they started empty (or white).
@@ -171,7 +281,7 @@ impl Watch {
             if !blank(&line[..at(inner0)], channels) || !blank(&line[at(inner1)..], channels) {
                 return true;
             }
-            // The snapshot keeps all the old pixels the selection reaches.
+            // The snapshot keeps all the old pixels the edit can reach.
             let (c0, c1) = ((inner0 - ox).max(kx0), (inner1 - ox).min(kx1));
             if (ky0..ky1).contains(&old_y) && c0 < c1 {
                 let old = before.span(old_y as u32, c0 as u32, c1 as u32, channels);
@@ -258,7 +368,9 @@ enum Kept {
 }
 
 impl Snapshot {
-    fn take(layer: &Layer, mask: bool, bounds: [u32; 4]) -> Option<Self> {
+    /// The buffer's pixels whose centres can fall inside `area` (document
+    /// pixels), or all of it while it is shared.
+    fn take(layer: &Layer, mask: bool, area: [u32; 4]) -> Option<Self> {
         let (pixels, transform) = Pixels::of(layer, mask)?;
         let size = pixels.size();
         if pixels.shared() {
@@ -269,7 +381,7 @@ impl Snapshot {
                 kept: Kept::Shared(pixels),
             });
         }
-        let area = region(bounds, transform, size);
+        let area = region(area, transform, size);
         let channels = pixels.channels();
         let mut copy = Vec::with_capacity(
             (area[2] - area[0]) as usize * (area[3] - area[1]) as usize * channels,
@@ -283,6 +395,16 @@ impl Snapshot {
             area,
             kept: Kept::Copy(copy),
         })
+    }
+
+    /// How many pixels were copied to keep it.
+    fn copied(&self) -> usize {
+        match self.kept {
+            Kept::Shared(_) => 0,
+            Kept::Copy(_) => {
+                (self.area[2] - self.area[0]) as usize * (self.area[3] - self.area[1]) as usize
+            }
+        }
     }
 
     /// Row `y`, columns `x0..x1`, inside the area kept.
@@ -376,6 +498,9 @@ fn same(old: &[u8], new: &[u8], channels: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value, json};
+
+    use super::super::{Access, MAX_LAYERS, apply, parse_edits};
     use super::*;
 
     #[test]
@@ -409,5 +534,137 @@ mod tests {
         let mut moved = layer.transform;
         moved.x = 100.0;
         assert_eq!(region([30, 0, 40, 10], moved, (40, 30)), [0; 4]);
+    }
+
+    fn apply_noted(document: &mut Document, edits: Vec<Value>) -> Reader {
+        let edits = parse_edits(json!(edits)).unwrap();
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS).with_notes();
+        apply(document, &edits, &mut reader).unwrap();
+        reader
+    }
+
+    #[test]
+    fn a_strokes_check_costs_what_the_stroke_does_not_what_the_selection_does() {
+        let mut document = Document::new(400, 300).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            400,
+            300,
+            image::Rgba([100, 100, 100, 255]),
+        )));
+        let mut edits =
+            vec![json!({"op": "select_rect", "x": 0, "y": 0, "width": 400, "height": 300})];
+        edits.extend((0..50).map(
+            |i| json!({"op": "stroke", "points": [[8 * i, 6 * i]], "size": 6, "color": "#ff0000"}),
+        ));
+        let mut reader = apply_noted(&mut document, edits);
+        let work = reader.notes.as_ref().unwrap().work;
+        let notes = reader.take_notes();
+        assert_eq!(notes.len(), 50);
+        assert!(notes.iter().all(|note| note.changed));
+        // Each dab's check copies and compares about 150 pixels; the layer
+        // the selection covers is 120,000.
+        assert!(work <= 50 * 2 * 15 * 15, "{work} pixels for 50 dabs");
+    }
+
+    /// A stroke's `changed`, compared only within its reach, agrees with
+    /// comparing all that the selection covers, for strokes of every kind on
+    /// layers that are turned, flipped, scaled and grow under them.
+    #[test]
+    fn a_strokes_reach_covers_every_pixel_it_can_change() {
+        let mut state = 11_u32;
+        let mut next = move |limit: u32| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) % limit
+        };
+        let mut outcomes = [0; 2];
+        for case in 0..400 {
+            let mut document = Document::new(60, 40).unwrap();
+            let layer = &mut document.layers[0];
+            layer.pixels = Some(Arc::new(RgbaImage::from_fn(30, 20, |x, y| {
+                let alpha = if (x + y) % 7 == 0 { 0 } else { 255 };
+                image::Rgba([(x * 8) as u8, (y * 12) as u8, 90, alpha])
+            })));
+            let place = |x, y, width, height, rotation, flip_x, flip_y| Transform {
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                flip_x,
+                flip_y,
+                ..Transform::new(30, 20)
+            };
+            layer.transform = match case % 4 {
+                0 => place(0.0, 0.0, 30.0, 20.0, 0.0, false, false),
+                1 => place(10.0, 5.0, 45.0, 30.0, 30.0, false, true),
+                2 => place(5.0, 10.0, 15.0, 10.0, -100.0, true, false),
+                _ => place(0.0, 0.0, 60.0, 40.0, 0.0, true, true),
+            };
+            let select = vec![json!({
+                "op": "select_rect", "ellipse": next(3) == 0,
+                "x": next(55), "y": next(35), "width": 1 + next(40), "height": 1 + next(30),
+            })];
+            let coordinate = |value: u32| value as f32 / 10.0 - 10.0;
+            let points: Vec<Value> = (0..1 + next(4))
+                .map(|_| {
+                    let (x, y) = (coordinate(next(800)), coordinate(next(600)));
+                    match next(3) {
+                        0 => json!([x, y, next(11) as f32 / 10.0]),
+                        _ => json!([x, y]),
+                    }
+                })
+                .collect();
+            let mask = next(5) == 0;
+            let color = ["#ff0000", "#00ff0080", "#5a5a5a", "#ffffff"][next(4) as usize];
+            // Dodge and Burn change pixels, not masks.
+            let mode = ["paint", "erase", "dodge", "burn"][next(if mask { 2 } else { 4 }) as usize];
+            let mut stroke = json!({
+                "op": "stroke", "points": points, "mask": mask, "color": color, "mode": mode,
+                "size": 1 + next(24), "hardness": next(11) as f32 / 10.0,
+                "opacity": (2 + next(9)) as f32 / 10.0,
+            });
+            if next(2) == 0 {
+                stroke["taper_in"] = json!(next(30));
+                stroke["taper_out"] = json!(next(30));
+            }
+            if next(2) == 0 {
+                stroke["spacing"] = json!(next(20) as f32 / 10.0);
+                stroke["scatter"] = json!(next(30) as f32 / 10.0);
+                stroke["scatter_count"] = json!(1 + next(4));
+                stroke["size_jitter"] = json!(next(11) as f32 / 10.0);
+                stroke["seed"] = json!(next(1000));
+            }
+            if next(3) == 0 {
+                let symmetry = ["vertical", "horizontal", "radial"][next(3) as usize];
+                stroke["symmetry"] = json!({
+                    "mode": symmetry, "segments": 2 + next(7), "center": [next(61), next(41)],
+                });
+            }
+            let mut reader = apply_noted(&mut document, select);
+            assert!(reader.take_notes().is_empty());
+            let before = document.clone();
+            let mut reader = apply_noted(&mut document, vec![stroke.clone()]);
+            let [note] = reader.take_notes()[..] else {
+                panic!("case {case}: one note");
+            };
+            // As the notes compared before: all the selection covers.
+            let bounds = before
+                .selection
+                .as_deref()
+                .and_then(crate::selection::bounds);
+            let bounds = bounds.map(|(x0, y0, x1, y1)| [x0, y0, x1, y1]);
+            let active = before.active().unwrap();
+            let whole = Watch {
+                layer: active.id,
+                mask,
+                selection: bounds,
+                area: bounds,
+                before: bounds.and_then(|bounds| Snapshot::take(active, mask, bounds)),
+            };
+            let expected = whole.changed(&document, &mut 0);
+            assert_eq!(note.changed, expected, "case {case}: {stroke}");
+            outcomes[usize::from(expected)] += 1;
+        }
+        assert!(outcomes[0] > 50 && outcomes[1] > 50, "{outcomes:?}");
     }
 }

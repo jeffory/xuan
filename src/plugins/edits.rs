@@ -2434,7 +2434,7 @@ fn apply_each(
                 } else {
                     activate(document, *layer)?;
                 }
-                let watch = reader.watch(document, *mask);
+                let watch = reader.watch(document, *mask, None);
                 crate::paint::fill(document, color.0, false, *mask)?;
                 reader.note(document, index, "fill", watch);
             }
@@ -2470,7 +2470,7 @@ fn apply_each(
             } => {
                 let path = VectorPath::parse(path)?;
                 activate(document, *layer)?;
-                let watch = reader.watch(document, false);
+                let watch = reader.watch(document, false, None);
                 crate::paint::fill_path(document, &path, *fill_rule, color.0)?;
                 reader.note(document, index, "fill_path", watch);
             }
@@ -2510,7 +2510,7 @@ fn apply_each(
                 } else {
                     activate(document, *layer)?;
                 }
-                let watch = reader.watch(document, *mask);
+                let watch = reader.watch(document, *mask, None);
                 crate::paint::gradient_stops(
                     document,
                     ends[0],
@@ -2661,7 +2661,7 @@ fn apply_each(
                         (position, brush)
                     })
                     .collect();
-                let watch = reader.watch(document, *mask);
+                let watch = reader.watch(document, *mask, Some(&samples[..]));
                 crate::paint::Stroke::default().path(
                     document,
                     &samples,
@@ -2677,14 +2677,14 @@ fn apply_each(
             Edit::ApplyFilter { layer, filter } => {
                 filter.validate()?;
                 activate(document, *layer)?;
-                let watch = reader.watch(document, false);
+                let watch = reader.watch(document, false, None);
                 crate::effects::apply_filter(document, filter, false)?;
                 reader.note(document, index, "apply_filter", watch);
             }
             Edit::ApplyAdjustment { layer, adjustment } => {
                 check_adjustment(adjustment)?;
                 activate(document, *layer)?;
-                let watch = reader.watch(document, false);
+                let watch = reader.watch(document, false, None);
                 crate::effects::apply_adjustment(document, adjustment, false)?;
                 reader.note(document, index, "apply_adjustment", watch);
             }
@@ -2815,7 +2815,7 @@ fn apply_each(
                     }
                     added.push(insert_above(document, layer, *above)?);
                 } else {
-                    let watch = reader.watch(document, false);
+                    let watch = reader.watch(document, false, None);
                     crate::effects::apply_adjustment(document, &adjustment, false)?;
                     reader.note(document, index, "auto_adjust", watch);
                 }
@@ -4415,6 +4415,63 @@ mod tests {
         apply(&mut document, &edits, &mut reader).unwrap();
         assert!(reader.take_notes().is_empty());
         assert_eq!(document.active, Some(base));
+    }
+
+    #[test]
+    fn notes_follow_a_turned_flipped_scaled_layer_as_strokes_grow_it() {
+        for shared in [false, true] {
+            // A 20 × 10 grey layer stretched to 40 × 20, turned a quarter and
+            // flipped: in the document it covers x 30–50, y 10–50.
+            let mut document = Document::new(80, 60).unwrap();
+            document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+                20,
+                10,
+                image::Rgba([100, 100, 100, 255]),
+            )));
+            document.layers[0].transform = Transform {
+                x: 20.0,
+                y: 20.0,
+                width: 40.0,
+                height: 20.0,
+                rotation: 90.0,
+                flip_x: true,
+                ..Transform::new(20, 10)
+            };
+            let original = shared.then(|| document.clone());
+            let stroke = |from: [f32; 2], to: [f32; 2], color: &str| json!({"op": "stroke", "points": [from, to], "size": 4, "hardness": 1, "color": color});
+            let notes = noted(
+                &mut document,
+                &[
+                    json!({"op": "select_rect", "x": 0, "y": 0, "width": 80, "height": 30}),
+                    // Grey over grey inside the selection; below the layer, where
+                    // it grows, the selection keeps the stroke out.
+                    stroke([40.0, 20.0], [40.0, 58.0], "#646464"),
+                    stroke([40.0, 20.0], [40.0, 58.0], "#ff0000"),
+                    // Beside the layer and just below the selection: the layer
+                    // grows, the selection's edge is compared, nothing there changes.
+                    stroke([55.0, 33.5], [75.0, 33.5], "#ff0000"),
+                    // Beside the layer and inside the selection: painted where it grew.
+                    stroke([60.0, 5.0], [75.0, 5.0], "#ff0000"),
+                ],
+            );
+            let top = [0, 0, 80, 30];
+            assert_eq!(
+                notes,
+                [
+                    note(2, "stroke", top, false),
+                    note(3, "stroke", top, true),
+                    note(4, "stroke", top, false),
+                    note(5, "stroke", top, true),
+                ],
+                "shared: {shared}"
+            );
+            let pixels = document.layers[0].pixels.as_ref().unwrap();
+            assert!(
+                pixels.width() > 20 && pixels.height() > 10,
+                "the layer grew"
+            );
+            drop(original);
+        }
     }
 
     #[test]

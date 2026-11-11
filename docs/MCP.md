@@ -264,16 +264,21 @@ like the existing ones, rather than anything specific to MCP:
   is active, `document/edit` now adds `notes` for the edits that paint inside
   it (`fill`, `fill_path`, `gradient`, `stroke`, and `apply_filter`,
   `apply_adjustment` and `auto_adjust` on pixels): the selection's bounds and
-  whether the edit changed any pixel. Xuan compares only where the selection
-  reaches, and keeps the pixels from before without copying them while the
-  document the request started from still shares them, so large layers are not
-  copied for it. The server passes the notes on: a tool's answer gains
-  `clipped_to_selection` and `changed`, a batch's `notes` name each step the
-  selection clipped, and a step (or some of a tool's strokes) that changed
-  nothing gets a plain warning before the JSON, saying how to clear the
-  selection. Nothing is refused and the selection is never cleared for the
-  agent: painting inside a selection is how agents mask fills and strokes on
-  purpose.
+  whether the edit changed any pixel. Xuan compares only the pixels the edit
+  can reach: those inside the selection's bounds and, for a stroke, within its
+  brush's reach of its points (with scatter and every symmetric copy). The
+  pixels from before cost nothing while the document the request started from
+  still shares them, the first edit of each layer in a request; for a later
+  edit of the same layer only that part is copied. So a stroke's check costs
+  about as much as the stroke, however large the selection, while a fill,
+  filter or adjustment, which visits the whole layer anyway, may copy and
+  compare the selection's whole rectangle. The server passes the notes on: a
+  tool's answer gains `clipped_to_selection` and `changed`, a batch's `notes`
+  name each step that ran inside the selection, and a step (or some of a
+  tool's strokes) that changed nothing gets a plain warning before the JSON,
+  saying how to clear the selection. Nothing is refused and the selection is
+  never cleared for the agent: painting inside a selection is how agents mask
+  fills and strokes on purpose.
 - **Letters in their own font or colour** (#110). A word with one red letter
   took a text layer per colour, placed side by side by hand. `create_text_layer`
   and `set_layer` take `runs` (`start`, `end` in Unicode code points, and any of
