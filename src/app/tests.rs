@@ -1173,6 +1173,7 @@ fn benchmark_large_image_filter_layers() {
             ..Default::default()
         })),
         Filter::Dither(Box::default()),
+        Filter::UNSHARP_MASK,
     ] {
         app.start_filter_layer(filter.clone());
         for _ in 0..3 {
@@ -1189,7 +1190,8 @@ fn benchmark_large_image_filter_layers() {
                 Filter::LensCorrection { distortion, .. } => *distortion = 10.0 + value,
                 Filter::Vignette { amount, .. }
                 | Filter::Bloom { amount, .. }
-                | Filter::TonalContrast { amount, .. } => *amount = 30.0 + value,
+                | Filter::TonalContrast { amount, .. }
+                | Filter::UnsharpMask { amount, .. } => *amount = 30.0 + value,
                 Filter::Dither(settings) => settings.density = value,
             }
             edit.refresh = true;

@@ -285,7 +285,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `fill` | Fill the selection with a colour, or with `path` the inside of an SVG path, or with `mask: true` the layer's mask | `fill`, `fill_path` |
 | `save_path` | Keep an SVG path with the document under a name, for the Paths dialog | `add_path` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
-| `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
+| `apply_filter` | Blur, motion blur, noise, lens correction, vignette, bloom, tonal contrast, unsharp mask (sharpen), dither; or a filter layer | `apply_filter`, `add_adjustment_layer` |
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
 | `auto_adjust` | Auto `contrast`, `tone` or `white_balance` (grey-world, or from a `neutral` point that should be grey), applied or as an adjustment layer | `auto_adjust` |
 | `set_adjustment` | Change an existing adjustment or filter layer's settings in place; `get_document` lists the current ones under `adjustment` and `filter` | `set_adjustment` |

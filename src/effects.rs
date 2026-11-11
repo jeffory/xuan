@@ -453,9 +453,24 @@ pub enum Filter {
         highlights: f32,
     },
     Dither(Box<DitherSettings>),
+    /// Sharpening: the difference between each pixel and the image blurred at Radius
+    /// 0.1–100 px is added back, Amount 0–500% of it, where it is at least Threshold
+    /// 0–255 levels (so noise in flat areas is left alone). It needs format 18.
+    UnsharpMask {
+        amount: f32,
+        radius: f32,
+        threshold: f32,
+    },
 }
 
 impl Filter {
+    /// Unsharp Mask as the Filter menu opens it.
+    pub const UNSHARP_MASK: Self = Self::UnsharpMask {
+        amount: 100.0,
+        radius: 1.5,
+        threshold: 0.0,
+    };
+
     /// Upstream's defaults for the new filters, as the Filter menu opens them.
     pub const VIGNETTE: Self = Self::Vignette {
         amount: 35.0,
@@ -478,7 +493,7 @@ impl Filter {
     };
 
     /// Every filter with the settings the Filter menu opens it with, in menu order.
-    pub fn defaults() -> [Self; 8] {
+    pub fn defaults() -> [Self; 9] {
         [
             Self::GaussianBlur { radius: 4.0 },
             Self::MotionBlur {
@@ -497,6 +512,7 @@ impl Filter {
             Self::BLOOM,
             Self::Dither(Box::default()),
             Self::TONAL_CONTRAST,
+            Self::UNSHARP_MASK,
         ]
     }
 
@@ -559,6 +575,15 @@ impl Filter {
                 within("TonalContrast.highlights", highlights, -100.0, 100.0)
             }
             Self::Dither(settings) => settings.validate(),
+            &Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => {
+                within("UnsharpMask.amount", amount, 0.0, 500.0)?;
+                within("UnsharpMask.radius", radius, 0.1, 100.0)?;
+                within("UnsharpMask.threshold", threshold, 0.0, 255.0)
+            }
         }
     }
 
@@ -589,6 +614,15 @@ impl Filter {
                 highlights,
             },
             Self::Dither(ref settings) => Self::Dither(Box::new(settings.scaled(scale))),
+            Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => Self::UnsharpMask {
+                amount,
+                radius: radius * scale,
+                threshold,
+            },
             _ => self.clone(),
         }
     }
@@ -603,6 +637,7 @@ impl Filter {
             Self::Bloom { .. } => "Bloom / Glow",
             Self::TonalContrast { .. } => "Tonal Contrast",
             Self::Dither(_) => "Dither",
+            Self::UnsharpMask { .. } => "Unsharp Mask",
         }
     }
 
@@ -728,6 +763,11 @@ fn filtered_with(image: &RgbaImage, filter: &Filter, fills_clear: bool) -> RgbaI
             [shadows, midtones, highlights],
         ),
         Filter::Dither(settings) => dither::dither(image, settings),
+        &Filter::UnsharpMask {
+            amount,
+            radius,
+            threshold,
+        } => stylize::unsharp_mask(image, &gaussian_blurred(image, radius), amount, threshold),
     }
 }
 

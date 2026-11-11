@@ -183,6 +183,49 @@ pub(super) fn bloom(image: &RgbaImage, blurred: &RgbaImage, amount: f32) -> Rgba
     })
 }
 
+/// Unsharp Mask for one straight pixel: what sets it apart from `base` (the image blurred
+/// at the radius) is added again, `amount` percent of it, unless no channel differs by
+/// `threshold` levels (of 255), which leaves grain and flat areas as they are. The
+/// sharpening comes in over the next `threshold` levels rather than at once, so pixels
+/// on either side of the threshold do not jump apart.
+pub fn unsharp_mask_pixel(
+    pixel: [f32; 4],
+    base: [f32; 4],
+    amount: f32,
+    threshold: f32,
+) -> [f32; 4] {
+    if pixel[3] <= 0.0 || base[3] <= 0.0 {
+        return pixel;
+    }
+    let detail = [pixel[0] - base[0], pixel[1] - base[1], pixel[2] - base[2]];
+    let most = detail[0].abs().max(detail[1].abs()).max(detail[2].abs());
+    let ramp = ((most * 255.0 - threshold) / threshold.max(1.0)).clamp(0.0, 1.0);
+    if ramp <= 0.0 {
+        return pixel;
+    }
+    let gain = amount / 100.0 * ramp;
+    [
+        (pixel[0] + detail[0] * gain).clamp(0.0, 1.0),
+        (pixel[1] + detail[1] * gain).clamp(0.0, 1.0),
+        (pixel[2] + detail[2] * gain).clamp(0.0, 1.0),
+        pixel[3],
+    ]
+}
+
+pub(super) fn unsharp_mask(
+    image: &RgbaImage,
+    blurred: &RgbaImage,
+    amount: f32,
+    threshold: f32,
+) -> RgbaImage {
+    if amount <= 0.0 {
+        return image.clone();
+    }
+    mapped(image, |x, y, pixel| {
+        unsharp_mask_pixel(pixel, unit(blurred.get_pixel(x, y)), amount, threshold)
+    })
+}
+
 pub(super) fn tonal_contrast(
     image: &RgbaImage,
     blurred: &RgbaImage,
@@ -287,6 +330,31 @@ mod tests {
         // Nothing brighter around it, nothing changes.
         let pixel = [0.4, 0.3, 0.2, 1.0];
         assert_eq!(bloom_pixel(pixel, [0.1, 0.1, 0.1, 1.0], 2.0), pixel);
+    }
+
+    #[test]
+    fn unsharp_mask_adds_the_detail_back_above_the_threshold() {
+        let grey = [0.5, 0.5, 0.5, 1.0];
+        // Lighter than its surroundings by 0.1: twice that at 100%, three times at 200%.
+        let light = [0.6, 0.6, 0.6, 1.0];
+        let out = unsharp_mask_pixel(light, grey, 100.0, 0.0);
+        assert!((out[0] - 0.7).abs() < 1e-6 && out[3] == 1.0);
+        assert!((unsharp_mask_pixel(light, grey, 200.0, 0.0)[1] - 0.8).abs() < 1e-6);
+        // Darker goes darker, and the result stays in range.
+        assert!(unsharp_mask_pixel([0.4, 0.4, 0.4, 1.0], grey, 100.0, 0.0)[0] < 0.4);
+        assert_eq!(
+            unsharp_mask_pixel([0.9; 4], [0.1, 0.1, 0.1, 1.0], 500.0, 0.0)[0],
+            1.0
+        );
+        // Below the threshold, at no amount, or without pixels, nothing changes.
+        assert_eq!(unsharp_mask_pixel(light, grey, 100.0, 30.0), light);
+        assert_ne!(unsharp_mask_pixel(light, grey, 100.0, 20.0), light);
+        assert_eq!(unsharp_mask_pixel(light, light, 500.0, 0.0), light);
+        let clear = [0.6, 0.6, 0.6, 0.0];
+        assert_eq!(unsharp_mask_pixel(clear, grey, 100.0, 0.0), clear);
+        // Colour detail is sharpened channel by channel.
+        let out = unsharp_mask_pixel([0.6, 0.5, 0.4, 1.0], grey, 100.0, 0.0);
+        assert!(out[0] > 0.6 && out[1] == 0.5 && out[2] < 0.4);
     }
 
     #[test]

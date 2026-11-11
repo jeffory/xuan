@@ -1506,7 +1506,9 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                     Filter::MotionBlur { distance, .. } => {
                         (distance as f64, 1.0 + distance.max(0.0) as f64 / 4.0)
                     }
-                    Filter::TonalContrast { .. } | Filter::Dither(_) => (0.0, 4.0),
+                    Filter::TonalContrast { .. }
+                    | Filter::UnsharpMask { .. }
+                    | Filter::Dither(_) => (0.0, 4.0),
                     _ => (0.0, 2.0),
                 };
                 let padded = (side + pad).powi(2);

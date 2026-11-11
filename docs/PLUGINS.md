@@ -1422,7 +1422,9 @@ adjustment layers. Filters: `{"GaussianBlur": {"radius"}}` (0–100),
 (±50, ±100; as in Photoshop, a negative vignette darkens the corners and a positive one
 brightens them), and upstream Compositor's `{"Vignette": {"amount", "color": [r, g, b],
 "midpoint", "roundness", "feather", "highlights"}}`, `{"Bloom": {"amount", "radius"}}`,
-`{"TonalContrast": {"amount", "radius", "shadows", "midtones", "highlights"}}` and
+`{"TonalContrast": {"amount", "radius", "shadows", "midtones", "highlights"}}`,
+`{"UnsharpMask": {"amount", "radius", "threshold"}}` (sharpening: 0–500%, 0.1–100 px,
+0–255 levels; [format 18](FORMAT.md#unsharp-mask-version-18)) and
 `{"Dither": {…}}` (any Dither setting left out takes upstream's default, so `{"Dither":
 {}}` is Atkinson in black and white); their ranges and defaults are in
 [FORMAT.md](FORMAT.md#compositor-filters-version-14). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",

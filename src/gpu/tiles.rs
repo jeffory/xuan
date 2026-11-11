@@ -84,7 +84,8 @@ pub(super) fn reach(filter: &Filter) -> Option<u32> {
     match *filter {
         Filter::GaussianBlur { radius }
         | Filter::Bloom { radius, .. }
-        | Filter::TonalContrast { radius, .. } => {
+        | Filter::TonalContrast { radius, .. }
+        | Filter::UnsharpMask { radius, .. } => {
             // The kernel's half, and a pixel to spare.
             Some(super::filter_layers::blur_length(radius) / 2 + 1)
         }

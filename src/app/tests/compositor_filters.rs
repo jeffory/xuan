@@ -51,6 +51,7 @@ fn compositor_filters_become_filter_layers_with_their_settings() {
         (Filter::BLOOM, "Radius"),
         (Filter::Dither(Box::default()), "Style"),
         (Filter::TONAL_CONTRAST, "Midtones"),
+        (Filter::UNSHARP_MASK, "Threshold"),
     ] {
         let (context, mut app) = filter_app();
         let layers = app.session().unwrap().document.layers.len();
@@ -110,6 +111,7 @@ fn compositor_filters_apply_inside_the_selection() {
     for filter in [
         Filter::VIGNETTE,
         Filter::TONAL_CONTRAST,
+        Filter::UNSHARP_MASK,
         Filter::Dither(Box::default()),
     ] {
         let (context, mut app) = filter_app();
