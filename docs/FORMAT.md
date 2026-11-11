@@ -477,3 +477,16 @@ is edited; everything else keeps the lowest version its content needs (1-16), an
 runs is written and drawn exactly as before. A version 17 document may also carry anything the
 earlier versions can. The reader accepts versions 1-17; older files have no runs and need no
 migration.
+
+## Unsharp Mask (version 18)
+
+A filter layer or an attached filter may be `{"UnsharpMask": {"amount", "radius",
+"threshold"}}`: sharpening by adding back the difference between each pixel and the image
+blurred at `radius` 0.1-100 pixels (1.5), `amount` 0-500 percent of it (100), where at
+least one channel differs by `threshold` 0-255 levels (0), which leaves grain and flat
+areas alone. Transparent pixels are not changed.
+
+Older builds do not know the filter and would refuse the whole project, so a document that
+uses it is written as version 18 and they report an unsupported version; everything else
+keeps the lowest version its content needs (1-17). A version 18 document may also carry
+anything the earlier versions can. The reader accepts versions 1-18.

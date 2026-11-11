@@ -224,7 +224,11 @@ pub fn save_hashed(
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 17;
+const LATEST_VERSION: u32 = 18;
+
+/// The first version with the Unsharp Mask filter, which older readers do not know and
+/// would refuse the whole project over.
+const UNSHARP_MASK: u32 = 18;
 
 /// The first version with style runs on text layers: letters with their own font or colour.
 const TEXT_RUNS: u32 = 17;
@@ -254,9 +258,16 @@ const PHOTOSHOP_VIGNETTE: u32 = 12;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    if document.layers.iter().any(|l| {
+        matches!(
+            l.filter,
+            Some(crate::effects::Filter::UnsharpMask { .. })
+        )
+    }) {
+        UNSHARP_MASK
     // Older readers would drop the runs, and with them each letter's font and colour, the
     // next time the text is edited.
-    if document
+    } else if document
         .layers
         .iter()
         .any(|l| l.text.as_ref().is_some_and(|t| !t.runs.is_empty()))
@@ -1631,6 +1642,63 @@ mod tests {
             }
             save(&plain, &path).unwrap();
             assert_eq!(manifest_json(&path)["version"], 4);
+        }
+    }
+
+    #[test]
+    fn unsharp_mask_round_trips_and_needs_version_18() {
+        use crate::effects::Filter;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sharp.xuan");
+        let filter = Filter::UnsharpMask {
+            amount: 180.0,
+            radius: 2.5,
+            threshold: 6.0,
+        };
+        let mut doc = Document::new(32, 32).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(32, 32, |x, y| {
+            Rgba([(x * 8) as u8, ((x / 4 + y / 4) % 2 * 200) as u8, 128, 255])
+        })));
+        let mut layer = Layer::blank(filter.name(), 32, 32);
+        layer.filter = Some(filter.clone());
+        doc.layers.push(layer);
+        doc.validate().unwrap();
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 18);
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[1].filter, Some(filter));
+        assert_eq!(render::render(&loaded), render::render(&doc));
+        assert_ne!(
+            render::render(&doc),
+            render::render(&Document {
+                layers: vec![doc.layers[0].clone()],
+                ..doc.clone()
+            }),
+            "the filter sharpens"
+        );
+        // Without it the document goes back to the version it needs.
+        let mut plain = loaded.clone();
+        plain.layers[1].filter = Some(Filter::GaussianBlur { radius: 1.0 });
+        save(&plain, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 4);
+        for bad in [
+            Filter::UnsharpMask {
+                amount: 501.0,
+                radius: 1.0,
+                threshold: 0.0,
+            },
+            Filter::UnsharpMask {
+                amount: 100.0,
+                radius: 0.0,
+                threshold: 0.0,
+            },
+            Filter::UnsharpMask {
+                amount: 100.0,
+                radius: 1.0,
+                threshold: 256.0,
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
         }
     }
 

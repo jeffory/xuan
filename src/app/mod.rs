@@ -20,12 +20,15 @@ mod dialogs;
 mod drops;
 mod export_preview;
 mod eyedropper;
+#[cfg(target_os = "linux")]
+mod file_drop;
 mod filter_controls;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;
 mod grid_settings;
 mod guides;
+pub mod headless;
 mod icons;
 mod jobs;
 mod keybindings;
@@ -35,6 +38,15 @@ mod layout_grid;
 mod levels_controls;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_menu;
+// The macOS menu bar's logic, tested on every platform.
+#[cfg(any(target_os = "macos", test))]
+mod menu_keys;
+mod menu_model;
+// The macOS menu bar's logic, tested on every platform.
+#[cfg(any(target_os = "macos", test))]
+mod menu_sync;
 mod menus;
 mod navigator;
 mod palette;
@@ -50,6 +62,8 @@ mod plugin_files;
 mod plugin_install;
 mod plugin_models;
 mod plugin_panes;
+mod plugin_raw;
+mod plugin_runs;
 mod plugin_sessions;
 mod plugins;
 mod presets_dialog;
@@ -484,6 +498,8 @@ enum Dialog {
     PluginFile,
     /// Allow a plugin's direct edits for its session.
     PluginEditSession,
+    /// Allow a plugin to run another plugin's action.
+    PluginRun,
     Plugins,
     /// Plugins → Install from Folder or Zip…: choose, review and install.
     PluginInstall,
@@ -604,6 +620,9 @@ pub struct EditorApp {
     /// Checks for a newer release and the update dialog.
     updates: updates::Updates,
     tablet: Option<tablet::TabletInput>,
+    /// Files dragged onto a Wayland window, which winit does not report.
+    #[cfg(target_os = "linux")]
+    file_drops: Option<file_drop::FileDrops>,
     context: egui::Context,
     window_title: String,
     /// The colours installed in the egui context, switched by `sync_palette`.
@@ -757,6 +776,11 @@ pub struct EditorApp {
     decorated: bool,
     /// The system draws the window buttons and resize edges (macOS), see [`chrome::NATIVE_BUTTONS`].
     native_buttons: bool,
+    /// Whether the menus are in the system menu bar, so the window draws none (macOS).
+    system_menu_bar: bool,
+    /// The macOS menu bar, while the menus are there.
+    #[cfg(target_os = "macos")]
+    native_menu: Option<macos_menu::NativeMenu>,
     /// The title bar style the window was created with.
     startup_title_bar: xuan::config::TitleBar,
     button_layout: chrome::ButtonLayout,
@@ -775,6 +799,8 @@ pub struct EditorApp {
     /// The Export dialog's preview and estimated size, made in the background.
     export_preview: export_preview::ExportPreview,
     screenshot: Option<PathBuf>,
+    /// Running without a window (`--headless`): who answers the prompts nobody can.
+    headless: Option<headless::Headless>,
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
@@ -817,8 +843,19 @@ impl EditorApp {
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
+        #[cfg(target_os = "linux")]
+        {
+            app.file_drops = file_drop::FileDrops::new(cc);
+        }
         #[cfg(target_os = "macos")]
         macos::install_quit_handler(&cc.egui_ctx);
+        #[cfg(target_os = "macos")]
+        macos::keep_title_bar_drags();
+        // Before the menu bar is built: AppKit would add Show Tab Bar to the View menu.
+        #[cfg(target_os = "macos")]
+        macos::disallow_window_tabs();
+        #[cfg(target_os = "macos")]
+        app.install_native_menu(&cc.egui_ctx);
         // Install the native renderer before the first RAW worker is started.
         xuan::gpu::scope(app.processor.clone(), || {
             for path in paths {
@@ -873,6 +910,8 @@ impl EditorApp {
             plugins: Default::default(),
             updates: Default::default(),
             tablet: None,
+            #[cfg(target_os = "linux")]
+            file_drops: None,
             context: ctx.clone(),
             window_title: String::new(),
             palette_applied: theme::Palette::DARK,
@@ -984,6 +1023,9 @@ impl EditorApp {
             decorated: false,
             // Tests see the Linux and Windows title bar wherever they run.
             native_buttons: chrome::NATIVE_BUTTONS && !cfg!(test),
+            system_menu_bar: false,
+            #[cfg(target_os = "macos")]
+            native_menu: None,
             startup_title_bar: xuan::config::TitleBar::Compact,
             button_layout: Default::default(),
             #[cfg(target_os = "linux")]
@@ -996,6 +1038,7 @@ impl EditorApp {
             export_texture: None,
             export_preview: Default::default(),
             screenshot,
+            headless: None,
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
@@ -2178,14 +2221,24 @@ impl EditorApp {
 
 impl eframe::App for EditorApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        #[cfg(target_os = "macos")]
+        self.give_back_native_menu_keys(input);
         if let Some(tablet) = &mut self.tablet {
             self.pen_samples = tablet.update(ctx, input);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(drops) = &mut self.file_drops {
+            drops.update(input);
         }
     }
 
     fn on_exit(&mut self) {
-        // Stop the tablet queue before eframe destroys its Wayland window/display.
+        // Stop the tablet and file drop queues before eframe destroys its Wayland window/display.
         self.tablet = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.file_drops = None;
+        }
         self.plugins.stop_all();
     }
 
@@ -2260,6 +2313,9 @@ impl EditorApp {
     }
 
     fn show_with_processor(&mut self, ctx: &egui::Context) {
+        // Items clicked in the macOS menu bar; the keys it took came back in `raw_input_hook`.
+        #[cfg(target_os = "macos")]
+        self.run_native_menu_clicks(ctx);
         self.forget_crop_of_other_documents();
         self.sync_move_options();
         self.sync_palette(ctx);
@@ -2305,15 +2361,19 @@ impl EditorApp {
         self.window_resize(ctx);
         self.poll_plugins();
         self.poll_updates();
-        self.menus(ctx);
+        #[cfg(target_os = "macos")]
+        self.sync_native_menu();
+        if !self.system_menu_bar {
+            self.menus(ctx);
+        }
         if self.develop.is_some() {
             // The Develop workspace has its own toolbar; RAW tabs stay reachable above it.
             self.tabs(ctx);
             self.develop_workspace(ctx);
         } else {
-            // Tool options, then the tabs as the canvas's own header.
-            self.tool_options(ctx);
+            // The tabs, then the tool options, as in the Develop workspace.
             self.tabs(ctx);
+            self.tool_options(ctx);
             self.reload_bar(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);

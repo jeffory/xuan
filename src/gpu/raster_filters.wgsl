@@ -34,6 +34,16 @@ fn tonal_contrast(@builtin(global_invocation_id) id: vec3<u32>) {
     result[i] = packed(tonal_contrast_pixel(rgba(i), unpack4x8unorm(auxiliary[i]), config[1].x, config[1].yzw));
 }
 
+@compute @workgroup_size(8, 8)
+fn unsharp_mask(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = vec2<u32>(config[0].xy);
+    if (any(id.xy >= size)) {
+        return;
+    }
+    let i = id.y * size.x + id.x;
+    result[i] = packed(unsharp_mask_pixel(rgba(i), unpack4x8unorm(auxiliary[i]), config[1].x, config[1].y));
+}
+
 fn dither_source(position: vec2<i32>) -> vec4<f32> {
     return rgba(u32(position.y) * u32(config[0].x) + u32(position.x));
 }

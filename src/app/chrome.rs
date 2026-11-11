@@ -18,6 +18,13 @@ pub(super) const NATIVE_BUTTONS: bool = cfg!(target_os = "macos");
 /// Room the macOS window buttons take at the start of the title bar, after its margin.
 const NATIVE_BUTTONS_WIDTH: f32 = 62.0;
 
+/// The title row's height on macOS. The system centres its window buttons 16 px from the top
+/// (measured on macOS 26), so a 32 px row lines up with them.
+pub(super) const MAC_TITLE_HEIGHT: f32 = 32.0;
+
+/// The title bar's left margin: the same as in [`title_bar`].
+const TITLE_MARGIN: f32 = 14.0;
+
 /// Sets up the native window for a title bar style. Transparency (for the rounded corners Xuan
 /// draws) and macOS's full-size content view are fixed when the window is created.
 pub fn native_window(builder: egui::ViewportBuilder, style: TitleBar) -> egui::ViewportBuilder {
@@ -460,6 +467,25 @@ impl EditorApp {
         }
     }
 
+    /// Whether the tab bar is the window's top row: macOS's Compact style, with the menus in
+    /// the system menu bar.
+    pub(super) fn tabs_in_title_row(&self) -> bool {
+        self.system_menu_bar
+            && self.native_buttons
+            && matches!(self.title_bar_style(), TitleBar::Compact)
+    }
+
+    /// Room the tab bar leaves at its start for the window buttons, when it is the top row.
+    /// macOS hides them in full screen.
+    pub(super) fn title_row_inset(&self, ctx: &egui::Context) -> f32 {
+        let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        if self.tabs_in_title_row() && !fullscreen {
+            TITLE_MARGIN + NATIVE_BUTTONS_WIDTH
+        } else {
+            0.0
+        }
+    }
+
     /// Title-bar items after the menus: the centered title, which also moves
     /// the window, and any right-hand window buttons.
     pub(super) fn trailing_window_controls(&mut self, ui: &mut egui::Ui) {
@@ -599,14 +625,7 @@ impl EditorApp {
                 ui.palette().muted,
             );
         }
-        if response.double_clicked() {
-            let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-        } else if response.drag_started_by(egui::PointerButton::Primary) {
-            // A native drag grabs the pointer, so let clicks finish before handing it off.
-            start_native_drag(ui.ctx(), egui::ViewportCommand::StartDrag);
-        }
+        title_row_gesture(ui.ctx(), &response);
     }
 
     /// Undecorated Wayland/X11 windows need client-provided edge hit targets.
@@ -638,6 +657,18 @@ impl EditorApp {
                     }
                 });
         }
+    }
+}
+
+/// Moves the window from a drag on an empty part of a title row, and zooms it on a
+/// double-click.
+pub(super) fn title_row_gesture(ctx: &egui::Context, response: &egui::Response) {
+    if response.double_clicked() {
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+    } else if response.drag_started_by(egui::PointerButton::Primary) {
+        // A native drag grabs the pointer, so let clicks finish before handing it off.
+        start_native_drag(ctx, egui::ViewportCommand::StartDrag);
     }
 }
 

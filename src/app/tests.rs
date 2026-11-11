@@ -90,6 +90,15 @@ mod units;
 #[path = "tests/update_check.rs"]
 mod update_check;
 
+#[path = "tests/menu_bar.rs"]
+mod menu_bar;
+
+#[path = "tests/menu_changes.rs"]
+mod menu_changes;
+
+#[path = "tests/mac_keys.rs"]
+mod mac_keys;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1164,6 +1173,7 @@ fn benchmark_large_image_filter_layers() {
             ..Default::default()
         })),
         Filter::Dither(Box::default()),
+        Filter::UNSHARP_MASK,
     ] {
         app.start_filter_layer(filter.clone());
         for _ in 0..3 {
@@ -1180,7 +1190,8 @@ fn benchmark_large_image_filter_layers() {
                 Filter::LensCorrection { distortion, .. } => *distortion = 10.0 + value,
                 Filter::Vignette { amount, .. }
                 | Filter::Bloom { amount, .. }
-                | Filter::TonalContrast { amount, .. } => *amount = 30.0 + value,
+                | Filter::TonalContrast { amount, .. }
+                | Filter::UnsharpMask { amount, .. } => *amount = 30.0 + value,
                 Filter::Dither(settings) => settings.density = value,
             }
             edit.refresh = true;

@@ -132,6 +132,17 @@ impl Editor for FakeEditor {
                 Ok(json!({"documents": [{"id": "doc", "title": "Untitled", "current": true}]}))
             }
             "document/export" | "layer/export" => Ok(self.export()),
+            "document/sample" => Ok(json!({
+                "width": 64, "height": 48, "radius": params["radius"],
+                "samples": [{"x": 1, "y": 2, "color": "#0a141eff", "rgba": [10, 20, 30, 255], "luminance": 19}],
+            })),
+            "document/histogram" => {
+                let channel = json!({"bins": vec![2; 256], "mean": 127.5, "clipped_low": 0.0039});
+                Ok(json!({
+                    "region": [0, 0, 64, 48], "pixels": 512, "transparent": 0,
+                    "luminance": channel, "red": channel, "green": channel, "blue": channel,
+                }))
+            }
             "selection/export" => Ok(Value::Null),
             "session/status" => {
                 Ok(json!({"edit_prompt": "session", "edits": "ask", "auto": false}))
@@ -161,10 +172,28 @@ impl Editor for FakeEditor {
                     None => Ok(json!({"ok": true, "layers": ["new-layer"]})),
                 }
             }
+            // Another plugin's action, as Xuan answers once its job runs.
+            "host/run" if params["action"].as_str().is_some_and(|a| a.contains('/')) => {
+                Ok(json!({
+                    "ok": true, "running": true, "job": "job-1", "plugin": "comfy-cloud",
+                    "plugin_name": "Comfy\u{202E} Cloud", "action": "generate", "label": "Generate Image…",
+                }))
+            }
             "host/run" => Ok(json!({
                 "ok": true, "layers": ["new-layer"], "running": params["action"] == "remove_background",
             })),
+            "plugins/actions" => Ok(plugin_actions()),
+            "jobs/list" => Ok(json!({
+                "running": [{"job": "job-1", "kind": "action", "label": "Generate Image · Comfy Cloud",
+                             "progress": 0.5, "message": "Queued", "started_by": "mcp-server", "shown": true}],
+                "status_bar": "Generate Image · Comfy Cloud · Queued", "results_waiting": 0,
+                "proposal": null, "finished": [],
+            })),
             "document/activate" => Ok(json!({"ok": true})),
+            "raw/develop" => Ok(json!({
+                "ok": true,
+                "layer": {"id": params["layer"], "kind": "raw", "raw": {"settings": params["settings"]}},
+            })),
             // As Xuan words a file that fails to load.
             "file/open" => Err(EditorError {
                 code: -32603,
@@ -187,6 +216,46 @@ impl Editor for FakeEditor {
             }),
         }
     }
+}
+
+/// `plugins/actions` as Xuan answers it, for a plugin like Comfy Cloud.
+fn plugin_actions() -> Value {
+    json!({"actions": [
+        {
+            "plugin": "comfy-cloud", "plugin_name": "Comfy Cloud", "network": true,
+            "allowed": true, "available": true, "id": "generate",
+            "action": "comfy-cloud/generate", "label": "Generate Image…",
+            "description": "Generate an image from a description.", "kind": "generate",
+            "source": "none", "surfaces": ["document"], "result": "ask",
+            "inputs": [
+                {"id": "prompt", "type": "multiline", "label": "Prompt", "placeholder": "A lighthouse"},
+                {"id": "model", "type": "enum", "label": "Model", "default": "pro",
+                 "values": [{"id": "pro", "label": "Seedream Pro"}, {"id": "flash", "label": "flash"}]},
+                {"id": "steps", "type": "integer", "label": "", "min": 1.0, "max": 50.0, "default": 20},
+                {"id": "strength", "type": "number", "label": "Strength", "help": "How much to change", "min": 0.0, "max": 1.5},
+                {"id": "tint", "type": "color", "label": "Tint"},
+                {"id": "seed", "type": "seed", "label": "Seed"},
+                {"id": "upscale", "type": "bool", "label": "Upscale", "default": false},
+                {"id": "reference", "type": "path", "label": "Reference"},
+            ],
+        },
+        {
+            "plugin": "comfy-cloud", "plugin_name": "Comfy Cloud", "network": true,
+            "allowed": true, "available": true, "id": "fill-region",
+            "action": "comfy-cloud/fill-region", "label": "Fill Region…", "description": "",
+            "kind": "edit", "source": "composite", "surfaces": ["region"], "result": "layer",
+            "inputs": [
+                {"id": "regions", "type": "regions", "label": "Box", "min": 1.0, "max": 1.0,
+                 "fields": [{"id": "desc", "type": "text", "label": "What to paint here"}]},
+            ],
+        },
+        {
+            "plugin": "local-upscale", "plugin_name": "Local Upscale", "network": false,
+            "allowed": false, "available": true, "id": "upscale",
+            "action": "local-upscale/upscale", "label": "Upscale", "description": "",
+            "kind": "edit", "source": "layer", "surfaces": [], "result": "replace", "inputs": [],
+        },
+    ]})
 }
 
 fn app(editor: Arc<FakeEditor>) -> (axum::Router, Arc<Shared>) {
@@ -2373,4 +2442,661 @@ fn text_layers_take_letter_runs() {
         create["properties"]["runs"]["items"]["required"],
         json!(["start", "end"])
     );
+}
+
+#[test]
+fn develop_raw_sends_the_settings_given_after_switching_documents() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "develop_raw",
+        json!({
+            "document": "doc",
+            "layer": "raw-layer",
+            // Sent as a string by some clients.
+            "settings": "{\"exposure\": 0.5, \"white_balance\": \"Temperature\", \"temperature\": 5200}",
+            "auto_exposure": false,
+            "neutral_point": [0.5, 0.25],
+        }),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let requests = editor.requests();
+    let methods: Vec<&str> = requests.iter().map(|(_, m, _)| m.as_str()).collect();
+    assert_eq!(methods, ["document/activate", "raw/develop"]);
+    assert_eq!(requests[0].2, json!({"document": "doc"}));
+    assert_eq!(
+        requests[1].2,
+        json!({
+            "layer": "raw-layer",
+            "settings": {"exposure": 0.5, "white_balance": "Temperature", "temperature": 5200},
+            "auto_exposure": false,
+            "neutral_point": [0.5, 0.25],
+        })
+    );
+    // In the client's edit session, like every edit.
+    assert_eq!(requests[1].0.as_deref(), Some("s"));
+    assert!(text_of(&result).contains("\"kind\": \"raw\""));
+
+    let unknown = call_tool(&editor, "develop_raw", json!({"exposure": 1}));
+    assert_eq!(unknown.is_error, Some(true));
+    assert!(text_of(&unknown).contains("Unknown argument `exposure`"));
+
+    let tools = tools::list();
+    let tool = tools.iter().find(|t| t.name == "develop_raw").unwrap();
+    assert!(
+        tool.description
+            .as_deref()
+            .unwrap()
+            .contains("waits until the user answers")
+    );
+    let settings = tool.input_schema["properties"]["settings"]["description"]
+        .as_str()
+        .unwrap();
+    for name in [
+        "exposure",
+        "temperature",
+        "highlights",
+        "crop",
+        "hsl",
+        "negative",
+    ] {
+        assert!(settings.contains(name), "{name}");
+    }
+}
+
+#[test]
+fn plugin_actions_are_listed_with_a_schema_of_their_inputs() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(&editor, "list_plugin_actions", json!({}));
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let listed: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    let actions = listed["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 3);
+    let generate = &actions[0];
+    for (key, value) in [
+        ("plugin", json!("comfy-cloud")),
+        ("action", json!("generate")),
+        ("label", json!("Generate Image…")),
+        ("result", json!("ask")),
+        ("into", json!(["layer", "document"])),
+        ("network", json!(true)),
+    ] {
+        assert_eq!(generate[key], value, "{key}");
+    }
+    let inputs = &generate["inputs"];
+    assert_eq!(inputs["type"], "object");
+    assert_eq!(inputs["additionalProperties"], false);
+    let property = |id: &str| inputs["properties"][id].clone();
+    assert_eq!(
+        property("prompt"),
+        json!({"type": "string", "title": "Prompt", "description": "For example: A lighthouse"})
+    );
+    assert_eq!(
+        property("model"),
+        json!({"type": "string", "enum": ["pro", "flash"], "title": "Model",
+               "description": "One of pro (Seedream Pro), flash", "default": "pro"})
+    );
+    assert_eq!(
+        property("steps"),
+        json!({"type": "integer", "minimum": 1, "maximum": 50, "default": 20})
+    );
+    assert_eq!(
+        property("strength"),
+        json!({"type": "number", "minimum": 0, "maximum": 1.5, "title": "Strength",
+               "description": "How much to change"})
+    );
+    assert_eq!(
+        property("tint")["pattern"],
+        "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+    );
+    assert_eq!(property("seed")["type"], "integer");
+    assert_eq!(
+        property("upscale"),
+        json!({"type": "boolean", "title": "Upscale", "default": false})
+    );
+    // Files are the user's to choose.
+    assert_eq!(property("reference"), Value::Null);
+    assert!(inputs.get("required").is_none());
+    // Regions an action needs are required, each a box with its fields.
+    let fill = &actions[1];
+    assert!(fill.get("into").is_none());
+    assert_eq!(fill["inputs"]["required"], json!(["regions"]));
+    let regions = &fill["inputs"]["properties"]["regions"];
+    assert_eq!(
+        (&regions["minItems"], &regions["maxItems"]),
+        (&json!(1), &json!(1))
+    );
+    assert_eq!(
+        regions["items"]["required"],
+        json!(["x", "y", "width", "height"])
+    );
+    assert_eq!(
+        regions["items"]["properties"]["fields"]["properties"]["desc"],
+        json!({"type": "string", "title": "What to paint here"})
+    );
+    // One plugin's actions.
+    let result = call_tool(
+        &editor,
+        "list_plugin_actions",
+        json!({"plugin": "local-upscale"}),
+    );
+    let listed: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    assert_eq!(listed["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["actions"][0]["allowed"], false);
+}
+
+#[test]
+fn run_plugin_action_starts_another_plugins_action_and_get_jobs_follows_it() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "run_plugin_action",
+        json!({"plugin": "comfy-cloud", "action": "generate", "inputs": {"prompt": "a kite"},
+               "into": "document", "layers": ["a"]}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let (session, method, params) = editor.requests().last().cloned().unwrap();
+    assert_eq!(
+        (session.as_deref(), method.as_str()),
+        (Some("s"), "host/run")
+    );
+    assert_eq!(
+        params,
+        json!({"action": "comfy-cloud/generate", "inputs": {"prompt": "a kite"},
+               "into": "document", "layers": ["a"]})
+    );
+    // It returns at once, with the job to follow.
+    let answer: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    assert_eq!(
+        (&answer["running"], &answer["job"]),
+        (&json!(true), &json!("job-1"))
+    );
+    assert!(answer["note"].as_str().unwrap().contains("get_jobs"));
+    // The pane names what started, without the plugin's control characters.
+    assert_eq!(
+        tools::started("run_plugin_action", &result).as_deref(),
+        Some("started Generate Image… from Comfy Cloud")
+    );
+    assert_eq!(tools::started("run_command", &result), None);
+    // Inputs sent as JSON text are read; the rest is optional.
+    call_tool(
+        &editor,
+        "run_plugin_action",
+        json!({"plugin": "comfy-cloud", "action": "generate", "inputs": "{\"prompt\": \"a hat\"}"}),
+    );
+    assert_eq!(
+        editor.requests().last().unwrap().2,
+        json!({"action": "comfy-cloud/generate", "inputs": {"prompt": "a hat"}})
+    );
+    let sent = editor.requests().len();
+    for (arguments, says) in [
+        (
+            json!({"plugin": "comfy-cloud/x", "action": "generate"}),
+            "`plugin` must be an id",
+        ),
+        (
+            json!({"plugin": "comfy-cloud", "action": ""}),
+            "`action` must be an id",
+        ),
+        (
+            json!({"plugin": "comfy-cloud"}),
+            "`action` must be a string",
+        ),
+        (
+            json!({"plugin": "comfy-cloud", "action": "generate", "inputs": [1]}),
+            "`inputs` must be an object",
+        ),
+        (
+            json!({"plugin": "comfy-cloud", "action": "generate", "seed": 3}),
+            "Unknown argument `seed`",
+        ),
+    ] {
+        let result = call_tool(&editor, "run_plugin_action", arguments.clone());
+        assert_eq!(result.is_error, Some(true), "{arguments}");
+        assert!(
+            text_of(&result).contains(says),
+            "{arguments}: {}",
+            text_of(&result)
+        );
+    }
+    assert_eq!(editor.requests().len(), sent, "nothing was sent");
+
+    // get_jobs is the status bar, as Xuan reports it.
+    let result = call_tool(&editor, "get_jobs", json!({}));
+    let jobs: Value = serde_json::from_str(&text_of(&result)).unwrap();
+    assert_eq!(jobs["running"][0]["message"], "Queued");
+    assert_eq!(editor.requests().last().unwrap().1, "jobs/list");
+    assert!(call_tool(&editor, "get_jobs", json!({"job": "job-1"})).is_error == Some(true));
+}
+
+#[test]
+fn plugin_action_tools_are_not_batched_and_say_what_they_wait_for() {
+    let editor = FakeEditor::new(false);
+    for tool in ["list_plugin_actions", "run_plugin_action", "get_jobs"] {
+        let result = call_tool(
+            &editor,
+            "batch",
+            json!({"steps": [{"tool": tool, "arguments": {}}]}),
+        );
+        assert_eq!(result.is_error, Some(true), "{tool}");
+        assert!(
+            text_of(&result).contains(&format!("{tool} cannot be part of a batch")),
+            "{tool}: {}",
+            text_of(&result)
+        );
+        assert!(!tools::batchable().contains(&tool), "{tool}");
+    }
+    assert!(editor.requests().is_empty());
+    let tools = tools::list();
+    let tool = |name: &str| tools.iter().find(|t| t.name == name).unwrap().clone();
+    let run = tool("run_plugin_action");
+    let annotations = run.annotations.clone().unwrap();
+    assert_eq!(annotations.read_only_hint, Some(false));
+    assert_eq!(annotations.open_world_hint, Some(true));
+    let description = run.description.clone().unwrap_or_default();
+    assert!(
+        description.contains("The first run of each plugin in a session waits")
+            && description.contains("instead of retrying"),
+        "{description}"
+    );
+    assert_eq!(run.input_schema["required"], json!(["plugin", "action"]));
+    assert_eq!(
+        tools::waiting_message("run_plugin_action"),
+        "Waiting for the user to allow the run in Xuan"
+    );
+    for name in ["list_plugin_actions", "get_jobs"] {
+        let annotations = tool(name).annotations.unwrap();
+        assert_eq!(annotations.read_only_hint, Some(true), "{name}");
+        assert_eq!(annotations.open_world_hint, Some(false), "{name}");
+        assert!(
+            tool(name)
+                .description
+                .unwrap_or_default()
+                .contains("Run other plugins' actions"),
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn refused_and_unanswered_runs_say_nothing_ran() {
+    // Refused by the user (or by Xuan's own checks): the model is told
+    // Xuan's reason, not that edits were refused.
+    let editor = FakeEditor::new(true);
+    let result = call_tool(
+        &editor,
+        "run_plugin_action",
+        json!({"plugin": "comfy-cloud", "action": "generate"}),
+    );
+    let text = text_of(&result);
+    assert!(
+        text.starts_with("Xuan: ") && text.ends_with("Ask the user before trying again."),
+        "{text}"
+    );
+    assert!(!text.contains("edits from this session"), "{text}");
+
+    // Not answered in time: withdrawn, and the pane says it failed.
+    let waits = Waits {
+        without_progress: Duration::from_millis(200),
+        ..quick()
+    };
+    let editor = FakeEditor::holding("host/run");
+    let (app, shared) = app_with(editor.clone(), waits);
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let result = client
+        .tool(
+            "run_plugin_action",
+            json!({"plugin": "comfy-cloud", "action": "generate"}),
+        )
+        .await;
+    let text = text_of(&result);
+    assert!(
+        text.contains("Xuan's prompt to run this action") && text.contains("nothing was run"),
+        "{text}"
+    );
+    assert_eq!(editor.withdrawn(), ["host/run"]);
+    let activity = shared.activity.lock().unwrap().clone();
+    assert_eq!(
+        activity.back().map(String::as_str),
+        Some("run_plugin_action: failed")
+    );
+}
+
+#[tokio::test]
+async fn a_run_the_client_starts_shows_in_the_pane() {
+    let editor = FakeEditor::new(false);
+    let (app, shared) = app(editor);
+    let mut client = Client::new(app);
+    client.initialize().await;
+    let result = client
+        .tool(
+            "run_plugin_action",
+            json!({"plugin": "comfy-cloud", "action": "generate", "into": "layer"}),
+        )
+        .await;
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let activity = shared.activity.lock().unwrap().clone();
+    assert_eq!(
+        activity.back().map(String::as_str),
+        Some("run_plugin_action: started Generate Image… from Comfy Cloud")
+    );
+    // The pane says when clients may run other plugins' actions.
+    *shared.status.lock().unwrap() = server::Status::Listening { port: PORT };
+    let asks = crate::pane::tree(
+        &shared,
+        Some(&json!({"edit_prompt": "session", "run_actions": true, "run_auto": false})),
+    )
+    .to_string();
+    assert!(
+        asks.contains("Clients may run other plugins' actions"),
+        "{asks}"
+    );
+    let auto = crate::pane::tree(
+        &shared,
+        Some(&json!({"edit_prompt": "session", "run_actions": true, "run_auto": true})),
+    )
+    .to_string();
+    assert!(
+        auto.contains("Clients run other plugins' actions without asking"),
+        "{auto}"
+    );
+    let off = crate::pane::tree(&shared, Some(&json!({"edit_prompt": "session"}))).to_string();
+    assert!(!off.contains("other plugins' actions"), "{off}");
+}
+
+#[test]
+fn set_adjustment_changes_a_layer_in_place_with_one_of_adjustment_or_filter() {
+    let editor = FakeEditor::new(false);
+    let layer = "11111111-1111-1111-1111-111111111111";
+    let hue =
+        json!({"HueSaturation": {"hue": 0, "saturation": 8, "lightness": 0, "colorize": false}});
+    let blur = json!({"GaussianBlur": {"radius": 3}});
+    for (key, sent, expected) in [
+        ("adjustment", hue.clone(), hue.clone()),
+        // Some clients quote objects; the settings are read as JSON.
+        ("adjustment", json!(hue.to_string()), hue.clone()),
+        ("filter", blur.clone(), blur.clone()),
+    ] {
+        let result = call_tool(
+            &editor,
+            "set_adjustment",
+            json!({"layer": layer, key: sent}),
+        );
+        assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+        let params = edit_requests(&editor).pop().unwrap();
+        assert_eq!(
+            params["edits"],
+            json!([{"op": "set_adjustment", "layer": layer, key: expected}])
+        );
+        assert_eq!(params["name"], "Change Adjustment");
+    }
+    let sent = edit_requests(&editor).len();
+    for bad in [
+        json!({"layer": layer}),
+        json!({"layer": layer, "adjustment": hue, "filter": blur}),
+    ] {
+        let result = call_tool(&editor, "set_adjustment", bad);
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("either"), "{}", text_of(&result));
+    }
+    assert_eq!(edit_requests(&editor).len(), sent, "nothing more sent");
+}
+
+#[test]
+fn pixels_and_histograms_are_measured_as_numbers_and_regions_are_forwarded() {
+    let editor = FakeEditor::new(false);
+    let last = |editor: &FakeEditor| editor.requests().last().cloned().unwrap();
+    let sampled = call_tool(
+        &editor,
+        "sample_pixels",
+        json!({"points": [[1, 2]], "radius": 2, "layer": "base"}),
+    );
+    assert_ne!(sampled.is_error, Some(true), "{}", text_of(&sampled));
+    let (_, method, params) = last(&editor);
+    assert_eq!(method, "document/sample");
+    assert_eq!(
+        params,
+        json!({"points": [[1, 2]], "radius": 2, "layer": "base"})
+    );
+    let answer: Value = serde_json::from_str(&text_of(&sampled)).unwrap();
+    assert_eq!(answer["samples"][0]["rgba"], json!([10, 20, 30, 255]));
+    // Some clients quote lists.
+    call_tool(&editor, "sample_pixels", json!({"points": "[[3, 4]]"}));
+    assert_eq!(last(&editor).2["points"], json!([[3, 4]]));
+
+    // 256 bins come back merged into the number asked for, 32 by default.
+    for (bins, expected) in [
+        (None, Some((32, 16))),
+        (Some(256), Some((256, 2))),
+        (Some(0), None),
+    ] {
+        let mut arguments = json!({"region": [0, 0, 8, 8]});
+        if let Some(bins) = bins {
+            arguments["bins"] = json!(bins);
+        }
+        let result = call_tool(&editor, "get_histogram", arguments);
+        assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+        let (_, method, params) = last(&editor);
+        assert_eq!(method, "document/histogram");
+        assert_eq!(params, json!({"region": [0, 0, 8, 8]}), "bins stay here");
+        let answer: Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(answer["pixels"], 512);
+        assert_eq!(answer["red"]["mean"], 127.5);
+        match expected {
+            Some((count, each)) => {
+                let merged = answer["green"]["bins"].as_array().unwrap();
+                assert_eq!(merged.len(), count);
+                assert!(merged.iter().all(|bin| bin == each), "{merged:?}");
+            }
+            None => assert!(answer["green"].get("bins").is_none()),
+        }
+    }
+    let bad = call_tool(&editor, "get_histogram", json!({"bins": 7}));
+    assert_eq!(bad.is_error, Some(true));
+
+    // Previews and layer images take a region; without one nothing is added.
+    call_tool(&editor, "get_preview", json!({"region": [4, 4, 16, 16]}));
+    assert_eq!(
+        last(&editor).2,
+        json!({"max_side": 1024, "region": [4, 4, 16, 16]})
+    );
+    call_tool(&editor, "get_preview", json!({}));
+    assert_eq!(last(&editor).2, json!({"max_side": 1024}));
+    call_tool(
+        &editor,
+        "get_layer_image",
+        json!({"layer": "base", "region": [0, 0, 8, 8]}),
+    );
+    assert_eq!(last(&editor).2["region"], json!([0, 0, 8, 8]));
+
+    // A part goes to a file through export_document, never through the answer.
+    let result = call_tool(
+        &editor,
+        "export_document",
+        json!({"path": "/tmp/part.png", "layer": "base", "region": "[0, 0, 8, 8]", "max_side": 256}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let (_, method, params) = last(&editor);
+    assert_eq!(method, "file/export");
+    assert_eq!(
+        params,
+        json!({"path": "/tmp/part.png", "layer": "base", "region": [0, 0, 8, 8], "max_side": 256})
+    );
+    for tool in tools::list() {
+        if ["sample_pixels", "get_histogram"].contains(&tool.name.as_ref()) {
+            assert_eq!(tool.annotations.unwrap().read_only_hint, Some(true));
+        }
+    }
+}
+
+#[test]
+fn canvas_turns_by_any_angle_and_crops_work_out_ratio_and_straighten_boxes() {
+    let editor = FakeEditor::new(false);
+    let sent = |editor: &FakeEditor| edit_requests(editor).pop().unwrap()["edits"].clone();
+    call_tool(&editor, "rotate_canvas", json!({"degrees": -2.5}));
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "rotate_canvas", "degrees": -2.5}])
+    );
+    call_tool(
+        &editor,
+        "rotate_canvas",
+        json!({"degrees": 90, "expand": false}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "rotate_canvas", "degrees": 90, "expand": false}])
+    );
+
+    // A plain rectangle is the crop it always was.
+    call_tool(
+        &editor,
+        "crop_canvas",
+        json!({"x": 1, "y": 2, "width": 8, "height": 6}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "crop", "x": 1, "y": 2, "width": 8, "height": 6}])
+    );
+    for (arguments, expected) in [
+        (
+            json!({"ratio": "4:5"}),
+            json!({"op": "crop_to", "ratio": [4.0, 5.0]}),
+        ),
+        (
+            json!({"ratio": " 16 x 9 ", "center": [10, 20]}),
+            json!({"op": "crop_to", "ratio": [16.0, 9.0], "center": [10, 20]}),
+        ),
+        (
+            json!({"ratio": "1:1", "x": 1, "y": 2, "width": 8, "height": 6}),
+            json!({"op": "crop_to", "ratio": [1.0, 1.0], "bounds": [1, 2, 8, 6]}),
+        ),
+        (
+            json!({"straighten": -2}),
+            json!({"op": "crop_to", "straighten": -2}),
+        ),
+    ] {
+        let result = call_tool(&editor, "crop_canvas", arguments.clone());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "{arguments}: {}",
+            text_of(&result)
+        );
+        assert_eq!(sent(&editor), json!([expected]), "{arguments}");
+    }
+    let before = edit_requests(&editor).len();
+    for (bad, says) in [
+        (json!({}), "Give x, y"),
+        (json!({"x": 1, "ratio": "1:1"}), "all of x"),
+        (json!({"ratio": "wide"}), "`ratio`"),
+        (json!({"ratio": "4:0"}), "`ratio`"),
+    ] {
+        let result = call_tool(&editor, "crop_canvas", bad.clone());
+        assert_eq!(result.is_error, Some(true), "{bad}");
+        assert!(
+            text_of(&result).contains(says),
+            "{bad}: {}",
+            text_of(&result)
+        );
+    }
+    assert_eq!(edit_requests(&editor).len(), before, "nothing more sent");
+
+    // A pivot and cover go with the placement.
+    call_tool(
+        &editor,
+        "set_layer",
+        json!({"layer": "base", "rotation": 3, "pivot": [100, 80], "cover": true}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "transform", "layer": "base", "rotation": 3, "pivot": [100, 80], "cover": true}])
+    );
+}
+
+#[test]
+fn strokes_dodge_and_burn_and_strokes_and_fills_paint_masks() {
+    let editor = FakeEditor::new(false);
+    let sent = |editor: &FakeEditor| edit_requests(editor).pop().unwrap()["edits"].clone();
+    call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"layer": "base", "points": [[1, 2]], "mode": "dodge", "range": "highlights", "exposure": 0.2}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "stroke", "layer": "base", "points": [[1, 2]], "mode": "dodge", "range": "highlights", "exposure": 0.2}])
+    );
+    // Each stroke may set its own mode; the rest comes from the top level.
+    call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"mask": true, "color": "#ffffff", "strokes": [{"points": [[1, 2]]}, {"points": [[3, 4]], "mode": "erase"}]}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([
+            {"op": "stroke", "mask": true, "color": "#ffffff", "points": [[1, 2]]},
+            {"op": "stroke", "mask": true, "color": "#ffffff", "points": [[3, 4]], "mode": "erase"},
+        ])
+    );
+    call_tool(
+        &editor,
+        "fill",
+        json!({"layer": "base", "color": "#000000", "mask": true}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "fill", "layer": "base", "color": "#000000", "mask": true}])
+    );
+    let refused = call_tool(
+        &editor,
+        "fill",
+        json!({"color": "#000000", "mask": true, "path": "M 0 0 L 4 0 L 4 4 Z"}),
+    );
+    assert_eq!(refused.is_error, Some(true));
+    assert!(text_of(&refused).contains("no `path`"));
+    let description = tools::list()
+        .into_iter()
+        .find(|tool| tool.name == "paint_stroke")
+        .and_then(|tool| tool.description)
+        .unwrap();
+    for word in ["dodge", "burn", "sponge", "mask: true"] {
+        assert!(description.contains(word), "{word}");
+    }
+}
+
+#[test]
+fn auto_adjust_sends_its_kind_and_where_to_measure() {
+    let editor = FakeEditor::new(false);
+    let result = call_tool(
+        &editor,
+        "auto_adjust",
+        json!({"kind": "white_balance", "as_layer": true, "neutral": [120, 80], "name": "WB"}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let params = edit_requests(&editor).pop().unwrap();
+    assert_eq!(
+        params["edits"],
+        json!([{"op": "auto_adjust", "kind": "white_balance", "as_layer": true, "neutral": [120, 80], "name": "WB"}])
+    );
+    assert_eq!(params["name"], "Auto Adjust");
+    assert!(text_of(&result).contains("new-layer"), "the layer it added");
+    // In a batch, the layer it adds can be named by the next step.
+    let batch = call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "auto_adjust", "arguments": {"kind": "tone", "as_layer": true}},
+            {"tool": "set_layer", "arguments": {"layer": "$1", "opacity": 0.6}},
+        ]}),
+    );
+    assert_ne!(batch.is_error, Some(true), "{}", text_of(&batch));
+    let unknown = call_tool(
+        &editor,
+        "auto_adjust",
+        json!({"kind": "tone", "strength": 2}),
+    );
+    assert_eq!(unknown.is_error, Some(true));
 }

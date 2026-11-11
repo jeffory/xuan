@@ -297,7 +297,9 @@ impl FilterLayers {
                 let [r, g, b] = color.map(|v| v as f32 / 255.0);
                 config.push([r, g, b, 0.0]);
             }
-            &Filter::Bloom { radius, .. } | &Filter::TonalContrast { radius, .. } => {
+            &Filter::Bloom { radius, .. }
+            | &Filter::TonalContrast { radius, .. }
+            | &Filter::UnsharpMask { radius, .. } => {
                 let scratch = self.scratch.get_or_insert_with(|| {
                     target(device, size, wgpu::TextureFormat::Rgba32Float, 1)
                 });
@@ -326,6 +328,9 @@ impl FilterLayers {
                         config[0] = [7.0, amount, 0.0, 0.0];
                         config.push([shadows, midtones, highlights, 0.0]);
                     }
+                    Filter::UnsharpMask {
+                        amount, threshold, ..
+                    } => config[0] = [9.0, amount, threshold, 0.0],
                     _ => unreachable!(),
                 }
             }
