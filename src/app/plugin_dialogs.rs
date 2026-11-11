@@ -773,7 +773,7 @@ impl EditorApp {
                     .on_hover_text(super::plugin_consent::offline_mode_note(&self.config));
                 if sandbox::SUPPORTED {
                     widgets::checkbox(ui, &mut block, tr("Block network for plugins that don't declare it"))
-                        .on_hover_text(tr("Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
+                        .on_hover_text(tr("Plugins that declare no network hosts cannot connect to the network, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
                 }
                 if let Some(dir) = &plugin_dir {
                     // A long path would widen the window: elide it, with the whole path on hover.
@@ -1087,10 +1087,10 @@ fn bullet_note(ui: &mut egui::Ui, text: &str) {
 pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
     if blocked {
-        bullet(ui, tr("Network blocked by Xuan (Linux)"));
+        bullet(ui, tr(sandbox::BLOCKED_LABEL));
         bullet_note(
             ui,
-            tr("It cannot open network sockets, not even to this computer."),
+            tr("It cannot connect to the network, not even to this computer."),
         );
     }
     if !permissions.network.is_empty() {

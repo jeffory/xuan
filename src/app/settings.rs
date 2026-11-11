@@ -544,10 +544,10 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
             },
             Some(if sandbox::SUPPORTED {
                 tr(
-                    "Plugins that declare no network hosts cannot open network sockets, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked.",
+                    "Plugins that declare no network hosts cannot connect to the network, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked.",
                 )
             } else {
-                tr("Only available on Linux.")
+                tr("Only available on Linux and Windows.")
             }),
         );
         if changed {
