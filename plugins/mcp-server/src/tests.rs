@@ -2793,3 +2793,41 @@ async fn a_run_the_client_starts_shows_in_the_pane() {
     let off = crate::pane::tree(&shared, Some(&json!({"edit_prompt": "session"}))).to_string();
     assert!(!off.contains("other plugins' actions"), "{off}");
 }
+
+#[test]
+fn set_adjustment_changes_a_layer_in_place_with_one_of_adjustment_or_filter() {
+    let editor = FakeEditor::new(false);
+    let layer = "11111111-1111-1111-1111-111111111111";
+    let hue =
+        json!({"HueSaturation": {"hue": 0, "saturation": 8, "lightness": 0, "colorize": false}});
+    let blur = json!({"GaussianBlur": {"radius": 3}});
+    for (key, sent, expected) in [
+        ("adjustment", hue.clone(), hue.clone()),
+        // Some clients quote objects; the settings are read as JSON.
+        ("adjustment", json!(hue.to_string()), hue.clone()),
+        ("filter", blur.clone(), blur.clone()),
+    ] {
+        let result = call_tool(
+            &editor,
+            "set_adjustment",
+            json!({"layer": layer, key: sent}),
+        );
+        assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+        let params = edit_requests(&editor).pop().unwrap();
+        assert_eq!(
+            params["edits"],
+            json!([{"op": "set_adjustment", "layer": layer, key: expected}])
+        );
+        assert_eq!(params["name"], "Change Adjustment");
+    }
+    let sent = edit_requests(&editor).len();
+    for bad in [
+        json!({"layer": layer}),
+        json!({"layer": layer, "adjustment": hue, "filter": blur}),
+    ] {
+        let result = call_tool(&editor, "set_adjustment", bad);
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("either"), "{}", text_of(&result));
+    }
+    assert_eq!(edit_requests(&editor).len(), sent, "nothing more sent");
+}

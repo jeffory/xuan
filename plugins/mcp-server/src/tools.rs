@@ -1099,6 +1099,27 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 ))
             }),
         },
+        Spec {
+            name: "set_adjustment",
+            title: "Change an adjustment or filter layer",
+            description: "Change the settings of an adjustment or filter layer that is already there, in place: give `adjustment` for an adjustment layer or `filter` for a filter layer, written whole as apply_adjustment and apply_filter take them. get_document lists each such layer's current settings under `adjustment` or `filter`, so read them, change the numbers and send them back. The layer keeps its place, mask, opacity and blend mode.",
+            properties: json!({"layer": layer(), "adjustment": effect(ADJUSTMENTS), "filter": effect(FILTERS)}),
+            required: &["layer"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["layer", "adjustment", "filter"];
+                let args = unquote(unquote(pick(args, &keys)?, "adjustment"), "filter");
+                if args.contains_key("adjustment") == args.contains_key("filter") {
+                    return Err("Give either `adjustment` or `filter`".into());
+                }
+                let layer = args.get("layer").cloned().unwrap_or(Value::Null);
+                Ok(Plan::new(
+                    "Change Adjustment",
+                    vec![Value::Object(op("set_adjustment", &args, &keys))],
+                    Reply::Layer(layer),
+                ))
+            }),
+        },
         // The canvas.
         Spec {
             name: "crop_canvas",
@@ -1245,7 +1266,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {

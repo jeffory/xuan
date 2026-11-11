@@ -152,6 +152,9 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         "attached_to": attached_to,
         "shape": shape,
         "text": text,
+        // An adjustment or filter layer's settings, as `set_adjustment` takes them.
+        "adjustment": layer.adjustment,
+        "filter": layer.filter,
         "raw": layer.raw.as_ref().map(super::raw::describe),
         "generated": layer.generated,
         "provenance": layer.provenance,
@@ -969,6 +972,16 @@ pub enum Edit {
         #[serde(default)]
         above: Option<Uuid>,
     },
+    /// New settings for an adjustment or filter layer that is already there,
+    /// as the layer's own dialog sets them: an adjustment for an adjustment
+    /// layer, a filter for a filter layer.
+    SetAdjustment {
+        layer: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adjustment: Option<Adjustment>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<Filter>,
+    },
     /// An empty pixel layer the size of the canvas.
     AddEmptyLayer {
         #[serde(default)]
@@ -1744,6 +1757,7 @@ macro_rules! layer_ids {
             | Edit::Select { layer }
             | Edit::UngroupLayers { layer }
             | Edit::Transform { layer, .. }
+            | Edit::SetAdjustment { layer, .. }
             | Edit::SetText { layer, .. } => vec![layer],
             Edit::SelectLayers { layers }
             | Edit::MergeLayers { layers }
@@ -2472,6 +2486,36 @@ fn apply_each(
                     });
                 }
                 added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::SetAdjustment {
+                layer,
+                adjustment,
+                filter,
+            } => {
+                ensure!(
+                    adjustment.is_some() != filter.is_some(),
+                    "Give either an adjustment or a filter"
+                );
+                let layer = find_mut(document, *layer)?;
+                ensure!(!layer.locked, "The layer is locked");
+                if let Some(adjustment) = adjustment {
+                    check_adjustment(adjustment)?;
+                    ensure!(
+                        layer.adjustment.is_some(),
+                        "\"{}\" is not an adjustment layer",
+                        layer.name
+                    );
+                    layer.adjustment = Some(adjustment.clone());
+                }
+                if let Some(filter) = filter {
+                    filter.validate()?;
+                    ensure!(
+                        layer.filter.is_some(),
+                        "\"{}\" is not a filter layer",
+                        layer.name
+                    );
+                    layer.filter = Some(filter.clone());
+                }
             }
             Edit::AddEmptyLayer { name, above } => {
                 reader.add_layer()?;
@@ -5077,6 +5121,79 @@ mod tests {
         copies["symmetry"] = json!({"mode": "radial", "segments": 32});
         assert!(cost(&document, &[edit(long)]).stroke <= MAX_STROKE_LENGTH);
         assert!(cost(&document, &[edit(copies)]).stroke > MAX_STROKE_LENGTH);
+    }
+
+    #[test]
+    fn adjustment_layers_report_their_settings_and_set_adjustment_changes_them_in_place() {
+        let (mut document, image) = grey_document();
+        let hue = |saturation: i32| json!({"HueSaturation": {"hue": 0.0, "saturation": saturation, "lightness": 0.0, "colorize": false}});
+        let added = run(
+            &mut document,
+            &[
+                edit(json!({"op": "add_adjustment_layer", "adjustment": hue(16)})),
+                edit(json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 2.0}}})),
+            ],
+        )
+        .unwrap();
+        let (grade, blur) = (added[0], added[1]);
+        let described = |document: &Document, id: Uuid| {
+            describe_layer(
+                document,
+                document.layers.iter().find(|l| l.id == id).unwrap(),
+            )
+        };
+        assert_eq!(
+            described(&document, grade)["adjustment"]["HueSaturation"]["saturation"],
+            16.0
+        );
+        assert_eq!(described(&document, grade)["filter"], Value::Null);
+        assert_eq!(
+            described(&document, blur)["filter"]["GaussianBlur"]["radius"],
+            2.0
+        );
+        assert_eq!(described(&document, image)["adjustment"], Value::Null);
+
+        let order: Vec<Uuid> = document.layers.iter().map(|l| l.id).collect();
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "set_adjustment", "layer": grade, "adjustment": hue(6)})),
+                edit(json!({"op": "set_adjustment", "layer": blur, "filter": {"GaussianBlur": {"radius": 5.0}}})),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            described(&document, grade)["adjustment"]["HueSaturation"]["saturation"],
+            6.0
+        );
+        assert_eq!(
+            described(&document, blur)["filter"]["GaussianBlur"]["radius"],
+            5.0
+        );
+        assert_eq!(
+            order,
+            document.layers.iter().map(|l| l.id).collect::<Vec<_>>(),
+            "the layers keep their places"
+        );
+
+        for (bad, says) in [
+            (json!({"op": "set_adjustment", "layer": grade}), "either"),
+            (
+                json!({"op": "set_adjustment", "layer": grade, "filter": {"GaussianBlur": {"radius": 5.0}}}),
+                "not a filter layer",
+            ),
+            (
+                json!({"op": "set_adjustment", "layer": image, "adjustment": hue(1)}),
+                "not an adjustment layer",
+            ),
+            (
+                json!({"op": "set_adjustment", "layer": grade, "adjustment": hue(500)}),
+                "",
+            ),
+        ] {
+            let error = run(&mut document.clone(), &[edit(bad.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
     }
 
     #[test]

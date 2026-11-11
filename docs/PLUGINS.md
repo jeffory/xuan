@@ -1310,6 +1310,12 @@ Layers and their properties:
 - `{"op": "add_adjustment_layer", "adjustment" | "filter", "name"?,
   "above"?}`: a non-destructive adjustment or filter layer, masked by the
   selection when there is one.
+- `{"op": "set_adjustment", "layer", "adjustment" | "filter"}`: new settings
+  for an adjustment or filter layer that is already there, as its own dialog
+  sets them: an adjustment for an adjustment layer, a filter for a filter
+  layer. The layer keeps its place, mask, opacity and blend mode.
+  `document/get` lists each such layer's current settings under `adjustment`
+  or `filter`, in the shape this op takes.
 
 Pixels, inside the selection when there is one (on the given `layer`, which
 becomes the active layer, or the active layer; it must be an unlocked pixel
