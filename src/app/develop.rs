@@ -926,7 +926,7 @@ impl EditorApp {
         self.develop = Some(develop);
     }
 
-    fn apply_developed(
+    pub(super) fn apply_developed(
         &mut self,
         target: &DevelopTarget,
         asset: RawAsset,

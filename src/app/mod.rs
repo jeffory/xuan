@@ -26,6 +26,7 @@ mod font_picker;
 mod gpu_preview;
 mod grid_settings;
 mod guides;
+pub mod headless;
 mod icons;
 mod jobs;
 mod keybindings;
@@ -59,6 +60,7 @@ mod plugin_files;
 mod plugin_install;
 mod plugin_models;
 mod plugin_panes;
+mod plugin_raw;
 mod plugin_sessions;
 mod plugins;
 mod presets_dialog;
@@ -789,6 +791,8 @@ pub struct EditorApp {
     /// The Export dialog's preview and estimated size, made in the background.
     export_preview: export_preview::ExportPreview,
     screenshot: Option<PathBuf>,
+    /// Running without a window (`--headless`): who answers the prompts nobody can.
+    headless: Option<headless::Headless>,
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
@@ -1020,6 +1024,7 @@ impl EditorApp {
             export_texture: None,
             export_preview: Default::default(),
             screenshot,
+            headless: None,
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,

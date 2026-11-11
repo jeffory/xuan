@@ -6307,3 +6307,139 @@ done
         ui.app_mut().stop_plugin("mock");
     }
 }
+
+/// A document with one RAW layer whose camera file the decoder cannot read.
+fn raw_document(app: &mut EditorApp) -> uuid::Uuid {
+    let camera = image::Rgb32FImage::from_pixel(16, 12, image::Rgb([0.2; 3]));
+    let decoded = xuan::raw::DecodedRaw {
+        camera,
+        as_shot: [1.0; 3],
+        camera_to_rgb: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        xyz_to_camera: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        metadata: xuan::raw::RawMetadata {
+            width: 16,
+            height: 12,
+            ..Default::default()
+        },
+    };
+    let asset = xuan::raw::RawAsset {
+        filename: "broken.NEF".into(),
+        metadata: decoded.metadata.clone(),
+        settings: Default::default(),
+        bytes: Arc::new(vec![1, 2, 3]),
+    };
+    let pixels = xuan::raw::render(
+        &decoded,
+        &asset.settings,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    app.apply_developed(&super::develop::DevelopTarget::New, asset, pixels)
+        .unwrap();
+    app.session().unwrap().document.layers[0].id
+}
+
+fn request(method: &str, params: serde_json::Value) -> xuan::plugins::protocol::Request {
+    xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(7),
+        method: method.into(),
+        params,
+    }
+}
+
+#[test]
+fn raw_develop_checks_its_settings_at_once_and_runs_as_a_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    let layer = raw_document(&mut app);
+    let described = xuan::plugins::edits::describe(&app.session().unwrap().document);
+    assert_eq!(described["layers"][0]["raw"]["filename"], "broken.NEF");
+
+    // A misspelt setting starts nothing.
+    app.serve_request(
+        "mock",
+        request(
+            "raw/develop",
+            serde_json::json!({"settings": {"exposre": 1}}),
+        ),
+    );
+    assert!(app.job.is_none());
+    // Only through its job, never answered on the spot.
+    assert!(plugin_request(&mut app, "raw/develop", serde_json::json!({})).is_err());
+
+    let before = app.session().unwrap().document.layers[0].pixels.clone();
+    app.serve_request(
+        "mock",
+        request(
+            "raw/develop",
+            serde_json::json!({"layer": layer.to_string(), "settings": {"exposure": 1}}),
+        ),
+    );
+    let job = app.job.as_ref().expect("a develop job");
+    assert_eq!(job.name, "Develop RAW");
+    assert_eq!(
+        job.reply
+            .as_ref()
+            .map(|(plugin, _, id)| (plugin.as_str(), *id)),
+        Some(("mock", layer))
+    );
+    // Other edits wait for it.
+    assert!(plugin_request(&mut app, "document/edit", serde_json::json!({"edits": []})).is_err());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while app.job.is_some() {
+        assert!(std::time::Instant::now() < deadline, "the job never ended");
+        app.poll_job();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // The camera file does not decode: the plugin hears why, the user gets no
+    // error dialog, and the layer is as it was.
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let session = app.session().unwrap();
+    assert_eq!(session.document.layers[0].pixels, before);
+    assert_eq!(
+        session.document.layers[0]
+            .raw
+            .as_ref()
+            .unwrap()
+            .settings
+            .exposure,
+        0.0
+    );
+}
+
+#[test]
+fn headless_file_requests_follow_allow_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    let image = dir.path().join("photo.png");
+    RgbaImage::new(2, 2).save(&image).unwrap();
+    let open = || request("file/open", serde_json::json!({"path": image}));
+    let save = || request("file/save_as", serde_json::json!({}));
+
+    app.headless = Some(super::headless::Headless { allow_files: false });
+    app.queue_file_request("mock", open());
+    app.queue_file_request("mock", save());
+    assert!(app.plugins.file_requests.is_empty(), "refused at once");
+
+    app.headless = Some(super::headless::Headless { allow_files: true });
+    app.queue_file_request("mock", save());
+    assert!(
+        app.plugins.file_requests.is_empty(),
+        "no save dialog headless"
+    );
+    app.queue_file_request("mock", open());
+    assert_eq!(app.plugins.file_requests.len(), 1);
+
+    // With a window, all of them wait for the user.
+    let (_context, mut app) = super::app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.queue_file_request("mock", save());
+    assert_eq!(app.plugins.file_requests.len(), 1);
+}

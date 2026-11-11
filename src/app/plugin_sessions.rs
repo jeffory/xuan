@@ -95,6 +95,8 @@ impl EditorApp {
         }
         match request.method.as_str() {
             "document/edit" => true,
+            // Develops a RAW layer again: an edit like any other, run as a job.
+            "raw/develop" => true,
             "host/run" => request
                 .params
                 .get("action")
@@ -206,10 +208,7 @@ impl EditorApp {
                 }
                 continue;
             }
-            let result = self.service_request(&plugin, &request);
-            if let Some(process) = self.plugins.process_mut(&plugin) {
-                let _ = process.respond(request.id, result);
-            }
+            self.serve_request(&plugin, request);
         }
         // Edits that arrived while these were applied wait behind them.
         waiting.append(&mut self.plugins.edit_held);

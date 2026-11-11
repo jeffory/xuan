@@ -18,6 +18,9 @@ pub(super) struct Job {
     pub cancel: Arc<AtomicBool>,
     /// The fraction done (an `f32`'s bits), for jobs that report it.
     progress: Arc<AtomicU32>,
+    /// A plugin request answered when the job ends (`raw/develop`): the plugin,
+    /// the request and the layer the answer describes.
+    pub reply: Option<(String, xuan::plugins::protocol::Id, Uuid)>,
 }
 
 impl Job {
@@ -80,6 +83,7 @@ impl EditorApp {
             receive,
             cancel,
             progress,
+            reply: None,
         });
     }
 
@@ -95,6 +99,9 @@ impl EditorApp {
             }
         };
         let job = self.job.take().unwrap();
+        let reply = job.reply.clone();
+        let cancelled = job.cancel.load(Ordering::Relaxed);
+        let failed = result.as_ref().err().cloned();
         if let Some(session) = self
             .sessions
             .iter_mut()
@@ -114,12 +121,18 @@ impl EditorApp {
                     session.history.cancel(&mut session.document);
                     if job.cancel.load(Ordering::Relaxed) {
                         self.status = tr("Cancelled").into();
-                    } else if let Err(error) = result {
+                    } else if let Err(error) = result
+                        && reply.is_none()
+                    {
+                        // A plugin's job tells the plugin, which tells its user.
                         self.error = Some(error);
                     }
                 }
             }
             session.invalidate();
+        }
+        if let Some((plugin, id, layer)) = reply {
+            self.answer_job_reply(&plugin, id, job.target, layer, cancelled, failed);
         }
     }
 }

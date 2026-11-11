@@ -94,6 +94,7 @@ the document takes effect on the next frame and is drawn at once.
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
 | provenance | `document/get` lists each generated layer's `provenance` |
+| develop a camera RAW layer | `raw/develop` (new): a background job, answered when it ends |
 | run a plugin action | not exposed: `host/run` only starts the calling plugin's own actions |
 
 Panes give the plugin its status and connection page; settings hold the port.
@@ -503,6 +504,80 @@ usually sends what it reads (previews included) to a model in the cloud:
 - previews and exports outside an action need the send consent (#39) once per
   process, or "Don't ask again";
 - offline mode ("Disable plugins that use the network") stops it.
+
+## Headless mode and camera RAW
+
+Two additions for agents that work without anyone at the screen: how to use
+them is in [AGENTS-GUIDE.md](AGENTS-GUIDE.md#without-a-window---headless).
+
+**`xuan --headless`** runs the editor without a window and serves this
+plugin. `main` branches before eframe is started, so no winit event loop,
+window, surface or wgpu device exists and the display server, EGL, Vulkan
+and GL are never loaded: a desktop whose graphics stack fails at startup, a
+server, or a container can still run it. The editor is the same
+`EditorApp`, made with an `egui::Context` that never paints. A loop
+(`src/app/headless.rs`) does what a frame does apart from drawing: it
+services plugin requests, finishes jobs and commits history, and sleeps
+until a plugin message or a job asks for a repaint (the context's repaint
+callback wakes it). Without a GPU processor, edits take the CPU paths Xuan
+already has for computers without a suitable GPU.
+
+The prompts have no one to answer them, so the command line does, for this
+run only:
+
+- The plugin's grant is made in memory with `edit_without_asking` and
+  `send_without_asking`: launching Xuan headless is the user's answer to
+  the edit prompt and to the prompt before images go out. The settings file
+  is read (for the plugin folders, the port and "plugins that use the
+  network") but never written, so a headless run does not grant anything to
+  the Xuan used with a window.
+- File requests are refused, with a message that says why, unless
+  `--allow-files` is given: then `file/open` and writes to a `path` go ahead
+  without the prompt (`save_without_asking`), and an overwrite still needs
+  `overwrite: true`. A save without `path` would need the system dialog and
+  is always refused, before any dialog is shown.
+- Any other dialog that opens is closed and reported on standard error.
+
+Rather than show the token, Xuan prints the URL from the plugin's
+`connection.json`, the token file's path and a Claude Code command that
+reads it. `--mcp-port` overrides the port setting for the run. A plugin that
+stops is started again, up to three times. SIGINT and SIGTERM stop the
+plugin and Xuan.
+
+Considered: an MCP stdio transport (`claude mcp add xuan -- xuan --headless`)
+would save the token step, but the plugin's stdin and stdout already carry
+the plugin protocol, so Xuan would have to proxy MCP between its own stdio
+and the plugin's HTTP server; `mcp-remote` already bridges a stdio-only
+client to the HTTP server. Rendering the window offscreen with a GPU was
+not needed: nothing an agent does goes through egui's painting.
+
+**Camera RAW.** Develop (the RAW pipeline, `src/raw`) was reachable only
+through its workspace, which a client cannot use: `file/open` of a RAW file
+opened a Develop tab waiting for **Apply** and answered with the previous
+document. Now:
+
+- `file/open` (and a headless command line) opens a RAW file directly as a
+  document with one RAW layer developed with the default settings, as
+  pressing Apply at once would.
+- `document/get` describes a RAW layer's camera file, metadata and Develop
+  settings under `raw`.
+- `raw/develop` develops a RAW layer again with settings laid over its own.
+  Decoding and rendering a 24-megapixel file takes seconds, beyond the
+  budget of a `document/edit` (which runs on the UI thread between frames),
+  so it is a background job like Content-Aware Fill: the job holds the
+  plugin's request and answers it when it ends, the user sees the job and
+  can cancel it, and it is one undo step. It is gated like `document/edit`
+  (`document = "edit"` and the session's answer). The settings are checked
+  before the job starts, so a misspelt or out-of-range setting is refused
+  at once with its name and range.
+- The MCP tool `develop_raw` sends it; `open_document` and `get_document`
+  say what they do with RAW files.
+
+RAW stays in core rather than becoming a plugin: decoding and the Develop
+pipeline were already core (the Develop workspace, RAW layers in `.xuan`
+files), and a plugin could not develop RAW layers non-destructively anyway,
+since format plugins return flat pixels. What this adds is the generic host
+request any plugin with `document = "edit"` can use.
 
 ## Not in v1
 

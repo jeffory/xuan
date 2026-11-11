@@ -152,6 +152,7 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         "attached_to": attached_to,
         "shape": shape,
         "text": text,
+        "raw": layer.raw.as_ref().map(super::raw::describe),
         "generated": layer.generated,
         "provenance": layer.provenance,
     })
