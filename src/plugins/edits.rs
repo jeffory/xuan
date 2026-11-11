@@ -860,6 +860,9 @@ pub enum Edit {
         #[serde(default)]
         layer: Option<Uuid>,
         color: Color,
+        /// Fill the layer's mask (as luminance) instead of its pixels.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mask: bool,
     },
     /// Keep SVG path data with the document as a named path, as in the
     /// Paths panel (replacing the path of that name if there is one).
@@ -954,6 +957,23 @@ pub enum Edit {
         /// Paint the stroke again mirrored or turned around a centre.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         symmetry: Option<StrokeSymmetry>,
+        /// What the brush does: paint (the default), erase, or the Dodge,
+        /// Burn and Sponge tools, which change the pixels under it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<StrokeMode>,
+        /// Dodge and Burn: the tones that change most (midtones by default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range: Option<StrokeRange>,
+        /// Dodge, Burn and Sponge: the strength, 0 to 1 (0.5 by default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exposure: Option<f32>,
+        /// Sponge: saturate instead of desaturate.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        saturate: bool,
+        /// Paint the layer's mask (the colour's luminance: white shows, black
+        /// hides) instead of its pixels.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mask: bool,
     },
     /// A filter applied to a layer's pixels inside the selection, written as
     /// in `.xuan` files, e.g. `{"GaussianBlur": {"radius": 4}}`.
@@ -1699,6 +1719,26 @@ impl Edit {
     }
 }
 
+/// What a `stroke` edit's brush does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeMode {
+    Paint,
+    Erase,
+    Dodge,
+    Burn,
+    Sponge,
+}
+
+/// The tones a Dodge or Burn stroke changes most.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeRange {
+    Shadows,
+    Midtones,
+    Highlights,
+}
+
 /// How far a batch moves the document's content: the sum of the `left` and
 /// `top` of its `extend_canvas` edits. Outputs placed in the coordinates of
 /// the document as it was sent move by this much to stay on their content.
@@ -2326,9 +2366,13 @@ fn apply_each(
                     document.selection = Some(Arc::new(crate::gpu::blur_gray(selection, *radius)));
                 }
             }
-            Edit::Fill { layer, color } => {
-                activate(document, *layer)?;
-                crate::paint::fill(document, color.0, false, false)?;
+            Edit::Fill { layer, color, mask } => {
+                if *mask {
+                    activate_mask(document, *layer)?;
+                } else {
+                    activate(document, *layer)?;
+                }
+                crate::paint::fill(document, color.0, false, *mask)?;
             }
             Edit::AddPath { path, name } => {
                 let d = VectorPath::parse(path)?;
@@ -2395,7 +2439,11 @@ fn apply_each(
                     .map(|stop| (stop.position, stop.color.0))
                     .collect();
                 stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-                activate(document, *layer)?;
+                if *mask {
+                    activate_mask(document, *layer)?;
+                } else {
+                    activate(document, *layer)?;
+                }
                 crate::paint::gradient_stops(
                     document,
                     ends[0],
@@ -2429,7 +2477,48 @@ fn apply_each(
                 hue_jitter,
                 seed,
                 symmetry,
+                mode,
+                range,
+                exposure,
+                saturate,
+                mask,
             } => {
+                use crate::paint::PaintMode;
+                let mode = match (mode, erase) {
+                    (None | Some(StrokeMode::Paint), false) => PaintMode::Paint,
+                    (None | Some(StrokeMode::Erase), true) | (Some(StrokeMode::Erase), false) => {
+                        PaintMode::Erase
+                    }
+                    (Some(StrokeMode::Dodge), false) => PaintMode::Dodge,
+                    (Some(StrokeMode::Burn), false) => PaintMode::Burn,
+                    (Some(StrokeMode::Sponge), false) => PaintMode::Sponge,
+                    (Some(_), true) => bail!("Give `erase` or a `mode`, not both"),
+                };
+                let tones = matches!(mode, PaintMode::Dodge | PaintMode::Burn | PaintMode::Sponge);
+                ensure!(
+                    tones || (range.is_none() && exposure.is_none() && !saturate),
+                    "`range`, `exposure` and `saturate` belong to the dodge, burn and sponge modes"
+                );
+                ensure!(
+                    !(tones && *mask),
+                    "Dodge, Burn and Sponge work on layer pixels, not masks"
+                );
+                let exposure = exposure.unwrap_or(0.5);
+                ensure!(
+                    exposure.is_finite() && (0.0..=1.0).contains(&exposure),
+                    "The exposure must be between 0 and 1"
+                );
+                let tone = crate::paint::tone::Tone {
+                    range: match range {
+                        Some(StrokeRange::Shadows) => crate::paint::tone::ToneRange::Shadows,
+                        Some(StrokeRange::Highlights) => crate::paint::tone::ToneRange::Highlights,
+                        Some(StrokeRange::Midtones) | None => {
+                            crate::paint::tone::ToneRange::Midtones
+                        }
+                    },
+                    exposure,
+                    saturate: *saturate,
+                };
                 let points = &*stroke_points(points, path)?;
                 let xy: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
                 let positions = valid_points(&xy)?;
@@ -2473,7 +2562,11 @@ fn apply_each(
                 symmetry
                     .validate(document.width, document.height)
                     .map_err(anyhow::Error::msg)?;
-                activate(document, *layer)?;
+                if *mask {
+                    activate_mask(document, *layer)?;
+                } else {
+                    activate(document, *layer)?;
+                }
                 let brush = crate::paint::Brush {
                     diameter: *size,
                     hardness: *hardness,
@@ -2482,12 +2575,8 @@ fn apply_each(
                     color: color.0,
                     dynamics,
                     symmetry,
+                    tone,
                     ..crate::paint::Brush::default()
-                };
-                let mode = if *erase {
-                    crate::paint::PaintMode::Erase
-                } else {
-                    crate::paint::PaintMode::Paint
                 };
                 // Pressure goes through the pen's path: size, and opacity when asked.
                 let samples: Vec<(Point, crate::paint::Brush)> = positions
@@ -2509,7 +2598,7 @@ fn apply_each(
                     &samples,
                     crate::paint::StrokeOptions {
                         mode,
-                        mask_target: false,
+                        mask_target: *mask,
                         source: None,
                         clone_offset: Point::default(),
                     },
@@ -2982,6 +3071,42 @@ fn activate(document: &mut Document, layer: Option<Uuid>) -> Result<()> {
         document.select(layer, false);
     }
     ensure!(document.active().is_some(), "Select a layer first");
+    Ok(())
+}
+
+/// As [`activate`], for an edit that paints a mask: an image keeps its mask on a mask
+/// layer attached to it, so when it has exactly one, that layer becomes the active one
+/// and is painted, instead of a second mask being started.
+fn activate_mask(document: &mut Document, layer: Option<Uuid>) -> Result<()> {
+    activate(document, layer)?;
+    let Some(active) = document.active() else {
+        return Ok(());
+    };
+    if active.mask.is_some() || !active.can_attach_effects() {
+        return Ok(());
+    }
+    let attached: Vec<Uuid> = document
+        .layers
+        .iter()
+        .filter(|child| {
+            child.parent == Some(active.id) && child.standalone_mask && child.mask.is_some()
+        })
+        .map(|child| child.id)
+        .collect();
+    match attached[..] {
+        [] => {}
+        [mask] => document.select(mask, false),
+        _ => bail!(
+            "Layer {} has {} mask layers attached; name one of them: {}",
+            active.name,
+            attached.len(),
+            attached
+                .iter()
+                .map(Uuid::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
     Ok(())
 }
 
@@ -5341,6 +5466,125 @@ mod tests {
             let error = run(&mut document.clone(), &[edit(bad.clone())]).unwrap_err();
             assert!(error.to_string().contains(says), "{bad}: {error}");
         }
+    }
+
+    #[test]
+    fn strokes_dodge_burn_and_paint_masks_and_fills_reach_masks_too() {
+        let level = |document: &Document, id: Uuid, x: u32, y: u32| {
+            let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+            layer.pixels.as_ref().unwrap().get_pixel(x, y).0[0]
+        };
+        let across = json!([[5, 15], [35, 15]]);
+        for (mode, lighter) in [("dodge", true), ("burn", false)] {
+            let (mut document, id) = grey_document();
+            let stroke = edit(json!({
+                "op": "stroke", "layer": id, "points": across, "size": 8,
+                "mode": mode, "range": "midtones", "exposure": 1.0,
+            }));
+            run(&mut document, &[stroke]).unwrap();
+            let (under, away) = (level(&document, id, 20, 15), level(&document, id, 20, 2));
+            assert_eq!(away, 100, "{mode}");
+            assert_eq!(under > 100, lighter, "{mode}: {under}");
+            assert_ne!(under, 100, "{mode}");
+        }
+
+        // An adjustment layer's mask is painted directly: black hides the adjustment.
+        let (mut document, image) = grey_document();
+        let grade = run(
+            &mut document,
+            &[edit(
+                json!({"op": "add_adjustment_layer", "adjustment": "Invert"}),
+            )],
+        )
+        .unwrap()[0];
+        let mask_at = |document: &Document, id: Uuid, x: u32, y: u32| {
+            let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+            layer.mask.as_ref().unwrap().pixels.get_pixel(x, y).0[0]
+        };
+        run(
+            &mut document,
+            &[edit(json!({
+                "op": "stroke", "layer": grade, "points": across, "size": 8,
+                "color": "#000000", "mask": true,
+            }))],
+        )
+        .unwrap();
+        assert!(mask_at(&document, grade, 20, 15) < 10);
+        assert_eq!(mask_at(&document, grade, 20, 2), 255);
+        let flat = crate::render::render(&document);
+        assert_eq!(
+            flat.get_pixel(20, 15).0[0],
+            100,
+            "not inverted under the stroke"
+        );
+        assert_eq!(flat.get_pixel(20, 2).0[0], 155);
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "fill", "layer": grade, "color": "#ffffff", "mask": true}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(mask_at(&document, grade, 20, 15), 255);
+
+        // An image keeps its mask on an attached mask layer: once it has one, that is
+        // the mask a second stroke paints.
+        run(
+            &mut document,
+            &[edit(json!({
+                "op": "stroke", "layer": image, "points": across, "size": 8,
+                "color": "#000000", "mask": true,
+            }))],
+        )
+        .unwrap();
+        document.promote_image_masks();
+        let attached: Vec<Uuid> = document
+            .layers
+            .iter()
+            .filter(|l| l.parent == Some(image) && l.standalone_mask)
+            .map(|l| l.id)
+            .collect();
+        assert_eq!(attached.len(), 1);
+        assert!(mask_at(&document, attached[0], 20, 15) < 10);
+        for edit in [
+            edit(json!({
+                "op": "stroke", "layer": image, "points": [[20, 2], [20, 28]],
+                "size": 4, "color": "#000000", "mask": true,
+            })),
+            edit(json!({
+                "op": "gradient", "layer": image, "start": [0, 0], "end": [40, 0], "mask": true,
+                "stops": [{"position": 0, "color": "#000000"}, {"position": 1, "color": "#ffffff"}],
+            })),
+        ] {
+            run(&mut document, &[edit]).unwrap();
+            document.promote_image_masks();
+            let masks = document
+                .layers
+                .iter()
+                .filter(|l| l.parent == Some(image) && l.standalone_mask)
+                .count();
+            assert_eq!(masks, 1, "no second mask layer");
+        }
+        assert!(
+            mask_at(&document, attached[0], 2, 15) < 40,
+            "the gradient's dark end"
+        );
+
+        for (bad, says) in [
+            (json!({"mode": "dodge", "mask": true}), "not masks"),
+            (json!({"mode": "burn", "erase": true}), "not both"),
+            (json!({"exposure": 0.5}), "belong to"),
+            (json!({"mode": "sponge", "exposure": 2}), "exposure"),
+        ] {
+            let mut stroke = json!({"op": "stroke", "layer": image, "points": across});
+            stroke
+                .as_object_mut()
+                .unwrap()
+                .extend(bad.as_object().unwrap().clone());
+            let error = run(&mut document.clone(), &[edit(stroke)]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
+        assert!(serde_json::from_value::<Edit>(json!({"op": "stroke", "mode": "smear"})).is_err());
     }
 
     /// Whether every pixel of the flattened image is opaque: no corner is empty.

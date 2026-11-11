@@ -3014,3 +3014,55 @@ fn canvas_turns_by_any_angle_and_crops_work_out_ratio_and_straighten_boxes() {
         json!([{"op": "transform", "layer": "base", "rotation": 3, "pivot": [100, 80], "cover": true}])
     );
 }
+
+#[test]
+fn strokes_dodge_and_burn_and_strokes_and_fills_paint_masks() {
+    let editor = FakeEditor::new(false);
+    let sent = |editor: &FakeEditor| edit_requests(editor).pop().unwrap()["edits"].clone();
+    call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"layer": "base", "points": [[1, 2]], "mode": "dodge", "range": "highlights", "exposure": 0.2}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "stroke", "layer": "base", "points": [[1, 2]], "mode": "dodge", "range": "highlights", "exposure": 0.2}])
+    );
+    // Each stroke may set its own mode; the rest comes from the top level.
+    call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"mask": true, "color": "#ffffff", "strokes": [{"points": [[1, 2]]}, {"points": [[3, 4]], "mode": "erase"}]}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([
+            {"op": "stroke", "mask": true, "color": "#ffffff", "points": [[1, 2]]},
+            {"op": "stroke", "mask": true, "color": "#ffffff", "points": [[3, 4]], "mode": "erase"},
+        ])
+    );
+    call_tool(
+        &editor,
+        "fill",
+        json!({"layer": "base", "color": "#000000", "mask": true}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "fill", "layer": "base", "color": "#000000", "mask": true}])
+    );
+    let refused = call_tool(
+        &editor,
+        "fill",
+        json!({"color": "#000000", "mask": true, "path": "M 0 0 L 4 0 L 4 4 Z"}),
+    );
+    assert_eq!(refused.is_error, Some(true));
+    assert!(text_of(&refused).contains("no `path`"));
+    let description = tools::list()
+        .into_iter()
+        .find(|tool| tool.name == "paint_stroke")
+        .and_then(|tool| tool.description)
+        .unwrap();
+    for word in ["dodge", "burn", "sponge", "mask: true"] {
+        assert!(description.contains(word), "{word}");
+    }
+}

@@ -281,8 +281,8 @@ larger tool arguments with a tool error saying the request is too large.
 | `select_shape` | Rectangle, ellipse, polygon or SVG path selection with a `mode` and optional `feather` | `select_rect`, `select_polygon`, `select_path` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
 | `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels (of `layer`) | `host/run`, `grow_selection`, `feather_selection` |
-| `paint_stroke` | Brush strokes (or eraser) through points: one with `points` or an SVG `path`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`), and mirror or radial `symmetry` | `stroke` |
-| `fill` | Fill the selection with a colour, or with `path` the inside of an SVG path | `fill`, `fill_path` |
+| `paint_stroke` | Brush strokes (or eraser; `mode` dodge, burn or sponge to lighten, darken or (de)saturate what is under the brush; `mask: true` to paint a layer's mask) through points: one with `points` or an SVG `path`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`), and mirror or radial `symmetry` | `stroke` |
+| `fill` | Fill the selection with a colour, or with `path` the inside of an SVG path, or with `mask: true` the layer's mask | `fill`, `fill_path` |
 | `save_path` | Keep an SVG path with the document under a name, for the Paths dialog | `add_path` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
@@ -532,6 +532,11 @@ the call returns when it is done. Look at the result with `get_preview`.
 - Prefer non-destructive changes the user can adjust: adjustment and filter
   layers (`as_layer: true`), masks, and new layers over painting on the
   original.
+- Local adjustments go through masks: add the adjustment with `as_layer`,
+  `fill` its mask black (`mask: true`), then bring it back where it is wanted
+  with `paint_stroke` (`mask: true`, white, a large soft brush) or
+  `fill_gradient` with `mask`. `set_adjustment` then tunes the strength
+  without repainting.
 - Name the layers you create, so the user can find them.
 - Selections limit fills, strokes, filters and adjustments, and become the
   mask of new adjustment layers. Clear it with `modify_selection` `none` when

@@ -1327,7 +1327,8 @@ Pixels, inside the selection when there is one (on the given `layer`, which
 becomes the active layer, or the active layer; it must be an unlocked pixel
 layer, so text and shape layers become pixel layers):
 
-- `{"op": "fill", "layer"?, "color"}`.
+- `{"op": "fill", "layer"?, "color", "mask"?}`. With `mask: true` the layer's
+  mask is filled (with the colour's lightness) instead of its pixels.
 - `{"op": "fill_path", "layer"?, "path", "color", "fill_rule"?}`: fill the
   inside of `path` ([SVG path data](#svg-path-data)), within the selection when
   there is one, with antialiased edges. The selection does not change.
@@ -1340,7 +1341,16 @@ layer, so text and shape layers become pixel layers):
   `mask` paints the layer's mask with the gradient's brightness instead of its
   pixels. `start` and `end` must differ.
 - `{"op": "stroke", "layer"?, "points": [[x, y], …], "color"?, "size"?,
-  "hardness"?, "opacity"?, "flow"?, "erase"?, …dynamics, "symmetry"?}`: one brush stroke through the
+  "hardness"?, "opacity"?, "flow"?, "erase"?, "mode"?, "range"?, "exposure"?,
+  "saturate"?, "mask"?, …dynamics, "symmetry"?}`: `mode` is `paint` (the
+  default), `erase`, or the tone tools `dodge`, `burn` and `sponge`, which
+  change the pixels under the brush: most in `range` (`shadows`, `midtones`,
+  the default, or `highlights`) and by `exposure` (0–1, default 0.5), with
+  `saturate` for a sponge that saturates. `mask: true` paints the layer's mask
+  with the colour's lightness instead of its pixels (not with the tone
+  tools). A `mask` edit on an image paints the one mask layer attached to it;
+  with none, the image gets one; with several, name the mask layer itself.
+  Otherwise one brush stroke through the
   points (at most 10,000) in document coordinates; `size` is the brush
   diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (defaults 0.8
   and 1), and `erase` erases instead of painting. `flow` (above 0, at most 1;

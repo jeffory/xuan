@@ -1047,7 +1047,9 @@ fn specs() -> Vec<Spec> {
             description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows (a single point paints one round dab), or `path`, SVG path data such as \"M 0 700 C 120 640 380 640 512 700\" whose curves Xuan flattens to points (one subpath; `taper_in`/`taper_out` taper its ends). For several strokes or dabs give `strokes` instead: a list of {points, color, size, …}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. \
 A point may be [x, y, pressure] with pressure 0–1 (default 1), as from a pen: it scales the size along the stroke, and the opacity too with `pressure_opacity`, e.g. [[10, 50, 0.1], [60, 40, 1], [110, 50, 0.1]] for a blade thin at both ends. \
 Symmetry paints each stroke again as one coat with it: `symmetry` {\"mode\": \"vertical\"} mirrors it left↔right across a vertical axis (x → 2·cx − x), \"horizontal\" top↔bottom, and {\"mode\": \"radial\", \"segments\": 12} turns it into 12 copies around the centre, e.g. a starburst's rays from one ray. `center` [x, y] (on the canvas, default its middle) is where the axis or the turns go through. Scatter and jitter are mirrored with the stroke, and every copy counts against the limits. \
-Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. `flow` (0–1, default 1) is how much paint one pass lays down: below 1, going back over the same spot within a stroke builds up to `opacity`. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
+Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. `flow` (0–1, default 1) is how much paint one pass lays down: below 1, going back over the same spot within a stroke builds up to `opacity`. \
+`mode` \"dodge\" lightens and \"burn\" darkens the pixels under the brush instead of painting a colour, most in the `range` of tones named (shadows, midtones or highlights) and by `exposure` (0–1, default 0.5; going over a spot again within one stroke does not add to it, so use a second stroke to go further); \"sponge\" desaturates, or saturates with `saturate`. A large, soft brush (hardness 0) at a low exposure gives the gradual result retouchers want, e.g. dodging a face or burning the edges of the frame. These change pixels, so paint them on a copy (run_command duplicate) to keep the original. \
+`mask: true` paints the layer's mask instead of its pixels, with the colour's lightness: white shows the layer and black hides it. On an adjustment or filter layer this is how to apply it locally, e.g. fill the mask black and paint white with a soft brush where a Curves layer should lighten; on an image it paints the mask layer attached to it, adding one when it has none. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
             properties: {
                 let mut properties = brush_properties();
                 properties.insert(SYMMETRY.into(), symmetry_schema());
@@ -1081,21 +1083,27 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "fill",
             title: "Fill",
-            description: "Fill the selection (or the whole layer without one) of a pixel layer with a colour. With `path`, fill only the inside of that SVG path (and of the selection, if there is one), with antialiased edges.",
+            description: "Fill the selection (or the whole layer without one) of a pixel layer with a colour. With `path`, fill only the inside of that SVG path (and of the selection, if there is one), with antialiased edges. With `mask: true`, fill the layer's mask instead of its pixels, with the colour's lightness: black hides the whole layer (or an adjustment layer's whole effect), ready for paint_stroke or fill_gradient with `mask` to bring it back locally; white shows it all again.",
             properties: json!({
                 "layer": optional_layer(), "color": color("Fill colour"),
+                "mask": {"type": "boolean", "description": "Fill the layer's mask instead of its pixels"},
                 "path": svg_path(SVG_PATH), "fill_rule": fill_rule(),
             }),
             required: &["color"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = pick(args, &["layer", "color", "path", "fill_rule"])?;
-                let edit = if args.get("path").is_some_and(|v| !v.is_null()) {
+                let args = pick(args, &["layer", "color", "path", "fill_rule", "mask"])?;
+                let masked = args.get("mask") == Some(&json!(true));
+                let edit = if masked && args.get("path").is_some_and(|v| !v.is_null()) {
+                    return Err(
+                        "`mask` fills the whole mask or the selection: it takes no `path`".into(),
+                    );
+                } else if args.get("path").is_some_and(|v| !v.is_null()) {
                     op("fill_path", &args, &["layer", "color", "path", "fill_rule"])
                 } else if args.get("fill_rule").is_some_and(|v| !v.is_null()) {
                     return Err("`fill_rule` goes only with `path`".into());
                 } else {
-                    op("fill", &args, &["layer", "color"])
+                    op("fill", &args, &["layer", "color", "mask"])
                 };
                 Ok(Plan::new("Fill", vec![Value::Object(edit)], Reply::Ok))
             }),
@@ -1139,7 +1147,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 },
                 "radial": {"type": "boolean", "description": "Circular instead of linear"},
                 "opacity": number("0–1"),
-                "mask": {"type": "boolean", "description": "Paint the layer's mask instead of its pixels"},
+                "mask": {"type": "boolean", "description": "Paint the layer's mask instead of its pixels: white shows the layer, black hides it. On an adjustment or filter layer a soft gradient applies it gradually across the image; an image's attached mask layer is painted, or one is added"},
             }),
             required: &["start", "end", "stops"],
             kind: Kind::Edit,
@@ -2164,7 +2172,12 @@ fn selection_edit(args: &Map<String, Value>) -> Result<Plan, String> {
 }
 
 /// `paint_stroke`'s arguments.
-const STROKE_ARGS: [&str; 20] = [
+const STROKE_ARGS: [&str; 25] = [
+    "mode",
+    "range",
+    "exposure",
+    "saturate",
+    "mask",
     "layer",
     "points",
     "path",
@@ -2187,7 +2200,12 @@ const STROKE_ARGS: [&str; 20] = [
     "seed",
 ];
 /// What each stroke of `strokes` may set, the top-level value otherwise.
-const BRUSH: [&str; 16] = [
+const BRUSH: [&str; 21] = [
+    "mode",
+    "range",
+    "exposure",
+    "saturate",
+    "mask",
     "color",
     "size",
     "hardness",
@@ -2235,6 +2253,11 @@ fn brush_properties() -> Map<String, Value> {
         "opacity": number("0–1 (default 1)"),
         "flow": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "How much paint one pass lays down (default 1); below 1 paint builds up to `opacity` where the stroke goes back over itself"},
         "erase": {"type": "boolean"},
+        "mode": {"type": "string", "enum": ["paint", "erase", "dodge", "burn", "sponge"], "description": "What the brush does (default paint): dodge lightens, burn darkens and sponge desaturates the pixels under it"},
+        "range": {"type": "string", "enum": ["shadows", "midtones", "highlights"], "description": "Dodge and burn: the tones that change most (default midtones)"},
+        "exposure": {"type": "number", "minimum": 0, "maximum": 1, "description": "Dodge, burn and sponge: strength (default 0.5); one stroke at 1 moves a tone halfway to white or black"},
+        "saturate": {"type": "boolean", "description": "Sponge: saturate instead of desaturate"},
+        "mask": {"type": "boolean", "description": "Paint the layer's mask instead of its pixels: white shows the layer, black hides it"},
         "pressure_opacity": {"type": "boolean", "description": "Point pressure and taper also scale the opacity"},
         "spacing": {"type": "number", "minimum": 0, "maximum": 10, "description": "Distance between dabs as a fraction of the size, e.g. 0.25; 0 (default) is continuous"},
         "taper_in": {"type": "number", "minimum": 0, "description": "Pixels over which the stroke grows from nothing at its start"},
