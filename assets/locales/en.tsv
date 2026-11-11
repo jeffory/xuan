@@ -1479,3 +1479,20 @@ the plugin did not answer in time
 Could not export
 Colours measured in the image
 The image's histogram
+for
+asks to run another plugin's action for its client:
+A run can send document data there and may use paid credits.
+It runs as if you chose it from the menu: the other plugin's own prompts still apply, and its result is a proposal you accept or discard. Allow holds for this session's runs of that plugin until the asking plugin stops.
+Always Allow lets the plugin run other plugins' actions without this prompt until you turn it off in Plugins → Manage Plugins….
+Regions:
+Result: a new layer
+Result: a new document
+On the layers:
+Run other plugins' actions
+Off: the plugin cannot list or start other plugins' actions. On: it can, and Xuan asks you before its first run of each plugin in each session. The other plugin's own permission, send and model prompts still apply, and its result is a proposal you accept or discard.
+Run them without asking
+On: no prompt before the plugin's runs of other plugins' actions. The other plugin's own prompts still apply.
+Started by
+started this run for its client.
+Started
+The plugin was stopped
