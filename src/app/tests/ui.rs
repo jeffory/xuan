@@ -102,6 +102,9 @@ mod anchor;
 #[path = "ui_curves.rs"]
 mod curves;
 
+#[path = "ui_upstream_checks.rs"]
+mod upstream_checks;
+
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
 mod window_buttons;
