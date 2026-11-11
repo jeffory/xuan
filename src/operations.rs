@@ -845,8 +845,7 @@ impl CanvasRotation {
 /// effects stay live (an effect's light angle stays put, as with Photoshop's global light).
 /// An angle in degrees brought into (-180, 180].
 fn normalized_angle(degrees: f32) -> f32 {
-    let angle = degrees.rem_euclid(360.0);
-    if angle > 180.0 { angle - 360.0 } else { angle }
+    crate::document::normalized_degrees(degrees)
 }
 
 /// Sine and cosine of an angle in degrees, exact at the quarter turns.
@@ -1748,6 +1747,108 @@ mod tests {
         for layer in &doc.layers {
             assert_eq!(layer.transform, new, "{}", layer.name);
         }
+    }
+
+    #[test]
+    fn layers_flipped_with_a_turned_image_keep_their_angle_within_a_half_turn() {
+        // An image turned 200°, with an unturned, canvas-sized mask layer attached: reflected
+        // in the image's axis, the mask turns 2 × 200° − 0°, which is 40°.
+        let mut doc = Document::new(20, 16).unwrap();
+        let image = doc.layers[0].id;
+        doc.layers[0].transform.rotation = 200.0;
+        let mut mask = Layer::mask("Mask", 20, 16);
+        mask.parent = Some(image);
+        let before = mask.transform;
+        doc.layers.push(mask);
+        doc.select(image, false);
+        let old = transform_box(&doc, false).unwrap();
+        let new = Transform {
+            flip_x: true,
+            ..old
+        };
+        apply_transform(&mut doc, new, false).unwrap();
+        let flipped = doc.layers[1].transform;
+        assert!(flipped.flip_x);
+        assert!(
+            (flipped.rotation - 40.0).abs() < 1e-3,
+            "{}",
+            flipped.rotation
+        );
+        // Where the reflection puts it, whatever the angle is called.
+        for (after, corner) in flipped.corners().into_iter().zip(before.corners()) {
+            assert!(after.distance(new.point(old.inverse(corner))) < 0.01);
+        }
+        // Any angle a box or a reflection leaves is kept within (−180°, 180°], by whole turns.
+        for degrees in [
+            400.0, 360.0, 200.0, -200.0, -180.0, -540.0, 180.0, 37.5, -0.25,
+        ] {
+            let angle = crate::document::normalized_degrees(degrees);
+            assert!(angle > -180.0 && angle <= 180.0, "{degrees}: {angle}");
+            assert_eq!((angle - degrees).rem_euclid(360.0), 0.0, "{degrees}");
+        }
+        assert_eq!(crate::document::normalized_degrees(37.5), 37.5);
+        // Turning and scaling the image as well keeps it within a half turn too.
+        let mut new = transform_box(&doc, false).unwrap();
+        new.rotation = 170.0;
+        new.width += 4.0;
+        apply_transform(&mut doc, new, false).unwrap();
+        let rotation = doc.layers[1].transform.rotation;
+        assert!(rotation > -180.0 && rotation <= 180.0, "{rotation}");
+    }
+
+    #[test]
+    fn layers_flipped_together_in_upright_bounds_land_on_whole_pixels() {
+        let mut doc = Document::new(100, 80).unwrap();
+        doc.layers.clear();
+        let mut layers = Vec::new();
+        for (name, x, y, width, height, rotation) in [
+            ("Left", 3.0, 5.0, 13, 7, 0.0),
+            ("Right", 66.0, 41.0, 20, 11, 0.0),
+            ("Turned", 40.0, 20.0, 10, 6, 30.0),
+        ] {
+            let mut layer = Layer::blank(name, width, height);
+            layer.transform.x = x;
+            layer.transform.y = y;
+            layer.transform.rotation = rotation;
+            layers.push(layer);
+        }
+        doc.selected = layers.iter().map(|l| l.id).collect();
+        doc.active = Some(layers[0].id);
+        doc.layers = layers;
+        let start: Vec<Transform> = doc.layers.iter().map(|l| l.transform).collect();
+        let flip = |doc: &mut Document, horizontal: bool| {
+            let mut new = transform_box(doc, false).unwrap();
+            if horizontal {
+                new.flip_x = !new.flip_x;
+            } else {
+                new.flip_y = !new.flip_y;
+            }
+            apply_transform(doc, new, false).unwrap();
+        };
+        let at = |doc: &Document| {
+            (doc.layers.iter())
+                .map(|l| (l.transform.x, l.transform.y, l.transform.rotation))
+                .collect::<Vec<_>>()
+        };
+        // The bounds run from 3 to 86 across and from 5 to 52 down, so each layer lands at
+        // 3 + 86 (or 5 + 52) less its own far edge, as Flip Canvas puts layers.
+        flip(&mut doc, true);
+        assert_eq!(
+            at(&doc),
+            [(73.0, 5.0, 0.0), (3.0, 41.0, 0.0), (39.0, 20.0, -30.0)]
+        );
+        flip(&mut doc, false);
+        assert_eq!(
+            at(&doc),
+            [(73.0, 45.0, 0.0), (3.0, 5.0, 0.0), (39.0, 31.0, 30.0)]
+        );
+        flip(&mut doc, true);
+        flip(&mut doc, false);
+        let end: Vec<Transform> = doc.layers.iter().map(|l| l.transform).collect();
+        assert_eq!(
+            end, start,
+            "flipped twice each way, exactly where they were"
+        );
     }
 
     #[test]

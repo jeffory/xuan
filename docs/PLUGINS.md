@@ -1298,7 +1298,10 @@ Layers and their properties:
   flips a layer that is not flipped, `false` unflips one that is, and a flip
   it already has changes nothing. A group mirrors as a whole across its
   layers' bounds, as **Flip Horizontal** on it does, its layers trading
-  places.
+  places; its own `flip_x` and `flip_y`, which these compare with, say
+  whether it was mirrored as a whole, not whether its layers were flipped one
+  by one. Layers flipped together in documents saved by older versions were
+  stored warped and report no flip until they are flipped again.
 - `{"op": "add_empty_layer", "name"?, "above"?}` and `{"op": "add_mask_layer",
   "name"?, "above"?}`: an empty pixel layer, or a mask layer made from the
   selection (all white without one), the size of the canvas.

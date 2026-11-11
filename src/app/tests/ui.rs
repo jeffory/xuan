@@ -1008,6 +1008,51 @@ mod layer_appearance {
     }
 
     #[test]
+    fn a_mask_flipped_with_its_turned_image_is_not_turned_by_selecting_it() {
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        // An image turned 200°, with an unturned, canvas-sized mask layer attached to it.
+        let image = active(&ui).id;
+        {
+            let document = &mut ui.app_mut().session_mut().unwrap().document;
+            document.layers[0].transform.rotation = 200.0;
+            let mut mask = xuan::document::Layer::mask("Attached mask", 20, 16);
+            mask.parent = Some(image);
+            document.layers.push(mask);
+            document.select(image, false);
+            document.validate().unwrap();
+        }
+        ui.settle();
+        ui.app_mut().command("flip_h");
+        ui.settle();
+        let mask = |ui: &UiTest| {
+            let document = &ui.app().session().unwrap().document;
+            (document.layers.iter())
+                .find(|l| l.name == "Attached mask")
+                .unwrap()
+                .transform
+        };
+        let flipped = mask(&ui);
+        assert!(flipped.flip_x);
+        // 2 × 200° − 0°, a whole turn less, so the Angle field can show it as it is.
+        assert!(
+            (flipped.rotation - 40.0).abs() < 1e-3,
+            "{}",
+            flipped.rotation
+        );
+        // Selecting it with the Move tool shows its placement and changes nothing.
+        ui.app_mut().tool = Tool::Move;
+        ui.settle();
+        let steps = ui.app().session().unwrap().history.names().count();
+        ui.click("Attached mask");
+        assert_eq!(active(&ui).name, "Attached mask");
+        assert!(ui.has("Angle"));
+        assert_eq!(mask(&ui), flipped);
+        assert_eq!(ui.app().session().unwrap().history.names().count(), steps);
+    }
+
+    #[test]
     fn generated_layers_show_their_model_provenance_read_only_with_a_copy_button() {
         let mut ui = UiTest::with_document();
         ui.app_mut().command("fill_fg");

@@ -215,7 +215,7 @@ impl Transform {
         result.height = (self.height * new.height / old.height).max(1.0);
         result.x = center.x - result.width * 0.5;
         result.y = center.y - result.height * 0.5;
-        result.rotation += new.rotation - old.rotation;
+        result.rotation = normalized_degrees(self.rotation + new.rotation - old.rotation);
         result.warp = None;
         let quad = self.corners().map(|p| result.inverse(map(p)));
         if crate::geometry::Homography::from_quad(quad).is_some() {
@@ -232,20 +232,48 @@ impl Transform {
             return new;
         }
         let (flip_x, flip_y) = (old.flip_x != new.flip_x, old.flip_y != new.flip_y);
-        let center = new.point(old.inverse(self.center()));
         let mut result = self;
         result.flip_x ^= flip_x;
         result.flip_y ^= flip_y;
         // One flip reverses the sense of turning; two flips are a half turn, which the two
         // toggled flips already make.
-        result.rotation = if flip_x != flip_y {
+        result.rotation = normalized_degrees(if flip_x != flip_y {
             new.rotation + old.rotation - self.rotation
         } else {
             self.rotation + new.rotation - old.rotation
-        };
+        });
+        if old.rotation == 0.0 && new.rotation == 0.0 && old.warp.is_none() {
+            // Upright boxes mirror about their middle exactly, as Flip Canvas does, so whole
+            // pixel positions stay whole.
+            let place = |at: f32, size: f32, from: f32, to: f32, extent: f32, flipped: bool| {
+                if flipped {
+                    from + to + extent - at - size
+                } else {
+                    at + to - from
+                }
+            };
+            result.x = place(self.x, self.width, old.x, new.x, old.width, flip_x);
+            result.y = place(self.y, self.height, old.y, new.y, old.height, flip_y);
+            return result;
+        }
+        let center = new.point(old.inverse(self.center()));
         result.x = center.x - self.width * 0.5;
         result.y = center.y - self.height * 0.5;
         result
+    }
+}
+
+/// An angle in degrees brought into (−180, 180] by whole turns. Angles already in that range
+/// are returned as they are, and the others exactly: the remainder of a division is exact, and
+/// so is adding or taking away one turn from what is left.
+pub fn normalized_degrees(degrees: f32) -> f32 {
+    let angle = degrees % 360.0;
+    if angle > 180.0 {
+        angle - 360.0
+    } else if angle <= -180.0 {
+        angle + 360.0
+    } else {
+        angle
     }
 }
 
