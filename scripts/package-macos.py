@@ -23,6 +23,9 @@ LICENSES = (
     "licenses/heic-rs-MIT.txt",
     "licenses/seccompiler-BSD-3-Clause.txt",
     "licenses/kurbo-MIT.txt",
+    "licenses/libwebp-BSD-3-Clause.txt",
+    # The native menu bar, in macOS builds only.
+    "licenses/muda-MIT.txt",
     "licenses/Hack-LICENSE.txt",
     "licenses/tabler-icons-MIT.txt",
     "assets/fonts/Inter-LICENSE.txt",

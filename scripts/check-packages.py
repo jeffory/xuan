@@ -72,6 +72,8 @@ def check_files(prefix, portable=False, windows=False, appimage=False, macos=Fal
             {
                 "Info.plist",
                 "PkgInfo",
+                # The native menu bar's library, in macOS builds only.
+                f"{share}/licenses/xuan/muda-MIT.txt",
                 "Resources/xuan.icns",
                 "_CodeSignature/CodeResources",
             }
