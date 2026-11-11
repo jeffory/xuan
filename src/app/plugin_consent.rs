@@ -21,8 +21,13 @@ use xuan::{
 use super::{Dialog, EditorApp, plugins::one_line, widgets};
 
 /// Requests that hand a plugin pixels outside the source of an action.
-pub(super) const EXPORT_METHODS: [&str; 3] =
-    ["layer/export", "document/export", "selection/export"];
+pub(super) const EXPORT_METHODS: [&str; 5] = [
+    "layer/export",
+    "document/export",
+    "selection/export",
+    "document/sample",
+    "document/histogram",
+];
 
 /// What offline mode means for the plugins it does not stop.
 pub(super) fn offline_mode_note(config: &xuan::config::Config) -> &'static str {
@@ -320,6 +325,8 @@ impl EditorApp {
                 format!("{what} “{name}”")
             }
             "document/export" => tr("The whole image, flattened").into(),
+            "document/sample" => tr("Colours measured in the image").into(),
+            "document/histogram" => tr("The image's histogram").into(),
             _ => tr("The shape of the selection").into(),
         }
     }

@@ -1419,3 +1419,5 @@ Started by	启动者：
 started this run for its client.	为其客户端启动了此次运行。
 Started	已启动
 The plugin was stopped	插件已停止
+Colours measured in the image	从图像中测得的颜色
+The image's histogram	图像的直方图

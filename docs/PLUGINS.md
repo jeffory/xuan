@@ -238,7 +238,7 @@ from connecting either. Install plugins you trust.
 
 | | `document = "read"` (default) | `document = "edit"` |
 | --- | --- | --- |
-| `document/get`, `layer/export`, `document/export`, `selection/export` | yes | yes |
+| `document/get`, `layer/export`, `document/export`, `selection/export`, `document/sample`, `document/histogram` | yes | yes |
 | Action results that only change the selection or open a new document: `mask`, `document` (and an `image` with `result.into = "document"`), a `set_selection` edit, `text`; always a proposal the user accepts or discards | yes | yes |
 | Action results that change the open document's pixels or layers: an `image` placed as a layer or replacing the source, any other `edit` op, `extend_canvas` | no | yes |
 | `document/edit`, including its `set_selection` op | no | yes |
@@ -435,8 +435,8 @@ Until the user chose "Don't ask again", `action/estimate` reaches such a
 plugin with `source: null` and without its regions and `text`, `multiline`,
 `path` or `secret` inputs, since it is sent as soon as the dialog opens.
 
-**Exports outside an action.** `layer/export`, `document/export` and
-`selection/export` from a plugin that declares network hosts are answered at
+**Exports outside an action.** `layer/export`, `document/export`,
+`selection/export`, `document/sample` and `document/histogram` from a plugin that declares network hosts are answered at
 once while one of its confirmed jobs runs or after "Don't ask again".
 Otherwise, for example from a pane, the request is held unanswered and Xuan
 asks once, as soon as no other dialog is open, naming what was asked for.
@@ -1170,8 +1170,10 @@ wait for the user's answer (see [Network](#network)).
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
 | `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, fill, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, raw, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
-| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips; an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
-| `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
+| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, region?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips (with `region`, `[x, y, width, height]` in document pixels, that rectangle of the layer alone as it sits in the document instead); an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
+| `document/export` | `{max_side?, region?, dir?}` | `{path, width, height, scale}`; with `region` (`[x, y, width, height]` in document pixels, cut to the canvas) only that rectangle, and `x`, `y` and `region` say what was written |
+| `document/sample` | `{points: [[x, y]], radius?, layer?}` | `{width, height, radius, samples: [{x, y, color, rgba, luminance}]}`: the colour at each point in document pixels (at most 1,000), averaged by alpha over the pixels within `radius` (0–50) of it; `color` is `null` off the canvas. With `layer`, that layer alone as it sits in the document |
+| `document/histogram` | `{region?, layer?}` | `{region, pixels, transparent, mean_alpha, luminance, red, green, blue}`: for each channel `{bins: [256 counts], mean, min, max, median, p1, p99, clipped_low, clipped_high}` over the pixels that are not fully transparent |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
@@ -1182,7 +1184,7 @@ wait for the user's answer (see [Network](#network)).
 | `host/run` | `{action, inputs?, layers?, into?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. With **Run other plugins' actions**, another plugin's action as `<plugin>/<action>`, after the user allowed it, answered with `{ok: true, running: true, job, …}` once its job runs (see [Running other plugins' actions](#running-other-plugins-actions)). For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
 | `file/save_as` | `{document?, suggested_name?}` or `{document?, path, overwrite?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; with `path`, `{name, asked}` once it was saved there after Xuan's prompt (`asked: true`) or without asking (`asked: false`); see [Files the user chooses](#files-the-user-chooses) |
-| `file/export` | `{document?, format?, suggested_name?, quality?, lossless?}` or `{document?, format?, path, overwrite?, quality?, lossless?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff`, `webp` or layered OpenRaster `ora`); with `path`, `{name, asked}` as for `file/save_as` |
+| `file/export` | `{document?, format?, suggested_name?, quality?, lossless?}` or `{document?, format?, path, overwrite?, quality?, lossless?, layer?, region?, max_side?}` (the last three write a part of the document as a PNG, and the answer adds `width`, `height`, `x`, `y` and `scale`) | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff`, `webp` or layered OpenRaster `ora`); with `path`, `{name, asked}` as for `file/save_as` |
 | `file/save` | `{document?}` | `{name, asked}` once the document was saved back to its own `.xuan` file, as **File → Save**, after Xuan's prompt or without asking |
 | `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path`; a camera RAW file opens as a document with one RAW layer developed with the default settings, not in a Develop tab |
 | `raw/develop` | `{layer?, settings?, reset?, auto_exposure?, neutral_point?, name?}` | `{ok: true, layer}` (the layer as `document/get` describes it) once the RAW layer (the active one by default) was developed again from its camera file; see [Camera RAW layers](#camera-raw-layers). Needs `document = "edit"`, waits for the session's answer like `document/edit`, and runs in the background like a `host/run` job: other edits fail with "The editor is busy" until it ends |

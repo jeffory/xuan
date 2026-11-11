@@ -1132,6 +1132,31 @@ impl EditorApp {
                     ));
                 };
                 let name = format!("{}.png", Uuid::new_v4());
+                let invalid = |error: anyhow::Error| RpcError::invalid_params(format!("{error:#}"));
+                let region =
+                    xuan::plugins::inspect::Region::parse(&session.document, params.get("region"))
+                        .map_err(invalid)?;
+                if let Some(region) = region.filter(|_| request.method != "selection/export") {
+                    // A rectangle of the image, or of one layer as it sits in the document.
+                    let layer = match request.method.as_str() {
+                        "layer/export" => Some(uuid("layer")?),
+                        _ => None,
+                    };
+                    let (image, scale) =
+                        xuan::plugins::inspect::part(&session.document, layer, region, max_side)
+                            .map_err(invalid)?;
+                    let path = dir.join(&name);
+                    edits::write_png(&image, &path).map_err(internal)?;
+                    return Ok(json!({
+                        "path": path,
+                        "width": image.width(),
+                        "height": image.height(),
+                        "x": region.x,
+                        "y": region.y,
+                        "scale": scale,
+                        "region": [region.x, region.y, region.width, region.height],
+                    }));
+                }
                 let export = match request.method.as_str() {
                     "layer/export" => {
                         let what = match string("what").as_deref() {
@@ -1159,6 +1184,49 @@ impl EditorApp {
                 export
                     .map(|export| serde_json::to_value(export).unwrap_or(Value::Null))
                     .map_err(internal)
+            }
+            "document/sample" | "document/histogram" => {
+                if let Some(error) = self.export_refused(plugin) {
+                    return Err(error);
+                }
+                let Some(session) = self.session() else {
+                    return Err(RpcError::new(
+                        protocol::INVALID_PARAMS,
+                        "No document is open",
+                    ));
+                };
+                let invalid = |error: anyhow::Error| RpcError::invalid_params(format!("{error:#}"));
+                let document = &session.document;
+                let layer = match params.get("layer") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(uuid("layer")?),
+                };
+                if request.method == "document/histogram" {
+                    let region =
+                        xuan::plugins::inspect::Region::parse(document, params.get("region"))
+                            .map_err(invalid)?;
+                    return xuan::plugins::inspect::histogram(document, layer, region)
+                        .map_err(invalid);
+                }
+                let points: Vec<[f64; 2]> = params
+                    .get("points")
+                    .cloned()
+                    .and_then(|points| serde_json::from_value(points).ok())
+                    .ok_or_else(|| {
+                        RpcError::invalid_params(
+                            "`points` must be a list of [x, y] in document pixels",
+                        )
+                    })?;
+                let radius = match params.get("radius") {
+                    None | Some(Value::Null) => 0,
+                    Some(radius) => radius
+                        .as_u64()
+                        .and_then(|radius| u32::try_from(radius).ok())
+                        .ok_or_else(|| {
+                            RpcError::invalid_params("`radius` must be a whole number")
+                        })?,
+                };
+                xuan::plugins::inspect::sample(document, layer, &points, radius).map_err(invalid)
             }
             "document/edit" => {
                 let manifest = self

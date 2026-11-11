@@ -217,6 +217,17 @@ fn path_options() -> Value {
 }
 const TEXT_PATH: &str = "Set the text along this path instead of in a box: SVG path data in document pixels, as in an SVG <path d=…>, e.g. \"M 100 400 Q 300 200 500 400\". Only the first subpath is followed; letters past the end of an open path are hidden, and on a closed path the text wraps around";
 const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
+/// Requests that hand over what is in the image, which the user may refuse.
+fn sends_the_image(method: &str) -> bool {
+    method.ends_with("/export") || matches!(method, "document/sample" | "document/histogram")
+}
+fn region() -> Value {
+    json!({"description": "A rectangle as [x, y, width, height] in document pixels; what lies outside the canvas is left out", "oneOf": [{"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}, {"type": "string"}]})
+}
+/// An argument that was given and is not null.
+fn given(args: &Map<String, Value>, key: &str) -> Option<Value> {
+    args.get(key).filter(|value| !value.is_null()).cloned()
+}
 fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
 }
@@ -325,33 +336,100 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_preview",
             title: "See the image",
-            description: "The current document flattened, as a PNG image, so you can see the result. `max_side` is the longest side in pixels (default 1024, 64–4096). The first preview may wait while Xuan asks the user to allow sending the image.",
-            properties: json!({"max_side": integer("Longest side in pixels")}),
+            description: "The current document flattened, as a PNG image, so you can see the result. `max_side` is the longest side in pixels (default 1024, 64–4096). `region` [x, y, width, height] in document pixels shows only that rectangle, so a detail can be seen at full size without the whole image. The image comes back in this conversation; to measure it, sample_pixels and get_histogram return numbers instead, and export_document with `path` and `max_side` or `region` writes the PNG to a file. The first preview may wait while Xuan asks the user to allow sending the image.",
+            properties: json!({"max_side": integer("Longest side in pixels"), "region": region()}),
             required: &[],
             kind: Kind::Read,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["max_side"])?;
+                let args = pick(args, &["max_side", "region"])?;
                 let side = max_side(&args, DEFAULT_PREVIEW)?;
-                let export = cx.call("document/export", json!({"max_side": side}))?;
+                let mut params = json!({"max_side": side});
+                if let Some(region) = given(&args, "region") {
+                    params["region"] = region;
+                }
+                let export = cx.call("document/export", params)?;
                 image_result(&export, "Flattened preview")
             }),
         },
         Spec {
             name: "get_layer_image",
             title: "See a layer",
-            description: "A layer's own pixels (`what` = \"pixels\", the default) or its mask (\"mask\") as a PNG, with where it sits in the document. Pixels are as stored, before the layer's flip_x and flip_y. For an image, the mask is read from its attached mask layer (`mask_layer` says which); with several, ask for one of them. `max_side` is the longest side (default 512).",
-            properties: json!({"layer": layer(), "what": {"type": "string", "enum": ["pixels", "mask"]}, "max_side": integer("Longest side in pixels")}),
+            description: "A layer's own pixels (`what` = \"pixels\", the default) or its mask (\"mask\") as a PNG, with where it sits in the document. Pixels are as stored, before the layer's flip_x and flip_y. For an image, the mask is read from its attached mask layer (`mask_layer` says which); with several, ask for one of them. `max_side` is the longest side (default 512). With `region` [x, y, width, height] in document pixels you get that rectangle of the layer alone as it sits in the document instead: moved, scaled, rotated, flipped and masked, on transparency, which shows for example whether a rotated layer leaves the canvas corners empty (`what` does not apply).",
+            properties: json!({"layer": layer(), "what": {"type": "string", "enum": ["pixels", "mask"]}, "max_side": integer("Longest side in pixels"), "region": region()}),
             required: &["layer"],
             kind: Kind::Read,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["layer", "what", "max_side"])?;
+                let args = pick(args, &["layer", "what", "max_side", "region"])?;
                 let side = max_side(&args, 512)?;
                 let what = args.get("what").cloned().unwrap_or(json!("pixels"));
-                let export = cx.call(
-                    "layer/export",
-                    json!({"layer": string(&args, "layer")?, "what": what, "max_side": side}),
-                )?;
+                let mut params =
+                    json!({"layer": string(&args, "layer")?, "what": what, "max_side": side});
+                if let Some(region) = given(&args, "region") {
+                    params["region"] = region;
+                }
+                let export = cx.call("layer/export", params)?;
                 image_result(&export, "Layer")
+            }),
+        },
+        Spec {
+            name: "sample_pixels",
+            title: "Measure colours",
+            description: "The colours at points of the image, as numbers: for each [x, y] in document pixels, `color` (#rrggbbaa), `rgba` (0–255) and `luminance` (0–255, Rec. 709). `radius` averages the pixels within that many pixels of each point (0, the default, is the one pixel; 2 is a 5 × 5 average, which steadies a reading on noise or grain), weighted by their alpha. With `layer`, that layer alone is read as it sits in the document, transparent where it does not reach; without, the visible image. A point off the canvas has `color` null. Use it to measure a colour cast on something that should be neutral, to check for clipping, or to see whether a corner is empty, without loading an image. At most 1000 points.",
+            properties: json!({
+                "points": {"type": "array", "minItems": 1, "maxItems": 1000, "description": "Points as [x, y] in document pixels", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
+                "radius": {"type": "integer", "minimum": 0, "maximum": 50, "description": "Average the pixels within this many pixels of each point"},
+                "layer": optional_layer(),
+            }),
+            required: &["points"],
+            kind: Kind::Read,
+            run: Action::Run(|cx, args| {
+                let args = unquote(pick(args, &["points", "radius", "layer"])?, "points");
+                text(cx.call("document/sample", Value::Object(args))?)
+            }),
+        },
+        Spec {
+            name: "get_histogram",
+            title: "Measure tones",
+            description: "Histograms of the image as numbers, over the pixels that are not fully transparent: for `luminance`, `red`, `green` and `blue`, the `mean`, `median`, `min`, `max`, `p1` and `p99` (the levels 1% and 99% of the pixels lie below), `clipped_low` and `clipped_high` (the share of pixels at 0 and at 255: crushed shadows and blown highlights) and `bins`, the counts from dark to light. `bins` is how many bins to return (default 32; 0 for none, up to 256). `region` [x, y, width, height] in document pixels measures only that rectangle, and `layer` one layer alone as it sits in the document. `pixels` is how many were counted and `transparent` how many were skipped. Use it to judge exposure, contrast, clipping and colour casts (compare the red, green and blue means of something neutral).",
+            properties: json!({
+                "region": region(),
+                "layer": optional_layer(),
+                "bins": {"type": "integer", "enum": [0, 8, 16, 32, 64, 128, 256], "description": "How many bins each histogram has"},
+            }),
+            required: &[],
+            kind: Kind::Read,
+            run: Action::Run(|cx, args| {
+                let mut args = unquote(pick(args, &["region", "layer", "bins"])?, "region");
+                let bins = match args.remove("bins") {
+                    None | Some(Value::Null) => 32,
+                    Some(bins) => bins
+                        .as_u64()
+                        .filter(|bins| [0, 8, 16, 32, 64, 128, 256].contains(bins))
+                        .ok_or("`bins` must be 0, 8, 16, 32, 64, 128 or 256")?,
+                };
+                let mut answer = cx.call("document/histogram", Value::Object(args))?;
+                for channel in ["luminance", "red", "green", "blue"] {
+                    let Some(described) = answer.get_mut(channel).and_then(Value::as_object_mut)
+                    else {
+                        continue;
+                    };
+                    let counts: Vec<u64> = described
+                        .get("bins")
+                        .and_then(Value::as_array)
+                        .map(|counts| counts.iter().filter_map(Value::as_u64).collect())
+                        .unwrap_or_default();
+                    if bins == 0 || counts.is_empty() {
+                        described.remove("bins");
+                    } else {
+                        let width = (counts.len() / bins as usize).max(1);
+                        let merged: Vec<u64> = counts
+                            .chunks(width)
+                            .map(|chunk| chunk.iter().sum())
+                            .collect();
+                        described.insert("bins".into(), json!(merged));
+                    }
+                }
+                text(answer)
             }),
         },
         Spec {
@@ -1400,10 +1478,14 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 "Without `path`, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
                 "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
                 " `quality` (1-100) sets jpg and lossy webp quality, and webp is lossy when `quality` is given unless `lossless: true`; what is left out follows Xuan's Export dialog.",
+                " With `path` ending in .png, `layer`, `region` and `max_side` export a part instead of the whole image at full size: `max_side` a copy no longer than that on its longest side, `region` [x, y, width, height] in document pixels that rectangle, and `layer` one layer (its own pixels as stored, or with `region` the layer alone as it sits in the document). This is how to hand an image to a program of your own, such as an analysis script, without it passing through this conversation; the answer then also says the image's `width`, `height`, `scale` (export pixels per document pixel) and the document `x`, `y` of its corner.",
                 " Returns the file name (never the folder), with `asked: false` when it was written without asking."
             ),
             properties: json!({
                 "document": {"type": "string"},
+                "layer": optional_layer(),
+                "region": region(),
+                "max_side": integer("With `path`: the longest side in pixels of a smaller copy"),
                 "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp", "ora"]},
                 "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
                 "path": {"type": "string", "description": "Where to export, an absolute path with an image extension"},
@@ -1424,8 +1506,12 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                         "overwrite",
                         "quality",
                         "lossless",
+                        "layer",
+                        "region",
+                        "max_side",
                     ],
                 )?;
+                let args = unquote(args, "region");
                 text(cx.call("file/export", Value::Object(args))?)
             }),
         },
@@ -2182,7 +2268,7 @@ fn explain(method: &str, error: &EditorError) -> String {
     match method {
         "document/edit" | "host/run" => "The user did not allow edits from this session in Xuan. Ask the user before trying again.".into(),
         "file/save_as" | "file/export" | "file/save" | "file/open" => "The user cancelled.".into(),
-        _ if method.ends_with("/export") => "The user did not allow sending the image to this MCP server.".into(),
+        _ if sends_the_image(method) => "The user did not allow sending the image to this MCP server.".into(),
         _ => format!("Xuan: {}", error.message),
     }
 }
@@ -2220,7 +2306,7 @@ pub fn not_answered(method: &str) -> String {
         "file/save_as" | "file/export" | "file/save" | "file/open" => {
             "The user has not yet answered Xuan's dialog for this request"
         }
-        _ if method.ends_with("/export") => {
+        _ if sends_the_image(method) => {
             "The user has not yet answered Xuan's prompt to allow sending the image to this MCP server"
         }
         _ => "Xuan did not answer in time",

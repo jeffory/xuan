@@ -263,8 +263,10 @@ larger tool arguments with a tool error saying the request is too large.
 | `list_documents` | The open documents | `document/list` |
 | `get_document` | Size, selection and all layers; with `document`, switches to it first | `document/get` |
 | `get_layer` | One layer | `document/get` |
-| `get_preview` | The flattened image as a PNG (`max_side`, default 1024) | `document/export` |
-| `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer) | `layer/export` |
+| `get_preview` | The flattened image as a PNG (`max_side`, default 1024), or only a `region` of it | `document/export` |
+| `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer); with `region`, the layer alone as it sits in the document | `layer/export` |
+| `sample_pixels` | The colour at points, as numbers, averaged over a `radius`; of the image or one `layer` | `document/sample` |
+| `get_histogram` | Luminance and RGB histograms with mean, median, range and clipped share; of the image, a `region` or one `layer` | `document/histogram` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
 | `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation; a text layer's `text`, `runs`, `path` and `path_options` | `set`, `set_text`, `transform` |
@@ -293,7 +295,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `run_command` | Flatten, duplicate, flip, rotate canvas, crop to selection, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
 | `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
-| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file; `quality` (1–100) for JPEG and lossy WebP, `lossless` for WebP | `file/export` |
+| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file; `quality` (1–100) for JPEG and lossy WebP, `lossless` for WebP; with `path`, `layer`, `region` and `max_side` write one layer, a rectangle or a smaller copy as a PNG | `file/export` |
 | `open_document` | Open an image or project, after the user agrees; a camera RAW file opens as a RAW layer developed with the default settings | `file/open` |
 | `develop_raw` | Develop a camera RAW layer again with new Develop settings (white balance, exposure, tone, colour, detail, lens, crop, rotation), `auto_exposure`, or a white balance from a `neutral_point`; only the settings given change | `raw/develop` |
 | `list_plugin_actions` | Other plugins' actions, each with a JSON schema of its inputs; needs **Run other plugins' actions** | `plugins/actions` |
@@ -521,6 +523,12 @@ the call returns when it is done. Look at the result with `get_preview`.
 
 - Look before you edit: `get_document`, then `get_preview`. Check again after
   a change; previews are cheap.
+- Measure rather than judge by eye: `sample_pixels` for the colour of
+  something that should be neutral or for whether a corner is empty,
+  `get_histogram` for exposure, contrast and clipping. Both answer in numbers
+  and cost far less than an image. For analysis in a program of your own,
+  `export_document` with `path` and `max_side`, `region` or `layer` writes a
+  PNG to a file, so the pixels never pass through the conversation.
 - Prefer non-destructive changes the user can adjust: adjustment and filter
   layers (`as_layer: true`), masks, and new layers over painting on the
   original.

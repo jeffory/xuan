@@ -151,6 +151,90 @@ fn send_without_asking(app: &EditorApp) -> bool {
 }
 
 #[test]
+fn plugins_measure_colours_histograms_and_regions_of_the_image() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 6];
+    app.new_document();
+    let layer = {
+        let session = app.session_mut().unwrap();
+        let mut pixels = image::RgbaImage::from_pixel(8, 6, image::Rgba([10, 20, 30, 255]));
+        pixels.put_pixel(7, 5, image::Rgba([255, 255, 255, 255]));
+        let layer = &mut session.document.layers[0];
+        layer.pixels = Some(std::sync::Arc::new(pixels));
+        layer.id
+    };
+
+    let sampled = plugin_request(
+        &mut app,
+        "document/sample",
+        json!({"points": [[0, 0], [7.5, 5.5], [8, 0]]}),
+    )
+    .unwrap();
+    assert_eq!(sampled["samples"][0]["color"], "#0a141eff");
+    assert_eq!(sampled["samples"][1]["rgba"], json!([255, 255, 255, 255]));
+    assert_eq!(sampled["samples"][2]["color"], serde_json::Value::Null);
+    let one = plugin_request(
+        &mut app,
+        "document/sample",
+        json!({"points": [[1, 1]], "layer": layer, "radius": 1}),
+    )
+    .unwrap();
+    assert_eq!(one["samples"][0]["rgba"], json!([10, 20, 30, 255]));
+
+    let whole = plugin_request(&mut app, "document/histogram", json!({})).unwrap();
+    assert_eq!(whole["pixels"], 48);
+    assert_eq!(whole["red"]["bins"][10], 47);
+    assert_eq!(whole["blue"]["max"], 255);
+    let corner = plugin_request(
+        &mut app,
+        "document/histogram",
+        json!({"region": [0, 0, 2, 2], "layer": layer}),
+    )
+    .unwrap();
+    assert_eq!(
+        (&corner["pixels"], &corner["green"]["mean"]),
+        (&json!(4), &json!(20.0))
+    );
+
+    for (method, what) in [
+        ("document/export", json!({})),
+        ("layer/export", json!({"layer": layer})),
+    ] {
+        let mut params = what;
+        params["region"] = json!([6, 4, 10, 10]);
+        let export = plugin_request(&mut app, method, params).unwrap();
+        assert_eq!(export["region"], json!([6, 4, 2, 2]), "{method}");
+        assert_eq!((&export["x"], &export["y"]), (&json!(6), &json!(4)));
+        let image = image::open(export["path"].as_str().unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(image.dimensions(), (2, 2));
+        assert_eq!(image.get_pixel(1, 1).0, [255, 255, 255, 255]);
+    }
+
+    for (method, params) in [
+        ("document/sample", json!({})),
+        (
+            "document/sample",
+            json!({"points": [[0, 0]], "radius": 500}),
+        ),
+        ("document/histogram", json!({"region": [90, 0, 1, 1]})),
+        ("document/histogram", json!({"layer": "nope"})),
+        ("document/export", json!({"region": [0, 0]})),
+    ] {
+        let error = plugin_request(&mut app, method, params.clone()).unwrap_err();
+        assert_eq!(
+            error.code,
+            xuan::plugins::protocol::INVALID_PARAMS,
+            "{method} {params}"
+        );
+    }
+}
+
+#[test]
 fn exports_to_network_plugins_follow_the_consent_rules() {
     use crate::app::plugin_consent::ConsentRequest;
     use serde_json::json;
@@ -170,7 +254,13 @@ fn exports_to_network_plugins_follow_the_consent_rules() {
     install_network_mock(&mut app, dir.path());
     assert!(app.sends_need_consent("mock"));
     assert_eq!(app.export_answer("mock"), None);
-    for method in ["document/export", "layer/export", "selection/export"] {
+    for method in [
+        "document/export",
+        "layer/export",
+        "selection/export",
+        "document/sample",
+        "document/histogram",
+    ] {
         let refused = plugin_request(&mut app, method, json!({})).unwrap_err();
         assert_eq!(refused.code, CANCELLED, "{method}");
     }
@@ -6117,6 +6207,97 @@ done
             crate::app::plugin_files::FileAction::Write(write) => Some(write.clone()),
             _ => None,
         }
+    }
+
+    #[test]
+    fn a_layer_a_region_or_a_smaller_copy_is_exported_to_a_path_as_a_png() {
+        use crate::app::plugin_files::FileAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::INVALID_PARAMS;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, _dialogs) = path_save_mock(dir.path(), config.path());
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        let layer = app.session().unwrap().document.layers[0].id;
+        let ask = |context: &egui::Context, app: &mut EditorApp, id: i64, params| {
+            app.queue_file_request("mock", file_request(id, "file/export", params));
+            run_until(context, app, |app| {
+                app.dialog == Some(Dialog::PluginFile) || answer(dir.path(), id).is_some()
+            });
+        };
+
+        // The same prompt as a whole export; the answer says where the pixels sit.
+        let region = out.path().join("region.png");
+        ask(
+            &context,
+            &mut app,
+            801,
+            json!({"path": region, "region": [4, 2, 8, 6]}),
+        );
+        let write = prompted_write(&app).expect("the export prompt is open");
+        assert!(write.part.is_some());
+        app.answer_file(FileAnswer::Always);
+        let exported = wait(&context, &mut app, 801);
+        assert_eq!(
+            exported["result"],
+            json!({"name": "region.png", "asked": true, "width": 8, "height": 6, "x": 4, "y": 2, "scale": 1.0})
+        );
+        assert_eq!(
+            xuan::io::import_image(&region).unwrap().dimensions(),
+            (8, 6)
+        );
+
+        let small = out.path().join("small.png");
+        ask(
+            &context,
+            &mut app,
+            802,
+            json!({"path": small, "max_side": 16, "region": [0, 0, 16, 12], "layer": layer}),
+        );
+        assert_eq!(wait(&context, &mut app, 802)["result"]["asked"], false);
+        assert_eq!(
+            xuan::io::import_image(&small).unwrap().dimensions(),
+            (16, 12)
+        );
+
+        for (id, params, says) in [
+            (
+                803,
+                json!({"path": out.path().join("part.jpg"), "region": [0, 0, 4, 4]}),
+                ".png",
+            ),
+            (804, json!({"max_side": 64}), "needs `path`"),
+            (
+                805,
+                json!({"path": out.path().join("off.png"), "region": [40, 0, 4, 4]}),
+                "outside",
+            ),
+            (
+                806,
+                json!({"path": out.path().join("none.png"), "layer": uuid::Uuid::new_v4()}),
+                "No layer",
+            ),
+        ] {
+            app.queue_file_request("mock", file_request(id, "file/export", params));
+            let refused = wait(&context, &mut app, id);
+            assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{id}");
+            let message = refused["error"]["message"].as_str().unwrap();
+            assert!(message.contains(says), "{id}: {message}");
+        }
+        app.queue_file_request(
+            "mock",
+            file_request(
+                807,
+                "file/save_as",
+                json!({"path": out.path().join("p.xuan"), "max_side": 64}),
+            ),
+        );
+        let refused = wait(&context, &mut app, 807);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS);
     }
 
     #[test]

@@ -82,7 +82,21 @@ pub(super) struct Write {
     pub replaces: bool,
     /// How an exported image is encoded.
     pub encoding: Encoding,
+    /// Export only this much of the document, as a PNG.
+    pub part: Option<Part>,
 }
+
+/// What `file/export` writes instead of the whole document at full size: one
+/// layer, a rectangle, or a smaller copy.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Part {
+    pub layer: Option<Uuid>,
+    pub region: Option<xuan::plugins::inspect::Region>,
+    pub max_side: Option<u32>,
+}
+
+/// The params of `file/export` that ask for a part of the document.
+const PART_KEYS: [&str; 3] = ["layer", "region", "max_side"];
 
 /// The `quality` and `lossless` a plugin gave `file/export`. What it leaves
 /// out follows the Export dialog, and the dialog keeps the user's choices.
@@ -437,6 +451,43 @@ fn still_the_shown_file(requested: &Path, shown: &Path) -> bool {
         && std::fs::metadata(shown).is_ok_and(|m| m.is_file() || m.is_dir())
 }
 
+/// The pixels a part export writes, and where they sit in the document: a
+/// region in document space (of the image, or of one layer as it sits there),
+/// one layer's own pixels as stored, or the whole image scaled down.
+fn part_image(
+    document: &xuan::document::Document,
+    part: Part,
+) -> anyhow::Result<(image::RgbaImage, Value)> {
+    use anyhow::Context as _;
+    use xuan::plugins::{edits, inspect};
+    if let Some(region) = part.region {
+        let (image, scale) = inspect::part(document, part.layer, region, part.max_side)?;
+        let described = json!({
+            "width": image.width(), "height": image.height(),
+            "x": region.x, "y": region.y, "scale": scale,
+        });
+        return Ok((image, described));
+    }
+    let (image, x, y, scale) = match part.layer {
+        Some(id) => {
+            let layer = (document.layers.iter().find(|layer| layer.id == id))
+                .with_context(|| format!("No layer {id}"))?;
+            let pixels = (layer.pixels.as_deref())
+                .with_context(|| format!("Layer {} has no pixels", layer.name))?;
+            let (image, scale) = edits::fit(pixels, part.max_side);
+            (image, layer.transform.x, layer.transform.y, scale)
+        }
+        None => {
+            let (image, scale) = edits::fit(&xuan::render::render(document), part.max_side);
+            (image, 0.0, 0.0, scale)
+        }
+    };
+    let described = json!({
+        "width": image.width(), "height": image.height(), "x": x, "y": y, "scale": scale,
+    });
+    Ok((image, described))
+}
+
 impl EditorApp {
     /// Check a file request's params before it waits for the user.
     fn file_action(&self, request: &Request) -> Result<FileAction, RpcError> {
@@ -511,6 +562,7 @@ impl EditorApp {
                         path,
                         replaces: true,
                         encoding: Encoding::default(),
+                        part: None,
                     }));
                 }
                 let format = string("format").map(requested_format).transpose()?;
@@ -523,6 +575,61 @@ impl EditorApp {
                     )));
                 } else {
                     Encoding::default()
+                };
+                let part = match PART_KEYS.into_iter().find(|key| given(key)) {
+                    None => None,
+                    Some(key) if method != "file/export" => {
+                        return Err(RpcError::invalid_params(format!(
+                            "`{method}` takes no `{key}`: it saves a project; use `file/export` for an image"
+                        )));
+                    }
+                    Some(key) if !given("path") => {
+                        return Err(RpcError::invalid_params(format!(
+                            "`{key}` needs `path`: a layer, a region or a smaller copy is written to a path, not through the save dialog"
+                        )));
+                    }
+                    Some(_) => {
+                        let invalid =
+                            |error: anyhow::Error| RpcError::invalid_params(format!("{error:#}"));
+                        let layer = match string("layer") {
+                            Some(id) => Some(Uuid::parse_str(id).map_err(|_| {
+                                RpcError::invalid_params("`layer` must be a layer id")
+                            })?),
+                            None if given("layer") => {
+                                return Err(RpcError::invalid_params("`layer` must be a layer id"));
+                            }
+                            None => None,
+                        };
+                        if let Some(id) = layer
+                            && !session.document.layers.iter().any(|l| l.id == id)
+                        {
+                            return Err(RpcError::invalid_params(format!("No layer {id}")));
+                        }
+                        let max_side = match params.get("max_side") {
+                            None | Some(Value::Null) => None,
+                            Some(value) => Some(
+                                value
+                                    .as_u64()
+                                    .map(|side| {
+                                        side.clamp(16, u64::from(xuan::document::MAX_SIDE)) as u32
+                                    })
+                                    .ok_or_else(|| {
+                                        RpcError::invalid_params(
+                                            "`max_side` must be a whole number of pixels",
+                                        )
+                                    })?,
+                            ),
+                        };
+                        Some(Part {
+                            layer,
+                            region: xuan::plugins::inspect::Region::parse(
+                                &session.document,
+                                params.get("region"),
+                            )
+                            .map_err(invalid)?,
+                            max_side,
+                        })
+                    }
                 };
                 if given("path") {
                     let path = string("path")
@@ -539,6 +646,11 @@ impl EditorApp {
                     let export = (method == "file/export").then_some(format.as_deref());
                     let (path, export, replaces) =
                         write_target(Path::new(path), export, overwrite)?;
+                    if part.is_some() && export.as_deref() != Some("png") {
+                        return Err(RpcError::invalid_params(
+                            "A layer, a region or a smaller copy is written as a PNG: end `path` in .png",
+                        ));
+                    }
                     return Ok(FileAction::Write(Write {
                         document,
                         export,
@@ -546,6 +658,7 @@ impl EditorApp {
                         path,
                         replaces,
                         encoding,
+                        part,
                     }));
                 }
                 let export =
@@ -829,10 +942,17 @@ impl EditorApp {
         };
         let source = self.plugins.source(plugin);
         let session = &mut self.sessions[index];
+        let mut placed = None;
         let done = match write.export {
             Some(_) => {
-                let options = write.encoding.options(self.export_options);
-                io::export(&session.document, path, &options).map_err(failed)?;
+                if let Some(part) = write.part {
+                    let (image, described) = part_image(&session.document, part).map_err(failed)?;
+                    xuan::plugins::edits::write_png(&image, path).map_err(failed)?;
+                    placed = Some(described);
+                } else {
+                    let options = write.encoding.options(self.export_options);
+                    io::export(&session.document, path, &options).map_err(failed)?;
+                }
                 if asked {
                     tr("Exported")
                 } else {
@@ -859,7 +979,12 @@ impl EditorApp {
         if !asked && let Some(process) = self.plugins.process_mut(plugin) {
             process.note(format!("{done} {}", path.display()));
         }
-        Ok(json!({"name": name, "asked": asked}))
+        let mut answer = json!({"name": name, "asked": asked});
+        if let (Some(placed), Some(answer)) = (placed, answer.as_object_mut()) {
+            // Where the pixels sit in the document, as the export requests say.
+            answer.extend(placed.as_object().cloned().unwrap_or_default());
+        }
+        Ok(answer)
     }
 
     /// Apply the answer to the open file prompt: `file/open`, or a write to

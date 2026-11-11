@@ -132,6 +132,17 @@ impl Editor for FakeEditor {
                 Ok(json!({"documents": [{"id": "doc", "title": "Untitled", "current": true}]}))
             }
             "document/export" | "layer/export" => Ok(self.export()),
+            "document/sample" => Ok(json!({
+                "width": 64, "height": 48, "radius": params["radius"],
+                "samples": [{"x": 1, "y": 2, "color": "#0a141eff", "rgba": [10, 20, 30, 255], "luminance": 19}],
+            })),
+            "document/histogram" => {
+                let channel = json!({"bins": vec![2; 256], "mean": 127.5, "clipped_low": 0.0039});
+                Ok(json!({
+                    "region": [0, 0, 64, 48], "pixels": 512, "transparent": 0,
+                    "luminance": channel, "red": channel, "green": channel, "blue": channel,
+                }))
+            }
             "selection/export" => Ok(Value::Null),
             "session/status" => {
                 Ok(json!({"edit_prompt": "session", "edits": "ask", "auto": false}))
@@ -2830,4 +2841,91 @@ fn set_adjustment_changes_a_layer_in_place_with_one_of_adjustment_or_filter() {
         assert!(text_of(&result).contains("either"), "{}", text_of(&result));
     }
     assert_eq!(edit_requests(&editor).len(), sent, "nothing more sent");
+}
+
+#[test]
+fn pixels_and_histograms_are_measured_as_numbers_and_regions_are_forwarded() {
+    let editor = FakeEditor::new(false);
+    let last = |editor: &FakeEditor| editor.requests().last().cloned().unwrap();
+    let sampled = call_tool(
+        &editor,
+        "sample_pixels",
+        json!({"points": [[1, 2]], "radius": 2, "layer": "base"}),
+    );
+    assert_ne!(sampled.is_error, Some(true), "{}", text_of(&sampled));
+    let (_, method, params) = last(&editor);
+    assert_eq!(method, "document/sample");
+    assert_eq!(
+        params,
+        json!({"points": [[1, 2]], "radius": 2, "layer": "base"})
+    );
+    let answer: Value = serde_json::from_str(&text_of(&sampled)).unwrap();
+    assert_eq!(answer["samples"][0]["rgba"], json!([10, 20, 30, 255]));
+    // Some clients quote lists.
+    call_tool(&editor, "sample_pixels", json!({"points": "[[3, 4]]"}));
+    assert_eq!(last(&editor).2["points"], json!([[3, 4]]));
+
+    // 256 bins come back merged into the number asked for, 32 by default.
+    for (bins, expected) in [
+        (None, Some((32, 16))),
+        (Some(256), Some((256, 2))),
+        (Some(0), None),
+    ] {
+        let mut arguments = json!({"region": [0, 0, 8, 8]});
+        if let Some(bins) = bins {
+            arguments["bins"] = json!(bins);
+        }
+        let result = call_tool(&editor, "get_histogram", arguments);
+        assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+        let (_, method, params) = last(&editor);
+        assert_eq!(method, "document/histogram");
+        assert_eq!(params, json!({"region": [0, 0, 8, 8]}), "bins stay here");
+        let answer: Value = serde_json::from_str(&text_of(&result)).unwrap();
+        assert_eq!(answer["pixels"], 512);
+        assert_eq!(answer["red"]["mean"], 127.5);
+        match expected {
+            Some((count, each)) => {
+                let merged = answer["green"]["bins"].as_array().unwrap();
+                assert_eq!(merged.len(), count);
+                assert!(merged.iter().all(|bin| bin == each), "{merged:?}");
+            }
+            None => assert!(answer["green"].get("bins").is_none()),
+        }
+    }
+    let bad = call_tool(&editor, "get_histogram", json!({"bins": 7}));
+    assert_eq!(bad.is_error, Some(true));
+
+    // Previews and layer images take a region; without one nothing is added.
+    call_tool(&editor, "get_preview", json!({"region": [4, 4, 16, 16]}));
+    assert_eq!(
+        last(&editor).2,
+        json!({"max_side": 1024, "region": [4, 4, 16, 16]})
+    );
+    call_tool(&editor, "get_preview", json!({}));
+    assert_eq!(last(&editor).2, json!({"max_side": 1024}));
+    call_tool(
+        &editor,
+        "get_layer_image",
+        json!({"layer": "base", "region": [0, 0, 8, 8]}),
+    );
+    assert_eq!(last(&editor).2["region"], json!([0, 0, 8, 8]));
+
+    // A part goes to a file through export_document, never through the answer.
+    let result = call_tool(
+        &editor,
+        "export_document",
+        json!({"path": "/tmp/part.png", "layer": "base", "region": "[0, 0, 8, 8]", "max_side": 256}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    let (_, method, params) = last(&editor);
+    assert_eq!(method, "file/export");
+    assert_eq!(
+        params,
+        json!({"path": "/tmp/part.png", "layer": "base", "region": [0, 0, 8, 8], "max_side": 256})
+    );
+    for tool in tools::list() {
+        if ["sample_pixels", "get_histogram"].contains(&tool.name.as_ref()) {
+            assert_eq!(tool.annotations.unwrap().read_only_hint, Some(true));
+        }
+    }
 }

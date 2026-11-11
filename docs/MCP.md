@@ -94,6 +94,7 @@ the document takes effect on the next frame and is drawn at once.
 | several edits as one undo step (#61) | one `document/edit` with every edit; `"$n"` names a layer added earlier in the request (new) |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
+| measure pixels without an image | `document/sample`, `document/histogram` (new; MCP `sample_pixels`, `get_histogram`); `region` on `document/export` and `layer/export`; `layer`, `region` and `max_side` on `file/export` with a `path` |
 | provenance | `document/get` lists each generated layer's `provenance` |
 | develop a camera RAW layer | `raw/develop` (new): a background job, answered when it ends |
 | run another plugin's action (#124) | `plugins/actions`, `host/run` with `<plugin>/<action>`, `jobs/list` (new), behind the grant setting **Run other plugins' actions** (MCP `list_plugin_actions`, `run_plugin_action`, `get_jobs`) |
