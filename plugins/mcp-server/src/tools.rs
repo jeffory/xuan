@@ -215,6 +215,64 @@ fn path_options() -> Value {
         "additionalProperties": false,
     })
 }
+/// A layer's effects for set_layer, in the shape `.xuan` files store them (Xuan's
+/// `LayerEffects`) and get_document reports them, with the ranges Xuan accepts.
+fn layer_effects() -> Value {
+    let enabled = json!({"type": "boolean", "description": "Shown (default true); false keeps the settings and draws nothing"});
+    let rgb = |default: &str| {
+        json!({"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3,
+               "description": format!("[r, g, b], each 0–255 (default {default})")})
+    };
+    let opacity = |default: f32| json!({"type": "number", "minimum": 0, "maximum": 1, "description": format!("0–1 (default {default})")});
+    let pixels = |max: u32, default: u32| json!({"type": "number", "minimum": 0, "maximum": max, "description": format!("Layer pixels, 0–{max} (default {default})")});
+    let shadow = |description: &str, distance: u32, blur: u32| {
+        json!({
+            "type": "object",
+            "description": description,
+            "properties": {
+                "enabled": enabled,
+                "angle": {"type": "number", "minimum": -360, "maximum": 360, "description": "Where the light comes from, in degrees counterclockwise from the right: 90 (the default) is from above, which drops the shadow straight down"},
+                "distance": pixels(5000, distance),
+                "blur": pixels(500, blur),
+                "color": rgb("[0, 0, 0]"),
+                "opacity": opacity(0.5),
+            },
+            "additionalProperties": false,
+        })
+    };
+    let glow = |description: &str, size: u32| {
+        json!({
+            "type": "object",
+            "description": description,
+            "properties": {"enabled": enabled, "size": pixels(500, size), "color": rgb("[255, 255, 255]"), "opacity": opacity(0.75)},
+            "additionalProperties": false,
+        })
+    };
+    json!({
+        "type": ["object", "null"],
+        "description": EFFECTS,
+        "properties": {
+            "stroke": {
+                "type": "object",
+                "description": "A line around what the layer shows",
+                "properties": {"enabled": enabled, "size": pixels(500, 4), "color": rgb("[0, 0, 0]"), "opacity": opacity(1.0), "inside": {"type": "boolean", "description": "Inside the edge instead of outside it (default false)"}},
+                "additionalProperties": false,
+            },
+            "drop_shadow": shadow("A shadow behind the layer", 20, 20),
+            "color_overlay": {
+                "type": "object",
+                "description": "A flat colour over everything the layer shows",
+                "properties": {"enabled": enabled, "color": rgb("[0, 0, 0]"), "opacity": opacity(1.0)},
+                "additionalProperties": false,
+            },
+            "inner_shadow": shadow("A shadow inside the layer's edges", 10, 10),
+            "outer_glow": glow("A soft glow around the outside of the layer", 20),
+            "inner_glow": glow("A soft glow inward from the layer's edges", 10),
+        },
+        "additionalProperties": false,
+    })
+}
+const EFFECTS: &str = r##"The layer's effects (Layer → Layer Effects… in Xuan), ALL of them as one object, as .xuan files store them and get_document reports them under `effects`: any of "stroke", "drop_shadow", "color_overlay", "inner_shadow", "outer_glow" and "inner_glow", each an object of its settings. It replaces every effect the layer had, so to change one, read them with get_document, change it and send them all back; null (or {}) removes them all. Settings left out take the defaults a new effect gets in Xuan. Colours are [r, g, b] lists, not "#rrggbb". Only pixel, text and shape layers take effects. Example, a warm glow: {"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}. The same JSON sent as a string is accepted too."##;
 const TEXT_PATH: &str = "Set the text along this path instead of in a box: SVG path data in document pixels, as in an SVG <path d=…>, e.g. \"M 100 400 Q 300 200 500 400\". Only the first subpath is followed; letters past the end of an open path are hidden, and on a closed path the text wraps around";
 const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
 /// Requests that hand over what is in the image, which the user may refuse.
@@ -483,7 +541,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees clockwise). `rotation` turns the layer about its own centre, or about `pivot` [x, y] in document pixels when given, which keeps that point of the picture where it is (to straighten about the subject, say). `cover: true` then scales the layer up about its centre just enough to cover the whole canvas, so a turned or moved layer leaves no corner empty; a layer that already covers it is left as it is. `flip_x` mirrors the layer left to right and `flip_y` top to bottom, about its own centre: true flipped, false not, as get_document reports them (setting the flip it already has changes nothing). A group mirrors as a whole across its layers' bounds, its layers trading places; to flip several layers each in place, batch one set_layer per layer. x and y are the top-left of the box before it is turned. Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees clockwise). `rotation` turns the layer about its own centre, or about `pivot` [x, y] in document pixels when given, which keeps that point of the picture where it is (to straighten about the subject, say). `cover: true` then scales the layer up about its centre just enough to cover the whole canvas, so a turned or moved layer leaves no corner empty; a layer that already covers it is left as it is. `flip_x` mirrors the layer left to right and `flip_y` top to bottom, about its own centre: true flipped, false not, as get_document reports them (setting the flip it already has changes nothing). A group mirrors as a whole across its layers' bounds, its layers trading places; to flip several layers each in place, batch one set_layer per layer. x and y are the top-left of the box before it is turned. Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. `effects` sets the layer's effects (stroke, drop shadow, colour overlay, inner shadow, outer glow, inner glow) as one object that replaces them all, in the shape get_document reports under `effects`, so read, change and send back; null removes them. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "fill": number("0–1; pixel, text and shape layers only"),
@@ -491,6 +549,7 @@ fn specs() -> Vec<Spec> {
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
                 "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees clockwise"), "pivot": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "The point [x, y] in document pixels the rotation turns about"}, "cover": {"type": "boolean", "description": "Scale the layer up just enough to cover the canvas"},
                 "flip_x": {"type": "boolean", "description": "Mirrored left to right about its centre (true) or not (false)"}, "flip_y": {"type": "boolean", "description": "Mirrored top to bottom about its centre (true) or not (false)"},
+                "effects": layer_effects(),
                 "text": {"type": "string", "description": "A text layer's new text"},
                 "runs": text_runs(),
                 "path": {"type": ["string", "null"], "description": "A text layer's path, SVG path data in document pixels; null puts the text back in a box"},
@@ -519,13 +578,14 @@ fn specs() -> Vec<Spec> {
                         "cover",
                         "flip_x",
                         "flip_y",
+                        "effects",
                         "text",
                         "runs",
                         "path",
                         "path_options",
                     ],
                 )?;
-                let args = unquote(unquote(args, "path_options"), "runs");
+                let args = unquote(unquote(unquote(args, "path_options"), "runs"), "effects");
                 // Locks protect layers from the agent: it may lock, but only
                 // the user unlocks.
                 if args.get("locked") == Some(&json!(false)) {
@@ -548,6 +608,15 @@ fn specs() -> Vec<Spec> {
                         return Err("`clip_to` must be a layer id or null".into());
                     }
                     set.insert("clip_to".into(), clip_to.clone());
+                }
+                // So does `null` for the effects, which removes them.
+                if let Some(effects) = args.get("effects") {
+                    if !(effects.is_null() || effects.is_object()) {
+                        return Err(
+                            "`effects` must be an object of effects, as get_document reports them, or null".into(),
+                        );
+                    }
+                    set.insert("effects".into(), effects.clone());
                 }
                 if set.len() > 2 {
                     edits.push(Value::Object(set));

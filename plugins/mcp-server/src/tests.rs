@@ -3142,3 +3142,54 @@ fn set_layer_sets_flips_with_the_placement_and_run_command_says_layers_flip_toge
         description("run_command")
     );
 }
+
+#[test]
+fn set_layer_sets_a_layers_effects_whole_or_removes_them() {
+    let editor = FakeEditor::new(false);
+    let layer = "11111111-1111-1111-1111-111111111111";
+    let glow = json!({"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}});
+    for (sent, expected) in [
+        (glow.clone(), glow.clone()),
+        // Some clients quote objects; the effects are read as JSON.
+        (json!(glow.to_string()), glow.clone()),
+        // `null` is passed on: it removes the effects.
+        (Value::Null, Value::Null),
+    ] {
+        let result = call_tool(
+            &editor,
+            "set_layer",
+            json!({"layer": layer, "effects": sent}),
+        );
+        assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+        assert_eq!(
+            edit_requests(&editor).pop().unwrap()["edits"],
+            json!([{"op": "set", "layer": layer, "effects": expected}])
+        );
+    }
+    let sent = edit_requests(&editor).len();
+    let result = call_tool(
+        &editor,
+        "set_layer",
+        json!({"layer": layer, "effects": [glow]}),
+    );
+    assert_eq!(result.is_error, Some(true));
+    assert!(text_of(&result).contains("`effects` must be"));
+    assert_eq!(edit_requests(&editor).len(), sent, "nothing more sent");
+
+    let tools = tools::list();
+    let set = tools.iter().find(|t| t.name == "set_layer").unwrap();
+    let schema = &set.input_schema["properties"]["effects"];
+    assert_eq!(schema["type"], json!(["object", "null"]));
+    let effect = |name: &str| &schema["properties"][name]["properties"];
+    assert_eq!(effect("outer_glow")["size"]["maximum"], 500);
+    assert_eq!(effect("drop_shadow")["distance"]["maximum"], 5000);
+    assert_eq!(effect("inner_shadow")["angle"]["minimum"], -360);
+    assert_eq!(effect("stroke")["color"]["maxItems"], 3);
+    assert!(
+        schema["description"]
+            .as_str()
+            .unwrap()
+            .contains("\"outer_glow\"")
+    );
+    assert!(set.description.as_deref().unwrap().contains("`effects`"));
+}

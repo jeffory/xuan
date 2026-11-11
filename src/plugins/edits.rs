@@ -16,6 +16,7 @@ use crate::{
     blend::BlendMode,
     document::{Adjustment, Document, Layer, MAX_SIDE, Mask, Point, Transform},
     effects::Filter,
+    layer_effects::{EffectKind, LayerEffects},
     paint::ShapeKind,
     selection::SelectionMode,
     text::{PathTextOptions, RunStyle, TextPath, TextRenderer, TextRun, TextStyle},
@@ -155,6 +156,8 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         // An adjustment or filter layer's settings, as `set_adjustment` takes them.
         "adjustment": layer.adjustment,
         "filter": layer.filter,
+        // The layer's effects, as the `set` edit takes them.
+        "effects": layer.effects.as_ref().filter(|effects| !effects.is_empty()),
         "raw": layer.raw.as_ref().map(super::raw::describe),
         "generated": layer.generated,
         "provenance": layer.provenance,
@@ -706,6 +709,15 @@ pub enum Edit {
             skip_serializing_if = "Option::is_none"
         )]
         clip_to: Option<Option<Uuid>>,
+        /// The layer's effects, all of them, as `.xuan` files store them and
+        /// `document/get` reports them (see [`effects_from`]), replacing what
+        /// it had; `null` removes them. Left out, they do not change.
+        #[serde(
+            default,
+            deserialize_with = "nullable_effects",
+            skip_serializing_if = "Option::is_none"
+        )]
+        effects: Option<Option<LayerEffects>>,
     },
     RemoveLayer {
         layer: Uuid,
@@ -1804,6 +1816,91 @@ where
 {
     Option::<T>::deserialize(deserializer).map(Some)
 }
+
+/// [`nullable`] for layer effects, read by [`effects_from`].
+fn nullable_effects<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<LayerEffects>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let effects = value.as_ref().map(effects_from).transpose();
+    effects.map(Some).map_err(serde::de::Error::custom)
+}
+
+/// The layer effects by the names `.xuan` files and `document/get` give them.
+const EFFECTS: [(&str, EffectKind); 6] = [
+    ("stroke", EffectKind::Stroke),
+    ("drop_shadow", EffectKind::DropShadow),
+    ("color_overlay", EffectKind::ColorOverlay),
+    ("inner_shadow", EffectKind::InnerShadow),
+    ("outer_glow", EffectKind::OuterGlow),
+    ("inner_glow", EffectKind::InnerGlow),
+];
+
+/// Layer effects a plugin sent, in the shape `.xuan` files store them: an object with any of
+/// the [`EFFECTS`], each an object of its settings. Each effect starts from the settings Layer
+/// Effects gives a new one (with a black stroke or overlay), so settings left out keep those,
+/// and names Xuan does not know are refused rather than ignored.
+fn effects_from(value: &Value) -> Result<LayerEffects> {
+    const EXAMPLE: &str =
+        r#"{"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}"#;
+    let names = || EFFECTS.map(|(name, _)| name).join(", ");
+    let Value::Object(given) = value else {
+        bail!("Layer effects are an object such as {EXAMPLE}, or null to remove them");
+    };
+    let mut effects = serde_json::Map::new();
+    for (name, settings) in given {
+        let Some((_, kind)) = EFFECTS.iter().find(|(known, _)| known == name) else {
+            bail!(
+                "`{name}` is not a layer effect; the effects are {}",
+                names()
+            );
+        };
+        if settings.is_null() {
+            continue;
+        }
+        let Value::Object(settings) = settings else {
+            bail!("`{name}` takes an object of its settings, as in {EXAMPLE}");
+        };
+        let mut fresh = LayerEffects::default();
+        fresh.add(*kind, [0; 3]);
+        let Some(Value::Object(mut merged)) = serde_json::to_value(fresh)?
+            .get_mut(name.as_str())
+            .map(Value::take)
+        else {
+            bail!("`{name}` cannot be set");
+        };
+        for (field, value) in settings {
+            ensure!(
+                merged.contains_key(field),
+                "`{name}` has no setting `{field}`; it takes {}",
+                merged
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            ensure!(
+                !(field == "color" && value.is_string()),
+                "An effect's `color` is [r, g, b], each 0–255, not {value}"
+            );
+            merged.insert(field.clone(), value.clone());
+        }
+        effects.insert(name.clone(), Value::Object(merged));
+    }
+    let effects: LayerEffects = serde_json::from_value(Value::Object(effects))
+        .map_err(|error| anyhow::anyhow!("Invalid layer effects: {error}"))?;
+    ensure!(
+        effects.validate().is_ok(),
+        "Layer effect settings out of range: a stroke's or glow's `size` is 0–500 pixels, a \
+         shadow's `angle` −360–360 degrees, `distance` 0–5000 and `blur` 0–500 pixels, and \
+         every `opacity` 0–1"
+    );
+    Ok(effects)
+}
+
 /// The ids `"$n"` references are parsed to until [`apply`] resolves them:
 /// "xuan" then zeros and `n`, a version-0 UUID that no layer ever has.
 const REFERENCE: u128 = 0x7875_616e_0000_0000_0000_0000_0000_0000;
@@ -2054,6 +2151,7 @@ fn apply_each(
                 fill,
                 blend,
                 clip_to,
+                effects,
             } => {
                 if let Some(base) = clip_to {
                     let base = clipping_base(document, *layer, *base)?;
@@ -2090,6 +2188,17 @@ fn apply_each(
                 }
                 if let Some(blend) = blend {
                     target.blend = *blend;
+                }
+                if let Some(effects) = effects {
+                    let effects = effects.clone().filter(|effects| !effects.is_empty());
+                    // As the Layer Effects dialog allows; anything can lose its effects.
+                    ensure!(
+                        effects.is_none() || target.can_attach_effects(),
+                        "\"{}\" cannot take layer effects: only pixel, text and shape layers \
+                         can, not groups, masks, adjustment or filter layers",
+                        target.name
+                    );
+                    target.effects = effects;
                 }
             }
             Edit::RemoveLayer { layer } => {
@@ -3932,6 +4041,7 @@ mod tests {
                     fill: None,
                     blend: None,
                     clip_to: None,
+                    effects: None,
                 },
             ],
         )
@@ -3983,6 +4093,7 @@ mod tests {
                     fill: None,
                     blend: None,
                     clip_to: None,
+                    effects: None,
                 }]
             )
             .is_err()
@@ -6065,6 +6176,125 @@ mod tests {
         )
         .unwrap();
         assert!(covered(&document));
+    }
+
+    #[test]
+    fn layer_effects_are_reported_and_set_whole_in_the_shape_files_store() {
+        let mut document = Document::new(40, 30).unwrap();
+        let square = run(
+            &mut document,
+            &[edit(json!({
+                "op": "add_shape_layer", "shape": "Rectangle", "x": 15, "y": 10,
+                "width": 10, "height": 10, "color": "#ff0000",
+            }))],
+        )
+        .unwrap()[0];
+        let set = |document: &mut Document, effects: Value| {
+            run(
+                document,
+                &[edit(
+                    json!({"op": "set", "layer": square, "effects": effects}),
+                )],
+            )
+        };
+        let effects = |document: &Document| described(document, square)["effects"].clone();
+        // Alpha a few pixels left of the square, and in a far corner.
+        let around = |document: &Document| {
+            let shown = crate::render::render(document);
+            (shown.get_pixel(12, 15).0[3], shown.get_pixel(0, 0).0[3])
+        };
+        assert_eq!(effects(&document), Value::Null);
+        assert_eq!(around(&document), (0, 0));
+
+        // Settings left out take those of a new effect; the layer reports them all.
+        let glow = json!({"outer_glow": {"size": 6, "color": [255, 217, 120], "opacity": 0.75}});
+        set(&mut document, glow.clone()).unwrap();
+        let reported = effects(&document);
+        assert_eq!(
+            reported,
+            json!({"outer_glow": {"enabled": true, "size": 6.0, "color": [255, 217, 120], "opacity": 0.75}})
+        );
+        let (near, far) = around(&document);
+        assert!(near > 0, "the glow shows around the layer");
+        assert_eq!(far, 0);
+
+        // What is reported goes back unchanged; a changed copy replaces the whole set.
+        let before = document
+            .layers
+            .iter()
+            .find(|l| l.id == square)
+            .unwrap()
+            .effects
+            .clone();
+        set(&mut document, reported.clone()).unwrap();
+        let layer = document.layers.iter().find(|l| l.id == square).unwrap();
+        assert_eq!(layer.effects, before);
+        let mut changed = reported;
+        changed["outer_glow"]["size"] = json!(8);
+        changed["drop_shadow"] = json!({"distance": 4});
+        set(&mut document, changed).unwrap();
+        assert_eq!(effects(&document)["outer_glow"]["size"], 8.0);
+        assert_eq!(
+            effects(&document)["drop_shadow"],
+            json!({"enabled": true, "angle": 90.0, "distance": 4.0, "blur": 20.0, "color": [0, 0, 0], "opacity": 0.5})
+        );
+        // Each effect starts from its own defaults, and the set replaces what was there.
+        set(&mut document, json!({"inner_shadow": {}, "stroke": null})).unwrap();
+        assert_eq!(
+            effects(&document),
+            json!({"inner_shadow": {"enabled": true, "angle": 90.0, "distance": 10.0, "blur": 10.0, "color": [0, 0, 0], "opacity": 0.5}})
+        );
+
+        // A hidden effect keeps its settings and draws nothing; null or {} removes them all.
+        set(
+            &mut document,
+            json!({"outer_glow": {"size": 6, "enabled": false}}),
+        )
+        .unwrap();
+        assert_eq!(effects(&document)["outer_glow"]["enabled"], false);
+        assert_eq!(around(&document), (0, 0));
+        for removed in [Value::Null, json!({})] {
+            set(&mut document, glow.clone()).unwrap();
+            set(&mut document, removed).unwrap();
+            assert_eq!(effects(&document), Value::Null);
+            let layer = document.layers.iter().find(|l| l.id == square).unwrap();
+            assert_eq!(layer.effects, None);
+        }
+
+        // Mistakes are refused with what to send instead, before anything changes.
+        for (bad, says) in [
+            (json!({"OuterGlow": {"size": 24}}), "not a layer effect"),
+            (json!({"outer_glow": {"radius": 24}}), "no setting `radius`"),
+            (json!({"outer_glow": {"color": "#ffd978"}}), "[r, g, b]"),
+            (json!({"outer_glow": {"size": 900}}), "out of range"),
+            (json!({"drop_shadow": {"opacity": 2}}), "out of range"),
+            (json!({"stroke": 4}), "object of its settings"),
+            (json!([{"outer_glow": {}}]), "an object such as"),
+            (
+                json!({"outer_glow": {"size": "big"}}),
+                "Invalid layer effects",
+            ),
+        ] {
+            let error = parse_edits(json!([{"op": "set", "layer": square, "effects": bad}]))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(says), "{bad}: {error}");
+        }
+        // Groups, masks, adjustment and filter layers take none, though null is harmless.
+        let invert = run(
+            &mut document,
+            &[edit(
+                json!({"op": "add_adjustment_layer", "adjustment": "Invert"}),
+            )],
+        )
+        .unwrap()[0];
+        let on = |layer, effects| edit(json!({"op": "set", "layer": layer, "effects": effects}));
+        let error = run(&mut document.clone(), &[on(invert, glow)]).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot take layer effects"),
+            "{error}"
+        );
+        run(&mut document, &[on(invert, Value::Null)]).unwrap();
     }
 
     #[test]

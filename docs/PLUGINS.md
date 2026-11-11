@@ -1169,7 +1169,7 @@ wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
-| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, fill, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, raw, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
+| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, fill, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, effects, raw, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
 | `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, region?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips (with `region`, `[x, y, width, height]` in document pixels, that rectangle of the layer alone as it sits in the document instead); an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
 | `document/export` | `{max_side?, region?, dir?}` | `{path, width, height, scale}`; with `region` (`[x, y, width, height]` in document pixels, cut to the canvas) only that rectangle, and `x`, `y` and `region` say what was written |
 | `document/sample` | `{points: [[x, y]], radius?, layer?}` | `{width, height, radius, samples: [{x, y, color, rgba, luminance}]}`: the colour at each point in document pixels (at most 1,000), averaged by alpha over the pixels within `radius` (0–50) of it; `color` is `null` off the canvas. With `layer`, that layer alone as it sits in the document |
@@ -1206,6 +1206,13 @@ Vertical** toggle. Several layers flipped together mirror across their
 combined bounds, so they also trade places, and each layer's own flip is
 toggled; the `transform` op sets them.
 
+`effects` is the layer's layer effects (**Layer → Layer Effects…**), as
+`.xuan` files store them ([FORMAT.md](FORMAT.md)), or `null` when it has
+none: an object with any of `stroke`, `drop_shadow`, `color_overlay`,
+`inner_shadow`, `outer_glow` and `inner_glow`, each with all its settings,
+`enabled` among them (a hidden effect keeps its settings). The `set` op takes
+the same object back.
+
 Masks are layers. **Add Mask from Selection** on an image adds a child layer
 of kind `mask` whose `parent` is the image; adjustment and filter layers can
 be attached to an image the same way and then change only that image, while
@@ -1224,7 +1231,7 @@ its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
 
 - `{"op": "add_layer", "image": path, "name"?, "x"?, "y"?, "mask"?, "above"?, "opacity"?, "blend"?}`
 - `{"op": "replace_pixels", "layer", "image", "x"?, "y"?}`
-- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "fill"?, "blend"?, "clip_to"?: id | null}`:
+- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "fill"?, "blend"?, "clip_to"?: id | null, "effects"?: {…} | null}`:
   `fill` (0–1) is Photoshop's Fill, on pixel, text and shape layers only: it
   fades the layer's own pixels but not its layer effects, where `opacity`
   fades both; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid
@@ -1237,7 +1244,17 @@ its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
   mask included. The base's opacity applies to the clipped layer too. A base
   that is itself clipped passes on its own base. Groups, mask layers and
   filter layers cannot be clipped; mask, adjustment and filter layers cannot
-  be bases.
+  be bases. `effects` replaces all the layer's effects with this object, in
+  the shape `document/get` reports, and `null` (or `{}`) removes them; left
+  out, they do not change. Each effect it names starts from the settings
+  **Layer Effects** gives a new one, so settings left out keep those (a black
+  stroke or colour overlay). Colours are `[r, g, b]`. The ranges are those of
+  the file format: a stroke's or glow's `size` 0–500, a shadow's `angle`
+  −360–360, `distance` 0–5000 and `blur` 0–500, every `opacity` 0–1. An
+  unknown effect or setting is refused, and so are effects on groups, mask,
+  adjustment and filter layers. For example `{"op": "set", "layer": id,
+  "effects": {"outer_glow": {"size": 24, "color": [255, 217, 120],
+  "opacity": 0.8}}}`.
 - `{"op": "remove_layer", "layer"}`
 - `{"op": "set_mask", "layer", "mask": path | null}`
 - `{"op": "set_selection", "mask": path | null}`
