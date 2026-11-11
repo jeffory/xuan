@@ -74,14 +74,16 @@ the document takes effect on the next frame and is drawn at once.
 | open a document | `file/open` (new): the user confirms the file |
 | save / export a document | `file/save_as`, `file/export` (new): the system save dialog, or with `path` Xuan's own prompt (#54); `file/save` saves in place |
 | switch document | `document/activate` (new) |
-| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
+| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, fill, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
-| get/set layer properties: name, visibility, lock, opacity, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
+| get/set layer properties: name, visibility, lock, opacity, fill, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
 | … transform | `document/edit` `transform` (new) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
 | create text / shape layer | `document/edit` `add_text_layer` (with an SVG `path` for text on a path), `add_shape_layer` (new) |
 | edit text, set it on a path (#64) | `document/edit` `set_text` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
+| auto contrast, tone and white balance | `document/edit` `auto_adjust` (MCP `auto_adjust`) |
+| read and change an adjustment / filter layer's settings | `document/get` lists them under `adjustment` and `filter`; `document/edit` `set_adjustment` (MCP `set_adjustment`) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
 | paint via strokes, fills and gradients | `document/edit` `stroke` (with `points` or an SVG `path`), `fill`, `fill_path`, `gradient` (new) |
 | vector paths (#62) | SVG path data in `select_path`, `stroke` `path`, `fill_path`, `add_shape_layer` `Path`; `add_path` keeps a named path with the document (new) |
@@ -89,12 +91,14 @@ the document takes effect on the next frame and is drawn at once.
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
 | reorder layers | `document/edit` `move_layer` (new) |
-| crop / resize / rotate / trim canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas`, `rotate_canvas`, `trim`; `host/run` `crop_to_selection` |
+| crop / resize / rotate / trim canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas`, `rotate_canvas` (any angle, `expand`), `crop_to` (ratio, straighten), `trim`; `host/run` `crop_to_selection` |
 | several edits as one undo step (#61) | one `document/edit` with every edit; `"$n"` names a layer added earlier in the request (new) |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |
+| measure pixels without an image | `document/sample`, `document/histogram` (new; MCP `sample_pixels`, `get_histogram`); `region` on `document/export` and `layer/export`; `layer`, `region` and `max_side` on `file/export` with a `path` |
 | provenance | `document/get` lists each generated layer's `provenance` |
-| run a plugin action | not exposed: `host/run` only starts the calling plugin's own actions |
+| develop a camera RAW layer | `raw/develop` (new): a background job, answered when it ends |
+| run another plugin's action (#124) | `plugins/actions`, `host/run` with `<plugin>/<action>`, `jobs/list` (new), behind the grant setting **Run other plugins' actions** (MCP `list_plugin_actions`, `run_plugin_action`, `get_jobs`) |
 
 Panes give the plugin its status and connection page; settings hold the port.
 
@@ -112,7 +116,11 @@ like the existing ones, rather than anything specific to MCP:
   tools declare them as a string or an object, accept the same JSON sent as
   a string (`"\"Invert\""`), and list every variant Xuan accepts; a test in
   `src/plugins/edits.rs` reads serde's list of variants and fails when the
-  tool descriptions miss one.
+  tool descriptions miss one. Upstream Compositor's Vignette, Bloom / Glow, Tonal
+  Contrast and Dither are among them (`{"Vignette": …}`, `{"Bloom": …}`,
+  `{"TonalContrast": …}`, `{"Dither": …}`), with upstream's ranges and
+  defaults as [FORMAT.md](FORMAT.md#compositor-filters-version-14) lists them;
+  a Dither may leave out any setting to take its default.
 - **Layer creation.** `add_text_layer`, `add_shape_layer`, `add_empty_layer`
   and `add_mask_layer` make editable layers like the tools do; text is drawn
   with the editor's own renderer and counts against the pixel budget.
@@ -179,6 +187,23 @@ like the existing ones, rather than anything specific to MCP:
   segment by the existing brush, so the GPU and CPU paths and the stroke's
   coverage rules are shared and agree. All are off by default; a stroke that
   uses none of them is painted exactly as before.
+- **Brush flow** (#104). A stroke laid its whole opacity down at once, so
+  building paint up gradually took one stroke per coat. `paint_stroke` (at
+  the top level and in each item of `strokes`) and the `stroke` edit take
+  `flow` (0–1, default 1), the Brush's Flow: below 1, each dab moves a pixel's
+  coverage a share of the way to its own (Photoshop's flow under an opacity
+  cap), shared so that one pass lays down `flow` at any spacing, and going
+  back over a spot builds up to `opacity`. A flow below 1 paints dabs 0.1 of
+  the size apart unless `spacing` says otherwise. At 1 a stroke paints
+  exactly as before.
+- **Fill opacity** (#105). A layer could only be faded as a whole, effects
+  included, so text with only its stroke showing, or a Hard Mix layer softened
+  into a contrast boost, could not be made. `set_layer` takes `fill` (0–1),
+  Photoshop's Fill on pixel, text and shape layers: it fades the layer's own
+  pixels but not its layer effects, and in the eight modes Photoshop treats
+  specially (Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light,
+  Linear Light, Hard Mix, Difference) it weakens the blend instead of fading
+  it. `get_document` reports each layer's `fill`.
 - **Vector paths** (#62). Every curve had to be computed outside Xuan and
   sent as dense point lists, and changing one meant recomputing it. Agents
   write SVG path data easily, so the tools take it: `select_shape` with
@@ -233,6 +258,13 @@ like the existing ones, rather than anything specific to MCP:
   references through untouched. When a request of several edits fails, Xuan
   names the edit (`Edit 3 (stroke): …`), which the server maps back to the
   step.
+- **Letters in their own font or colour** (#110). A word with one red letter
+  took a text layer per colour, placed side by side by hand. `create_text_layer`
+  and `set_layer` take `runs` (`start`, `end` in Unicode code points, and any of
+  `family`, `color`, `bold`, `italic`), sent as `runs` on `add_text_layer` and
+  `set_text`; new `text` keeps each unchanged letter's style, and `runs: []`
+  clears them. `get_document` lists each text layer's `runs`. Saved as `.xuan`
+  format 17.
 - **Documents.** `document/list` and `document/activate`.
 - **Undo/redo** needed nothing: they were already `Edit` commands.
 
@@ -303,6 +335,10 @@ decision: ask the user the first time, and offer to always allow.
 - **`path`.** `file/save_as` and `file/export` take an optional absolute
   `path` (and `overwrite`); `file/save` saves a document back to its own
   `.xuan` file, as Ctrl+S. Without `path`, the save dialog is unchanged.
+- **Encoding (#115).** `export_document` and `file/export` also take
+  `quality` (1–100, JPEG and lossy WebP) and `lossless` (WebP). WebP is lossy
+  when `quality` is given without `lossless`; what is left out follows the
+  user's **Export image** dialog, which a request never changes.
 - **Xuan's own prompt.** In place of the system dialog Xuan shows **Save a
   file?** (or **Export an image?**, **Save the project?**), naming the plugin,
   the document, the file name, its folder (resolved), and whether it writes a
@@ -458,6 +494,102 @@ discards. The MCP server gains no access to the provider plugin, and the
 provider none to the MCP client; offline mode makes the command fall back to
 the built-in algorithm.
 
+## Running other plugins' actions (#124)
+
+With the Comfy Cloud plugin installed, an agent could paint, mask and filter
+through the server but not run **Generate Image…**, **Edit Image…**,
+**Split into Layers** or the AI Region actions: `host/run` refuses another
+plugin's action on purpose (a plugin should not drive another one, with its
+own network hosts, secrets and costs, without the user knowing), and
+`run_command` takes only built-in commands. The rule stays the default; the
+exception is explicit and visible.
+
+- **Two grant settings, off by default.** **Run other plugins' actions**
+  (`run_other_actions`) lets the plugin list other plugins' actions, start
+  them and follow their jobs. Without it, `plugins/actions`, `jobs/list` and
+  such a `host/run` fail with an error that names the setting. **Always
+  Allow** in the run prompt stores the second, `run_without_asking`, shown as
+  **Run them without asking** under the first. The issue named one setting
+  and an Always Allow that "sets the grant"; that cannot be one flag, since
+  without the setting the request fails and the prompt could never offer to
+  turn it on, so the pair mirrors edits (`edit_prompt = "session"` and
+  `edit_without_asking`). Both belong to the grant like
+  `save_without_asking`: kept while the folder, command and permissions stay
+  the same, dropped otherwise. The settings are generic, but **Manage
+  Plugins** offers them only to plugins that ask before edits (the MCP
+  server), and shows them for any plugin while they are on.
+- **Checked before anything waits.** The plugin and action must exist, the
+  plugin must be enabled and not held back by offline mode, and the inputs
+  must fit the manifest as given. Inputs from a project file or a plugin's own
+  `host/run` are coerced (a wrong type falls back to the default, numbers are
+  clamped); a run for a client is not, so a bad enum or an out-of-range number
+  fails at once with the input's name instead of running with something
+  else. `path` inputs cannot be set: they name a file the user chooses, and a
+  client could otherwise have a network plugin read and upload any file.
+  `into` is required for actions with `result.into = "ask"`, and is `layer`
+  or `document`, what the action's dialog offers; the issue also listed
+  `replace`, which that dialog never offers. A disabled or offline plugin is
+  refused before the prompt, so the user is not asked about a run that
+  cannot happen.
+- **A prompt per session and plugin.** The first run in a session asks **Run
+  “Generate Image” for MCP Server (plugin mcp-server)?**, naming the other
+  plugin with its id, the texts and options, where the result goes, the
+  layers it selects, the session, and for a network plugin its hosts and that
+  a run can send document data and use paid credits. **Allow** covers that
+  session's runs of that plugin only: allowing Comfy Cloud does not allow
+  every plugin. **Always Allow** sets `run_without_asking`; **Cancel**
+  refuses with `-32800` and starts the 30-second cooldown edits and files
+  use. It behaves like the other plugin prompts: it waits until no other
+  dialog, editor job or plugin action is open, comes back after another
+  dialog replaced it (#56), and `request/cancel` closes it so a late answer
+  does nothing (#57). One run per plugin may wait for it, so runs that may
+  cost money cannot stack up behind one answer.
+- **The other plugin's rules, as from its menu.** The run takes the path a
+  surface run takes (`run_from_surface`), not `start_plugin_action_with` as
+  the issue suggested: that function opens the action's dialog for any action
+  with inputs, reports problems only to the user and resumes a newly allowed
+  plugin as a menu run. The checks are the menu's, in its order, and use the
+  other plugin's grant, never the server's: a plugin that is not allowed yet
+  shows its permission prompt (nothing resumes after it; the client runs the
+  action again), an action that needs an image layer or a selection is
+  refused as its menu item would be, missing models are offered for download
+  (once ready, the action's dialog opens with the client's inputs for the user
+  to run, as when a menu run waited for them), and a network plugin asks
+  **Send to *Plugin*?** before anything is sent, saying which plugin started
+  the run. So a run goes ahead without a prompt only where the menu item
+  would too; with "Don't ask again" for Comfy Cloud and Always Allow for the
+  server, neither asks.
+- **Answered when the job runs.** `host/run` answers `{ok, running: true,
+  job, …}` once the job runs, or an error that says why nothing ran. While the
+  send prompt is up the request waits, and the server keeps the client
+  informed with progress notifications as for every prompt; **Cancel**, the
+  action closing or the server stopping answer `-32800`, and
+  `request/cancel` closes the send prompt. Failures go to the client, not to
+  the user as error dialogs.
+- **Following the job.** Cloud jobs take 30–120 seconds or more. `jobs/list`
+  reports what the status bar shows (each job's label, progress and message,
+  which one the bar shows and "1 of N"), finished results waiting for the
+  editor, the open proposal, and what became of the jobs this plugin started:
+  waiting, proposed, done, accepted, discarded, failed (with the error) or
+  cancelled. Other plugins' finished jobs are not reported. `get_jobs` wraps
+  it, so a client can wait without guessing; `run_plugin_action` returns at
+  once, like `content_fill`.
+- **Visible to the user.** The job is in the status bar like any other, with
+  Cancel, and hovering it names the plugin that started it; the server's log
+  in **Manage Plugins** notes each run; the MCP Server pane lists "run_plugin_action:
+  started Generate Image… from Comfy Cloud" and says when clients may run
+  other plugins' actions; and the result is a proposal the user accepts or
+  discards.
+- **MCP tools.** `list_plugin_actions` turns each action's declared inputs
+  into a JSON schema (enum ids with their labels, bounds, defaults, regions as
+  boxes with their fields). `run_plugin_action` takes `plugin`, `action`,
+  `inputs`, `into` and `layers`, and is marked open-world. `get_jobs` wraps
+  `jobs/list`. None can be a `batch` step.
+
+Left out: plugins other than the MCP server calling each other (the setting
+is generic, but nothing offers it to them), and Xuan as an MCP client of
+outside servers.
+
 ## Network and the sandbox
 
 The server listens on `127.0.0.1`, so the plugin declares `network =
@@ -472,8 +604,82 @@ usually sends what it reads (previews included) to a model in the cloud:
   process, or "Don't ask again";
 - offline mode ("Disable plugins that use the network") stops it.
 
+## Headless mode and camera RAW
+
+Two additions for agents that work without anyone at the screen: how to use
+them is in [AGENTS-GUIDE.md](AGENTS-GUIDE.md#without-a-window---headless).
+
+**`xuan --headless`** runs the editor without a window and serves this
+plugin. `main` branches before eframe is started, so no winit event loop,
+window, surface or wgpu device exists and the display server, EGL, Vulkan
+and GL are never loaded: a desktop whose graphics stack fails at startup, a
+server, or a container can still run it. The editor is the same
+`EditorApp`, made with an `egui::Context` that never paints. A loop
+(`src/app/headless.rs`) does what a frame does apart from drawing: it
+services plugin requests, finishes jobs and commits history, and sleeps
+until a plugin message or a job asks for a repaint (the context's repaint
+callback wakes it). Without a GPU processor, edits take the CPU paths Xuan
+already has for computers without a suitable GPU.
+
+The prompts have no one to answer them, so the command line does, for this
+run only:
+
+- The plugin's grant is made in memory with `edit_without_asking` and
+  `send_without_asking`: launching Xuan headless is the user's answer to
+  the edit prompt and to the prompt before images go out. The settings file
+  is read (for the plugin folders, the port and "plugins that use the
+  network") but never written, so a headless run does not grant anything to
+  the Xuan used with a window.
+- File requests are refused, with a message that says why, unless
+  `--allow-files` is given: then `file/open` and writes to a `path` go ahead
+  without the prompt (`save_without_asking`), and an overwrite still needs
+  `overwrite: true`. A save without `path` would need the system dialog and
+  is always refused, before any dialog is shown.
+- Any other dialog that opens is closed and reported on standard error.
+
+Rather than show the token, Xuan prints the URL from the plugin's
+`connection.json`, the token file's path and a Claude Code command that
+reads it. `--mcp-port` overrides the port setting for the run. A plugin that
+stops is started again, up to three times. SIGINT and SIGTERM stop the
+plugin and Xuan.
+
+Considered: an MCP stdio transport (`claude mcp add xuan -- xuan --headless`)
+would save the token step, but the plugin's stdin and stdout already carry
+the plugin protocol, so Xuan would have to proxy MCP between its own stdio
+and the plugin's HTTP server; `mcp-remote` already bridges a stdio-only
+client to the HTTP server. Rendering the window offscreen with a GPU was
+not needed: nothing an agent does goes through egui's painting.
+
+**Camera RAW.** Develop (the RAW pipeline, `src/raw`) was reachable only
+through its workspace, which a client cannot use: `file/open` of a RAW file
+opened a Develop tab waiting for **Apply** and answered with the previous
+document. Now:
+
+- `file/open` (and a headless command line) opens a RAW file directly as a
+  document with one RAW layer developed with the default settings, as
+  pressing Apply at once would.
+- `document/get` describes a RAW layer's camera file, metadata and Develop
+  settings under `raw`.
+- `raw/develop` develops a RAW layer again with settings laid over its own.
+  Decoding and rendering a 24-megapixel file takes seconds, beyond the
+  budget of a `document/edit` (which runs on the UI thread between frames),
+  so it is a background job like Content-Aware Fill: the job holds the
+  plugin's request and answers it when it ends, the user sees the job and
+  can cancel it, and it is one undo step. It is gated like `document/edit`
+  (`document = "edit"` and the session's answer). The settings are checked
+  before the job starts, so a misspelt or out-of-range setting is refused
+  at once with its name and range.
+- The MCP tool `develop_raw` sends it; `open_document` and `get_document`
+  say what they do with RAW files.
+
+RAW stays in core rather than becoming a plugin: decoding and the Develop
+pipeline were already core (the Develop workspace, RAW layers in `.xuan`
+files), and a plugin could not develop RAW layers non-destructively anyway,
+since format plugins return flat pixels. What this adds is the generic host
+request any plugin with `document = "edit"` can use.
+
 ## Not in v1
 
-MCP client support (Xuan calling external MCP tools), stdio transport, running
-other plugins' actions from MCP, watching `.xuan` files on disk, and MCP
-sampling or elicitation.
+MCP client support (Xuan calling external MCP tools), stdio transport,
+watching `.xuan` files on disk, and MCP sampling or elicitation. Running other
+plugins' actions came later (#124, above).

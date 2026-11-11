@@ -41,10 +41,16 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Select | Deselect | Ctrl+D |
 | Select | Inverse Selection | Ctrl+Shift+I |
 | Select | Select Subject | Ctrl+Alt+A |
+| Filter | Camera Raw Filter… | Ctrl+Shift+A |
 | View | Fit Canvas | Ctrl+0 |
 | View | Actual Pixels | Ctrl+1 |
 | View | Zoom In | Ctrl+Plus / Ctrl+= |
 | View | Zoom Out | Ctrl+Minus |
+| View | Edit All Channels | Ctrl+2 |
+| View | Edit Red Channel | Ctrl+3 |
+| View | Edit Green Channel | Ctrl+4 |
+| View | Edit Blue Channel | Ctrl+5 |
+| View | Edit Alpha Channel | Ctrl+6 |
 | View | Show Transform Controls | Ctrl+H |
 | View | Show Grid | Ctrl+' |
 | View | Show Guides | Ctrl+; |
@@ -70,13 +76,18 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Tools | Switch Freehand / Polygonal Lasso | Shift+L |
 | Tools | Magic Wand | W |
 | Tools | Crop | C |
+| Tools | Switch Crop Box / Perspective Crop | Shift+C |
 | Tools | Brush | B |
 | Tools | Switch between Brush and Pencil | Shift+B |
 | Tools | Eraser | E |
 | Tools | Spot Healing | J |
 | Tools | Clone Stamp | S |
 | Tools | Blur / Smudge | R |
+| Tools | Switch Blur / Smudge / Liquify | Shift+R |
+| Tools | Dodge / Burn | O |
+| Tools | Switch Dodge / Burn / Sponge | Shift+O |
 | Tools | Gradient | G |
+| Tools | Switch between Gradient and Paint Bucket | Shift+G |
 | Tools | Shape | U |
 | Tools | Switch Rectangle / Ellipse Shape | Shift+U |
 | Tools | Pen | P |
@@ -94,7 +105,7 @@ On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) a
 | Help | Keyboard Shortcuts | F1 |
 <!-- END GENERATED -->
 
-With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last.
+With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last. G likewise selects whichever of Gradient and Paint Bucket you used last. O selects the Dodge / Burn tool in the mode you used last; with the tool selected, Shift+O moves on to the next of Dodge, Burn and Sponge. R and Shift+R do the same for the Blur / Smudge tool's Blur, Smudge and Liquify. C likewise selects the Crop tool in the mode you used last; with it selected, Shift+C switches between the crop box and Perspective Crop.
 
 ## Other keys and pointer controls
 
@@ -135,6 +146,8 @@ Copy an image in another app, or copy one or more image files in a file manager,
 Use **File → Open Image from Clipboard** to open copied pixels in a new document sized to the image, even when another document is open. Copied image files open in separate tabs. Clipboard images preserve transparency and prompt to save when closed.
 
 For a marquee selection, Ctrl+C copies the active layer's selected pixels. If no layer is active, it copies the visible canvas within the selection. Ctrl+V places those pixels on a new layer at their original position. Ctrl+Shift+C always copies the visible composite; Ctrl+X requires an active layer. Successful copies show the copied dimensions in the status bar.
+
+Without a selection, Ctrl+C copies the selected layers whole: folders with their contents, clipped and adjustment layers, editable text, masks, effects, blend mode and opacity. Other apps get the layers' flattened pixels. Ctrl+V pastes the layers complete, as one undo step, until something else is copied: in the same document just above the originals, in another document centred on the canvas, and inside the selected folder when one is selected. Pixel layers clipped to a layer that was not copied keep their clipped look in another document, baked into their pixels.
 
 Shift with a selection adds coverage, Alt subtracts, and Shift+Alt intersects. Drag inside a selection to move its outline; hold Ctrl to move selected pixels, or Ctrl+Alt to duplicate them. The contextual header also offers explicit selection modes.
 

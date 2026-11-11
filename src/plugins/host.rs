@@ -165,6 +165,8 @@ pub struct Process {
     /// including [`Incoming::Closed`], handed out by the next [`Process::poll`].
     held: Vec<Incoming>,
     log: Arc<Mutex<VecDeque<String>>>,
+    /// Set once everything the plugin wrote to stderr is in `log`.
+    log_complete: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
     /// False between `initialize` and its answer. Requests and notifications
     /// sent meanwhile wait in `outbox`, so the plugin sees nothing before
@@ -229,6 +231,7 @@ impl Process {
         let (send, incoming) = mpsc::channel();
         let closed = Arc::new(AtomicBool::new(false));
         let log = Arc::new(Mutex::new(VecDeque::new()));
+        let log_complete = Arc::new(AtomicBool::new(false));
         let budget = Arc::new(Budget::default());
         {
             let send = send.clone();
@@ -291,6 +294,7 @@ impl Process {
         }
         {
             let log = log.clone();
+            let log_complete = log_complete.clone();
             std::thread::Builder::new()
                 .name(format!("plugin {} stderr", manifest.plugin.id))
                 .spawn(move || {
@@ -304,6 +308,7 @@ impl Process {
                         }
                         push_log(&log, line);
                     }
+                    log_complete.store(true, Ordering::Release);
                 })
                 .context("plugin log thread")?;
         }
@@ -322,6 +327,7 @@ impl Process {
             budget,
             held: Vec::new(),
             log,
+            log_complete,
             closed,
             ready: true,
             outbox: Vec::new(),
@@ -463,6 +469,20 @@ impl Process {
             .lock()
             .map(|log| log.iter().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Once the plugin has exited, wait up to `limit` for the last of its stderr to reach the
+    /// log: the exit can be noticed (a closed pipe) before the log thread has read why.
+    pub fn settle_log(&mut self, limit: Duration) {
+        let exited = self.closed.load(Ordering::Relaxed)
+            || (self.child.as_mut()).is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))));
+        let deadline = std::time::Instant::now() + limit;
+        while exited
+            && !self.log_complete.load(Ordering::Acquire)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     /// Add a host note to the log, cut to [`MAX_NOTE`] bytes.

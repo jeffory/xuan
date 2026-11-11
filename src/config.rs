@@ -11,21 +11,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::{GridSettings, SnapSettings};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Language {
-    #[default]
-    #[serde(rename = "en")]
-    English,
-    #[serde(rename = "zh-CN")]
-    SimplifiedChinese,
+/// An interface language, saved as its tag (`en`, `zh-CN`): the name of its file in
+/// `assets/locales`. A tag this build has no locale for is kept, so the choice survives running
+/// an older or newer build, and the interface shows English.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub struct Language(String);
+
+impl Default for Language {
+    fn default() -> Self {
+        Self::english()
+    }
+}
+
+impl From<String> for Language {
+    /// Accepts any spelling of a tag (`zh_cn`); English for text that is not one.
+    fn from(tag: String) -> Self {
+        Self(crate::i18n::canonical_tag(&tag).unwrap_or_else(|| crate::i18n::ENGLISH.into()))
+    }
+}
+
+impl From<Language> for String {
+    fn from(language: Language) -> Self {
+        language.0
+    }
 }
 
 impl Language {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::English => "English",
-            Self::SimplifiedChinese => "简体中文",
-        }
+    pub fn new(tag: &str) -> Self {
+        tag.to_owned().into()
+    }
+
+    pub fn english() -> Self {
+        Self(crate::i18n::ENGLISH.into())
+    }
+
+    pub fn tag(&self) -> &str {
+        &self.0
+    }
+
+    /// The language's name for itself, or its tag when this build does not have it.
+    pub fn name(&self) -> &str {
+        crate::i18n::native_name(self).unwrap_or(&self.0)
     }
 }
 
@@ -164,6 +191,13 @@ pub struct Config {
     /// Files opened or saved, newest first: File → Open Recent. At most
     /// [`MAX_RECENT_FILES`]; see [`push_recent_file`].
     pub recent_files: Vec<PathBuf>,
+    /// File → New: the size of the last canvas created, in pixels. Absent until one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_canvas_size: Option<[u32; 2]>,
+    /// File → New: the background of the last canvas created. Transparent, as canvases were
+    /// before there was a choice, is not written.
+    #[serde(default, deserialize_with = "lenient_background")]
+    pub new_canvas_background: CanvasBackground,
     /// Move tool options: Auto Select.
     pub auto_select: bool,
     /// Move tool options: Ignore Transparent Pixels.
@@ -186,6 +220,146 @@ pub struct Config {
     /// Background and the Magic tool's Object mode. Built-in when absent.
     #[serde(default, skip_serializing_if = "Providers::is_default")]
     pub providers: Providers,
+    /// The units sizes and resolutions are shown in.
+    pub units: UnitSettings,
+    /// Checking for a newer release (issue 118).
+    pub updates: UpdateSettings,
+}
+
+/// Settings → General → Check for updates, and what the checks remember, in an `[updates]`
+/// table. See [`crate::update`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// Ask GitHub once a day whether a newer release is out. Off unless the user turns it on:
+    /// Xuan makes no network request of its own before then, except when Help → Check for
+    /// Updates… is chosen.
+    pub check: bool,
+    /// When the last check started, in seconds since 1970 (UTC). A value that is not one (a
+    /// negative number, text) reads as never, so the next check is due.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_time"
+    )]
+    pub last_check: Option<u64>,
+    /// The version Skip This Version was chosen for; the automatic check does not offer it again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
+/// The units sizes and resolutions are shown in (issue 94), in a `[units]` table.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UnitSettings {
+    /// File → New, Canvas Size and Image Size: the unit Width and Height were last shown in.
+    pub size: crate::units::Unit,
+    /// Pixels per inch or per centimetre.
+    pub resolution: crate::units::ResolutionUnit,
+    /// File → New: the resolution of the last canvas created, in pixels per inch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_canvas_resolution: Option<f32>,
+    /// What View → Rulers measure in.
+    pub rulers: crate::units::Unit,
+}
+
+impl UnitSettings {
+    /// File → New's resolution: the last one used, when it is one a document may have.
+    pub fn new_canvas_resolution(&self) -> f32 {
+        self.new_canvas_resolution
+            .filter(|ppi| crate::units::valid_resolution(f64::from(*ppi)))
+            .unwrap_or(crate::units::DEFAULT_RESOLUTION)
+    }
+}
+
+impl UpdateSettings {
+    /// The `[updates]` table. TOML integers are signed, so a time past the year 292 billion is
+    /// written as the largest one.
+    fn to_toml(&self) -> toml::Value {
+        let mut table = toml::Table::new();
+        table.insert("check".into(), toml::Value::Boolean(self.check));
+        if let Some(time) = self.last_check {
+            let time = i64::try_from(time).unwrap_or(i64::MAX);
+            table.insert("last_check".into(), toml::Value::Integer(time));
+        }
+        if let Some(version) = &self.skipped {
+            table.insert("skipped".into(), toml::Value::String(version.clone()));
+        }
+        toml::Value::Table(table)
+    }
+}
+
+/// What File → New fills the canvas with, saved as `"transparent"`, `"white"`, `"black"` or a
+/// `"#rrggbb"` colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum CanvasBackground {
+    #[default]
+    Transparent,
+    White,
+    Black,
+    /// An opaque colour of the user's choosing.
+    Custom([u8; 3]),
+}
+
+impl CanvasBackground {
+    /// The colour the canvas is filled with; `None` leaves it transparent.
+    pub fn pixel(self) -> Option<[u8; 4]> {
+        match self {
+            Self::Transparent => None,
+            Self::White => Some([255; 4]),
+            Self::Black => Some([0, 0, 0, 255]),
+            Self::Custom([r, g, b]) => Some([r, g, b, 255]),
+        }
+    }
+}
+
+impl From<String> for CanvasBackground {
+    /// Text that is none of the choices reads as transparent.
+    fn from(text: String) -> Self {
+        let text = text.trim().to_ascii_lowercase();
+        match text.as_str() {
+            "white" => Self::White,
+            "black" => Self::Black,
+            _ => text
+                .strip_prefix('#')
+                .filter(|hex| hex.len() == 6 && hex.is_ascii())
+                .and_then(|hex| {
+                    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+                    Some(Self::Custom([channel(0)?, channel(2)?, channel(4)?]))
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl From<CanvasBackground> for String {
+    fn from(background: CanvasBackground) -> Self {
+        match background {
+            CanvasBackground::Transparent => "transparent".into(),
+            CanvasBackground::White => "white".into(),
+            CanvasBackground::Black => "black".into(),
+            CanvasBackground::Custom([r, g, b]) => format!("#{r:02x}{g:02x}{b:02x}"),
+        }
+    }
+}
+
+/// A background that is not text, such as a number written by hand, reads as transparent
+/// rather than making the whole configuration unreadable.
+fn lenient_background<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<CanvasBackground, D::Error> {
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .map(|text| CanvasBackground::from(text.to_owned()))
+        .unwrap_or_default())
+}
+
+fn lenient_time<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error> {
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value.as_integer().and_then(|time| u64::try_from(time).ok()))
 }
 
 /// Files File → Open Recent remembers.
@@ -272,12 +446,16 @@ impl Default for Config {
             keybindings: toml::Table::new(),
             recent_commands: Vec::new(),
             recent_files: Vec::new(),
+            new_canvas_size: None,
+            new_canvas_background: CanvasBackground::Transparent,
             auto_select: true,
             ignore_transparent_pixels: true,
             show_controls: true,
             disable_network_plugins: false,
             block_undeclared_network: None,
             providers: Providers::default(),
+            units: UnitSettings::default(),
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -332,6 +510,19 @@ pub struct PluginGrant {
     /// to this grant like `send_without_asking`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub save_without_asking: bool,
+    /// "Run other plugins' actions": the plugin may list other plugins'
+    /// actions and start them with `host/run` (the MCP server, for its
+    /// clients). Each run still asks the user once per session, unless
+    /// `run_without_asking`, and still goes through the other plugin's own
+    /// grant and prompts. It belongs to this grant like
+    /// `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_other_actions: bool,
+    /// "Always Allow" in the prompt before a run of another plugin's
+    /// action: runs no longer ask once per session. It belongs to this
+    /// grant like `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_without_asking: bool,
 }
 
 impl PluginGrant {
@@ -471,7 +662,7 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
             Err(error) => return Err(error.into()),
         };
-        table.insert("language".into(), toml::Value::try_from(self.language)?);
+        table.insert("language".into(), toml::Value::try_from(&self.language)?);
         table.insert("theme".into(), toml::Value::try_from(self.theme)?);
         table.insert(
             "system_accent".into(),
@@ -525,6 +716,32 @@ impl Config {
             table.remove("providers");
         } else {
             table.insert("providers".into(), toml::Value::try_from(&self.providers)?);
+        }
+        match self.new_canvas_size {
+            Some(size) => {
+                table.insert("new_canvas_size".into(), toml::Value::try_from(size)?);
+            }
+            None => {
+                table.remove("new_canvas_size");
+            }
+        }
+        if self.new_canvas_background == CanvasBackground::Transparent {
+            table.remove("new_canvas_background");
+        } else {
+            table.insert(
+                "new_canvas_background".into(),
+                toml::Value::String(self.new_canvas_background.into()),
+            );
+        }
+        if self.units == UnitSettings::default() {
+            table.remove("units");
+        } else {
+            table.insert("units".into(), toml::Value::try_from(self.units)?);
+        }
+        if self.updates == UpdateSettings::default() {
+            table.remove("updates");
+        } else {
+            table.insert("updates".into(), self.updates.to_toml());
         }
         table.insert("auto_select".into(), toml::Value::Boolean(self.auto_select));
         table.insert(
@@ -585,7 +802,7 @@ mod tests {
         let path = dir.path().join("xuan/config.toml");
         assert_eq!(Config::load(&path).unwrap(), Config::default());
         let chinese = Config {
-            language: Language::SimplifiedChinese,
+            language: Language::new("zh-CN"),
             title_bar: TitleBar::System,
             pixel_grid: false,
             pixel_grid_percent: 1200,
@@ -601,6 +818,171 @@ mod tests {
     }
 
     #[test]
+    fn update_settings_roundtrip_and_stay_out_of_the_file_until_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("updates"));
+        assert!(!Config::load(&path).unwrap().updates.check);
+        let config = Config {
+            updates: UpdateSettings {
+                check: true,
+                last_check: Some(1_790_000_000),
+                skipped: Some("0.6.0".into()),
+            },
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+        // A time TOML cannot hold is written as the largest it can.
+        let far = Config {
+            updates: UpdateSettings {
+                last_check: Some(u64::MAX),
+                ..UpdateSettings::default()
+            },
+            ..Config::default()
+        };
+        far.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap().updates.last_check;
+        assert_eq!(loaded, Some(i64::MAX as u64));
+        // A hand-edited time that is not one reads as never checked.
+        for value in ["-5", "'yesterday'", "1.5", "[1]"] {
+            fs::write(
+                &path,
+                format!("[updates]\ncheck = true\nlast_check = {value}\n"),
+            )
+            .unwrap();
+            let updates = Config::load(&path).unwrap().updates;
+            assert!(updates.check, "{value}");
+            assert_eq!(updates.last_check, None, "{value}");
+        }
+    }
+
+    #[test]
+    fn the_last_new_canvas_size_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            new_canvas_size: Some([1080, 1920]),
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_size")
+        );
+        assert_eq!(
+            Config::load(&path).unwrap().new_canvas_size,
+            Some([1080, 1920])
+        );
+        // Releases before it wrote none; clearing it removes the key.
+        Config::default().save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_size")
+        );
+        assert_eq!(Config::load(&path).unwrap().new_canvas_size, None);
+    }
+
+    #[test]
+    fn the_new_canvas_background_roundtrips_and_transparent_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (background, text) in [
+            (CanvasBackground::White, "\"white\""),
+            (CanvasBackground::Black, "\"black\""),
+            (CanvasBackground::Custom([18, 52, 171]), "\"#1234ab\""),
+        ] {
+            let config = Config {
+                new_canvas_background: background,
+                ..Config::default()
+            };
+            config.save(&path).unwrap();
+            let saved = fs::read_to_string(&path).unwrap();
+            assert!(
+                saved.contains(&format!("new_canvas_background = {text}")),
+                "{saved}"
+            );
+            assert_eq!(
+                Config::load(&path).unwrap().new_canvas_background,
+                background
+            );
+        }
+        // Transparent, the default, removes the key; older configurations have none.
+        Config::default().save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_background")
+        );
+        assert_eq!(
+            Config::load(&path).unwrap().new_canvas_background,
+            CanvasBackground::Transparent
+        );
+        // Values that are not a choice read as transparent and leave the rest readable.
+        for bad in ["\"purple\"", "\"#12345\"", "\"#gg0000\"", "7", "[1, 2]"] {
+            fs::write(
+                &path,
+                format!("new_canvas_background = {bad}\nrulers = true\n"),
+            )
+            .unwrap();
+            let loaded = Config::load(&path).unwrap();
+            assert_eq!(
+                loaded.new_canvas_background,
+                CanvasBackground::Transparent,
+                "{bad}"
+            );
+            assert!(loaded.rulers, "{bad}");
+        }
+        assert_eq!(
+            CanvasBackground::from(" #FFFFFF ".to_owned()),
+            CanvasBackground::Custom([255; 3])
+        );
+        assert_eq!(CanvasBackground::Transparent.pixel(), None);
+        assert_eq!(CanvasBackground::Black.pixel(), Some([0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn unit_preferences_roundtrip() {
+        use crate::units::{ResolutionUnit, Unit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            units: UnitSettings {
+                size: Unit::Millimeters,
+                resolution: ResolutionUnit::PerCentimeter,
+                new_canvas_resolution: Some(300.0),
+                rulers: Unit::Inches,
+            },
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[units]") && text.contains("size = \"mm\""),
+            "{text}"
+        );
+        assert_eq!(Config::load(&path).unwrap().units, config.units);
+        assert_eq!(config.units.new_canvas_resolution(), 300.0);
+        // The defaults write nothing, and a stored resolution no document may have is ignored.
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("units"));
+        for bad in [0.0, -72.0, f32::NAN, 1e9] {
+            let units = UnitSettings {
+                new_canvas_resolution: Some(bad),
+                ..UnitSettings::default()
+            };
+            assert_eq!(units.new_canvas_resolution(), 72.0, "{bad}");
+        }
+        fs::write(&path, "[units]\nnew_canvas_resolution = -5.0\n").unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.units.size, Unit::Pixels);
+        assert_eq!(loaded.units.new_canvas_resolution(), 72.0);
+    }
+
+    #[test]
     fn invalid_preferences_are_reported_and_preserved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -608,7 +990,49 @@ mod tests {
         assert!(Config::load(&path).is_err());
         assert!(Config::default().save(&path).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "language = [broken");
-        assert!(toml::from_str::<Config>("language = 'unknown'").is_err());
+        assert!(toml::from_str::<Config>("language = 5").is_err());
+    }
+
+    #[test]
+    fn languages_load_by_tag_in_any_spelling() {
+        // Releases with a fixed list of languages saved the same tags.
+        for (saved, tag) in [
+            ("en", "en"),
+            ("zh-CN", "zh-CN"),
+            ("zh_cn", "zh-CN"),
+            ("pt-br", "pt-BR"),
+            ("uk", "uk"),
+            ("unknown", "en"),
+            ("", "en"),
+        ] {
+            let config: Config = toml::from_str(&format!("language = '{saved}'")).unwrap();
+            assert_eq!(config.language.tag(), tag, "{saved}");
+        }
+        // A language this build lacks is shown in English but kept when saving.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "language = 'uk'\n").unwrap();
+        let mut config = Config::load(&path).unwrap();
+        assert_eq!(config.language.name(), "uk");
+        config.pixel_grid = false;
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("language = \"uk\"")
+        );
+        Config {
+            language: Language::new("zh_CN"),
+            ..Config::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("language = \"zh-CN\"")
+        );
+        assert_eq!(Config::load(&path).unwrap().language.name(), "简体中文");
     }
 
     #[test]
@@ -619,7 +1043,7 @@ mod tests {
         assert_eq!(
             Config::load(&path).unwrap(),
             Config {
-                language: Language::SimplifiedChinese,
+                language: Language::new("zh-CN"),
                 title_bar: TitleBar::default(),
                 ..Config::default()
             }
@@ -951,7 +1375,7 @@ mod tests {
         assert_eq!(
             old,
             Config {
-                language: Language::SimplifiedChinese,
+                language: Language::new("zh-CN"),
                 title_bar: TitleBar::System,
                 pixel_grid: false,
                 ..Config::default()

@@ -10,6 +10,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use image::{GrayImage, Luma, RgbaImage};
+use rayon::prelude::*;
 
 /// The largest Expand / Contract amount, in pixels, as in Compositor.
 pub const MAX_AMOUNT: u32 = 500;
@@ -66,47 +67,49 @@ fn is_hard(mask: &GrayImage) -> bool {
 
 /// The squared Euclidean distance from every pixel to the nearest pixel where `seed` is
 /// true (Felzenszwalb and Huttenlocher's two-pass transform). Pixels with no seed at all
-/// get infinity.
+/// get infinity. Columns, then rows, are worked out in parallel.
 fn squared_distance(
     width: u32,
     height: u32,
     cancel: &AtomicBool,
-    seed: impl Fn(u32, u32) -> bool,
+    seed: impl Fn(u32, u32) -> bool + Sync,
 ) -> Option<Vec<f64>> {
     let (w, h) = (width as usize, height as usize);
-    let mut grid = vec![f64::INFINITY; w * h];
-    for y in 0..height {
-        for x in 0..width {
-            if seed(x, y) {
-                grid[y as usize * w + x as usize] = 0.0;
+    let scratch = |n: usize| move || (vec![0.0; n], vec![0usize; n], vec![0.0; n + 1]);
+    // Each column on its own, into a column-major copy.
+    let mut columns = vec![0.0; w * h];
+    columns
+        .par_chunks_mut(h)
+        .enumerate()
+        .for_each_init(scratch(h), |(f, v, z), (x, out)| {
+            if cancel.load(Ordering::Relaxed) {
+                return;
             }
-        }
+            for (y, value) in f.iter_mut().enumerate() {
+                *value = if seed(x as u32, y as u32) {
+                    0.0
+                } else {
+                    f64::INFINITY
+                };
+            }
+            transform_1d(f, out, v, z);
+        });
+    if cancel.load(Ordering::Relaxed) {
+        return None;
     }
-    let longest = w.max(h);
-    let mut f = vec![0.0; longest];
-    let mut d = vec![0.0; longest];
-    let mut v = vec![0usize; longest];
-    let mut z = vec![0.0; longest + 1];
-    for x in 0..w {
-        if x % 64 == 0 && cancel.load(Ordering::Relaxed) {
-            return None;
-        }
-        for y in 0..h {
-            f[y] = grid[y * w + x];
-        }
-        transform_1d(&f[..h], &mut d[..h], &mut v, &mut z);
-        for y in 0..h {
-            grid[y * w + x] = d[y];
-        }
-    }
-    for y in 0..h {
-        if y % 64 == 0 && cancel.load(Ordering::Relaxed) {
-            return None;
-        }
-        f[..w].copy_from_slice(&grid[y * w..(y + 1) * w]);
-        transform_1d(&f[..w], &mut grid[y * w..(y + 1) * w], &mut v, &mut z);
-    }
-    Some(grid)
+    let mut grid = vec![0.0; w * h];
+    grid.par_chunks_mut(w)
+        .enumerate()
+        .for_each_init(scratch(w), |(f, v, z), (y, out)| {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            for (x, value) in f.iter_mut().enumerate() {
+                *value = columns[x * h + y];
+            }
+            transform_1d(f, out, v, z);
+        });
+    (!cancel.load(Ordering::Relaxed)).then_some(grid)
 }
 
 /// One dimension of the squared distance transform: `d[q] = min_p f[p] + (q - p)²`.
@@ -152,7 +155,8 @@ fn transform_1d(f: &[f64], d: &mut [f64], v: &mut [usize], z: &mut [f64]) {
 }
 
 /// Greyscale dilation (`grow`) or erosion with a disc of `radius`. Outside the canvas
-/// counts as unselected, so erosion shrinks from the canvas edges too.
+/// counts as unselected, so erosion shrinks from the canvas edges too. Rows are worked
+/// out in parallel, each from the `2 × radius + 1` input rows around it.
 fn morphology(mask: &GrayImage, radius: u32, grow: bool, cancel: &AtomicBool) -> Option<GrayImage> {
     let (width, height) = mask.dimensions();
     let w = width as usize;
@@ -162,32 +166,31 @@ fn morphology(mask: &GrayImage, radius: u32, grow: bool, cancel: &AtomicBool) ->
         .map(|dy| ((r * r - dy * dy) as f64).sqrt().floor() as usize)
         .collect();
     let mut output = GrayImage::new(width, height);
-    let mut window = vec![0u8; w];
-    let mut accumulated = vec![0u8; w];
-    let mut deque = std::collections::VecDeque::with_capacity(w);
-    for y in 0..height as i64 {
-        if cancel.load(Ordering::Relaxed) {
-            return None;
-        }
-        accumulated.fill(if grow { 0 } else { 255 });
-        for (i, dy) in (-r..=r).enumerate() {
-            let sy = y + dy;
-            if sy < 0 || sy >= i64::from(height) {
-                if !grow {
-                    // An unselected row outside the canvas lies within reach.
-                    accumulated.fill(0);
+    output.as_mut().par_chunks_mut(w).enumerate().for_each_init(
+        || (vec![0u8; w], std::collections::VecDeque::with_capacity(w)),
+        |(window, deque), (y, accumulated)| {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            accumulated.fill(if grow { 0 } else { 255 });
+            for (i, dy) in (-r..=r).enumerate() {
+                let sy = y as i64 + dy;
+                if sy < 0 || sy >= i64::from(height) {
+                    if !grow {
+                        // An unselected row outside the canvas lies within reach.
+                        accumulated.fill(0);
+                    }
+                    continue;
                 }
-                continue;
+                let row = &mask.as_raw()[sy as usize * w..(sy as usize + 1) * w];
+                sliding_extreme(row, spans[i], grow, window, deque);
+                for (a, &b) in accumulated.iter_mut().zip(window.iter()) {
+                    *a = if grow { (*a).max(b) } else { (*a).min(b) };
+                }
             }
-            let row = &mask.as_raw()[sy as usize * w..(sy as usize + 1) * w];
-            sliding_extreme(row, spans[i], grow, &mut window, &mut deque);
-            for (a, &b) in accumulated.iter_mut().zip(&window) {
-                *a = if grow { (*a).max(b) } else { (*a).min(b) };
-            }
-        }
-        output.as_mut()[y as usize * w..(y as usize + 1) * w].copy_from_slice(&accumulated);
-    }
-    Some(output)
+        },
+    );
+    (!cancel.load(Ordering::Relaxed)).then_some(output)
 }
 
 /// The maximum (or minimum) of `row` over `x - half ..= x + half` for every `x`, with
@@ -221,6 +224,116 @@ fn sliding_extreme(
             value = 0;
         }
         *slot = value;
+    }
+}
+
+/// The widest Edit → Stroke… line, in pixels, as in Photoshop.
+pub const MAX_STROKE_WIDTH: u32 = 250;
+
+/// Where Edit → Stroke… draws its line against the selection's edge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StrokeLocation {
+    /// Wholly inside the selection, its outer edge on the selection's.
+    Inside,
+    /// Straddling the edge, half on each side; an odd width puts the extra pixel outside.
+    Center,
+    /// Wholly outside the selection, its inner edge on the selection's.
+    #[default]
+    Outside,
+}
+
+/// Edit → Stroke…'s line along the edge of `mask`, as coverage on the same canvas: the
+/// selection grown by the outside part of `width`, less the selection shrunk by the inside
+/// part. Grows and shrinks reach as far as Expand and Contract do (a disc, so corners
+/// round off), and the canvas edges count as an edge, as in Contract. The side of the line
+/// on the selection's edge is that edge as it is, so a stroke meets a fill of the same
+/// selection without a seam. On a hard selection (every value 0 or 255, as marquees and
+/// lassos make) the far side is antialiased from the exact distance to the selection; a
+/// soft one keeps its soft edge through the greyscale disc. Only the selection's bounds
+/// and the reach around them are worked on. `None` when cancelled.
+pub fn stroke_coverage(
+    mask: &GrayImage,
+    width: u32,
+    location: StrokeLocation,
+    cancel: &AtomicBool,
+) -> Option<GrayImage> {
+    let width = width.min(MAX_STROKE_WIDTH);
+    let (outside, inside) = match location {
+        StrokeLocation::Inside => (0, width),
+        StrokeLocation::Center => (width - width / 2, width / 2),
+        StrokeLocation::Outside => (width, 0),
+    };
+    let (canvas_width, canvas_height) = mask.dimensions();
+    let mut output = GrayImage::new(canvas_width, canvas_height);
+    let Some((left, top, right, bottom)) = crate::selection::bounds(mask).filter(|_| width > 0)
+    else {
+        return Some(output);
+    };
+    // A band one pixel wider than the reach is unselected all round (or is the canvas
+    // edge), so the crop grows and shrinks exactly as the whole canvas would.
+    let margin = width + 1;
+    let (x0, y0) = (left.saturating_sub(margin), top.saturating_sub(margin));
+    let x1 = right.saturating_add(margin).min(canvas_width);
+    let y1 = bottom.saturating_add(margin).min(canvas_height);
+    let crop = image::imageops::crop_imm(mask, x0, y0, x1 - x0, y1 - y0).to_image();
+    let hard = is_hard(&crop);
+    let grown = reach(&crop, outside, true, hard, cancel)?;
+    let shrunk = reach(&crop, inside, false, hard, cancel)?;
+    let crop_width = crop.width() as usize;
+    for (i, (g, s)) in grown.into_iter().zip(shrunk).enumerate() {
+        let (x, y) = ((i % crop_width) as u32, (i / crop_width) as u32);
+        let value = ((g - s).clamp(0.0, 1.0) * 255.0).round() as u8;
+        output.put_pixel(x0 + x, y0 + y, Luma([value]));
+    }
+    Some(output)
+}
+
+/// `mask` grown (or shrunk) by `radius` as coverage from 0 to 1. A hard mask takes the
+/// distance transform with a one-pixel ramp past the reach, so the new edge is
+/// antialiased; a whole-pixel distance is fully in or out, as Expand and Contract have
+/// it. A soft mask takes the greyscale disc.
+fn reach(
+    mask: &GrayImage,
+    radius: u32,
+    grow: bool,
+    hard: bool,
+    cancel: &AtomicBool,
+) -> Option<Vec<f32>> {
+    let unit = |value: u8| f32::from(value) / 255.0;
+    if radius == 0 {
+        return Some(mask.as_raw().iter().map(|&v| unit(v)).collect());
+    }
+    if !hard {
+        let moved = morphology(mask, radius, grow, cancel)?;
+        return Some(moved.as_raw().iter().map(|&v| unit(v)).collect());
+    }
+    let (width, height) = mask.dimensions();
+    let r = f64::from(radius);
+    if grow {
+        let distance =
+            squared_distance(width, height, cancel, |x, y| mask.get_pixel(x, y)[0] != 0)?;
+        Some(
+            distance
+                .into_iter()
+                .map(|d| (r + 1.0 - d.sqrt()).clamp(0.0, 1.0) as f32)
+                .collect(),
+        )
+    } else {
+        // Distances to the nearest unselected pixel, on a canvas padded with an
+        // unselected border one pixel wide, as in `contract`.
+        let distance = squared_distance(width + 2, height + 2, cancel, |x, y| {
+            x == 0 || y == 0 || x > width || y > height || mask.get_pixel(x - 1, y - 1)[0] == 0
+        })?;
+        let stride = width as usize + 2;
+        Some(
+            (0..(width * height) as usize)
+                .map(|i| {
+                    let (x, y) = (i % width as usize, i / width as usize);
+                    let d = distance[(y + 1) * stride + x + 1];
+                    (d.sqrt() - r).clamp(0.0, 1.0) as f32
+                })
+                .collect(),
+        )
     }
 }
 
@@ -526,6 +639,203 @@ mod tests {
         assert_eq!(range.mask(&image).as_raw(), &[255, 0, 0, 0, 0, 0]);
         range.invert = true;
         assert_eq!(range.mask(&image).as_raw(), &[0, 255, 255, 255, 255, 255]);
+    }
+
+    /// A hard `width` × `height` canvas with the rectangle `[left, right) × [top, bottom)`
+    /// selected.
+    fn marquee(size: (u32, u32), left: u32, top: u32, right: u32, bottom: u32) -> GrayImage {
+        GrayImage::from_fn(size.0, size.1, |x, y| {
+            Luma([
+                if (left..right).contains(&x) && (top..bottom).contains(&y) {
+                    255
+                } else {
+                    0
+                },
+            ])
+        })
+    }
+
+    /// The columns of row `y` the stroke fully covers, as runs `[start, end)`.
+    fn covered_runs(coverage: &GrayImage, y: u32) -> Vec<(u32, u32)> {
+        let mut runs = Vec::new();
+        let mut start = None;
+        for x in 0..=coverage.width() {
+            let full = x < coverage.width() && coverage.get_pixel(x, y)[0] == 255;
+            match (full, start) {
+                (true, None) => start = Some(x),
+                (false, Some(s)) => {
+                    runs.push((s, x));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        runs
+    }
+
+    /// Column `x` laid out as a row, top first.
+    fn column(coverage: &GrayImage, x: u32) -> GrayImage {
+        GrayImage::from_fn(coverage.height(), 1, |y, _| *coverage.get_pixel(x, y))
+    }
+
+    #[test]
+    fn stroke_widths_on_a_rectangle_are_exact() {
+        // Selected: x 20..60, y 15..45 on an 80 × 60 canvas.
+        let mask = marquee((80, 60), 20, 15, 60, 45);
+        let stroke = |width, location| stroke_coverage(&mask, width, location, &never()).unwrap();
+        let outside = stroke(10, StrokeLocation::Outside);
+        // Exactly ten pixels beyond each side, nothing on or inside the edge.
+        assert_eq!(covered_runs(&outside, 30), [(10, 20), (60, 70)]);
+        assert_eq!(covered_runs(&column(&outside, 40), 0), [(5, 15), (45, 55)]);
+        // Only the rounded corners are partly covered; the sides are crisp.
+        for (x, y, p) in outside.enumerate_pixels() {
+            if p[0] != 0 && p[0] != 255 {
+                assert!(
+                    !(20..60).contains(&x) && !(15..45).contains(&y),
+                    "({x}, {y})"
+                );
+            }
+        }
+        // The corners round off with the disc: 8 px out diagonally is past the reach
+        // (√128 > 10), 7 px is within it (√98 < 10).
+        assert_eq!(outside.get_pixel(20 - 8, 15 - 8)[0], 0);
+        assert_eq!(outside.get_pixel(20 - 7, 15 - 7)[0], 255);
+
+        let inside = stroke(10, StrokeLocation::Inside);
+        assert_eq!(covered_runs(&inside, 30), [(20, 30), (50, 60)]);
+        assert_eq!(covered_runs(&column(&inside, 40), 0), [(15, 25), (35, 45)]);
+        // Nothing outside the selection.
+        assert!(
+            inside
+                .enumerate_pixels()
+                .all(|(x, y, p)| p[0] == 0 || mask.get_pixel(x, y)[0] == 255)
+        );
+        // Inside corners stay square.
+        assert_eq!(inside.get_pixel(20, 15)[0], 255);
+
+        let center = stroke(10, StrokeLocation::Center);
+        assert_eq!(covered_runs(&center, 30), [(15, 25), (55, 65)]);
+        assert_eq!(covered_runs(&column(&center, 40), 0), [(10, 20), (40, 50)]);
+        // An odd width puts the extra pixel outside.
+        let odd = stroke(5, StrokeLocation::Center);
+        assert_eq!(covered_runs(&odd, 30), [(17, 22), (58, 63)]);
+    }
+
+    #[test]
+    fn stroke_meets_the_canvas_edge_and_nothing_strokes_nothing() {
+        // Select All: an inside stroke borders the canvas, an outside one has nowhere to go.
+        let all = GrayImage::from_pixel(12, 8, Luma([255]));
+        let inside = stroke_coverage(&all, 2, StrokeLocation::Inside, &never()).unwrap();
+        assert_eq!(covered_runs(&inside, 4), [(0, 2), (10, 12)]);
+        assert_eq!(covered_runs(&inside, 0), [(0, 12)]);
+        let outside = stroke_coverage(&all, 2, StrokeLocation::Outside, &never()).unwrap();
+        assert!(outside.as_raw().iter().all(|&v| v == 0));
+        // A selection touching the edge strokes as if the canvas went on.
+        let edge = marquee((30, 10), 0, 0, 10, 10);
+        let inside = stroke_coverage(&edge, 3, StrokeLocation::Inside, &never()).unwrap();
+        assert_eq!(covered_runs(&inside, 5), [(0, 3), (7, 10)]);
+        let empty = GrayImage::new(10, 10);
+        let none = stroke_coverage(&empty, 4, StrokeLocation::Center, &never()).unwrap();
+        assert!(none.as_raw().iter().all(|&v| v == 0));
+        let zero = stroke_coverage(&edge, 0, StrokeLocation::Outside, &never()).unwrap();
+        assert!(zero.as_raw().iter().all(|&v| v == 0));
+        // Widths stop at the maximum.
+        let wide = marquee((600, 3), 299, 1, 300, 2);
+        let capped = stroke_coverage(&wide, 1000, StrokeLocation::Outside, &never()).unwrap();
+        assert_eq!(
+            covered_runs(&capped, 1),
+            [(299 - MAX_STROKE_WIDTH, 299), (300, 300 + MAX_STROKE_WIDTH)]
+        );
+        let cancelled = AtomicBool::new(true);
+        assert!(stroke_coverage(&edge, 3, StrokeLocation::Outside, &cancelled).is_none());
+        let soft = GrayImage::from_pixel(10, 10, Luma([128]));
+        assert!(stroke_coverage(&soft, 3, StrokeLocation::Outside, &cancelled).is_none());
+    }
+
+    #[test]
+    fn stroke_on_an_ellipse_or_lasso_is_antialiased_and_round() {
+        let ellipse = crate::selection::rectangle(
+            100,
+            100,
+            crate::document::Point::new(20.0, 20.0),
+            crate::document::Point::new(80.0, 80.0),
+            true,
+        );
+        let ring = stroke_coverage(&ellipse, 6, StrokeLocation::Center, &never()).unwrap();
+        let partial = ring
+            .as_raw()
+            .iter()
+            .filter(|&&v| v != 0 && v != 255)
+            .count();
+        // Both edges of the line are antialiased, all the way round.
+        assert!(partial > 150, "{partial} partly covered pixels");
+        // The line is a ring of about the right area, π (33² − 27²): a hard selection has
+        // no edge finer than its pixels, so on a curve each side may sit a fraction of a
+        // pixel out.
+        let area: f32 = ring.as_raw().iter().map(|&v| f32::from(v) / 255.0).sum();
+        let expected = std::f32::consts::PI * (33.0f32.powi(2) - 27.0f32.powi(2));
+        assert!((area / expected - 1.0).abs() < 0.08, "{area} vs {expected}");
+        // Every pixel's coverage matches its distance from the circle's edge to within a
+        // pixel: the outline is round, not squared off at 45°.
+        for (x, y, p) in ring.enumerate_pixels() {
+            let r = ((x as f32 + 0.5 - 50.0).powi(2) + (y as f32 + 0.5 - 50.0).powi(2)).sqrt();
+            if (r - 30.0).abs() < 2.0 {
+                assert_eq!(p[0], 255, "({x}, {y}) is on the circle");
+            }
+            if (r - 30.0).abs() > 4.5 {
+                assert_eq!(p[0], 0, "({x}, {y}) is {r} from the centre");
+            }
+        }
+        // An outside stroke ramps off over about a pixel on its outer edge.
+        let outside = stroke_coverage(&ellipse, 6, StrokeLocation::Outside, &never()).unwrap();
+        let rim: Vec<u8> = (80..90).map(|x| outside.get_pixel(x, 50)[0]).collect();
+        assert_eq!(&rim[..6], &[255; 6]);
+        assert_eq!(&rim[7..], &[0; 3]);
+
+        let lasso = crate::selection::polygon(
+            60,
+            60,
+            &[
+                crate::document::Point::new(10.0, 10.0),
+                crate::document::Point::new(50.0, 18.0),
+                crate::document::Point::new(25.0, 50.0),
+            ],
+        );
+        let ring = stroke_coverage(&lasso, 4, StrokeLocation::Outside, &never()).unwrap();
+        let partial = ring
+            .as_raw()
+            .iter()
+            .filter(|&&v| v != 0 && v != 255)
+            .count();
+        assert!(partial > 40, "{partial} partly covered pixels");
+        assert!(
+            ring.enumerate_pixels()
+                .all(|(x, y, p)| p[0] == 0 || lasso.get_pixel(x, y)[0] == 0)
+        );
+    }
+
+    #[test]
+    fn soft_selections_give_soft_strokes() {
+        // Half selected: the stroke is half strength.
+        let mut half = marquee((40, 30), 10, 10, 30, 20);
+        for value in half.as_mut() {
+            *value /= 2;
+        }
+        let ring = stroke_coverage(&half, 3, StrokeLocation::Outside, &never()).unwrap();
+        assert_eq!(ring.get_pixel(8, 15)[0], 127);
+        assert_eq!(ring.get_pixel(7, 15)[0], 127);
+        assert_eq!(ring.get_pixel(6, 15)[0], 0);
+        assert_eq!(ring.get_pixel(15, 15)[0], 0);
+        // A feathered edge stays feathered: the stroke ramps as the selection does.
+        let feathered = crate::gpu::blur_gray(&marquee((60, 40), 20, 10, 40, 30), 3.0);
+        let ring = stroke_coverage(&feathered, 6, StrokeLocation::Center, &never()).unwrap();
+        let row: Vec<u8> = (0..30).map(|x| ring.get_pixel(x, 20)[0]).collect();
+        let peak = row.iter().copied().max().unwrap();
+        assert!(peak > 150, "{row:?}");
+        assert!(
+            row.iter().filter(|&&v| v > 0 && v < peak).count() >= 4,
+            "{row:?}"
+        );
     }
 
     #[test]

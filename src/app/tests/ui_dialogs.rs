@@ -384,3 +384,473 @@ fn new_canvas_opens_with_width_focused_and_selected() {
     let document = &ui.app().session().expect("a new document").document;
     assert_eq!((document.width, document.height), (800, 600));
 }
+
+fn new_canvas(dimensions: [u32; 2]) -> (tempfile::TempDir, UiTest) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::new();
+    ui.isolate_config(directory.path());
+    ui.app_mut().dimensions = dimensions;
+    ui.app_mut().command("new");
+    ui.settle();
+    (directory, ui)
+}
+
+/// The dialog's commit button (the label is also on the window's accessibility tree twice).
+fn create_canvas(ui: &mut UiTest) {
+    let create = ui
+        .harness
+        .query_all_by_role_and_label(Role::Button, "Create canvas")
+        .last()
+        .unwrap();
+    create.click();
+    ui.settle();
+}
+
+/// Focuses the dialog's `index`th number field (Width, Height) from the left, as a click
+/// would: it edits with its text selected. The empty-state screen behind has its own pair.
+fn focus_number(ui: &mut UiTest, index: usize) {
+    // The screen's fields are 36 points tall, the dialog's 22. A field being edited is a text
+    // input, not a spin button. Width and Height share a row, above Resolution.
+    let mut fields: Vec<_> = (ui.harness.query_all_by_role(Role::SpinButton))
+        .chain(ui.harness.query_all_by_role(Role::TextInput))
+        .filter(|node| node.rect().height() < 30.0)
+        .collect();
+    fields.sort_by(|a, b| {
+        (a.rect().top().round(), a.rect().left())
+            .partial_cmp(&(b.rect().top().round(), b.rect().left()))
+            .unwrap()
+    });
+    fields[index].focus();
+    ui.settle();
+}
+
+/// Opens the Preset menu, which shows `current`.
+fn open_presets(ui: &mut UiTest, current: &str) {
+    ui.harness
+        .get_by_role_and_label(Role::ComboBox, current)
+        .click();
+    ui.settle();
+}
+
+#[test]
+fn new_canvas_preset_fills_the_fields_and_editing_returns_to_custom() {
+    let (_directory, mut ui) = new_canvas([1000, 700]);
+    assert!(ui.has_role(Role::ComboBox, "Custom"));
+    open_presets(&mut ui, "Custom");
+    ui.click("Story / Reel (1080 × 1920)");
+    assert_eq!(ui.app().dimensions, [1080, 1920]);
+    assert!(ui.has_role(Role::ComboBox, "Story / Reel (1080 × 1920)"));
+    // A preset in the other orientation shows under the same name.
+    ui.app_mut().dimensions = [1920, 1080];
+    ui.settle();
+    assert!(ui.has_role(Role::ComboBox, "Full High Definition (1920 × 1080)"));
+    // Editing a field leaves the preset.
+    ui.app_mut().dimensions = [1921, 1080];
+    ui.settle();
+    assert!(ui.has_role(Role::ComboBox, "Custom"));
+    // The menu shows each group.
+    open_presets(&mut ui, "Custom");
+    assert!(ui.has("Screens") && ui.has("Social"));
+    ui.click("4K Ultra HD (3840 × 2160)");
+    assert_eq!(ui.app().dimensions, [3840, 2160]);
+    create_canvas(&mut ui);
+    let document = &ui.app().session().unwrap().document;
+    assert_eq!((document.width, document.height), (3840, 2160));
+}
+
+#[test]
+fn new_canvas_typing_a_width_switches_the_menu_to_custom() {
+    let (_directory, mut ui) = new_canvas([1920, 1080]);
+    assert!(ui.has_role(Role::ComboBox, "Full High Definition (1920 × 1080)"));
+    ui.type_keys("1000");
+    assert_eq!(ui.app().dimensions, [1000, 1080]);
+    assert!(ui.has_role(Role::ComboBox, "Custom"));
+}
+
+#[test]
+fn new_canvas_swap_turns_portrait_into_landscape() {
+    let (_directory, mut ui) = new_canvas([1080, 1920]);
+    ui.click("Swap");
+    assert_eq!(ui.app().dimensions, [1920, 1080]);
+    assert!(ui.has_role(Role::ComboBox, "Full High Definition (1920 × 1080)"));
+    ui.click("Swap");
+    assert_eq!(ui.app().dimensions, [1080, 1920]);
+}
+
+#[test]
+fn new_canvas_keep_aspect_ratio_follows_the_edited_side() {
+    let (_directory, mut ui) = new_canvas([1920, 1080]);
+    ui.click("Keep aspect ratio");
+    assert!(ui.app().keep_ratio);
+    // Clicking a number field edits it with its text selected; each keystroke keeps 16:9
+    // against the ratio the box was ticked at.
+    focus_number(&mut ui, 0);
+    ui.type_keys("960");
+    assert_eq!(ui.app().dimensions, [960, 540]);
+    focus_number(&mut ui, 1);
+    ui.type_keys("270");
+    assert_eq!(ui.app().dimensions, [480, 270]);
+    // Swap keeps the proportion in the new orientation.
+    ui.click("Swap");
+    assert_eq!(ui.app().ratio, [1080, 1920]);
+    // Off again, the fields are independent.
+    ui.click("Keep aspect ratio");
+    assert!(!ui.app().keep_ratio);
+}
+
+#[test]
+fn new_canvas_remembers_the_last_size_for_next_time() {
+    let (directory, mut ui) = new_canvas([1080, 1350]);
+    create_canvas(&mut ui);
+    let path = directory.path().join("config.toml");
+    let saved = xuan::config::Config::load(&path).unwrap();
+    assert_eq!(saved.new_canvas_size, Some([1080, 1350]));
+    // Another size was left behind by Canvas Size; File → New shows the remembered one.
+    ui.app_mut().dimensions = [10, 10];
+    ui.app_mut().command("new");
+    ui.settle();
+    assert_eq!(ui.app().dimensions, [1080, 1350]);
+    assert!(ui.has_role(Role::ComboBox, "Portrait post (1080 × 1350)"));
+}
+
+/// Runs frames until Edit → Stroke… shows its line on the canvas.
+fn wait_for_stroke(ui: &mut UiTest) {
+    for _ in 0..500 {
+        if !ui.app().stroke.as_ref().is_some_and(|edit| edit.busy()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        ui.settle();
+    }
+    ui.settle();
+    assert!(!ui.app().stroke.as_ref().is_some_and(|edit| edit.busy()));
+}
+
+/// Edit → Stroke… from the menu (issue 103): unavailable without a selection; with one, the
+/// dialog shows the line live, takes the standard footer, and Apply makes one undo step.
+#[test]
+fn edit_stroke_dialog_previews_and_applies_from_the_menu() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ui = UiTest::with_document();
+    ui.isolate_config(directory.path());
+    let pixels = |ui: &UiTest| {
+        let document = &ui.app().session().unwrap().document;
+        document.active().unwrap().pixels.as_deref().cloned()
+    };
+    ui.open_menu("Edit");
+    assert!(!ui.enabled("Stroke…"));
+    ui.key(egui::Key::Escape);
+
+    ui.app_mut().edit_selection("Rect", |doc| {
+        let mask = GrayImage::from_fn(20, 16, |x, y| {
+            image::Luma([if (6..14).contains(&x) && (4..12).contains(&y) {
+                255
+            } else {
+                0
+            }])
+        });
+        doc.selection = Some(Arc::new(mask));
+    });
+    ui.settle();
+    let before = pixels(&ui);
+    let start = ui.app().session().unwrap().history.revision;
+    ui.open_menu("Edit");
+    ui.click("Stroke…");
+    assert_eq!(ui.app().dialog, Some(Dialog::Stroke));
+    wait_for_stroke(&mut ui);
+    assert_footer_order(&ui, "stroke", footer("Apply"));
+    for label in ["Location", "Centre", "Preserve transparency"] {
+        assert!(ui.has(label), "{label}");
+    }
+    // The default outside line shows before anything is applied.
+    let outside = pixels(&ui).unwrap();
+    assert_eq!(outside.get_pixel(5, 8)[3], 255);
+    assert_eq!(outside.get_pixel(6, 8)[3], 0);
+
+    ui.click("Inside");
+    wait_for_stroke(&mut ui);
+    let inside = pixels(&ui).unwrap();
+    assert_eq!(inside.get_pixel(5, 8)[3], 0);
+    assert_eq!(inside.get_pixel(6, 8)[3], 255);
+    assert_eq!(ui.app().session().unwrap().history.revision, start);
+
+    ui.click("Apply");
+    assert_eq!(ui.app().dialog, None);
+    assert_eq!(ui.app().session().unwrap().history.revision, start + 1);
+    assert_eq!(pixels(&ui).unwrap(), inside);
+    ui.press(egui::Modifiers::CTRL, egui::Key::Z);
+    assert_eq!(pixels(&ui), before);
+
+    // Cancel puts the layer back.
+    ui.open_menu("Edit");
+    ui.click("Stroke…");
+    wait_for_stroke(&mut ui);
+    assert_ne!(pixels(&ui), before);
+    ui.click("Cancel");
+    assert_eq!(ui.app().dialog, None);
+    assert_eq!(pixels(&ui), before);
+}
+
+/// WebP export: Lossless hides the Quality slider, turning it off shows the
+/// slider with a lossy preview note, and the choice stays for the next
+/// export (issue 115). Every format has an estimated size (issue 91).
+#[test]
+fn webp_export_lossless_checkbox_shows_and_hides_quality() {
+    let (_directory, mut ui) = small_with_document();
+    ui.app_mut().export_format = "webp".into();
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(ui.has_role(Role::CheckBox, "Lossless"));
+    assert!(ui.app().export_options.webp_lossless, "lossless by default");
+    assert!(!ui.has("Quality"));
+    // The preview arrives from a worker; the controls must not move when it does, or a click
+    // aimed before it lands hits whatever moved under the pointer.
+    let checkbox =
+        |ui: &UiTest| (ui.harness.get_by_role_and_label(Role::CheckBox, "Lossless")).rect();
+    let before = (checkbox(&ui), ui.app().export_texture.is_none());
+    wait_for_estimate(&mut ui);
+    assert!(ui.app().export_texture.is_some());
+    assert_eq!(
+        checkbox(&ui),
+        before.0,
+        "moved when the preview arrived: {before:?}"
+    );
+
+    ui.click_role(Role::CheckBox, "Lossless");
+    assert!(!ui.app().export_options.webp_lossless);
+    assert!(ui.has("Quality"));
+    assert!(
+        (ui.harness)
+            .query_by_label_contains("WebP preview · transparency is kept")
+            .is_some()
+    );
+    wait_for_estimate(&mut ui);
+    assert_eq!(ui.app().export_options.webp_quality, 85);
+    assert_commit_visible(&ui, "Export image", "Export…");
+    ui.click("Cancel");
+
+    // Remembered while Xuan runs.
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(ui.has("Quality") && !ui.app().export_options.webp_lossless);
+    ui.click_role(Role::CheckBox, "Lossless");
+    assert!(!ui.has("Quality"));
+    ui.click("Cancel");
+
+    // JPEG has its quality and size, and no Lossless.
+    ui.app_mut().export_format = "jpg".into();
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(ui.has("Quality"));
+    assert!(!ui.has_role(Role::CheckBox, "Lossless"));
+    wait_for_estimate(&mut ui);
+}
+
+/// Runs frames until the Export dialog shows an estimated size, made in the background, and
+/// returns its text.
+#[track_caller]
+fn wait_for_estimate(ui: &mut UiTest) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if let Some(node) = ui.harness.query_by_label_contains("Estimated size: ≈") {
+            // A label's text is its value.
+            let node = node.accesskit_node();
+            return node.value().or_else(|| node.label()).unwrap_or_default();
+        }
+        assert!(std::time::Instant::now() < deadline, "no estimated size");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        ui.settle();
+    }
+}
+
+/// The Export dialog shows an approximate size, made off the UI thread, and Scale sets the
+/// exported image's size (issue 91).
+#[test]
+fn export_shows_an_estimated_size_and_scale_changes_the_output_size() {
+    let (directory, mut ui) = small_with_document();
+    ui.app_mut().export_format = "png".into();
+    ui.open_menu("File");
+    ui.click(super::EXPORT);
+    // The status bar names the document's size too.
+    assert!(ui.harness.query_all_by_label("32 × 24 px").count() >= 2);
+    let full = wait_for_estimate(&mut ui);
+    assert!(full.ends_with(" KiB"), "{full:?}");
+
+    // Type 50 into Scale: the size shown and the export follow.
+    ui.harness
+        .get(
+            egui_kittest::kittest::By::new()
+                .role(Role::SpinButton)
+                .value("100 %"),
+        )
+        .focus();
+    ui.settle();
+    ui.type_keys("50");
+    ui.key(egui::Key::Enter);
+    assert_eq!(ui.app().export_options.scale, 50);
+    assert!(ui.has("16 × 12 px"));
+    wait_for_estimate(&mut ui);
+    let path = directory.path().join("half.png");
+    ui.app().export_to(&path).unwrap();
+    assert_eq!(
+        xuan::io::import_image(&path).unwrap().dimensions(),
+        (16, 12)
+    );
+
+    // Past the range, the field keeps the largest scale.
+    ui.harness
+        .get(
+            egui_kittest::kittest::By::new()
+                .role(Role::SpinButton)
+                .value("50 %"),
+        )
+        .focus();
+    ui.settle();
+    ui.type_keys("900");
+    ui.key(egui::Key::Enter);
+    assert_eq!(ui.app().export_options.scale, 400);
+    assert!(ui.has("128 × 96 px"));
+    assert!(ui.enabled("Export…"));
+
+    // A scale past what an image may be says so, and Export waits for a smaller one.
+    ui.app_mut().session_mut().unwrap().document.width = xuan::document::MAX_SIDE;
+    ui.settle();
+    assert!(
+        (ui.harness)
+            .query_by_label_contains("Dimensions must be between")
+            .is_some()
+    );
+    assert!(!ui.enabled("Export…"));
+    ui.app_mut().session_mut().unwrap().document.width = 32;
+    ui.settle();
+
+    // OpenRaster keeps the layers at the document's size: no Scale and no estimate.
+    ui.click("Cancel");
+    ui.app_mut().export_format = "ora".into();
+    ui.app_mut().command("export");
+    ui.settle();
+    assert!(!ui.has("Scale"));
+    assert!(ui.harness.query_by_label_contains("Estimat").is_none());
+}
+
+#[test]
+fn export_sizes_read_in_kib_then_mib() {
+    use crate::app::dialogs::estimated_size;
+    assert_eq!(estimated_size(0), "1 KiB");
+    assert_eq!(estimated_size(1), "1 KiB");
+    assert_eq!(estimated_size(1024), "1 KiB");
+    assert_eq!(estimated_size(1025), "2 KiB");
+    assert_eq!(estimated_size(340 * 1024), "340 KiB");
+    assert_eq!(estimated_size(1024 * 1024), "1.0 MiB");
+    assert_eq!(estimated_size(1_500_000), "1.4 MiB");
+}
+
+/// The error dialog shows an alert icon, and Copy details puts the message, the version and the
+/// platform on the clipboard (issue 91).
+#[test]
+fn the_error_dialog_has_an_icon_and_copies_its_details() {
+    let mut ui = UiTest::new();
+    ui.app_mut().error = Some("Cannot read photo.png: bad header".into());
+    ui.settle();
+    assert!(ui.has("Couldn't complete the operation"));
+    assert!(ui.has_role(Role::Image, "Error"));
+    ui.click_and_stop("Copy details");
+    let copied = ui.copied_text().expect("Copy details copies text");
+    assert!(
+        copied.contains("Cannot read photo.png: bad header"),
+        "{copied}"
+    );
+    assert!(
+        copied.contains(&xuan::buildinfo::current().cli()),
+        "{copied}"
+    );
+    assert!(copied.contains(std::env::consts::OS), "{copied}");
+    // Copying leaves the dialog open; OK closes it.
+    ui.settle();
+    assert!(ui.app().error.is_some());
+    ui.click("OK");
+    assert!(ui.app().error.is_none());
+}
+
+/// Manage Plugins: a port-like integer setting (0–65535) is a number field that keeps typed
+/// values in range, a narrow one stays a slider, and the status line has a dot (issue 91).
+#[test]
+fn a_port_setting_is_a_number_field_and_the_status_has_a_dot() {
+    use egui_kittest::kittest::By;
+    let config = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("plugin.toml"),
+        r#"
+[plugin]
+id = "server"
+name = "Server"
+version = "0.1.0"
+command = ["sh", "plugin.sh"]
+
+[[settings]]
+id = "port"
+type = "integer"
+label = "Port"
+default = 8765
+min = 0
+max = 65535
+
+[[settings]]
+id = "level"
+type = "integer"
+label = "Level"
+default = 5
+min = 0
+max = 10
+"#,
+    )
+    .unwrap();
+    let mut ui = UiTest::new();
+    ui.isolate_config(config.path());
+    let manifest = xuan::plugins::Manifest::load(dir.path()).unwrap();
+    ui.app_mut().install_plugins(vec![manifest], vec![]);
+    let sliders = |ui: &UiTest| ui.harness.query_all_by_role(Role::Slider).count();
+    let outside = sliders(&ui);
+    ui.app_mut().plugins.manager_selected = Some("server".into());
+    ui.app_mut().command("plugins");
+    ui.settle();
+    assert!(ui.has("Not running"));
+    // A muted dot just before the status.
+    let status = ui.harness.get_by_label("Not running").rect();
+    let muted = super::super::theme::palette(&ui.ctx()).muted;
+    let dot = ui
+        .harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::Circle(circle) => {
+                circle.fill == muted
+                    && (circle.center.y - status.center().y).abs() < 3.0
+                    && (status.left() - 16.0..status.left()).contains(&circle.center.x)
+            }
+            _ => false,
+        });
+    assert!(dot, "no status dot before {status:?}");
+    // Level is a slider; Port is not.
+    assert_eq!(sliders(&ui), outside + 1);
+
+    let port = |ui: &UiTest| {
+        (ui.app().config.plugins.get("server"))
+            .and_then(|plugin| plugin.settings.get("port"))
+            .and_then(toml::Value::as_integer)
+    };
+    for (typed, kept) in [("9000", 9000), ("70000", 65535), ("-3", 0)] {
+        // Focused, the field selects its text, so typing replaces it.
+        let shown = port(&ui).unwrap_or(8765).to_string();
+        ui.harness
+            .get(By::new().role(Role::SpinButton).value(&shown))
+            .focus();
+        ui.settle();
+        ui.type_keys(typed);
+        ui.key(egui::Key::Enter);
+        assert_eq!(port(&ui), Some(kept), "typed {typed}");
+    }
+    assert!(ui.has("Not running"));
+}

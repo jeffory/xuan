@@ -83,10 +83,14 @@ const SCENES: &[&str] = &[
     "black_white_color_balance",
     "layer_effects",
     "layer_effects_combined",
+    "fill_opacity",
     "text_and_shapes",
     "path_shapes",
     "text_on_path",
     "remove_background",
+    "compositor_filters",
+    "unsharp_mask",
+    "dither_styles",
     "raw_default",
     "raw_negative",
     "raw_quarter_turn",
@@ -149,10 +153,19 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("black_white_color_balance", black_white_color_balance()),
         composite("layer_effects", layer_effects()),
         composite("layer_effects_combined", layer_effects_combined()),
+        composite("fill_opacity", fill_opacity()),
         composite("text_and_shapes", text_and_shapes()),
         composite("path_shapes", path_shapes()),
         composite("text_on_path", text_on_path()),
         composite("remove_background", remove_background()),
+        composite("compositor_filters", compositor_filters()),
+        composite("unsharp_mask", unsharp_mask()),
+        Scene {
+            // Thresholds: a pixel one level off on the GPU can land on the other side of a
+            // dither threshold, which moves it by a whole tone.
+            gpu: Tolerance::new(4, 0.02),
+            ..composite("dither_styles", dither_styles())
+        },
     ];
     if let Some(raw) = raw_fixture() {
         let raw = Arc::new(raw);
@@ -570,6 +583,215 @@ fn black_white_color_balance() -> Document {
     ])
 }
 
+/// A mask showing one cell of a `columns` × `rows` grid, counted along rows.
+fn cell_mask(columns: u32, rows: u32, index: u32) -> Mask {
+    Mask {
+        pixels: Arc::new(GrayImage::from_fn(columns * 16, rows * 16, |x, y| {
+            Luma([if x / 16 + y / 16 * columns == index {
+                255
+            } else {
+                0
+            }])
+        })),
+        ..Mask::white()
+    }
+}
+
+fn filter_layer(filter: crate::effects::Filter, mask: Option<Mask>) -> Layer {
+    let mut layer = Layer::blank(filter.name(), SIZE, SIZE);
+    layer.filter = Some(filter);
+    layer.mask = mask;
+    layer
+}
+
+/// Upstream Compositor's filters as filter layers over the hue ramp: Bloom / Glow around white
+/// spots (top left), Tonal Contrast on a fine checker (top right), a card with a Vignette
+/// attached to it (bottom left, framing the card), and a Vignette filter layer over the
+/// whole canvas.
+/// Soft texture and hard-edged tiles under Unsharp Mask filter layers: a fine, strong one in
+/// the top-left cell, a wide one with a threshold in the bottom-right, the rest untouched.
+fn unsharp_mask() -> Document {
+    use crate::effects::Filter;
+    let texture = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let wave = (x as f32 / 9.0).sin() * (y as f32 / 11.0).sin();
+        let v = (128.0 + 70.0 * wave) as u8;
+        Rgba([v, (v as f32 * 0.9) as u8, 255 - v, 220])
+    });
+    let tiles = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if (x / 16 + y / 16) % 4 == 0 && x % 16 > 3 && y % 16 > 3 {
+            [235, 200, 60, 255]
+        } else {
+            [0, 0, 0, 0]
+        })
+    });
+    document(vec![
+        Layer::image("Hues", hue_ramp(SIZE, SIZE)),
+        Layer::image("Texture", texture),
+        Layer::image("Tiles", tiles),
+        filter_layer(
+            Filter::UnsharpMask {
+                amount: 250.0,
+                radius: 2.0,
+                threshold: 0.0,
+            },
+            Some(cell_mask(2, 2, 0)),
+        ),
+        filter_layer(
+            Filter::UnsharpMask {
+                amount: 120.0,
+                radius: 12.0,
+                threshold: 24.0,
+            },
+            Some(cell_mask(2, 2, 3)),
+        ),
+    ])
+}
+
+fn compositor_filters() -> Document {
+    use crate::effects::Filter;
+    let spots = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let (dx, dy) = (x % 40, y % 40);
+        Rgba(
+            if x < 128 && y < 128 && (14..26).contains(&dx) && (14..26).contains(&dy) {
+                [255, 255, 240, 255]
+            } else {
+                [0, 0, 0, 0]
+            },
+        )
+    });
+    let detail = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if x >= 128 && y < 128 && (x / 6 + y / 6) % 2 == 0 {
+            [40, 40, 40, 90]
+        } else {
+            [0, 0, 0, 0]
+        })
+    });
+    let card = placed(
+        Layer::image(
+            "Card",
+            RgbaImage::from_fn(96, 96, |x, y| {
+                Rgba([200, (x * 2) as u8, (y * 2) as u8, 255])
+            }),
+        ),
+        16.0,
+        144.0,
+    );
+    let mut attached = filter_layer(
+        Filter::Vignette {
+            amount: 80.0,
+            color: [20, 30, 120],
+            midpoint: 20.0,
+            roundness: -40.0,
+            feather: 50.0,
+            highlights: 25.0,
+        },
+        None,
+    );
+    attached.parent = Some(card.id);
+    document(vec![
+        Layer::image("Hues", hue_ramp(SIZE, SIZE)),
+        Layer::image("Spots", spots),
+        Layer::image("Detail", detail),
+        filter_layer(
+            Filter::Bloom {
+                amount: 70.0,
+                radius: 6.0,
+            },
+            Some(cell_mask(2, 2, 0)),
+        ),
+        filter_layer(
+            Filter::TonalContrast {
+                amount: 100.0,
+                radius: 5.0,
+                shadows: 60.0,
+                midtones: 100.0,
+                highlights: -50.0,
+            },
+            Some(cell_mask(2, 2, 1)),
+        ),
+        card,
+        attached,
+        filter_layer(
+            Filter::Vignette {
+                amount: 55.0,
+                color: [30, 10, 0],
+                midpoint: 40.0,
+                roundness: 60.0,
+                feather: 60.0,
+                highlights: 25.0,
+            },
+            None,
+        ),
+    ])
+}
+
+/// Dither as filter layers over the gradient, one style per cell of a 4 × 2 grid, from the
+/// top left: Atkinson in 2 px chunky pixels, Bayer 4 × 4 in two colors, halftone dots in the
+/// image's colors, Mac patterns as ink on paper, then thin and glowing wobbly scanlines,
+/// ASCII, and three-level Floyd–Steinberg in the image's colors with round chunky pixels.
+fn dither_styles() -> Document {
+    use crate::effects::{DitherColors, DitherPixelShape, DitherSettings, DitherStyle, Filter};
+    let styles = [
+        DitherSettings::default(),
+        DitherSettings {
+            style: DitherStyle::Bayer4,
+            pixel_size: 1.0,
+            colors: DitherColors::TwoColors,
+            dark: [30, 20, 80],
+            light: [250, 220, 160],
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDots,
+            pixel_size: 1.0,
+            cell_size: 6.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::MacPatterns,
+            pixel_size: 1.0,
+            light_on_dark: false,
+            density: 20.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            glow: 0.0,
+            dots: 50.0,
+            wobble: 3.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            line_spacing: 6.0,
+            contrast: 30.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Ascii,
+            text_size: 10.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::FloydSteinberg,
+            pixel_size: 3.0,
+            pixel_shape: DitherPixelShape::Dot,
+            levels: 3.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+    ];
+    let mut layers = vec![Layer::image("Gradient", gradient())];
+    for (index, settings) in styles.into_iter().enumerate() {
+        layers.push(filter_layer(
+            Filter::Dither(Box::new(settings)),
+            Some(cell_mask(4, 2, index as u32)),
+        ));
+    }
+    document(layers)
+}
+
 /// A rounded rectangle of `color` at (`x`, `y`), `width` by `height`.
 fn rounded(x: f32, y: f32, width: f32, height: f32, color: [u8; 4]) -> Layer {
     paint::shape(
@@ -694,6 +916,79 @@ fn layer_effects_combined() -> Document {
         layer,
         clipped,
     ])
+}
+
+/// Fill against Opacity. Top: a strip for each of the eight modes Fill changes, at Fill 50% on
+/// the left half and Opacity 50% on the right, fading out at each half's end. Bottom: a layer
+/// with a stroke, a drop shadow and an inner glow at Fill 100%, 50% and 0%, and at Opacity 50%.
+fn fill_opacity() -> Document {
+    use crate::layer_effects::{GlowEffect, LayerEffects, ShadowEffect, StrokeEffect};
+    let special: Vec<_> = BlendMode::ALL
+        .into_iter()
+        .filter(|m| m.fill_is_special())
+        .collect();
+    let mut layers = vec![Layer::image("Gradient", gradient())];
+    let half = SIZE / 2;
+    for (index, &mode) in special.iter().enumerate() {
+        for side in 0..2 {
+            let mut strip = hue_ramp(half, 18);
+            for (x, _, pixel) in strip.enumerate_pixels_mut() {
+                if x >= half * 3 / 4 {
+                    pixel[3] = (255 - (x - half * 3 / 4) * 7) as u8;
+                }
+            }
+            let mut layer = placed(
+                Layer::image(mode.name(), strip),
+                (side * half) as f32,
+                2.0 + (index as u32 * 18) as f32,
+            );
+            layer.blend = mode;
+            if side == 0 {
+                layer.fill = 0.5;
+            } else {
+                layer.opacity = 0.5;
+            }
+            layers.push(layer);
+        }
+    }
+    let effects = LayerEffects {
+        stroke: Some(StrokeEffect {
+            size: 4.0,
+            color: [250, 240, 40],
+            ..StrokeEffect::default()
+        }),
+        drop_shadow: Some(ShadowEffect {
+            angle: 120.0,
+            distance: 8.0,
+            blur: 6.0,
+            opacity: 0.8,
+            ..ShadowEffect::DROP
+        }),
+        inner_glow: Some(GlowEffect {
+            size: 10.0,
+            color: [255, 255, 200],
+            opacity: 1.0,
+            ..GlowEffect::INNER
+        }),
+        ..LayerEffects::default()
+    };
+    for (index, (fill, opacity)) in [(1.0, 1.0), (0.5, 1.0), (0.0, 1.0), (1.0, 0.5)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut layer = rounded(
+            12.0 + index as f32 * 62.0,
+            168.0,
+            46.0,
+            70.0,
+            [60, 90, 200, 255],
+        );
+        layer.effects = Some(effects.clone());
+        layer.fill = fill;
+        layer.opacity = opacity;
+        layers.push(layer);
+    }
+    document(layers)
 }
 
 fn text(renderer: &mut TextRenderer, style: TextStyle, x: f32, y: f32) -> Layer {

@@ -2,11 +2,13 @@
 //! `docs/PLUGINS.md` for the manifest and the protocol.
 pub mod edits;
 pub mod host;
+pub mod inspect;
 pub mod install;
 pub mod jobs;
 pub mod manifest;
 pub mod models;
 pub mod protocol;
+pub mod raw;
 pub mod sandbox;
 pub mod ui;
 

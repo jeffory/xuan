@@ -120,32 +120,178 @@ pub fn duplicate(document: &mut Document) {
 }
 
 pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) -> Result<()> {
-    let targets = source.descendants(root);
-    let ids: HashMap<_, _> = targets.iter().map(|id| (*id, Uuid::new_v4())).collect();
-    let anchor = source
+    ensure!(
+        source.layers.iter().any(|l| l.id == root),
+        "The dragged layer no longer exists"
+    );
+    let offset = centring_offset(source, &[root], destination);
+    let index = destination.layers.len();
+    let copies = copy_into(
+        source,
+        &[root],
+        destination,
+        Some(None),
+        index,
+        offset,
+        false,
+    );
+    destination.select(copies[0], false);
+    destination.validate()
+}
+
+/// The selected layers that no other selected layer contains, from the bottom of the stack up:
+/// with their descendants, what Copy takes when there is no selection.
+pub fn selected_roots(document: &Document) -> Vec<Uuid> {
+    let parents: HashMap<_, _> = document.layers.iter().map(|l| (l.id, l.parent)).collect();
+    document
         .layers
         .iter()
-        .find(|l| l.id == root)
-        .ok_or_else(|| anyhow::anyhow!("The dragged layer no longer exists"))?
-        .transform
-        .center();
-    let offset = Point::new(
+        .filter(|layer| {
+            if !document.selected.contains(&layer.id) {
+                return false;
+            }
+            let mut parent = layer.parent;
+            // Bounded, as the parent chain of an invalid document can loop.
+            for _ in 0..parents.len() {
+                let Some(id) = parent else {
+                    return true;
+                };
+                if document.selected.contains(&id) {
+                    return false;
+                }
+                parent = parents.get(&id).copied().flatten();
+            }
+            true
+        })
+        .map(|layer| layer.id)
+        .collect()
+}
+
+/// Paste `roots` of `source` with their descendants into `destination`, as one complete copy
+/// with new IDs. In the document they came from the copies keep their place, just above the
+/// originals; in another document they are centred, above the active layer. A selected folder
+/// that is not one of the copies takes them inside it. Clipping to a layer outside the copy is
+/// kept in the same document and baked into the pixels in another.
+pub fn paste_layers(source: &Document, roots: &[Uuid], destination: &mut Document) -> Result<()> {
+    let roots: Vec<Uuid> = roots
+        .iter()
+        .copied()
+        .filter(|id| source.layers.iter().any(|l| l.id == *id))
+        .collect();
+    ensure!(!roots.is_empty(), "The copied layers no longer exist");
+    let same = source.id == destination.id;
+    let targets: HashSet<_> = roots
+        .iter()
+        .flat_map(|id| source.descendants(*id))
+        .collect();
+    let folder = destination
+        .active()
+        .filter(|l| l.group && !(same && targets.contains(&l.id)))
+        .map(|l| l.id);
+    let originals = destination
+        .layers
+        .iter()
+        .rposition(|l| targets.contains(&l.id))
+        .filter(|_| {
+            same && roots
+                .iter()
+                .all(|id| destination.layers.iter().any(|l| l.id == *id))
+        });
+    let (parent, index) = if let Some(folder) = folder {
+        let index = destination
+            .layers
+            .iter()
+            .rposition(|l| l.parent == Some(folder))
+            .or_else(|| destination.layers.iter().position(|l| l.id == folder))
+            .unwrap();
+        (Some(Some(folder)), index + 1)
+    } else if let Some(index) = originals {
+        // Each copy stays in its original's folder, as Duplicate does.
+        (None, index + 1)
+    } else if let Some(active) = destination.active() {
+        let index = destination
+            .layers
+            .iter()
+            .position(|l| l.id == active.id)
+            .unwrap();
+        (Some(destination.sibling_parent(active)), index + 1)
+    } else {
+        (Some(None), destination.layers.len())
+    };
+    let offset = if same {
+        Point::default()
+    } else {
+        centring_offset(source, &roots, destination)
+    };
+    let copies = copy_into(source, &roots, destination, parent, index, offset, same);
+    destination.selected.clear();
+    for id in copies {
+        destination.select(id, true);
+    }
+    destination.release_clipping_cycles();
+    destination.validate()
+}
+
+/// The shift that centres the bounds of `roots` on `destination`.
+fn centring_offset(source: &Document, roots: &[Uuid], destination: &Document) -> Point {
+    let layers = source.layers.iter().filter(|l| roots.contains(&l.id));
+    let anchor = if let [root] = roots
+        && let Some(root) = source.layers.iter().find(|l| l.id == *root)
+    {
+        root.transform.center()
+    } else {
+        let (mut min, mut max) = (
+            Point::new(f32::MAX, f32::MAX),
+            Point::new(f32::MIN, f32::MIN),
+        );
+        for corner in layers.flat_map(|l| l.transform.corners()) {
+            min = Point::new(min.x.min(corner.x), min.y.min(corner.y));
+            max = Point::new(max.x.max(corner.x), max.y.max(corner.y));
+        }
+        Point::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5)
+    };
+    Point::new(
         destination.width as f32 * 0.5 - anchor.x,
         destination.height as f32 * 0.5 - anchor.y,
-    );
+    )
+}
+
+/// Insert copies of `roots` and their descendants at `index` of `destination`, with new IDs and
+/// their parent and clipping references remapped, moved by `offset`. `parent`, when given,
+/// replaces the roots' own parent. Returns the roots' copies, from the bottom of the stack up.
+fn copy_into(
+    source: &Document,
+    roots: &[Uuid],
+    destination: &mut Document,
+    parent: Option<Option<Uuid>>,
+    index: usize,
+    offset: Point,
+    keep_clipping: bool,
+) -> Vec<Uuid> {
+    let targets: HashSet<_> = roots
+        .iter()
+        .flat_map(|id| source.descendants(*id))
+        .collect();
+    let ids: HashMap<_, _> = targets.iter().map(|id| (*id, Uuid::new_v4())).collect();
+    let mut prepared_source = None;
     let mut copies = Vec::new();
+    // Clipping to a layer outside the copy is kept only where that layer is.
+    let kept = |id: &Uuid| keep_clipping && destination.layers.iter().any(|l| l.id == *id);
     for layer in source.layers.iter().filter(|l| targets.contains(&l.id)) {
         let mut copy = layer.clone();
-        if let Some(clip) = layer.clip_to.filter(|id| !targets.contains(id))
+        if let Some(clip) = layer
+            .clip_to
+            .filter(|id| !targets.contains(id) && !kept(id))
             && let Some(pixels) = &layer.pixels
         {
-            let prepared_source = render::prepare_attachments(source);
+            let prepared_source =
+                prepared_source.get_or_insert_with(|| render::prepare_attachments(source));
             let base = prepared_source
                 .layers
                 .iter()
                 .find(|l| l.id == clip)
                 .unwrap();
-            let baked = crate::gpu::bake_alpha(&prepared_source, base, pixels, layer.transform)
+            let baked = crate::gpu::bake_alpha(prepared_source, base, pixels, layer.transform)
                 .unwrap_or_else(|| {
                     let mut baked = (**pixels).clone();
                     let (width, height) = baked.dimensions();
@@ -155,7 +301,7 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
                             (y as f32 + 0.5) / height as f32,
                         ));
                         pixel[3] = (pixel[3] as f32
-                            * render::layer_alpha(&prepared_source, base, point, 0))
+                            * render::layer_alpha(prepared_source, base, point, 0))
                         .round() as u8;
                     }
                     baked
@@ -166,8 +312,16 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
             copy.raw = None;
         }
         copy.id = ids[&layer.id];
-        copy.parent = layer.parent.and_then(|id| ids.get(&id).copied());
-        copy.clip_to = layer.clip_to.and_then(|id| ids.get(&id).copied());
+        copy.parent = match (layer.parent.and_then(|id| ids.get(&id)), parent) {
+            (Some(id), _) => Some(*id),
+            (None, Some(parent)) => parent,
+            (None, None) => layer
+                .parent
+                .filter(|id| destination.layers.iter().any(|l| l.id == *id)),
+        };
+        copy.clip_to = layer
+            .clip_to
+            .and_then(|id| ids.get(&id).copied().or_else(|| kept(&id).then_some(id)));
         copy.transform.x += offset.x;
         copy.transform.y += offset.y;
         if let Some(placement) = copy.mask.as_mut().and_then(|m| m.placement.as_mut()) {
@@ -176,9 +330,8 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
         }
         copies.push(copy);
     }
-    destination.layers.extend(copies);
-    destination.select(ids[&root], false);
-    destination.validate()
+    destination.layers.splice(index..index, copies);
+    roots.iter().filter_map(|id| ids.get(id).copied()).collect()
 }
 
 pub fn group(document: &mut Document) {
@@ -509,6 +662,73 @@ pub fn crop(document: &mut Document, start: Point, end: Point) -> Result<()> {
     Ok(())
 }
 
+/// Perspective Crop: straightens `quad` (corners on the canvas, top-left first, clockwise) into an
+/// upright `width` × `height` canvas in one step. Every layer and mask placement, of any kind,
+/// takes the projective map composed with its own transform, as the Move tool's Distort does,
+/// so no pixels are resampled or discarded and text and shapes stay editable. A folder, or an
+/// adjustment or filter layer without a mask, draws nothing of its own and is fitted to the new
+/// canvas if the map cannot take it. Paths follow the map point by point (a path reaching the
+/// vanishing line is removed); guides, which would no longer run straight across, and the
+/// selection are cleared. Returns how many paths were removed.
+pub fn perspective_crop(
+    document: &mut Document,
+    quad: crate::crop::perspective::Quad,
+    [width, height]: [u32; 2],
+) -> Result<usize> {
+    use crate::crop::perspective;
+    if let Err(problem) = perspective::check(quad) {
+        anyhow::bail!(tr(problem.message()).to_owned());
+    }
+    validate_size(width, height)?;
+    let map = perspective::rectify(quad, [width, height])
+        .context(tr(perspective::Degenerate::TooSmall.message()))?;
+    let refused = |name: &str| {
+        tr("“{}” reaches the vanishing line of the crop's perspective, so it cannot be straightened. Move the corners closer together, or make the layer smaller first.")
+            .replace("{}", name)
+    };
+    let mut layers = document.layers.clone();
+    for layer in &mut layers {
+        let draws_nothing = layer.group
+            || ((layer.adjustment.is_some() || layer.filter.is_some() || layer.pixels.is_none())
+                && layer.text.is_none()
+                && layer.shape.is_none()
+                && layer.raw.is_none()
+                && layer.mask.is_none());
+        layer.transform = match perspective::map_transform(layer.transform, map) {
+            Some(transform) => transform,
+            None if draws_nothing => Transform::new(width, height),
+            None => anyhow::bail!(refused(&layer.name)),
+        };
+        if let Some(placement) = layer.mask.as_ref().and_then(|m| m.placement) {
+            let mapped =
+                perspective::map_transform(placement, map).with_context(|| refused(&layer.name))?;
+            if let Some(mask) = &mut layer.mask {
+                mask.placement = Some(mapped);
+            }
+        }
+    }
+    document.layers = layers;
+    let before = document.paths.len();
+    document.paths.retain_mut(|path| {
+        let mut behind = false;
+        let mapped = path.d.mapped(|p| {
+            let point = Point::new(p.x as f32, p.y as f32);
+            let mapped = perspective::map_point(map, point).unwrap_or_else(|| {
+                behind = true;
+                point
+            });
+            kurbo::Point::new(f64::from(mapped.x), f64::from(mapped.y))
+        });
+        path.d = mapped;
+        !behind
+    });
+    document.guides.clear();
+    document.width = width;
+    document.height = height;
+    document.selection = None;
+    Ok(before - document.paths.len())
+}
+
 pub fn image_size(document: &mut Document, width: u32, height: u32) -> Result<()> {
     validate_size(width, height)?;
     let old = Transform::new(document.width, document.height);
@@ -623,6 +843,135 @@ impl CanvasRotation {
 /// placement, mask placement, guide, document path and the selection turn with it, and a quarter
 /// turn swaps the canvas width and height. Pixels are not resampled, so text, shapes and
 /// effects stay live (an effect's light angle stays put, as with Photoshop's global light).
+/// An angle in degrees brought into (-180, 180].
+fn normalized_angle(degrees: f32) -> f32 {
+    let angle = degrees.rem_euclid(360.0);
+    if angle > 180.0 { angle - 360.0 } else { angle }
+}
+
+/// Sine and cosine of an angle in degrees, exact at the quarter turns.
+fn sin_cos_degrees(degrees: f32) -> (f64, f64) {
+    let quarter = f64::from(degrees) / 90.0;
+    if (quarter - quarter.round()).abs() < 1e-9 {
+        return match (quarter.round() as i64).rem_euclid(4) {
+            0 => (0.0, 1.0),
+            1 => (1.0, 0.0),
+            2 => (0.0, -1.0),
+            _ => (-1.0, 0.0),
+        };
+    }
+    f64::from(degrees).to_radians().sin_cos()
+}
+
+/// The size of the smallest canvas that holds a `width` × `height` canvas turned `degrees`.
+pub fn rotated_canvas_size(width: u32, height: u32, degrees: f32) -> (u32, u32) {
+    let (sin, cos) = sin_cos_degrees(degrees);
+    let (w, h) = (f64::from(width), f64::from(height));
+    // A hair under, so rounding noise does not add a column to an exact fit.
+    let side = |length: f64| ((length - 1e-6).ceil().max(1.0)) as u32;
+    (
+        side(w * cos.abs() + h * sin.abs()),
+        side(w * sin.abs() + h * cos.abs()),
+    )
+}
+
+/// The largest upright box with `ratio` (width / height) that fits inside a `width` ×
+/// `height` rectangle turned `degrees` about its centre: what straightening keeps.
+pub fn inscribed_size(width: f32, height: f32, degrees: f32, ratio: f32) -> (f32, f32) {
+    let (sin, cos) = sin_cos_degrees(degrees);
+    let (sin, cos, ratio) = (sin.abs(), cos.abs(), f64::from(ratio));
+    let tall =
+        (f64::from(width) / (ratio * cos + sin)).min(f64::from(height) / (ratio * sin + cos));
+    ((tall * ratio) as f32, tall as f32)
+}
+
+/// Image → Rotate by any angle, clockwise: every layer, mask, path and the selection turns
+/// about the canvas centre. Layers keep their pixels and only change their placement, as
+/// with the quarter turns, so nothing is resampled or lost. With `expand` the canvas grows
+/// to hold all of the turned canvas, leaving transparent corners; without, it keeps its
+/// size and the corners that turn out of it are hidden. Guides only survive quarter turns.
+pub fn rotate_canvas_by(document: &mut Document, degrees: f32, expand: bool) -> Result<()> {
+    ensure!(
+        degrees.is_finite(),
+        "The rotation must be a number of degrees"
+    );
+    let degrees = normalized_angle(degrees);
+    ensure!(degrees != 0.0, "The rotation must not be a whole turn");
+    if expand
+        && degrees.fract() == 0.0
+        && let Some(rotation) = CanvasRotation::from_degrees(degrees as i32)
+    {
+        rotate_canvas(document, rotation);
+        return Ok(());
+    }
+    let (old_width, old_height) = (document.width, document.height);
+    let (width, height) = if expand {
+        rotated_canvas_size(old_width, old_height, degrees)
+    } else {
+        (old_width, old_height)
+    };
+    validate_size(width, height)?;
+    let (sin, cos) = sin_cos_degrees(degrees);
+    let from = (f64::from(old_width) / 2.0, f64::from(old_height) / 2.0);
+    let to = (f64::from(width) / 2.0, f64::from(height) / 2.0);
+    let map = |point: Point| {
+        let (x, y) = (f64::from(point.x) - from.0, f64::from(point.y) - from.1);
+        Point::new(
+            (to.0 + cos * x - sin * y) as f32,
+            (to.1 + sin * x + cos * y) as f32,
+        )
+    };
+    let turn = |t: &mut Transform| {
+        let center = map(t.center());
+        t.x = center.x - t.width * 0.5;
+        t.y = center.y - t.height * 0.5;
+        t.rotation = normalized_angle(t.rotation + degrees);
+    };
+    for layer in &mut document.layers {
+        turn(&mut layer.transform);
+        if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
+            turn(placement);
+        }
+    }
+    // A guide is upright or level; turned by another angle it would be neither.
+    document.guides.clear();
+    crate::vector::transform_paths(
+        &mut document.paths,
+        kurbo::Affine::translate(to)
+            * kurbo::Affine::new([cos, sin, -sin, cos, 0.0, 0.0])
+            * kurbo::Affine::translate((-from.0, -from.1)),
+    );
+    if let Some(selection) = &document.selection {
+        // Each new pixel reads the old selection where it came from, between pixels.
+        let old = &**selection;
+        let level = |x: i64, y: i64| -> f64 {
+            if x < 0 || y < 0 || x >= i64::from(old.width()) || y >= i64::from(old.height()) {
+                0.0
+            } else {
+                f64::from(old.get_pixel(x as u32, y as u32).0[0])
+            }
+        };
+        let turned = image::GrayImage::from_fn(width, height, |x, y| {
+            let (dx, dy) = (f64::from(x) + 0.5 - to.0, f64::from(y) + 0.5 - to.1);
+            let sx = from.0 + cos * dx + sin * dy - 0.5;
+            let sy = from.1 - sin * dx + cos * dy - 0.5;
+            let (x0, y0) = (sx.floor(), sy.floor());
+            let (fx, fy) = (sx - x0, sy - y0);
+            let (x0, y0) = (x0 as i64, y0 as i64);
+            let top = level(x0, y0) * (1.0 - fx) + level(x0 + 1, y0) * fx;
+            let bottom = level(x0, y0 + 1) * (1.0 - fx) + level(x0 + 1, y0 + 1) * fx;
+            image::Luma([(top * (1.0 - fy) + bottom * fy).round().clamp(0.0, 255.0) as u8])
+        });
+        document.selection = turned
+            .pixels()
+            .any(|p| p.0[0] > 0)
+            .then(|| Arc::new(turned));
+    }
+    document.width = width;
+    document.height = height;
+    Ok(())
+}
+
 pub fn rotate_canvas(document: &mut Document, rotation: CanvasRotation) {
     let (width, height) = (document.width as f32, document.height as f32);
     let turn = |t: &mut Transform| {
@@ -780,23 +1129,28 @@ pub fn trim(document: &mut Document, basis: TrimBasis, sides: TrimSides) -> Resu
     Ok(true)
 }
 
+/// `roots` and their descendants rendered on their own, as shown even when hidden, on a canvas
+/// the size of the document.
+pub fn render_layers(document: &Document, roots: &[Uuid]) -> RgbaImage {
+    let mut isolated = document.clone();
+    let targets: HashSet<_> = roots
+        .iter()
+        .flat_map(|id| document.descendants(*id))
+        .collect();
+    isolated.layers.retain(|l| targets.contains(&l.id));
+    for root in isolated.layers.iter_mut().filter(|l| roots.contains(&l.id)) {
+        root.parent = None;
+        root.visible = true;
+        root.clip_to = root.clip_to.filter(|id| targets.contains(id));
+    }
+    render::render(&isolated)
+}
+
 pub fn copy_pixels(document: &Document, merged: bool) -> Option<(RgbaImage, Point)> {
     let image = if merged {
         render::render(document)
     } else {
-        let layer = document.active()?;
-        let mut isolated = document.clone();
-        let targets = document.descendants(layer.id);
-        isolated.layers.retain(|l| targets.contains(&l.id));
-        let root = isolated
-            .layers
-            .iter_mut()
-            .find(|l| l.id == layer.id)
-            .unwrap();
-        root.parent = None;
-        root.visible = true;
-        root.clip_to = None;
-        render::render(&isolated)
+        render_layers(document, &[document.active()?.id])
     };
     let (left, top, right, bottom) = if let Some(mask) = &document.selection {
         selection::bounds(mask)?
@@ -893,6 +1247,263 @@ pub fn selection_from_mask_black(document: &mut Document) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn solid(name: &str, width: u32, height: u32, color: [u8; 4]) -> Layer {
+        Layer::image(name, RgbaImage::from_pixel(width, height, Rgba(color)))
+    }
+
+    fn find<'a>(document: &'a Document, name: &str) -> &'a Layer {
+        document.layers.iter().find(|l| l.name == name).unwrap()
+    }
+
+    /// A 20 × 20 document whose folder holds an 8 × 8 base, a layer clipped to it, an editable
+    /// text layer with a stroke and a mask, and an adjustment layer.
+    fn folder_document() -> (Document, Uuid) {
+        let mut document = Document::new(20, 20).unwrap();
+        let mut folder = Layer::blank("Folder", 20, 20);
+        folder.group = true;
+        let mut base = solid("Base", 8, 8, [255, 0, 0, 255]);
+        base.transform.x = 2.0;
+        base.transform.y = 4.0;
+        let mut clipped = solid("Clipped", 20, 20, [0, 255, 0, 255]);
+        clipped.clip_to = Some(base.id);
+        let mut text = solid("Text", 8, 8, [0, 0, 0, 255]);
+        text.text = Some(crate::text::TextStyle {
+            content: "Hello".into(),
+            ..Default::default()
+        });
+        text.effects = Some(crate::layer_effects::LayerEffects {
+            stroke: Some(crate::layer_effects::StrokeEffect {
+                size: 3.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        text.blend = crate::blend::BlendMode::Multiply;
+        text.opacity = 0.5;
+        let mut mask = Layer::mask("Mask", 8, 8);
+        mask.mask.as_mut().unwrap().pixels = Arc::new(GrayImage::from_pixel(8, 8, Luma([128])));
+        mask.parent = Some(text.id);
+        let mut invert = Layer::blank("Invert", 20, 20);
+        invert.adjustment = Some(crate::document::Adjustment::Invert);
+        for layer in [&mut base, &mut clipped, &mut text, &mut invert] {
+            layer.parent = Some(folder.id);
+        }
+        let id = folder.id;
+        document
+            .layers
+            .extend([base, clipped, text, mask, invert, folder]);
+        document.select(id, false);
+        document.validate().unwrap();
+        (document, id)
+    }
+
+    #[test]
+    fn selected_roots_leave_out_layers_inside_selected_folders() {
+        let (mut document, folder) = folder_document();
+        let background = document.layers[0].id;
+        let base = find(&document, "Base").id;
+        document.select(base, true);
+        document.select(background, true);
+        assert_eq!(selected_roots(&document), [background, folder]);
+        document.select(folder, true);
+        assert_eq!(selected_roots(&document), [background, base]);
+    }
+
+    #[test]
+    fn rendering_copied_layers_shows_hidden_roots_and_their_children_only() {
+        let mut document = Document::new(4, 2).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(4, 2, Rgba([9; 4]))));
+        let mut hidden = solid("Hidden", 2, 2, [255, 0, 0, 255]);
+        hidden.visible = false;
+        let mut right = solid("Right", 2, 2, [0, 0, 255, 255]);
+        right.transform.x = 2.0;
+        let roots = [hidden.id, right.id];
+        document.layers.extend([hidden, right]);
+        let image = render_layers(&document, &roots);
+        assert_eq!(image.dimensions(), (4, 2));
+        assert_eq!(image.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(3, 1).0, [0, 0, 255, 255]);
+        // The single-layer copy renders the same way.
+        document.select(roots[0], false);
+        assert_eq!(
+            copy_pixels(&document, false).unwrap().0.get_pixel(0, 0).0,
+            [255, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn pasting_a_folder_into_another_document_copies_it_whole_with_new_ids() {
+        let (source, folder) = folder_document();
+        let mut destination = Document::new(40, 30).unwrap();
+        let below = destination.layers[0].id;
+        destination.insert(solid("Top", 4, 4, [0; 4]));
+        destination.select(below, false);
+        paste_layers(&source, &[folder], &mut destination).unwrap();
+        destination.validate().unwrap();
+
+        assert_eq!(destination.layers.len(), 2 + 6);
+        let names: Vec<_> = destination.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Layer 1", "Base", "Clipped", "Text", "Mask", "Invert", "Folder", "Top"
+            ],
+            "pasted just above the active layer"
+        );
+        let source_ids: HashSet<_> = source.layers.iter().map(|l| l.id).collect();
+        assert!(
+            destination.layers[1..7]
+                .iter()
+                .all(|l| !source_ids.contains(&l.id))
+        );
+        let copy = find(&destination, "Folder");
+        assert!(copy.group);
+        assert_eq!(copy.parent, None);
+        assert_eq!(destination.active, Some(copy.id));
+        assert_eq!(destination.selected, HashSet::from([copy.id]));
+        for name in ["Base", "Clipped", "Text", "Invert"] {
+            assert_eq!(find(&destination, name).parent, Some(copy.id), "{name}");
+        }
+        let text = find(&destination, "Text");
+        assert_eq!(find(&destination, "Mask").parent, Some(text.id));
+        assert_eq!(
+            find(&destination, "Clipped").clip_to,
+            Some(find(&destination, "Base").id)
+        );
+        assert_eq!(
+            find(&destination, "Invert").adjustment,
+            Some(crate::document::Adjustment::Invert)
+        );
+        assert_eq!(text.text.as_ref().unwrap().content, "Hello");
+        assert_eq!(text.effects, find(&source, "Text").effects);
+        assert_eq!(
+            (text.blend, text.opacity),
+            (crate::blend::BlendMode::Multiply, 0.5)
+        );
+        assert_eq!(
+            find(&destination, "Mask")
+                .mask
+                .as_ref()
+                .unwrap()
+                .pixels
+                .get_pixel(0, 0)
+                .0,
+            [128]
+        );
+        // The folder spans the source canvas, so its centre moves to the destination's.
+        assert_eq!(copy.transform.center(), Point::new(20.0, 15.0));
+        let base = find(&destination, "Base").transform;
+        assert_eq!((base.x, base.y), (12.0, 9.0));
+        // The source is untouched.
+        assert_eq!(source.layers.len(), 7);
+        assert!(
+            source
+                .layers
+                .iter()
+                .all(|l| !destination.selected.contains(&l.id))
+        );
+    }
+
+    #[test]
+    fn pasting_layers_in_their_document_lands_just_above_the_originals() {
+        let (mut document, _) = folder_document();
+        let base = find(&document, "Base").id;
+        let clipped = find(&document, "Clipped").id;
+        document.select(clipped, false);
+        let source = document.clone();
+        paste_layers(&source, &[clipped], &mut document).unwrap();
+        let index = document
+            .layers
+            .iter()
+            .position(|l| l.id == clipped)
+            .unwrap();
+        let copy = &document.layers[index + 1];
+        assert_eq!(copy.name, "Clipped");
+        assert_ne!(copy.id, clipped);
+        assert_eq!(copy.parent, Some(find(&source, "Folder").id));
+        assert_eq!(copy.transform, source.layers[index].transform);
+        // Its base is still here, so the copy keeps clipping to it, unbaked.
+        assert_eq!(copy.clip_to, Some(base));
+        assert_eq!(copy.pixels, source.layers[index].pixels);
+        assert_eq!(document.active, Some(copy.id));
+
+        // Copying the folder while it is selected pastes beside it, not into it.
+        let folder = find(&document, "Folder").id;
+        document.select(folder, false);
+        let source = document.clone();
+        paste_layers(&source, &[folder], &mut document).unwrap();
+        document.validate().unwrap();
+        let folders: Vec<_> = document.layers.iter().filter(|l| l.group).collect();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[1].parent, None);
+        assert_eq!(document.layers.last().unwrap().id, folders[1].id);
+    }
+
+    #[test]
+    fn pasting_layers_with_a_folder_selected_puts_them_at_its_top() {
+        let (mut document, folder) = folder_document();
+        let background = document.layers[0].id;
+        let source = document.clone();
+        paste_layers(&source, &[background], &mut document).unwrap();
+        document.validate().unwrap();
+        let copy = document.active().unwrap();
+        assert_eq!(copy.name, "Layer 1");
+        assert_eq!(copy.parent, Some(folder));
+        let index = document
+            .layers
+            .iter()
+            .position(|l| l.id == copy.id)
+            .unwrap();
+        assert_eq!(
+            document.layers[index - 1].name,
+            "Invert",
+            "above the folder's top child"
+        );
+
+        // An empty folder in another document takes them too.
+        let mut other = Document::new(10, 10).unwrap();
+        let mut empty = Layer::blank("Empty", 10, 10);
+        empty.group = true;
+        let empty_id = empty.id;
+        other.insert(empty);
+        paste_layers(&source, &[background], &mut other).unwrap();
+        other.validate().unwrap();
+        assert_eq!(other.active().unwrap().parent, Some(empty_id));
+    }
+
+    #[test]
+    fn pasting_into_another_document_bakes_clipping_to_layers_left_behind() {
+        let (source, _) = folder_document();
+        let clipped = find(&source, "Clipped");
+        let mut destination = Document::new(20, 20).unwrap();
+        paste_layers(&source, &[clipped.id], &mut destination).unwrap();
+        destination.validate().unwrap();
+        let copy = destination.active().unwrap();
+        assert_eq!(copy.clip_to, None);
+        let pixels = copy.pixels.as_deref().unwrap();
+        assert_eq!(pixels.get_pixel(0, 0).0[3], 0, "outside the base");
+        assert_eq!(pixels.get_pixel(3, 5).0[3], 255, "inside the base");
+
+        // Several layers are centred together.
+        let (mut source, _) = folder_document();
+        let base = find(&source, "Base").id;
+        let text = find(&source, "Text").id;
+        source.select(base, false);
+        source.select(text, true);
+        let roots = selected_roots(&source);
+        assert_eq!(roots, [base, text]);
+        let mut destination = Document::new(40, 40).unwrap();
+        paste_layers(&source, &roots, &mut destination).unwrap();
+        assert_eq!(destination.selected.len(), 2);
+        assert_eq!(destination.active().unwrap().name, "Text");
+        let base = find(&destination, "Base").transform;
+        let text = find(&destination, "Text").transform;
+        // Base spans (2, 4)–(10, 12) and Text (0, 0)–(8, 8): together centred at (5, 6).
+        assert_eq!((base.x, base.y), (17.0, 18.0));
+        assert_eq!((text.x, text.y), (15.0, 14.0));
+        assert!(paste_layers(&source, &[Uuid::new_v4()], &mut destination).is_err());
+    }
 
     #[test]
     fn merging_a_standalone_mask_bakes_all_lower_siblings() {
@@ -1371,6 +1982,235 @@ mod tests {
         let selection = document.selection.as_ref().unwrap();
         assert_eq!(selection.dimensions(), (4, 6));
         assert_eq!(selection::bounds(selection), Some((4 - 1, 5, 4, 6)));
+    }
+
+    /// The corners of a page photographed at an angle, in a 320 × 340 photo.
+    const PHOTO_PAGE: [Point; 4] = [
+        Point::new(62.0, 38.0),
+        Point::new(231.0, 52.0),
+        Point::new(262.0, 318.0),
+        Point::new(31.0, 300.0),
+    ];
+
+    /// A transform that stretches its layer over `quad` of a `width` × `height` canvas.
+    fn onto(quad: [Point; 4], width: u32, height: u32) -> Transform {
+        Transform {
+            warp: Some(quad.map(|p| Point::new(p.x / width as f32, p.y / height as f32))),
+            ..Transform::new(width, height)
+        }
+    }
+
+    /// Where the dark line nearest `at` lies along `pixels` (the darkness-weighted middle of the
+    /// samples within 6 pixels of it).
+    fn line_centre(pixels: impl Fn(u32) -> u8, at: u32) -> f32 {
+        let (mut sum, mut weight) = (0.0, 0.0);
+        for i in at - 6..=at + 6 {
+            let dark = 255.0 - f32::from(pixels(i));
+            sum += (i as f32 + 0.5) * dark;
+            weight += dark;
+        }
+        sum / weight
+    }
+
+    #[test]
+    fn perspective_crop_straightens_a_photographed_grid() {
+        // The page: white, with 2-pixel black lines every 40 pixels each way.
+        let page = RgbaImage::from_fn(200, 280, |x, y| {
+            let line = |v: u32| v % 40 == 39 || (v.is_multiple_of(40) && v > 0);
+            if line(x) || line(y) {
+                Rgba([0, 0, 0, 255])
+            } else {
+                Rgba([255, 255, 255, 255])
+            }
+        });
+        // Photograph it: warp it onto the quad with a known homography and flatten that to pixels.
+        let mut scene = Document::new(320, 340).unwrap();
+        let mut sheet = Layer::image("Page", page);
+        sheet.transform = onto(PHOTO_PAGE, 320, 340);
+        scene.insert(sheet);
+        let photo = render::render_pixels(&scene, 320, 340);
+
+        let mut document = Document::new(320, 340).unwrap();
+        document.insert(Layer::image("Photo", photo));
+        assert_eq!(
+            crate::crop::perspective::output_size(PHOTO_PAGE),
+            [201, 266]
+        );
+        let removed = perspective_crop(&mut document, PHOTO_PAGE, [200, 280]).unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!((document.width, document.height), (200, 280));
+        let result = render::render_pixels(&document, 200, 280);
+        let gray = |x: u32, y: u32| result.get_pixel(x, y)[0];
+        let near_a_line = |v: u32| (v + 6) % 40 <= 12;
+        // The page fills the canvas to its corners.
+        for (x, y) in [(2, 2), (197, 2), (197, 277), (2, 277)] {
+            assert_eq!(result.get_pixel(x, y)[3], 255, "({x}, {y})");
+        }
+        // Each vertical line is straight and in place, within a pixel, from top to bottom.
+        for column in [40, 80, 120, 160] {
+            for y in (3..277).filter(|&y| !near_a_line(y)) {
+                let centre = line_centre(|x| gray(x, y), column);
+                assert!(
+                    (centre - column as f32).abs() < 1.0,
+                    "line {column} at row {y}: {centre}"
+                );
+            }
+        }
+        for row in [40, 80, 120, 160, 200, 240] {
+            for x in (3..197).filter(|&x| !near_a_line(x)) {
+                let centre = line_centre(|y| gray(x, y), row);
+                assert!(
+                    (centre - row as f32).abs() < 1.0,
+                    "line {row} at column {x}: {centre}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn perspective_crop_keeps_layers_masks_and_paths_registered() {
+        let mut document = Document::new(320, 340).unwrap();
+        let mut turned = solid("Turned", 100, 80, [255, 0, 0, 255]);
+        turned.transform = Transform {
+            x: 80.0,
+            y: 90.0,
+            width: 100.0,
+            height: 80.0,
+            rotation: 15.0,
+            ..Transform::new(1, 1)
+        };
+        let mut warped = solid("Warped", 40, 40, [0, 0, 255, 255]);
+        warped.transform = Transform {
+            x: 120.0,
+            y: 110.0,
+            width: 60.0,
+            height: 50.0,
+            flip_y: true,
+            warp: Some([
+                Point::new(0.1, 0.0),
+                Point::new(1.0, 0.1),
+                Point::new(0.9, 1.0),
+                Point::new(0.0, 0.8),
+            ]),
+            ..Transform::new(1, 1)
+        };
+        // A mask placed apart from its layer.
+        let mut mask = crate::document::Mask::white();
+        mask.linked = false;
+        mask.placement = Some(Transform {
+            x: 130.0,
+            y: 100.0,
+            width: 30.0,
+            height: 30.0,
+            ..Transform::new(1, 1)
+        });
+        warped.mask = Some(mask);
+        let mut text = solid("Text", 50, 20, [0, 0, 0, 255]);
+        text.text = Some(crate::text::TextStyle {
+            content: "Hello".into(),
+            ..Default::default()
+        });
+        text.transform.x = 100.0;
+        text.transform.y = 200.0;
+        let mut adjustment = Layer::blank("Invert", 320, 340);
+        adjustment.adjustment = Some(crate::document::Adjustment::Invert);
+        let mut folder = Layer::blank("Folder", 320, 340);
+        folder.group = true;
+        for layer in [turned, warped, text, adjustment, folder] {
+            document.insert(layer);
+        }
+        document.paths.push(crate::vector::NamedPath::new(
+            "Edge",
+            crate::vector::VectorPath::parse("M 62 38 L 231 52").unwrap(),
+        ));
+        document.guides.push(crate::layout::Guide::new(
+            crate::layout::GuideAxis::Vertical,
+            50.0,
+        ));
+        document.selection = Some(Arc::new(GrayImage::new(320, 340)));
+        let before = document.clone();
+        perspective_crop(&mut document, PHOTO_PAGE, [210, 297]).unwrap();
+        let map = crate::crop::perspective::rectify(PHOTO_PAGE, [210, 297]).unwrap();
+        // A point on the canvas shows the same place of each layer and mask as before.
+        for point in [
+            Point::new(120.0, 120.0),
+            Point::new(140.0, 130.0),
+            Point::new(150.0, 140.0),
+            Point::new(110.0, 205.0),
+        ] {
+            let moved = map.map(point);
+            for (old, new) in before.layers.iter().zip(&document.layers) {
+                assert_eq!(old.id, new.id);
+                let (a, b) = (old.transform.inverse(point), new.transform.inverse(moved));
+                assert!(a.distance(b) < 1e-3, "{}: {a:?} != {b:?}", old.name);
+                if let (Some(a), Some(b)) = (
+                    old.mask.as_ref().and_then(|m| m.placement),
+                    new.mask.as_ref().and_then(|m| m.placement),
+                ) {
+                    assert!(a.inverse(point).distance(b.inverse(moved)) < 1e-3);
+                }
+            }
+        }
+        assert!(find(&document, "Text").text.is_some());
+        assert!(find(&document, "Turned").transform.warp.is_some());
+        // Paths follow; guides and the selection go.
+        let edge = document.paths[0].d.bounds().unwrap();
+        assert!(edge.x0.abs() < 1e-2 && edge.y0.abs() < 1e-2);
+        assert!((edge.x1 - 210.0).abs() < 1e-2 && edge.y1.abs() < 1e-2);
+        assert!(document.guides.is_empty());
+        assert!(document.selection.is_none());
+        assert_eq!((document.width, document.height), (210, 297));
+    }
+
+    #[test]
+    fn perspective_crop_refuses_degenerate_corners_and_layers_at_the_vanishing_line() {
+        let mut document = Document::new(600, 400).unwrap();
+        let bow = [PHOTO_PAGE[0], PHOTO_PAGE[1], PHOTO_PAGE[3], PHOTO_PAGE[2]];
+        let error = perspective_crop(&mut document, bow, [100, 100]).unwrap_err();
+        assert!(error.to_string().contains("sides cross"), "{error}");
+        // The sides meet just above the top, inside the canvas.
+        let steep = [
+            Point::new(250.0, 100.0),
+            Point::new(350.0, 100.0),
+            Point::new(600.0, 400.0),
+            Point::new(0.0, 400.0),
+        ];
+        let mut tall = solid("Tall", 600, 400, [9, 9, 9, 255]);
+        tall.transform.y = -300.0;
+        tall.transform.height = 700.0;
+        document.insert(tall);
+        document.paths.push(crate::vector::NamedPath::new(
+            "Sky",
+            crate::vector::VectorPath::parse("M 10 0 L 20 10").unwrap(),
+        ));
+        let before = format!(
+            "{:?}",
+            document
+                .layers
+                .iter()
+                .map(|l| l.transform)
+                .collect::<Vec<_>>()
+        );
+        let error = perspective_crop(&mut document, steep, [300, 300]).unwrap_err();
+        assert!(error.to_string().contains("“Tall”"), "{error}");
+        assert_eq!(
+            before,
+            format!(
+                "{:?}",
+                document
+                    .layers
+                    .iter()
+                    .map(|l| l.transform)
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert_eq!((document.width, document.height), (600, 400));
+        // Without it, the blank layer is fitted to the canvas and the path past the line goes.
+        document.layers.retain(|l| l.name != "Tall");
+        let removed = perspective_crop(&mut document, steep, [300, 300]).unwrap();
+        assert_eq!(removed, 1);
+        assert!(document.paths.is_empty());
+        assert_eq!(document.layers[0].transform, Transform::new(300, 300));
     }
 
     #[test]

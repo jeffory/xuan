@@ -13,6 +13,11 @@ use crate::{
     render, selection,
 };
 
+pub mod dither;
+pub mod stylize;
+
+pub use dither::{DitherColors, DitherPixelShape, DitherSettings, DitherStyle};
+
 pub fn rgb_to_hsl(c: [f32; 3]) -> [f32; 3] {
     let high = c.into_iter().fold(f32::MIN, f32::max);
     let low = c.into_iter().fold(f32::MAX, f32::min);
@@ -315,6 +320,11 @@ pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4
             highlights,
             preserve_luminosity,
         } => color_balance(rgb, [shadows, midtones, highlights], *preserve_luminosity),
+        Adjustment::ColorLookup {
+            interpolation,
+            table,
+            ..
+        } => table.apply(rgb, *interpolation),
     };
     [
         rgb[0].clamp(0.0, 1.0),
@@ -395,30 +405,184 @@ pub fn apply_adjustment(
     Ok(())
 }
 
+/// As in Photoshop, a negative Lens Correction `vignette` darkens the corners and a positive
+/// one brightens them. Format 11 and earlier stored the opposite sign; `io::load` negates it.
+/// Vignette, Bloom, Tonal Contrast and Dither are upstream Compositor's filters, with its
+/// settings, ranges and defaults (`Document/Filters.swift`); they need format 14.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
-    GaussianBlur { radius: f32 },
-    MotionBlur { distance: f32, angle: f32 },
-    Noise { amount: f32, monochrome: bool },
-    LensCorrection { distortion: f32, vignette: f32 },
+    GaussianBlur {
+        radius: f32,
+    },
+    MotionBlur {
+        distance: f32,
+        angle: f32,
+    },
+    Noise {
+        amount: f32,
+        monochrome: bool,
+    },
+    LensCorrection {
+        distortion: f32,
+        vignette: f32,
+    },
+    /// Colors the edges toward `color`: Amount 0–100%, Midpoint 0–100 (where the falloff
+    /// starts), Roundness −100 (rectangle) to 100 (ellipse), Feather 0–100 and Highlights
+    /// 0–100 (how much bright pixels are spared). It frames the layer's pixels, or the canvas
+    /// for a filter layer, which also paints transparent areas.
+    Vignette {
+        amount: f32,
+        color: [u8; 3],
+        midpoint: f32,
+        roundness: f32,
+        feather: f32,
+        highlights: f32,
+    },
+    /// Bloom / Glow: Amount 0–100% and blur Radius 1–150 px.
+    Bloom {
+        amount: f32,
+        radius: f32,
+    },
+    /// Local contrast: Amount 0–100%, detail Radius 1–100 px, and strengths −100–100 in the
+    /// shadows, midtones and highlights.
+    TonalContrast {
+        amount: f32,
+        radius: f32,
+        shadows: f32,
+        midtones: f32,
+        highlights: f32,
+    },
+    Dither(Box<DitherSettings>),
+    /// Sharpening: the difference between each pixel and the image blurred at Radius
+    /// 0.1–100 px is added back, Amount 0–500% of it, where it is at least Threshold
+    /// 0–255 levels (so noise in flat areas is left alone). It needs format 18.
+    UnsharpMask {
+        amount: f32,
+        radius: f32,
+        threshold: f32,
+    },
 }
 
 impl Filter {
+    /// Unsharp Mask as the Filter menu opens it.
+    pub const UNSHARP_MASK: Self = Self::UnsharpMask {
+        amount: 100.0,
+        radius: 1.5,
+        threshold: 0.0,
+    };
+
+    /// Upstream's defaults for the new filters, as the Filter menu opens them.
+    pub const VIGNETTE: Self = Self::Vignette {
+        amount: 35.0,
+        color: [0; 3],
+        midpoint: 50.0,
+        roundness: 100.0,
+        feather: 60.0,
+        highlights: 25.0,
+    };
+    pub const BLOOM: Self = Self::Bloom {
+        amount: 40.0,
+        radius: 24.0,
+    };
+    pub const TONAL_CONTRAST: Self = Self::TonalContrast {
+        amount: 50.0,
+        radius: 16.0,
+        shadows: 40.0,
+        midtones: 60.0,
+        highlights: 30.0,
+    };
+
+    /// Every filter with the settings the Filter menu opens it with, in menu order.
+    pub fn defaults() -> [Self; 9] {
+        [
+            Self::GaussianBlur { radius: 4.0 },
+            Self::MotionBlur {
+                distance: 15.0,
+                angle: 0.0,
+            },
+            Self::Noise {
+                amount: 10.0,
+                monochrome: true,
+            },
+            Self::LensCorrection {
+                distortion: 0.0,
+                vignette: 0.0,
+            },
+            Self::VIGNETTE,
+            Self::BLOOM,
+            Self::Dither(Box::default()),
+            Self::TONAL_CONTRAST,
+            Self::UNSHARP_MASK,
+        ]
+    }
+
+    /// Whether `.xuan` format 12 and earlier can hold this filter.
+    pub fn is_legacy(&self) -> bool {
+        matches!(
+            self,
+            Self::GaussianBlur { .. }
+                | Self::MotionBlur { .. }
+                | Self::Noise { .. }
+                | Self::LensCorrection { .. }
+        )
+    }
+
     /// Check the settings are in range; the error names the field and its range.
     pub fn validate(&self) -> Result<()> {
-        match *self {
-            Self::GaussianBlur { radius } => within("GaussianBlur.radius", radius, 0.0, 100.0),
-            Self::MotionBlur { distance, angle } => {
+        match self {
+            &Self::GaussianBlur { radius } => within("GaussianBlur.radius", radius, 0.0, 100.0),
+            &Self::MotionBlur { distance, angle } => {
                 within("MotionBlur.distance", distance, 0.0, 200.0)?;
                 within("MotionBlur.angle", angle, -180.0, 180.0)
             }
-            Self::Noise { amount, .. } => within("Noise.amount", amount, 0.0, 100.0),
-            Self::LensCorrection {
+            &Self::Noise { amount, .. } => within("Noise.amount", amount, 0.0, 100.0),
+            &Self::LensCorrection {
                 distortion,
                 vignette,
             } => {
                 within("LensCorrection.distortion", distortion, -50.0, 50.0)?;
                 within("LensCorrection.vignette", vignette, -100.0, 100.0)
+            }
+            &Self::Vignette {
+                amount,
+                midpoint,
+                roundness,
+                feather,
+                highlights,
+                ..
+            } => {
+                within("Vignette.amount", amount, 0.0, 100.0)?;
+                within("Vignette.midpoint", midpoint, 0.0, 100.0)?;
+                within("Vignette.roundness", roundness, -100.0, 100.0)?;
+                within("Vignette.feather", feather, 0.0, 100.0)?;
+                within("Vignette.highlights", highlights, 0.0, 100.0)
+            }
+            &Self::Bloom { amount, radius } => {
+                within("Bloom.amount", amount, 0.0, 100.0)?;
+                within("Bloom.radius", radius, 1.0, 150.0)
+            }
+            &Self::TonalContrast {
+                amount,
+                radius,
+                shadows,
+                midtones,
+                highlights,
+            } => {
+                within("TonalContrast.amount", amount, 0.0, 100.0)?;
+                within("TonalContrast.radius", radius, 1.0, 100.0)?;
+                within("TonalContrast.shadows", shadows, -100.0, 100.0)?;
+                within("TonalContrast.midtones", midtones, -100.0, 100.0)?;
+                within("TonalContrast.highlights", highlights, -100.0, 100.0)
+            }
+            Self::Dither(settings) => settings.validate(),
+            &Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => {
+                within("UnsharpMask.amount", amount, 0.0, 500.0)?;
+                within("UnsharpMask.radius", radius, 0.1, 100.0)?;
+                within("UnsharpMask.threshold", threshold, 0.0, 255.0)
             }
         }
     }
@@ -432,6 +596,33 @@ impl Filter {
                 distance: distance * scale,
                 angle,
             },
+            Self::Bloom { amount, radius } => Self::Bloom {
+                amount,
+                radius: radius * scale,
+            },
+            Self::TonalContrast {
+                amount,
+                radius,
+                shadows,
+                midtones,
+                highlights,
+            } => Self::TonalContrast {
+                amount,
+                radius: radius * scale,
+                shadows,
+                midtones,
+                highlights,
+            },
+            Self::Dither(ref settings) => Self::Dither(Box::new(settings.scaled(scale))),
+            Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => Self::UnsharpMask {
+                amount,
+                radius: radius * scale,
+                threshold,
+            },
             _ => self.clone(),
         }
     }
@@ -442,12 +633,63 @@ impl Filter {
             Self::MotionBlur { .. } => "Motion Blur",
             Self::Noise { .. } => "Add Noise",
             Self::LensCorrection { .. } => "Lens Correction",
+            Self::Vignette { .. } => "Vignette",
+            Self::Bloom { .. } => "Bloom / Glow",
+            Self::TonalContrast { .. } => "Tonal Contrast",
+            Self::Dither(_) => "Dither",
+            Self::UnsharpMask { .. } => "Unsharp Mask",
+        }
+    }
+
+    /// How far past the layer the filter reaches, in layer pixels: room is made for it so
+    /// it spreads rather than stopping at the layer's edge.
+    pub fn padding(&self) -> u32 {
+        match *self {
+            Self::GaussianBlur { radius } | Self::Bloom { radius, .. } => {
+                (radius * 3.0).ceil() as u32
+            }
+            Self::MotionBlur { distance, .. } => (distance * 0.5).ceil() as u32 + 1,
+            _ => 0,
         }
     }
 }
 
+/// A Gaussian blur of straight pixels with standard deviation `sigma`, done on premultiplied
+/// colors so transparent edges do not darken. Gaussian Blur, Bloom and Tonal Contrast share it.
+pub(crate) fn gaussian_blurred(image: &RgbaImage, sigma: f32) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    let premul = RgbaImage::from_fn(w, h, |x, y| {
+        let p = image.get_pixel(x, y).0;
+        Rgba([
+            ((p[0] as u16 * p[3] as u16) / 255) as u8,
+            ((p[1] as u16 * p[3] as u16) / 255) as u8,
+            ((p[2] as u16 * p[3] as u16) / 255) as u8,
+            p[3],
+        ])
+    });
+    let mut result = image::imageops::blur(&premul, sigma.max(0.01));
+    for pixel in result.pixels_mut() {
+        if pixel[3] > 0 {
+            for i in 0..3 {
+                pixel[i] = ((pixel[i] as u32 * 255) / pixel[3] as u32).min(255) as u8;
+            }
+        }
+    }
+    result
+}
+
+/// The filter as a filter layer runs it, on the composite below: as `filtered`, except that a
+/// Vignette frames the whole backdrop and paints its transparent areas too.
+pub fn filtered_backdrop(image: &RgbaImage, filter: &Filter) -> RgbaImage {
+    filtered_with(image, filter, true)
+}
+
 pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
-    if let Some(result) = crate::gpu::filter(image, filter) {
+    filtered_with(image, filter, false)
+}
+
+fn filtered_with(image: &RgbaImage, filter: &Filter, fills_clear: bool) -> RgbaImage {
+    if let Some(result) = crate::gpu::filter_with(image, filter, fills_clear) {
         return result;
     }
     if crate::gpu::cancelled() {
@@ -455,27 +697,7 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
     }
     let (w, h) = image.dimensions();
     match filter {
-        Filter::GaussianBlur { radius } => {
-            // Blur premultiplied pixels to prevent dark fringes at transparent edges.
-            let premul = RgbaImage::from_fn(w, h, |x, y| {
-                let p = image.get_pixel(x, y).0;
-                Rgba([
-                    ((p[0] as u16 * p[3] as u16) / 255) as u8,
-                    ((p[1] as u16 * p[3] as u16) / 255) as u8,
-                    ((p[2] as u16 * p[3] as u16) / 255) as u8,
-                    p[3],
-                ])
-            });
-            let mut result = image::imageops::blur(&premul, radius.max(0.01));
-            for pixel in result.pixels_mut() {
-                if pixel[3] > 0 {
-                    for i in 0..3 {
-                        pixel[i] = ((pixel[i] as u32 * 255) / pixel[3] as u32).min(255) as u8;
-                    }
-                }
-            }
-            result
-        }
+        Filter::GaussianBlur { radius } => gaussian_blurred(image, *radius),
         Filter::MotionBlur { distance, angle } => {
             motion_blur(image, *distance, *angle, &AtomicBool::new(false))
                 .expect("Motion blur was not cancelled")
@@ -504,10 +726,48 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
             let k = 1.0 + distortion * radius / 100.0;
             let mut p = render::sample(image, Point::new((u * k + 1.0) * 0.5, (v * k + 1.0) * 0.5));
             for value in &mut p[..3] {
-                *value *= 1.0 - vignette * radius * 0.005;
+                *value *= 1.0 + vignette * radius * 0.005;
             }
             Rgba(p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
         }),
+        &Filter::Vignette {
+            amount,
+            color,
+            midpoint,
+            roundness,
+            feather,
+            highlights,
+        } => stylize::vignette(
+            image,
+            amount,
+            color,
+            midpoint,
+            roundness,
+            feather,
+            highlights,
+            fills_clear,
+        ),
+        &Filter::Bloom { amount, radius } => {
+            stylize::bloom(image, &gaussian_blurred(image, radius), amount)
+        }
+        &Filter::TonalContrast {
+            amount,
+            radius,
+            shadows,
+            midtones,
+            highlights,
+        } => stylize::tonal_contrast(
+            image,
+            &gaussian_blurred(image, radius),
+            amount,
+            [shadows, midtones, highlights],
+        ),
+        Filter::Dither(settings) => dither::dither(image, settings),
+        &Filter::UnsharpMask {
+            amount,
+            radius,
+            threshold,
+        } => stylize::unsharp_mask(image, &gaussian_blurred(image, radius), amount, threshold),
     }
 }
 
@@ -681,11 +941,7 @@ fn apply_filter_impl(
     ensure_pixels(layer)?;
     let original_transform = layer.transform;
     let original = layer.pixels.as_ref().unwrap();
-    let padding = match filter {
-        Filter::GaussianBlur { radius } => (radius * 3.0).ceil() as u32,
-        Filter::MotionBlur { distance, .. } => (distance * 0.5).ceil() as u32 + 1,
-        _ => 0,
-    };
+    let padding = filter.padding();
     // Sides that reach the canvas edge repeat their edge pixels and do not grow,
     // so a layer that fills the canvas stays opaque up to its edges.
     let edges = if padding > 0 {
@@ -736,43 +992,8 @@ fn apply_filter_impl(
         }
     };
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-    let blended = selection.as_deref().and_then(|selection| {
-        crate::gpu::filter_selection(crate::gpu::FilterSelection {
-            image: result.as_raw(),
-            original: original.as_raw(),
-            size: [w, h],
-            original_size: [original.width(), original.height()],
-            transform,
-            selection,
-            padding,
-            mask: false,
-        })
-    });
-    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-    if let Some(bytes) = blended {
-        result = RgbaImage::from_raw(w, h, bytes).unwrap();
-    } else if selection.is_some() {
-        for (x, y, pixel) in result.enumerate_pixels_mut() {
-            if x == 0 {
-                ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-            }
-            let point = transform.point(Point::new(
-                (x as f32 + 0.5) / w as f32,
-                (y as f32 + 0.5) / h as f32,
-            ));
-            let amount = selection::coverage(selection.as_deref(), point);
-            let old = if (padding..padding + original.width()).contains(&x)
-                && (padding..padding + original.height()).contains(&y)
-            {
-                original.get_pixel(x - padding, y - padding).0
-            } else {
-                [0; 4]
-            };
-            for i in 0..4 {
-                pixel[i] =
-                    (old[i] as f32 * (1.0 - amount) + pixel[i] as f32 * amount).round() as u8;
-            }
-        }
+    if let Some(selection) = selection.as_deref() {
+        blend_selection(&mut result, original, transform, selection, padding, cancel)?;
     }
     let mut transform = transform;
     // Growth per side (left, top, right, bottom). Sides that reach the canvas
@@ -810,6 +1031,56 @@ fn apply_filter_impl(
     }
     layer.transform = transform;
     layer.pixels = Some(Arc::new(result));
+    Ok(())
+}
+
+/// Keep the filtered `result` only where `selection` covers it, and `original` elsewhere,
+/// blending by the selection's coverage. `result` is `original` grown by `padding` pixels on
+/// each side, and `transform` places `result` in the document.
+pub(crate) fn blend_selection(
+    result: &mut RgbaImage,
+    original: &RgbaImage,
+    transform: Transform,
+    selection: &image::GrayImage,
+    padding: u32,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let (w, h) = result.dimensions();
+    let blended = crate::gpu::filter_selection(crate::gpu::FilterSelection {
+        image: result.as_raw(),
+        original: original.as_raw(),
+        size: [w, h],
+        original_size: [original.width(), original.height()],
+        transform,
+        selection,
+        padding,
+        mask: false,
+    });
+    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+    if let Some(bytes) = blended {
+        *result = RgbaImage::from_raw(w, h, bytes).unwrap();
+        return Ok(());
+    }
+    for (x, y, pixel) in result.enumerate_pixels_mut() {
+        if x == 0 {
+            ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+        }
+        let point = transform.point(Point::new(
+            (x as f32 + 0.5) / w as f32,
+            (y as f32 + 0.5) / h as f32,
+        ));
+        let amount = selection::coverage(Some(selection), point);
+        let old = if (padding..padding + original.width()).contains(&x)
+            && (padding..padding + original.height()).contains(&y)
+        {
+            original.get_pixel(x - padding, y - padding).0
+        } else {
+            [0; 4]
+        };
+        for i in 0..4 {
+            pixel[i] = (old[i] as f32 * (1.0 - amount) + pixel[i] as f32 * amount).round() as u8;
+        }
+    }
     Ok(())
 }
 
@@ -935,6 +1206,90 @@ pub fn histogram(image: &RgbaImage) -> [u32; 256] {
     bins
 }
 
+/// The darkest and lightest levels of 256 counts once the outlying 0.5% at each end are
+/// left out, as [`auto_levels`] clips them.
+fn clipped_range(bins: &[u64; 256]) -> (f32, f32) {
+    let total: u64 = bins.iter().sum();
+    let cutoff = total / 200;
+    let mut sum = 0;
+    let black = bins
+        .iter()
+        .position(|n| {
+            sum += n;
+            sum > cutoff
+        })
+        .unwrap_or(0) as f32;
+    sum = 0;
+    let white = 255
+        - bins
+            .iter()
+            .rev()
+            .position(|n| {
+                sum += n;
+                sum > cutoff
+            })
+            .unwrap_or(0);
+    (black.min(254.0), (white as f32).max(black.min(254.0) + 1.0))
+}
+
+/// Auto Tone: each of red, green and blue stretched to the full range on its own, the
+/// outlying 0.5% at each end clipped. Unlike [`auto_levels`], which stretches the
+/// lightness and keeps the colours, this also removes a colour cast from the darkest and
+/// lightest tones.
+pub fn auto_tone(image: &RgbaImage) -> Adjustment {
+    let mut bins = [[0u64; 256]; 3];
+    for pixel in image.pixels().filter(|p| p[3] != 0) {
+        for channel in 0..3 {
+            bins[channel][usize::from(pixel[channel])] += 1;
+        }
+    }
+    let mut ranges = [[0.0, 1.0, 255.0, 0.0, 255.0]; 4];
+    for channel in 0..3 {
+        let (black, white) = clipped_range(&bins[channel]);
+        ranges[channel + 1] = [black, 1.0, white, 0.0, 255.0];
+    }
+    Adjustment::LevelsChannels { ranges }
+}
+
+/// The average colour of an image for a grey-world white balance: its pixels that are
+/// neither transparent nor clipped in any channel, or every visible pixel when all are
+/// clipped. `None` for an image with nothing visible.
+pub fn average_color(image: &RgbaImage) -> Option<[f32; 3]> {
+    let mean = |clipped: bool| {
+        let (mut sum, mut count) = ([0u64; 3], 0u64);
+        for pixel in image.pixels().filter(|p| p[3] != 0) {
+            if !clipped && pixel.0[..3].iter().any(|v| !(5..=250).contains(v)) {
+                continue;
+            }
+            for channel in 0..3 {
+                sum[channel] += u64::from(pixel[channel]);
+            }
+            count += 1;
+        }
+        (count > 0).then(|| sum.map(|channel| channel as f32 / count as f32))
+    };
+    mean(false).or_else(|| mean(true))
+}
+
+/// Auto white balance: per-channel levels that make `neutral`, a colour that should be
+/// grey (the image's average for a grey-world balance, or a sampled grey card), grey at
+/// the same lightness. Each channel is scaled by at most 4 either way.
+pub fn white_balance(neutral: [f32; 3]) -> Adjustment {
+    let target = 0.2126 * neutral[0] + 0.7152 * neutral[1] + 0.0722 * neutral[2];
+    let mut ranges = [[0.0, 1.0, 255.0, 0.0, 255.0]; 4];
+    for channel in 0..3 {
+        let gain = (target / neutral[channel].max(0.5)).clamp(0.25, 4.0);
+        ranges[channel + 1] = if gain >= 1.0 {
+            // Brighter: a lower white point.
+            [0.0, 1.0, (255.0 / gain).max(1.0), 0.0, 255.0]
+        } else {
+            // Darker: a lower output white.
+            [0.0, 1.0, 255.0, 0.0, 255.0 * gain]
+        };
+    }
+    Adjustment::LevelsChannels { ranges }
+}
+
 pub fn auto_levels(image: &RgbaImage) -> Adjustment {
     let bins = histogram(image);
     let total: u32 = bins.iter().sum();
@@ -1047,6 +1402,13 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
             within("BlackWhite.tint_hue", *tint_hue, 0.0, 360.0)?;
             within("BlackWhite.tint_saturation", *tint_saturation, 0.0, 100.0)?;
         }
+        Adjustment::ColorLookup { name, table, .. } => {
+            ensure!(
+                name.len() <= 1024 && !name.contains(['\n', '\r']),
+                "`ColorLookup.name` must be one line of at most 1024 bytes"
+            );
+            table.validate()?;
+        }
         Adjustment::ColorBalance {
             shadows,
             midtones,
@@ -1158,6 +1520,78 @@ mod tests {
 
     /// Upstream's adjust_color_balance: a midtone shift moves mid gray by 70% of it, and
     /// Preserve Luminosity scales the result back to the original brightness.
+    /// The issue's acceptance check: a Color Lookup layer at 50% gives half the look, its mask
+    /// limits it, and deleting it restores the original pixels.
+    #[test]
+    fn color_lookup_layers_fade_with_opacity_and_masks_and_leave_no_trace() {
+        use crate::lut::{Dimension, Lut};
+        let mut document = Document::new(16, 8).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(16, 8, |x, y| {
+            Rgba([(x * 16) as u8, (y * 32) as u8, 200, 255])
+        })));
+        let original = render::render(&document);
+        let mut table = Lut::identity(Dimension::Three, 17);
+        for entry in &mut table.table {
+            *entry = [1.0 - entry[0], entry[2], entry[1]];
+        }
+        let mut layer = crate::document::Layer::blank("Color Lookup", 16, 8);
+        layer.adjustment = Some(Adjustment::color_lookup("swap.cube", table));
+        document.layers.push(layer);
+        let full = render::render(&document);
+        assert_ne!(full, original);
+        document.layers[1].opacity = 0.5;
+        let half = render::render(&document);
+        for ((a, b), mixed) in original.pixels().zip(full.pixels()).zip(half.pixels()) {
+            for c in 0..3 {
+                let expected = (a[c] as f32 + b[c] as f32) / 2.0;
+                assert!(
+                    (mixed[c] as f32 - expected).abs() <= 1.0,
+                    "{a:?} {b:?} {mixed:?}"
+                );
+            }
+        }
+        // A black mask hides the look.
+        document.layers[1].opacity = 1.0;
+        document.layers[1].mask = Some(crate::document::Mask {
+            pixels: Arc::new(image::GrayImage::from_pixel(1, 1, image::Luma([0]))),
+            ..crate::document::Mask::white()
+        });
+        assert_eq!(render::render(&document), original);
+        document.layers.pop();
+        assert_eq!(render::render(&document), original);
+    }
+
+    #[test]
+    fn color_lookup_tables_are_validated_with_the_document() {
+        use crate::lut::{Dimension, Lut};
+        let good = Adjustment::color_lookup("ok.cube", Lut::identity(Dimension::One, 4));
+        assert!(validate_adjustment(&good).is_ok());
+        let mut table = Lut::identity(Dimension::Three, 3);
+        table.table.truncate(5);
+        assert!(validate_adjustment(&Adjustment::color_lookup("short.cube", table)).is_err());
+        let long = Adjustment::color_lookup("x".repeat(2000), Lut::default());
+        assert!(validate_adjustment(&long).is_err());
+        // The destructive path applies it too, on the CPU.
+        let mut document = Document::new(4, 4).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            4,
+            4,
+            Rgba([10, 128, 250, 255]),
+        )));
+        let mut invert = Lut::identity(Dimension::One, 2);
+        invert.table = vec![[1.0; 3], [0.0; 3]];
+        apply_adjustment(
+            &mut document,
+            &Adjustment::color_lookup("invert.cube", invert),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            document.layers[0].pixels.as_ref().unwrap().get_pixel(1, 1),
+            &Rgba([245, 127, 5, 255])
+        );
+    }
+
     #[test]
     fn color_balance_shifts_tones_and_can_preserve_luminosity() {
         let red_mids = [&[0.0; 3], &[100.0, 0.0, 0.0], &[0.0; 3]];
@@ -1372,6 +1806,37 @@ mod tests {
         assert_eq!(image.get_pixel(7, 9)[0], 255);
         assert!(image.get_pixel(9, 9)[3] < 255);
         doc.validate().unwrap();
+    }
+
+    /// Photoshop's sign: a positive vignette brightens the corners, a negative one darkens
+    /// them, and the center is unchanged.
+    #[test]
+    fn lens_correction_vignette_follows_photoshop() {
+        let image = RgbaImage::from_pixel(32, 32, Rgba([128, 128, 128, 255]));
+        let lens = |vignette| {
+            filtered(
+                &image,
+                &Filter::LensCorrection {
+                    distortion: 0.0,
+                    vignette,
+                },
+            )
+        };
+        let (brighter, darker) = (lens(50.0), lens(-50.0));
+        assert!(
+            brighter.get_pixel(0, 0)[0] > 128,
+            "{:?}",
+            brighter.get_pixel(0, 0)
+        );
+        assert!(
+            darker.get_pixel(0, 0)[0] < 128,
+            "{:?}",
+            darker.get_pixel(0, 0)
+        );
+        assert_eq!(brighter.get_pixel(0, 0)[3], 255);
+        for result in [&brighter, &darker] {
+            assert!(result.get_pixel(16, 16)[0].abs_diff(128) <= 1);
+        }
     }
 
     fn edge_filters() -> [Filter; 3] {

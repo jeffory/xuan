@@ -180,6 +180,14 @@ pub(super) enum Group {
     Result,
 }
 
+impl Group {
+    /// Whether its rows show their category: not under a category's own header, which already
+    /// names it.
+    pub fn names_category(self) -> bool {
+        !matches!(self, Self::Category(_))
+    }
+}
+
 /// A command shown in the palette.
 #[derive(Clone, Debug)]
 pub(super) struct Row {
@@ -580,10 +588,19 @@ impl EditorApp {
     ) -> bool {
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-        let category = tr(entry.category().name());
+        // Under a category's header the row leaves the category out; Recent and search results
+        // name it.
+        let category = row
+            .group
+            .names_category()
+            .then(|| tr(entry.category().name()));
         let label = entry.label();
         response.widget_info(|| {
-            WidgetInfo::labeled(WidgetType::Button, enabled, format!("{label}, {category}"))
+            let name = match category {
+                Some(category) => format!("{label}, {category}"),
+                None => label.to_owned(),
+            };
+            WidgetInfo::labeled(WidgetType::Button, enabled, name)
         });
         if selected && reveal {
             ui.scroll_to_rect(rect, None);
@@ -637,7 +654,9 @@ impl EditorApp {
             right = shortcut_rect.left() - 12.0;
         }
         let category_left = left + label_width + 12.0;
-        if category_left < right {
+        if let Some(category) = category
+            && category_left < right
+        {
             let galley =
                 ui.painter()
                     .layout_no_wrap(category.to_owned(), FontId::proportional(12.0), muted);

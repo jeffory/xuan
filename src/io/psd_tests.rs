@@ -568,6 +568,9 @@ struct TextSpec {
     second_size: Option<f64>,
     justification: u8,
     warp: &'static str,
+    /// A second style run after this many UTF-16 units, in the second font (Menlo-Regular)
+    /// and this fill colour (ARGB, 0–1), with a `RunLengthArray`.
+    letter_run: Option<(usize, [f64; 4])>,
 }
 
 impl Default for TextSpec {
@@ -581,6 +584,7 @@ impl Default for TextSpec {
             second_size: None,
             justification: 0,
             warp: "warpNone",
+            letter_run: None,
         }
     }
 }
@@ -597,12 +601,25 @@ fn type_tool(spec: &TextSpec) -> Vec<u8> {
         runs.push(' ');
         runs.push_str(&run(size));
     }
+    let mut lengths = String::new();
+    if let Some((split, [a, r, g, b])) = spec.letter_run {
+        runs.push_str(&format!(
+            " << /StyleSheet << /StyleSheetData << /Font 1 /FontSize {} \
+             /FillColor << /Type 1 /Values [ {a} {r} {g} {b} ] >> >> >> >>",
+            spec.size
+        ));
+        let total = spec.content.encode_utf16().count() + 1;
+        lengths = format!(
+            " /RunLengthArray [ {split} {} ]",
+            total.saturating_sub(split)
+        );
+    }
     let mut engine = b"\n\n<<\n\t/EngineDict\n\t<<\n\t\t/Editor << /Text ".to_vec();
     engine.extend(engine_string(&format!("{}\r", spec.content)));
     engine.extend(
         format!(
             " >>\n\t\t/ParagraphRun << /RunArray [ << /ParagraphSheet << /Properties << \
-             /Justification {} >> >> >> ] >>\n\t\t/StyleRun << /RunArray [ {runs} ] >>\n\t\t\
+             /Justification {} >> >> >> ] >>\n\t\t/StyleRun << /RunArray [ {runs} ]{lengths} >>\n\t\t\
              /Rendered << /Shapes << /Children [ << /ShapeType 0 >> ] >> >>\n\t>>\n\t\
              /ResourceDict << /FontSet [ << /Name ",
             spec.justification
@@ -610,6 +627,8 @@ fn type_tool(spec: &TextSpec) -> Vec<u8> {
         .as_bytes(),
     );
     engine.extend(engine_string("Arial-BoldItalicMT"));
+    engine.extend(b" /Type 1 >> << /Name ");
+    engine.extend(engine_string("Menlo-Regular"));
     engine.extend(b" /Type 1 >> ] >>\n>>");
     let (sin, cos) = spec.rotation.to_radians().sin_cos();
     let mut out = 1_u16.to_be_bytes().to_vec();
@@ -708,7 +727,9 @@ fn legacy_names_and_fill_opacity() {
     file[at + 4] = 0x8E;
     let (document, _) = read(&file, PixelBudget::default()).unwrap();
     assert_eq!(document.layers[0].name, "Café");
-    assert!((document.layers[0].opacity - 128.0 / 255.0).abs() < 1e-6);
+    // Fill opacity is the layer's Fill; its opacity stays as Photoshop had it.
+    assert_eq!(document.layers[0].opacity, 1.0);
+    assert!((document.layers[0].fill - 128.0 / 255.0).abs() < 1e-6);
     assert_eq!(MAC_ROMAN.chars().count(), 128);
 }
 
@@ -1138,7 +1159,9 @@ fn adjustment_layers_stay_editable_or_are_left_out() {
     for v in [1.5_f32, -0.1, 1.2] {
         exposure.extend(v.to_be_bytes());
     }
-    let mut multiply = LayerSpec::blank("Invert").with(b"nvrt", Vec::new());
+    let mut multiply = LayerSpec::blank("Invert")
+        .with(b"nvrt", Vec::new())
+        .with(b"iOpa", vec![51]);
     multiply.blend = *b"mul ";
     let mut balance = Vec::new();
     for v in [10_i16, -20, 30, 0, 0, 0, -100, 100, 5] {
@@ -1236,6 +1259,11 @@ fn adjustment_layers_stay_editable_or_are_left_out() {
     ));
     assert_eq!(document.layers[3].adjustment, Some(Adjustment::Invert));
     assert_eq!(document.layers[3].blend, BlendMode::Normal);
+    // An adjustment's fill opacity folds into its opacity, as both fade it alike.
+    assert_eq!(
+        (document.layers[3].opacity, document.layers[3].fill),
+        (0.2, 1.0)
+    );
     assert!(document.layers.iter().all(|l| l.pixels.is_none()));
     assert_eq!(report.count(Dropped::PhotoshopBlendMode("Multiply")), 1);
     assert_eq!(
@@ -1407,7 +1435,14 @@ fn shape_layers_without_pixels_are_drawn_from_their_path() {
     let mut reader = Reader::new(&record_bytes);
     let parsed = read_record(&mut reader, false).unwrap();
     let started = std::time::Instant::now();
-    assert!(draw_vector(&parsed, canvas, crate::limits::get().project_pixels).is_none());
+    assert!(
+        draw_vector(
+            &parsed,
+            Frame::whole(canvas),
+            crate::limits::get().project_pixels
+        )
+        .is_none()
+    );
     assert!(started.elapsed().as_secs() < 5);
     let cc = find("CC rectangle");
     assert_eq!(cc.shape.as_ref().unwrap().color, [0, 255, 0, 255]);
@@ -1514,6 +1549,66 @@ fn simple_horizontal_text_stays_editable() {
     assert_eq!(report.count(Dropped::PhotoshopTextAsPixels), 6);
     assert_eq!(report.count(Dropped::PhotoshopTextStyles), 1);
     assert_eq!(report.count(Dropped::TextLayout), 1);
+}
+
+/// Letters in another font or colour become style runs, counted in letters: "\r\n" is one
+/// letter and "😀" two UTF-16 units.
+#[test]
+fn photoshop_text_with_letter_fonts_and_colours_keeps_them() {
+    let text = |name: &str, spec: TextSpec| {
+        LayerSpec::solid(name, (10, 4), (30, 12), [255, 255, 0, 255])
+            .with(b"TySh", type_tool(&spec))
+    };
+    let spec = PsdSpec::layers(
+        60,
+        40,
+        vec![
+            text(
+                "Letters",
+                TextSpec {
+                    content: "Hi\r\n😀 there",
+                    // "Hi", the line break and "😀" (6 units) keep the first style.
+                    letter_run: Some((6, [1.0, 0.0, 0.0, 1.0])),
+                    ..Default::default()
+                },
+            ),
+            text(
+                "Bad lengths",
+                TextSpec {
+                    letter_run: Some((usize::MAX / 2, [1.0, 0.0, 0.0, 1.0])),
+                    ..Default::default()
+                },
+            ),
+        ],
+    );
+    let (document, report) = open(&spec);
+    let style = document
+        .layers
+        .iter()
+        .find(|l| l.name == "Letters")
+        .unwrap();
+    let style = style.text.as_ref().unwrap();
+    assert_eq!(style.content, "Hi\n😀 there");
+    assert_eq!(style.family, "Arial");
+    assert_eq!(
+        style.runs,
+        vec![TextRun {
+            start: 4,
+            end: 10,
+            style: RunStyle {
+                family: Some("Menlo".into()),
+                color: Some([0, 0, 255, 255]),
+                bold: Some(false),
+                italic: Some(false),
+            },
+        }]
+    );
+    style.validate().unwrap();
+    // Only font and colour differ, which runs hold.
+    assert_eq!(report.count(Dropped::PhotoshopTextStyles), 0);
+    // A run length that cannot be right keeps the layer as Photoshop drew it.
+    let bad = document.layers.iter().find(|l| l.name == "Bad lengths");
+    assert!(bad.is_none_or(|layer| layer.text.is_none()));
 }
 
 fn rgb_color(r: f64, g: f64, b: f64) -> D {
@@ -1731,11 +1826,12 @@ fn layer_effects_map_onto_xuans_or_are_reported() {
     assert_eq!(approximate.inner_glow.unwrap().size, 500.0);
     assert!(find("Unsupported").effects.is_none());
     assert!(find("Off").effects.is_none());
-    // Switched off, the fill opacity applies as usual.
-    assert_eq!(find("Off").opacity, 0.0);
+    // Fill opacity maps to Fill whether the effects are switched off or not.
+    assert_eq!((find("Off").opacity, find("Off").fill), (1.0, 0.0));
     assert!(find("Legacy").effects.is_none());
-    // Fill opacity cannot be separated from the effects: the layer keeps its layer opacity.
+    // Fill 0% hides the pixels but not the effects.
     assert_eq!(find("Effects only").opacity, 1.0);
+    assert_eq!(find("Effects only").fill, 0.0);
     assert!(find("Effects only").effects.is_some());
     assert!(find("Empty").effects.is_none() && find("Folder").effects.is_none());
     // Effects that are all switched off are kept, and the fill opacity applies.
@@ -1749,16 +1845,80 @@ fn layer_effects_map_onto_xuans_or_are_reported() {
             .unwrap()
             .enabled
     );
-    assert_eq!(disabled.opacity, 0.0);
+    assert_eq!((disabled.opacity, disabled.fill), (1.0, 0.0));
 
     assert_eq!(report.count(Dropped::PhotoshopEffectSettings), 1);
     // Unsupported, legacy and unreadable.
     assert_eq!(report.count(Dropped::PhotoshopEffects), 3);
-    assert_eq!(report.count(Dropped::FillOpacity), 1);
     // On a layer without pixels and on a folder.
     assert_eq!(report.count(Dropped::LayerEffect), 2);
     // Imported effects render.
     render::render(&document);
+}
+
+/// Fill opacity (`iOpa`) on a layer with an outside stroke, as Photoshop draws it: the
+/// layer's own pixels fade with the fill and the stroke does not; Opacity fades both. A folder's
+/// fill opacity is not a Fill.
+#[test]
+fn fill_opacity_fades_pixels_but_not_effects() {
+    let stroke = effects_block(
+        100.0,
+        vec![(
+            "FrFX",
+            D::Obj(
+                "FrFX",
+                vec![
+                    ("enab", D::Bool(true)),
+                    ("Styl", D::Enum("FStl", "OutF")),
+                    ("PntT", D::Enum("FrFl", "SClr")),
+                    ("Md  ", mode("Nrml")),
+                    ("Opct", D::Unit(100.0)),
+                    ("Sz  ", D::Unit(2.0)),
+                    ("Clr ", rgb_color(255.0, 0.0, 0.0)),
+                ],
+            ),
+        )],
+    );
+    let mut folder = LayerSpec::folder("Folder", b"pass").with(b"iOpa", vec![0]);
+    folder.opacity = 255;
+    let mut half_opacity = LayerSpec::solid("Opacity", (16, 4), (4, 4), [0, 0, 255, 255])
+        .with(b"lfx2", stroke.clone());
+    half_opacity.opacity = 128;
+    let spec = PsdSpec::layers(
+        22,
+        12,
+        vec![
+            LayerSpec::solid("Background", (0, 0), (22, 12), [255, 255, 255, 255]),
+            LayerSpec::solid("Fill 0", (2, 4), (4, 4), [0, 0, 255, 255])
+                .with(b"lfx2", stroke.clone())
+                .with(b"iOpa", vec![0]),
+            LayerSpec::solid("Fill 50", (10, 4), (2, 4), [0, 0, 255, 255])
+                .with(b"lfx2", stroke)
+                .with(b"iOpa", vec![128]),
+            half_opacity,
+            LayerSpec::divider(),
+            LayerSpec::solid("Inside", (0, 0), (1, 1), [0, 0, 0, 255]),
+            folder,
+        ],
+    );
+    let (document, report) = open(&spec);
+    assert!(report.is_empty(), "{:?}", report.lines());
+    let find = |name| document.layers.iter().find(|l| l.name == name).unwrap();
+    assert_eq!(find("Fill 0").fill, 0.0);
+    assert!((find("Fill 50").fill - 128.0 / 255.0).abs() < 1e-6);
+    assert_eq!(find("Folder").fill, 1.0);
+    let image = render::render(&document);
+    let pixel = |x, y| image.get_pixel(x, y).0;
+    // Fill 0%: the stroke alone, around a hole that shows the backdrop.
+    assert_eq!(pixel(1, 5), [255, 0, 0, 255]);
+    assert_eq!(pixel(3, 5), [255, 255, 255, 255]);
+    // Fill 50%: the stroke at full strength around half-faded blue.
+    assert_eq!(pixel(9, 5), [255, 0, 0, 255]);
+    let inside = pixel(10, 5);
+    assert!(inside[0].abs_diff(127) <= 1 && inside[1].abs_diff(127) <= 1 && inside[2] == 255);
+    // Opacity 50% fades the stroke as well.
+    let faded = pixel(15, 5);
+    assert!(faded[0] == 255 && faded[1].abs_diff(127) <= 1 && faded[2].abs_diff(127) <= 1);
 }
 
 #[test]
@@ -1825,6 +1985,557 @@ fn opens_through_load_with_report() {
     crate::io::save(&document, &saved).unwrap();
     let loaded = crate::io::load(&saved).unwrap();
     assert_eq!(render::render(&loaded), render::render(&document));
+}
+
+// Artboards ------------------------------------------------------------------------------------
+
+/// An artboard's descriptor, as Photoshop writes it (ag-psd's `artb` writer): its rectangle
+/// (left, top, right, bottom) and background type, with `color` as its `Clr `.
+fn artboard_block(
+    (left, top, right, bottom): (f64, f64, f64, f64),
+    background: Option<i32>,
+    color: (f64, f64, f64),
+) -> Vec<u8> {
+    let mut items = vec![
+        (
+            "artboardRect",
+            D::Obj(
+                "classFloatRect",
+                vec![
+                    ("Top ", D::Doub(top)),
+                    ("Left", D::Doub(left)),
+                    ("Btom", D::Doub(bottom)),
+                    ("Rght", D::Doub(right)),
+                ],
+            ),
+        ),
+        ("guideIndeces", D::List(Vec::new())),
+        ("artboardPresetName", D::Text("")),
+        ("Clr ", rgb_color(color.0, color.1, color.2)),
+    ];
+    if let Some(background) = background {
+        items.push(("artboardBackgroundType", D::Long(background)));
+    }
+    block(None, "artboard", items)
+}
+
+/// An artboard folder with a transparent background.
+fn artboard(name: &str, rect: (f64, f64, f64, f64)) -> LayerSpec {
+    LayerSpec::folder(name, b"pass").with(b"artb", artboard_block(rect, Some(3), (0.0, 0.0, 0.0)))
+}
+
+/// Read every record of `spec`'s file.
+fn records_of(spec: &PsdSpec, check: impl FnOnce(&[Record<'_>])) {
+    let file = bytes(spec);
+    check(&parse(&file).unwrap().records);
+}
+
+fn documents(spec: &PsdSpec, artboards: Artboards) -> (Vec<Imported>, ImportReport) {
+    read_documents(&bytes(spec), PixelBudget::default(), artboards).unwrap()
+}
+
+#[test]
+fn artboards_are_read_from_their_folders() {
+    let rect = (10.0, 20.0, 110.0, 70.0);
+    let custom = (217.0, 117.0, 117.0);
+    let with = |key: &[u8; 4], background, color| {
+        LayerSpec::folder("Board", b"pass").with(key, artboard_block(rect, background, color))
+    };
+    let spec = PsdSpec::layers(
+        200,
+        100,
+        vec![
+            with(b"artb", Some(1), custom),
+            with(b"artb", Some(2), custom),
+            with(b"artb", Some(3), custom),
+            with(b"artb", Some(4), custom),
+            with(b"artd", Some(4), (300.0, 0.0, 0.0)),
+            with(b"artb", Some(9), custom),
+            with(b"artb", None, custom),
+            // `abdd` wins over `artb`, as in psd-tools.
+            with(b"artb", Some(1), custom).with(
+                b"abdd",
+                artboard_block((0.0, 0.0, 5.0, 5.0), Some(2), custom),
+            ),
+            // Not artboards: an empty rectangle, a layer, a folder without a rectangle.
+            with(b"artb", Some(1), custom).with(
+                b"abdd",
+                artboard_block((5.0, 5.0, 5.0, 9.0), Some(1), custom),
+            ),
+            LayerSpec::blank("Layer").with(b"artb", artboard_block(rect, Some(1), custom)),
+            LayerSpec::folder("Folder", b"pass").with(b"artb", block(None, "artboard", vec![])),
+            LayerSpec::folder("Broken", b"pass").with(b"artb", vec![0, 0, 0, 16, 1]),
+        ],
+    );
+    records_of(&spec, |records| {
+        let infos: Vec<_> = records.iter().map(artboard_info).collect();
+        let board = Rect {
+            left: 10,
+            top: 20,
+            right: 110,
+            bottom: 70,
+        };
+        let backgrounds: Vec<_> = infos[..7]
+            .iter()
+            .map(|info| {
+                assert_eq!(info.unwrap().rect, board);
+                info.unwrap().background
+            })
+            .collect();
+        assert_eq!(
+            backgrounds,
+            [
+                Background::Color([255, 255, 255, 255]),
+                Background::Color([0, 0, 0, 255]),
+                Background::Transparent,
+                Background::Color([217, 117, 117, 255]),
+                // Components are clamped to 0–255.
+                Background::Color([255, 0, 0, 255]),
+                Background::Unreadable,
+                Background::Unreadable,
+            ]
+        );
+        assert_eq!(
+            infos[7],
+            Some(ArtboardInfo {
+                rect: Rect {
+                    left: 0,
+                    top: 0,
+                    right: 5,
+                    bottom: 5,
+                },
+                background: Background::Color([0, 0, 0, 255]),
+            })
+        );
+        assert!(infos[8..].iter().all(Option::is_none), "{infos:?}");
+    });
+    // A custom background without a readable color is left out.
+    let spec = PsdSpec::layers(
+        4,
+        4,
+        vec![
+            LayerSpec::divider(),
+            LayerSpec::folder("Board", b"pass").with(
+                b"artb",
+                block(
+                    None,
+                    "artboard",
+                    vec![
+                        (
+                            "artboardRect",
+                            D::Obj(
+                                "classFloatRect",
+                                vec![
+                                    ("Top ", D::Doub(0.0)),
+                                    ("Left", D::Doub(0.0)),
+                                    ("Btom", D::Doub(4.0)),
+                                    ("Rght", D::Doub(4.0)),
+                                ],
+                            ),
+                        ),
+                        ("artboardBackgroundType", D::Long(4)),
+                    ],
+                ),
+            ),
+        ],
+    );
+    let (opened, report) = documents(&spec, Artboards::Documents);
+    assert!(opened[0].document.layers.is_empty());
+    assert_eq!(report.count(Dropped::ArtboardBackgroundLeftOut), 1);
+}
+
+/// Three 10×10 artboards side by side on a 30×12 canvas, each with something sticking out, and
+/// a layer and a folder outside them.
+fn three_artboards() -> PsdSpec {
+    let mut masked = LayerSpec::pixels("Masked", (2, 3), (4, 4), red_gradient);
+    masked.mask = Some(MaskSpec {
+        rect: (3, 2, 7, 6),
+        default: 0,
+        flags: 0,
+        plane: vec![200; 16],
+    });
+    let white = LayerSpec::folder("White", b"pass").with(
+        b"artb",
+        artboard_block((0.0, 0.0, 10.0, 10.0), Some(1), (0.0, 0.0, 0.0)),
+    );
+    let custom = LayerSpec::folder("Custom", b"pass").with(
+        b"artb",
+        artboard_block((20.0, 2.0, 30.0, 12.0), Some(4), (0.0, 0.0, 255.0)),
+    );
+    let mut outer = LayerSpec::folder("Outer", b"pass");
+    outer.mask = Some(MaskSpec {
+        rect: (4, 21, 12, 30),
+        default: 0,
+        flags: 0,
+        plane: vec![255; 8 * 9],
+    });
+    PsdSpec::layers(
+        30,
+        12,
+        vec![
+            // Below every artboard: a canvas-wide backdrop.
+            LayerSpec::solid("Backdrop", (0, 0), (30, 12), [9, 9, 9, 255]),
+            LayerSpec::divider(),
+            masked,
+            white,
+            LayerSpec::divider(),
+            // Reaches 2 pixels into the White artboard, which does not show it.
+            LayerSpec::pixels("Across", (8, 1), (4, 3), red_gradient),
+            artboard("Transparent", (10.0, 0.0, 20.0, 10.0)),
+            LayerSpec::divider(),
+            LayerSpec::solid("Bottom", (20, 2), (10, 10), [0, 255, 0, 128]),
+            LayerSpec::divider(),
+            LayerSpec::divider(),
+            LayerSpec::solid("Deep", (25, 7), (2, 2), [255, 255, 0, 255]),
+            LayerSpec::folder("Inner", b"pass"),
+            outer,
+            custom,
+            LayerSpec::divider(),
+            LayerSpec::solid("In loose folder", (0, 0), (1, 1), [1; 4]),
+            LayerSpec::folder("Loose folder", b"pass"),
+            LayerSpec::solid("Loose", (0, 0), (1, 1), [1; 4]),
+        ],
+    )
+}
+
+#[test]
+fn files_with_artboards_used_to_open_as_one_canvas_and_still_do_through_read() {
+    // `read`, which `load_with_report` uses, opens the whole canvas as before: artboards are
+    // folders at their place, with no background, and nothing outside them is left out.
+    let (document, report) = open(&three_artboards());
+    assert_eq!((document.width, document.height), (30, 12));
+    let names: Vec<_> = document.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Backdrop",
+            "Masked",
+            "White",
+            "Across",
+            "Transparent",
+            "Bottom",
+            "Deep",
+            "Inner",
+            "Outer",
+            "Custom",
+            "In loose folder",
+            "Loose folder",
+            "Loose"
+        ]
+    );
+    let across = document.layers.iter().find(|l| l.name == "Across").unwrap();
+    assert_eq!((across.transform.x, across.transform.width), (8.0, 4.0));
+    assert!(report.is_empty(), "{:?}", report.lines());
+}
+
+#[test]
+fn each_artboard_opens_as_its_own_document() {
+    let (opened, report) = documents(&three_artboards(), Artboards::Documents);
+    // In the Layers panel's order, top first, named after the artboards.
+    let names: Vec<_> = opened
+        .iter()
+        .map(|o| o.artboard.as_deref().unwrap())
+        .collect();
+    assert_eq!(names, ["Custom", "Transparent", "White"]);
+    let origins: Vec<_> = opened.iter().map(|o| o.origin).collect();
+    assert_eq!(origins, [(20, 2), (10, 0), (0, 0)]);
+    for imported in &opened {
+        let document = &imported.document;
+        assert_eq!((document.width, document.height), (10, 10));
+        document.validate().unwrap();
+        assert!(document.active.is_some());
+    }
+    let layer = |board: usize, name: &str| {
+        opened[board]
+            .document
+            .layers
+            .iter()
+            .find(|l| l.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .clone()
+    };
+
+    // White: a white background below the masked layer, which keeps its place and mask.
+    let white = &opened[2].document;
+    let names: Vec<_> = white.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Artboard Background", "Masked"]);
+    let masked = layer(2, "Masked");
+    assert_eq!(masked.parent, None);
+    assert_eq!((masked.transform.x, masked.transform.y), (2.0, 3.0));
+    let placement = masked.mask.as_ref().unwrap().placement.unwrap();
+    assert_eq!((placement.x, placement.y), (2.0, 3.0));
+    let image = render::render(white);
+    assert_eq!(image.get_pixel(0, 0).0, [255, 255, 255, 255]);
+    assert_eq!(image.get_pixel(9, 9).0, [255, 255, 255, 255]);
+    assert_ne!(image.get_pixel(3, 4).0, [255, 255, 255, 255]);
+
+    // Transparent: no background; the layer reaching into White is cropped at the edge, its
+    // pixels relative to the artboard's corner.
+    let transparent = &opened[1].document;
+    assert_eq!(transparent.layers.len(), 1);
+    let across = layer(1, "Across");
+    assert_eq!((across.transform.x, across.transform.y), (0.0, 1.0));
+    let pixels = across.pixels.as_ref().unwrap();
+    assert_eq!(pixels.dimensions(), (2, 3));
+    assert_eq!(pixels.get_pixel(0, 0).0, red_gradient(2, 0));
+    let image = render::render(transparent);
+    assert_eq!(image.get_pixel(5, 5)[3], 0);
+    assert_eq!(image.get_pixel(1, 2).0, red_gradient(3, 1));
+
+    // Custom: nested folders keep their nesting inside the artboard, which is no folder itself.
+    let custom = &opened[0].document;
+    let names: Vec<_> = custom.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Artboard Background", "Bottom", "Deep", "Inner", "Outer"]
+    );
+    let (outer, inner, deep) = (layer(0, "Outer"), layer(0, "Inner"), layer(0, "Deep"));
+    assert!(outer.group && inner.group && outer.parent.is_none());
+    assert_eq!(inner.parent, Some(outer.id));
+    assert_eq!(deep.parent, Some(inner.id));
+    // Folders span the document; their masks sit relative to the artboard too.
+    assert_eq!((outer.transform.x, outer.transform.width), (0.0, 10.0));
+    let placement = outer.mask.as_ref().unwrap().placement.unwrap();
+    assert_eq!((placement.x, placement.y, placement.width), (1.0, 2.0, 9.0));
+    assert_eq!((deep.transform.x, deep.transform.y), (5.0, 5.0));
+    assert_eq!(layer(0, "Bottom").transform.x, 0.0);
+    let image = render::render(custom);
+    assert_eq!(image.get_pixel(5, 5).0, [255, 255, 0, 255]);
+    let tinted = image.get_pixel(0, 0).0;
+    assert!(
+        tinted[1] > 100 && tinted[2] > 100 && tinted[0] < 10,
+        "{tinted:?}"
+    );
+
+    // What changed: the artboards, the cropped layer and the backgrounds, and what is outside.
+    assert_eq!(
+        report.names(Dropped::ArtboardDocument),
+        ["Custom", "Transparent", "White"]
+    );
+    assert_eq!(report.count(Dropped::CroppedToArtboard), 1);
+    assert_eq!(report.count(Dropped::ArtboardBackground), 2);
+    assert_eq!(
+        report.names(Dropped::OutsideArtboards),
+        ["Loose", "Loose folder", "Backdrop"]
+    );
+    let lines = report.lines();
+    assert!(
+        lines.contains(
+            &"Layers outside every artboard (left out): 3 (“Loose”, “Loose folder”, “Backdrop”)"
+                .to_owned()
+        ),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("Artboards (each opened as its own document): 3")),
+        "{lines:?}"
+    );
+    assert!(report.summary().unwrap().contains("“Backdrop”"));
+}
+
+#[test]
+fn artboards_imported_as_folders_share_the_budget() {
+    let (opened, report) = documents(&three_artboards(), Artboards::Folders);
+    assert_eq!(opened.len(), 3);
+    assert_eq!(report.count(Dropped::ArtboardFolder), 3);
+    assert_eq!(report.count(Dropped::ArtboardDocument), 0);
+    // Custom takes 204 pixels with its background, Transparent 6 and White 116: each fits 250
+    // on its own, but White no longer fits in what the other two leave of a shared 250.
+    let budget = PixelBudget {
+        layers: 250,
+        masks: 1_000,
+    };
+    let file = bytes(&three_artboards());
+    let (each, report) = read_documents(&file, budget, Artboards::Documents).unwrap();
+    assert_eq!(each.len(), 3);
+    assert!(report.names(Dropped::ArtboardTooLarge).is_empty());
+    let (shared, report) = read_documents(&file, budget, Artboards::Folders).unwrap();
+    let names: Vec<_> = shared.iter().map(|o| o.artboard.clone().unwrap()).collect();
+    assert_eq!(names, ["Custom", "Transparent"]);
+    assert_eq!(report.names(Dropped::ArtboardTooLarge), ["White"]);
+}
+
+#[test]
+fn artboards_over_the_budget_are_skipped_by_name() {
+    let spec = PsdSpec::layers(
+        40,
+        20,
+        vec![
+            LayerSpec::divider(),
+            LayerSpec::solid("Small art", (0, 0), (10, 10), [1; 4]),
+            artboard("Small", (0.0, 0.0, 10.0, 10.0)),
+            LayerSpec::divider(),
+            LayerSpec::solid("Big art", (10, 0), (20, 20), [1; 4]),
+            artboard("Big", (10.0, 0.0, 30.0, 20.0)),
+            // An empty artboard costs nothing but its background.
+            LayerSpec::divider(),
+            artboard("Empty", (30.0, 0.0, 40.0, 10.0)),
+        ],
+    );
+    let budget = PixelBudget {
+        layers: 150,
+        masks: 150,
+    };
+    let (opened, report) = read_documents(&bytes(&spec), budget, Artboards::Documents).unwrap();
+    let names: Vec<_> = opened.iter().map(|o| o.artboard.clone().unwrap()).collect();
+    assert_eq!(names, ["Empty", "Small"]);
+    assert_eq!(report.names(Dropped::ArtboardTooLarge), ["Big"]);
+    assert!(
+        report
+            .lines()
+            .contains(&"Artboards too large for the memory limit (left out): 1 (“Big”)".to_owned())
+    );
+    // A background counts against the budget too.
+    let mut white = spec.clone();
+    white.layers[2] = LayerSpec::folder("Small", b"pass").with(
+        b"artb",
+        artboard_block((0.0, 0.0, 10.0, 10.0), Some(1), (0.0, 0.0, 0.0)),
+    );
+    let (_, report) = read_documents(&bytes(&white), budget, Artboards::Documents).unwrap();
+    assert_eq!(report.names(Dropped::ArtboardTooLarge), ["Big", "Small"]);
+    // An artboard larger than any Xuan document is skipped as well.
+    let mut huge = spec.clone();
+    huge.layers[7] = artboard("Huge", (0.0, 0.0, 1_000_000.0, 1_000_000.0));
+    let (_, report) = documents(&huge, Artboards::Documents);
+    assert_eq!(report.names(Dropped::ArtboardTooLarge), ["Huge"]);
+    // With nothing left to open, the file is refused.
+    let mut full = spec.clone();
+    full.layers.truncate(6);
+    let tiny = PixelBudget {
+        layers: 10,
+        masks: 10,
+    };
+    let message = format!(
+        "{:#}",
+        read_documents(&bytes(&full), tiny, Artboards::Documents)
+            .err()
+            .unwrap()
+    );
+    assert!(message.contains("megapixel"), "{message}");
+}
+
+#[test]
+fn only_each_artboards_window_is_decoded() {
+    // A 1,200 × 1,200 background inside an artboard of 100 × 100: the whole file is beyond a
+    // budget of a megapixel, even cropped to the canvas, but the artboard's window fits.
+    let gradient = |x: u32, y: u32| [(x % 251) as u8, (y % 241) as u8, 7, 255];
+    let mut background = LayerSpec::pixels("Background", (0, 0), (1_200, 1_200), gradient);
+    background.compression = 1;
+    let spec = PsdSpec::layers(
+        1_200,
+        1_200,
+        vec![
+            LayerSpec::divider(),
+            background,
+            artboard("Window", (500.0, 600.0, 600.0, 700.0)),
+        ],
+    );
+    let budget = PixelBudget {
+        layers: 1_000_000,
+        masks: 1_000_000,
+    };
+    let file = bytes(&spec);
+    assert!(format!("{:#}", read(&file, budget).unwrap_err()).contains("megapixel"));
+    let (opened, report) = read_documents(&file, budget, Artboards::Documents).unwrap();
+    let layer = &opened[0].document.layers[0];
+    let pixels = layer.pixels.as_ref().unwrap();
+    assert_eq!(pixels.dimensions(), (100, 100));
+    assert_eq!((layer.transform.x, layer.transform.y), (0.0, 0.0));
+    assert_eq!(pixels.get_pixel(0, 0).0, gradient(500, 600));
+    assert_eq!(pixels.get_pixel(99, 99).0, gradient(599, 699));
+    assert_eq!(report.count(Dropped::CroppedToArtboard), 1);
+    // Artboards with masks and shapes drawn from their path stay within their window too.
+    let mut masked = LayerSpec::blank("Masked shape")
+        .with(b"SoCo", solid_color(0.0, 0.0, 255.0))
+        .with(b"vmsk", vector_mask(&[], true));
+    masked.mask = Some(MaskSpec {
+        rect: (0, 0, 1_200, 1_200),
+        default: 0,
+        flags: 0,
+        plane: vec![90; 1_200 * 1_200],
+    });
+    masked.compression = 1;
+    let spec = PsdSpec::layers(
+        1_200,
+        1_200,
+        vec![
+            LayerSpec::divider(),
+            masked,
+            artboard("Window", (500.0, 600.0, 600.0, 700.0)),
+        ],
+    );
+    let (opened, _) = read_documents(&bytes(&spec), budget, Artboards::Documents).unwrap();
+    let layer = &opened[0].document.layers[0];
+    assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (100, 100));
+    assert_eq!((layer.transform.x, layer.transform.y), (0.0, 0.0));
+    let mask = layer.mask.as_ref().unwrap();
+    assert_eq!(mask.pixels.dimensions(), (100, 100));
+    let placement = mask.placement.unwrap();
+    assert_eq!((placement.x, placement.y), (0.0, 0.0));
+}
+
+#[test]
+fn files_without_artboards_open_as_read_opens_them() {
+    for spec in [
+        sample(),
+        three_artboards_without_artboards(),
+        PsdSpec::new(3, 2),
+    ] {
+        let file = bytes(&spec);
+        let (document, report) = read(&file, PixelBudget::default()).unwrap();
+        let (opened, opened_report) =
+            read_documents(&file, PixelBudget::default(), Artboards::Documents).unwrap();
+        assert_eq!(opened.len(), 1);
+        let whole = &opened[0];
+        assert!(whole.artboard.is_none());
+        assert_eq!(whole.origin, (0, 0));
+        assert_eq!(opened_report, report);
+        let (a, b) = (&whole.document, &document);
+        assert_eq!(
+            (a.width, a.height, a.resolution),
+            (b.width, b.height, b.resolution)
+        );
+        let shape = |d: &Document| {
+            d.layers
+                .iter()
+                .map(|l| (l.name.clone(), l.transform, l.group, l.pixels.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shape(a), shape(b));
+        assert_eq!(render::render(a), render::render(b));
+    }
+}
+
+/// [`three_artboards`] with plain folders for artboards.
+fn three_artboards_without_artboards() -> PsdSpec {
+    let mut spec = three_artboards();
+    for layer in &mut spec.layers {
+        layer.extra.retain(|(key, _)| key != b"artb");
+    }
+    spec
+}
+
+#[test]
+fn artboard_files_open_from_disk() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Boards.psd");
+    fs::write(&path, bytes(&three_artboards())).unwrap();
+    let (opened, _) = load_documents(&path, PixelBudget::default(), Artboards::Documents).unwrap();
+    assert_eq!(opened.len(), 3);
+    // Unbalanced folders are still refused.
+    let mut spec = three_artboards();
+    spec.layers.insert(0, LayerSpec::divider());
+    assert!(
+        format!(
+            "{:#}",
+            read_documents(&bytes(&spec), PixelBudget::default(), Artboards::Documents)
+                .err()
+                .unwrap()
+        )
+        .contains("damaged")
+    );
 }
 
 // Hostile input -------------------------------------------------------------------------------
@@ -2173,6 +2884,39 @@ fn mutated_files_never_panic() {
             // Errors are fine; panics, hangs and runaway allocations are not.
             if let Ok((document, _)) = read(&mutated, PixelBudget::default()) {
                 document.validate().unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn mutated_artboard_files_never_panic() {
+    let mut random = Random(0xA27B_0A2D_5EED_0116);
+    for psb in [false, true] {
+        let mut spec = three_artboards();
+        spec.psb = psb;
+        let file = bytes(&spec);
+        for end in (0..file.len()).step_by(7) {
+            let _ = read_documents(&file[..end], PixelBudget::default(), Artboards::Documents);
+        }
+        for _ in 0..1000 {
+            let mut mutated = file.clone();
+            for _ in 0..1 + random.below(6) {
+                let at = random.below(mutated.len());
+                match random.below(4) {
+                    0 => mutated[at] = 0xFF,
+                    1 => mutated[at] = 0,
+                    2 => mutated[at] ^= 1 << random.below(8),
+                    _ => mutated[at] = random.next() as u8,
+                }
+            }
+            for artboards in [Artboards::Documents, Artboards::Folders] {
+                if let Ok((opened, _)) = read_documents(&mutated, PixelBudget::default(), artboards)
+                {
+                    for imported in opened {
+                        imported.document.validate().unwrap();
+                    }
+                }
             }
         }
     }

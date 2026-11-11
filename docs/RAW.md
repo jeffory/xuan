@@ -10,6 +10,8 @@ Save as `.xuan` to embed the original RAW bytes, shooting metadata, and all Deve
 
 Direct pixel painting and destructive filters require **Rasterize RAW Layer**, which is undoable. Paint on a separate pixel layer and use adjustment layers when you want to retain RAW editing. Merging or flattening produces ordinary pixel layers.
 
+The same controls work on ordinary photo layers through **Filter → Camera Raw Filter…** (Ctrl+Shift+A), which develops the layer's 8-bit sRGB pixels in floating point and writes the result back into that layer; the RAW-only Negative and Info tabs, geometry, crop and TIFF export are left out. See [Usage](USAGE.md).
+
 ## Controls
 
 - **Basic:** as-shot white balance, temperature/tint and lighting presets, neutral picker, auto exposure, ±10 EV exposure, brightness, contrast, highlights/shadows, white/black points, clarity, texture, dehaze, vibrance, saturation.

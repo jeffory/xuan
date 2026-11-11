@@ -2,7 +2,7 @@ use image::{GrayImage, Rgba, RgbaImage};
 use rayon::prelude::*;
 
 use crate::{
-    blend::{BlendMode, composite, dissolve_alpha},
+    blend::{BlendMode, composite_filled, dissolve_alpha},
     document::{Document, Layer, Point},
 };
 
@@ -280,6 +280,28 @@ pub fn source_size(document: &Document, layer: &Layer, size: [u32; 2]) -> [u32; 
     [target(width, image.width()), target(height, image.height())]
 }
 
+/// The canvas as exactly the one layer's pixels, when the document is a single plain layer that
+/// covers the canvas pixel for pixel. Compositing would round colours and drop the colour under
+/// fully transparent pixels, where packed channel maps keep data, so exports use these instead.
+pub fn unaltered(document: &Document) -> Option<std::sync::Arc<RgbaImage>> {
+    let [layer] = document.layers.as_slice() else {
+        return None;
+    };
+    let pixels = layer.pixels.as_ref()?;
+    (layer.visible
+        && !layer.group
+        && !layer.is_effect()
+        && layer.opacity == 1.0
+        && layer.fill == 1.0
+        && layer.blend == crate::blend::BlendMode::Normal
+        && layer.mask.is_none()
+        && layer.clip_to.is_none()
+        && layer.effects.as_ref().is_none_or(|e| e.is_empty())
+        && pixels.dimensions() == (document.width, document.height)
+        && layer.transform == crate::document::Transform::new(document.width, document.height))
+    .then(|| pixels.clone())
+}
+
 pub fn render(document: &Document) -> RgbaImage {
     render_scaled(document, document.width, document.height)
 }
@@ -324,7 +346,7 @@ pub(crate) fn render_pixels(document: &Document, width: u32, height: u32) -> Rgb
             let filter = filter.scaled(width as f32 / document.width as f32);
             steps.push(CompositeStep::Filtered(
                 layer,
-                crate::effects::filtered(&backdrop, &filter),
+                crate::effects::filtered_backdrop(&backdrop, &filter),
             ));
         } else {
             steps.push(step);
@@ -340,19 +362,23 @@ fn render_steps(
     height: u32,
 ) -> RgbaImage {
     let mut output = RgbaImage::new(width, height);
+    if width == 0 {
+        return output;
+    }
+    // A row per task: each thread composites whole rows, without per-pixel scheduling.
     output
         .as_mut()
-        .par_chunks_exact_mut(4)
+        .par_chunks_exact_mut(width as usize * 4)
         .enumerate()
-        .for_each_init(Vec::new, |groups, (index, target)| {
-            let x = index as u32 % width;
-            let y = index as u32 / width;
-            let point = Point::new(
-                (x as f32 + 0.5) * document.width as f32 / width as f32,
-                (y as f32 + 0.5) * document.height as f32 / height as f32,
-            );
-            let pixel = composite_at(document, steps, point, groups);
-            target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+        .for_each_init(Vec::new, |groups, (y, row)| {
+            for (x, target) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let point = Point::new(
+                    (x as f32 + 0.5) * document.width as f32 / width as f32,
+                    (y as f32 + 0.5) * document.height as f32 / height as f32,
+                );
+                let pixel = composite_at(document, steps, point, groups);
+                target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+            }
         });
     output
 }
@@ -439,10 +465,14 @@ fn composite_at(
         if let Some(image) = &layer.pixels {
             let mut source = sample(image, layer.transform.inverse(point));
             source[3] = layer_alpha(document, layer, point, 0) * coverage;
+            // Fill fades the layer's own pixels (the effects are already drawn into a layer
+            // with any, at full fill); as a clipping base the layer keeps its full alpha.
+            let mut fill = layer.fill;
             if layer.blend == BlendMode::Dissolve {
-                source[3] = dissolve_alpha(source[3], point.x, point.y);
+                source[3] = dissolve_alpha(source[3] * fill, point.x, point.y);
+                fill = 1.0;
             }
-            pixel = composite(pixel, source, layer.blend);
+            pixel = composite_filled(pixel, source, layer.blend, fill);
         }
     }
     pixel
@@ -830,3 +860,6 @@ mod tests {
         assert_eq!(render(&doc).get_pixel(0, 0).0, [255, 0, 0, 255]);
     }
 }
+
+#[cfg(test)]
+mod fill_tests;

@@ -290,6 +290,17 @@ pub enum Adjustment {
         highlights: [f32; 3],
         preserve_luminosity: bool,
     },
+    /// Photoshop's Color Lookup: colours mapped through a table read from a `.cube` file.
+    /// Format 15 keeps the table in the project as `luts/<layer UUID>.cube`, not in the
+    /// manifest, so the project does not depend on the original file.
+    ColorLookup {
+        /// The file's name, to show which table this is.
+        name: String,
+        #[serde(default)]
+        interpolation: crate::lut::Interpolation,
+        #[serde(skip)]
+        table: Arc<crate::lut::Lut>,
+    },
 }
 
 impl Adjustment {
@@ -310,7 +321,19 @@ impl Adjustment {
 
     /// Whether .xuan format 6 and earlier can store this adjustment.
     pub fn is_legacy(&self) -> bool {
-        !matches!(self, Self::BlackWhite { .. } | Self::ColorBalance { .. })
+        !matches!(
+            self,
+            Self::BlackWhite { .. } | Self::ColorBalance { .. } | Self::ColorLookup { .. }
+        )
+    }
+
+    /// A Color Lookup adjustment for a table read from the file `name`.
+    pub fn color_lookup(name: impl Into<String>, table: crate::lut::Lut) -> Self {
+        Self::ColorLookup {
+            name: name.into(),
+            interpolation: crate::lut::Interpolation::default(),
+            table: Arc::new(table),
+        }
     }
 
     pub fn name(&self) -> &'static str {
@@ -327,6 +350,7 @@ impl Adjustment {
             Self::Invert => "Invert",
             Self::BlackWhite { .. } => "Black & White",
             Self::ColorBalance { .. } => "Color Balance",
+            Self::ColorLookup { .. } => "Color Lookup",
         }
     }
 }
@@ -412,6 +436,10 @@ pub struct Layer {
     pub visible: bool,
     pub locked: bool,
     pub opacity: f32,
+    /// Photoshop's Fill: fades the layer's own pixels but not its layer effects, where
+    /// `opacity` fades both (format 13). Only pixel, text and shape layers have one below 1.
+    #[serde(default = "full_fill", skip_serializing_if = "is_full_fill")]
+    pub fill: f32,
     pub blend: BlendMode,
     pub transform: Transform,
     pub parent: Option<Uuid>,
@@ -441,6 +469,14 @@ pub struct Layer {
     pub pixels: Option<Arc<RgbaImage>>,
 }
 
+fn full_fill() -> f32 {
+    1.0
+}
+
+fn is_full_fill(fill: &f32) -> bool {
+    *fill == 1.0
+}
+
 impl Layer {
     pub fn is_effect(&self) -> bool {
         self.standalone_mask || self.adjustment.is_some() || self.filter.is_some()
@@ -457,6 +493,7 @@ impl Layer {
             visible: true,
             locked: false,
             opacity: 1.0,
+            fill: 1.0,
             blend: BlendMode::Normal,
             transform: Transform::new(width, height),
             parent: None,
@@ -520,6 +557,9 @@ pub struct Document {
     /// Paths kept with the document, as in Photoshop's Paths panel (format version 10).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<crate::vector::NamedPath>,
+    /// The collage the document was made as, so its layout can be changed (format version 16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collage: Option<Box<crate::collage::Collage>>,
     #[serde(skip)]
     pub selected: HashSet<Uuid>,
     #[serde(skip)]
@@ -541,6 +581,7 @@ impl Document {
             guides: Vec::new(),
             grid: None,
             paths: Vec::new(),
+            collage: None,
             selection: None,
         })
     }
@@ -786,7 +827,7 @@ impl Document {
     pub fn validate(&self) -> Result<()> {
         validate_size(self.width, self.height)?;
         ensure!(
-            self.resolution.is_finite() && (1.0..=9600.0).contains(&self.resolution),
+            crate::units::valid_resolution(f64::from(self.resolution)),
             "Invalid resolution"
         );
         ensure!(self.layers.len() <= MAX_LAYERS, "Too many layers");
@@ -795,6 +836,9 @@ impl Document {
             grid.validate()?;
         }
         crate::vector::validate_paths(&self.paths)?;
+        if let Some(collage) = &self.collage {
+            collage.validate()?;
+        }
         // Indexed so hostile files with many deeply nested layers validate in linear time.
         let ids: std::collections::HashMap<_, _> =
             self.layers.iter().map(|layer| (layer.id, layer)).collect();
@@ -875,6 +919,15 @@ impl Document {
             ensure!(
                 layer.opacity.is_finite() && (0.0..=1.0).contains(&layer.opacity),
                 "Invalid opacity"
+            );
+            ensure!(
+                layer.fill.is_finite() && (0.0..=1.0).contains(&layer.fill),
+                "Invalid fill"
+            );
+            // As in Photoshop, folders and adjustment, filter and mask layers have no fill.
+            ensure!(
+                layer.fill == 1.0 || layer.can_attach_effects(),
+                "Only pixel, text and shape layers take a fill"
             );
             ensure!(
                 !(layer.group || layer.adjustment.is_some() || layer.filter.is_some())
