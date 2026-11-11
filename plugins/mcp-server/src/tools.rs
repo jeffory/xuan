@@ -726,9 +726,9 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "create_image_layer",
             title: "Add an image as a layer",
-            description: "Add a PNG (base64 in `png_base64`) as a new layer at x, y; with width and/or height it is scaled to that size in document pixels.",
+            description: "Add a PNG as a new layer at x, y: `png_base64` is the PNG file's bytes as base64 (not a file path; this tool cannot read files). With width and/or height it is scaled to that size in document pixels.",
             properties: json!({
-                "png_base64": {"type": "string"}, "x": number("Left"), "y": number("Top"), "width": number("Placed width"),
+                "png_base64": {"type": "string", "description": "The PNG file's bytes as base64 (not a file path)"}, "x": number("Left"), "y": number("Top"), "width": number("Placed width"),
                 "height": number("Placed height"), "name": name(), "above": above(), "opacity": number("0–1"),
                 "blend": {"type": "string"},
             }),
@@ -2552,13 +2552,41 @@ fn decode_png(text: &str) -> Result<Vec<u8>, String> {
     if text.len() > MAX_IMAGE_BYTES / 3 * 4 + 4 {
         return Err("The image is larger than 64 MiB".into());
     }
-    let bytes = STANDARD
-        .decode(text)
-        .map_err(|_| "`png_base64` is not base64".to_owned())?;
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err("`png_base64` is not a PNG".into());
+    let bytes = STANDARD.decode(text);
+    let png = |bytes: &[u8]| bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+    match bytes {
+        Ok(bytes) if png(&bytes) => Ok(bytes),
+        _ if looks_like_path(text) => Err(
+            "`png_base64` takes the PNG file's contents encoded as base64, not a file path; create_image_layer cannot read files".into(),
+        ),
+        Err(_) => Err("`png_base64` is not base64".into()),
+        Ok(_) => Err("`png_base64` is not a PNG".into()),
     }
-    Ok(bytes)
+}
+
+/// Whether text sent as base64 is more likely a file's path: it ends in an image file's
+/// extension (base64 has no dots), starts like a path (`~`, `./`, `../`, `file:`, a drive
+/// letter or a backslash), or starts with `/` and is not base64 at all (JPEG data, which is,
+/// starts with `/9j/`).
+fn looks_like_path(text: &str) -> bool {
+    const EXTENSIONS: [&str; 11] = [
+        "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "heic", "avif", "svg",
+    ];
+    let extension = text.rsplit_once('.').is_some_and(|(_, extension)| {
+        EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+    });
+    let bytes = text.as_bytes();
+    let drive = bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    extension
+        || drive
+        || text.contains('\\')
+        || ["~", "./", "../", "file:"]
+            .iter()
+            .any(|start| text.starts_with(start))
+        || (text.starts_with('/') && STANDARD.decode(text).is_err())
 }
 
 fn incoming_file(dir: &Path) -> Result<PathBuf, String> {
