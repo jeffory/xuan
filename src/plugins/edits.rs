@@ -2010,12 +2010,7 @@ fn apply_each(
                 if let Some(blend) = blend {
                     layer.blend = *blend;
                 }
-                if let Some(above) = above {
-                    find(document, *above)?;
-                    document.select(*above, false);
-                }
-                added.push(layer.id);
-                document.insert(layer);
+                added.push(insert_above(document, layer, *above)?);
             }
             Edit::ReplacePixels { layer, image, x, y } => {
                 let pixels = reader.rgba(image)?;
@@ -4761,6 +4756,8 @@ mod tests {
 
     #[test]
     fn new_layers_above_a_group_go_next_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = png(dir.path(), "red.png", [255, 0, 0, 255], 4);
         let (mut document, base) = grey_document();
         let group = run(
             &mut document,
@@ -4785,6 +4782,7 @@ mod tests {
             json!({"op": "add_shape_layer", "shape": "Rectangle", "x": 0, "y": 0, "width": 4, "height": 4, "color": "#ff0000", "above": group}),
             json!({"op": "add_adjustment_layer", "adjustment": "Invert", "above": group}),
             json!({"op": "auto_adjust", "kind": "contrast", "as_layer": true, "above": group}),
+            json!({"op": "add_layer", "image": image, "above": group}),
         ] {
             let mut document = document.clone();
             let id = run(&mut document, &[edit(op.clone())]).unwrap()[0];
