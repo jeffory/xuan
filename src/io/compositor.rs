@@ -7,6 +7,7 @@
 //! Damaged or hostile manifests and assets are rejected as a whole.
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    ops::Range,
     path::Path,
     sync::Arc,
 };
@@ -23,7 +24,7 @@ use crate::{
     i18n::tr,
     layer_effects::LayerEffects,
     layout::{Guide, GuideAxis, MAX_GUIDE_POSITION, MAX_GUIDES},
-    text::{MAX_TEXT_BYTES, TextStyle},
+    text::{MAX_TEXT_BYTES, RunStyle, TextRun, TextStyle},
 };
 
 /// The newest Compositor project version the importer reads (Compositor 1.4.5 writes 11).
@@ -53,10 +54,6 @@ pub enum Dropped {
     LayerEffect,
     /// A text layer whose alignment, tracking, leading or paragraph box Xuan ignores.
     TextLayout,
-    /// A text layer with per-letter colors (version 10).
-    TextColors,
-    /// A text layer with per-letter fonts (version 11).
-    TextFonts,
     /// A text layer beyond Xuan's text limits, imported as plain pixels.
     TextAsPixels,
     /// A live line shape, imported as plain pixels.
@@ -131,8 +128,6 @@ impl Dropped {
                 tr("Text alignment, spacing or paragraph box (kept until the text is edited)")
                     .into()
             }
-            Self::TextColors => tr("Per-letter text colours (kept until the text is edited)").into(),
-            Self::TextFonts => tr("Per-letter fonts (kept until the text is edited)").into(),
             Self::TextAsPixels => tr("Text beyond Xuan's limits (imported as pixels)").into(),
             Self::LineShape => tr("Live line shapes (imported as pixels)").into(),
             Self::FilterSettings => tr("Blur or noise settings adapted to Xuan").into(),
@@ -626,11 +621,12 @@ pub(super) fn font_from_postscript(name: &str) -> (String, bool, bool) {
     (spaced, bold, italic)
 }
 
-/// Check upstream's `colorRuns` / `fontRuns`: sorted, not overlapping, non-empty, inside the text.
+/// Check upstream's `colorRuns` / `fontRuns`: sorted, not overlapping, non-empty, inside the
+/// text. `take` is given each run and its UTF-16 range.
 fn validate_runs(
     runs: &Value,
     units: usize,
-    mut check: impl FnMut(&Value) -> Result<()>,
+    mut take: impl FnMut(&Value, Range<usize>) -> Result<()>,
 ) -> Result<()> {
     let runs = runs.as_array().context("Invalid text runs")?;
     ensure!(!runs.is_empty() && runs.len() <= units, "Invalid text runs");
@@ -640,10 +636,67 @@ fn validate_runs(
         let length = run["length"].as_u64().context("Invalid text run")?;
         ensure!(location >= end && length > 0, "Overlapping text runs");
         end = location.checked_add(length).context("Invalid text run")?;
-        check(run)?;
+        ensure!(end <= units as u64, "Text run outside the text");
+        take(run, location as usize..end as usize)?;
     }
-    ensure!(end <= units as u64, "Text run outside the text");
     Ok(())
+}
+
+/// A function from a UTF-16 range of `content`, as upstream's runs count (`NSRange`), to the
+/// chars it covers; a range ending inside a surrogate pair takes the whole letter.
+fn letter_ranges(content: &str) -> impl Fn(Range<usize>) -> Range<usize> {
+    let mut starts = Vec::with_capacity(content.len());
+    let mut unit = 0;
+    for c in content.chars() {
+        starts.push(unit);
+        unit += c.len_utf16();
+    }
+    units_to_letters(starts)
+}
+
+/// A function from a range of UTF-16 units to the letters it touches, given the unit each
+/// letter starts at (in order).
+pub(super) fn units_to_letters(starts: Vec<usize>) -> impl Fn(Range<usize>) -> Range<usize> {
+    move |units: Range<usize>| {
+        let start = starts
+            .partition_point(|&s| s <= units.start)
+            .saturating_sub(1);
+        let end = starts.partition_point(|&s| s < units.end);
+        start..end.max(start)
+    }
+}
+
+/// Style runs from each letter's own colour and font (an index into `faces`: family, bold,
+/// italic), merging neighbours that match.
+fn letter_runs(
+    colors: &[Option<[u8; 4]>],
+    fonts: &[Option<usize>],
+    faces: &[(String, bool, bool)],
+) -> Vec<TextRun> {
+    let mut runs: Vec<TextRun> = Vec::new();
+    for (index, (color, font)) in colors.iter().zip(fonts).enumerate() {
+        let font = font.map(|font| &faces[font]);
+        let style = RunStyle {
+            family: font
+                .map(|(family, _, _)| family.clone())
+                .filter(|family| !family.trim().is_empty()),
+            color: *color,
+            bold: font.map(|(_, bold, _)| *bold),
+            italic: font.map(|(_, _, italic)| *italic),
+        };
+        if style.is_empty() {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(last) if last.end == index && last.style == style => last.end = index + 1,
+            _ => runs.push(TextRun {
+                start: index,
+                end: index + 1,
+                style,
+            }),
+        }
+    }
+    runs
 }
 
 fn unit_color(value: &Value, key: &str) -> Result<u8> {
@@ -691,20 +744,29 @@ fn comp_text(value: &Value, version: u64, report: &mut ImportReport) -> Result<O
     }
     let font_name = value["fontName"].as_str().unwrap_or("Helvetica");
     ensure!(font_name.len() <= 1024, "Invalid font name");
+    // Each letter's own colour and font, by its index in `content`'s chars.
+    let letters = content.chars().count();
+    let mut colors = vec![None; letters];
+    let mut fonts = vec![None; letters];
+    let mut faces = Vec::new();
+    let to_letters = letter_ranges(content);
     if !value["colorRuns"].is_null() {
         ensure!(version >= 10, "Per-letter colours need project version 10");
-        validate_runs(&value["colorRuns"], units, |run| {
-            for key in ["red", "green", "blue"] {
+        validate_runs(&value["colorRuns"], units, |run, range| {
+            let mut color = [255; 4];
+            for (channel, key) in color.iter_mut().zip(["red", "green", "blue"]) {
                 ensure!(run[key].is_number(), "Invalid text run colour");
-                unit_color(run, key)?;
+                *channel = unit_color(run, key)?;
+            }
+            for letter in &mut colors[to_letters(range)] {
+                *letter = Some(color);
             }
             Ok(())
         })?;
-        report.add(Dropped::TextColors);
     }
     if !value["fontRuns"].is_null() {
         ensure!(version >= 11, "Per-letter fonts need project version 11");
-        validate_runs(&value["fontRuns"], units, |run| {
+        validate_runs(&value["fontRuns"], units, |run, range| {
             let name = run["fontName"].as_str().context("Invalid text run font")?;
             ensure!(
                 !name.is_empty()
@@ -715,15 +777,18 @@ fn comp_text(value: &Value, version: u64, report: &mut ImportReport) -> Result<O
                     )),
                 "Invalid text run font"
             );
+            faces.push(font_from_postscript(name));
+            for letter in &mut fonts[to_letters(range)] {
+                *letter = Some(faces.len() - 1);
+            }
             Ok(())
         })?;
-        report.add(Dropped::TextFonts);
     }
     if alignment != "Left" || tracking != 0.0 || leading != 0.0 || !paragraph.is_null() {
         report.add(Dropped::TextLayout);
     }
     let (family, bold, italic) = font_from_postscript(font_name);
-    let style = TextStyle {
+    let mut style = TextStyle {
         content: content.into(),
         family: if family.trim().is_empty() {
             TextStyle::default().family
@@ -736,6 +801,8 @@ fn comp_text(value: &Value, version: u64, report: &mut ImportReport) -> Result<O
         italic,
         ..TextStyle::default()
     };
+    style.runs = letter_runs(&colors, &fonts, &faces);
+    style.normalize_runs();
     if content.len() > MAX_TEXT_BYTES || style.validate().is_err() {
         report.add(Dropped::TextAsPixels);
         return Ok(None);

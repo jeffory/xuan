@@ -67,6 +67,58 @@ Most clients that speak Streamable HTTP read an `mcpServers` entry like the one
 A client that only runs servers as local commands (stdio) can reach it through
 an HTTP bridge such as `mcp-remote`, passing the same URL and header.
 
+### Without a window (`--headless`)
+
+`xuan --headless` runs the editor with no window and serves the MCP Server, for
+agents on a machine without a display, over SSH, in a container, or when the
+desktop's graphics stack will not start Xuan. It opens no window and creates
+no GPU device, so nothing loads the display server, EGL, Vulkan or GL;
+documents are edited with the CPU paths Xuan uses on computers without a
+suitable GPU, so large filters and RAW develops are slower than with a
+window.
+
+```sh
+xuan --headless photo.NEF               # serve the MCP server, with photo.NEF open
+xuan --headless --allow-files           # also let clients open and save files
+xuan --headless --mcp-port 0 --demo     # any free port, the sample document
+```
+
+It prints the server's URL, the file that holds the token, and a Claude Code
+command that reads it:
+
+```text
+MCP server: http://127.0.0.1:8765/mcp
+Token file: /home/you/.config/xuan/plugin-data/mcp-server/token
+Claude Code: claude mcp add --transport http xuan http://127.0.0.1:8765/mcp --header "Authorization: Bearer $(cat '/home/you/.config/xuan/plugin-data/mcp-server/token')"
+```
+
+The token is the one the MCP Server pane shows, so a client already set up
+for Xuan with a window connects to a headless Xuan too. Only one of them can
+have the port: while Xuan with a window serves MCP, start the headless one
+with another `--mcp-port`. Errors, the status line and the plugin's log go to standard error. Ctrl+C (or
+SIGTERM) stops it and the plugin.
+
+Nobody is there to answer Xuan's prompts, so the command line answers them:
+
+- **Edits** are allowed: starting Xuan headless is the answer to the edit
+  prompt and to the prompt before images go to the client.
+- **Files** are refused unless you add `--allow-files`. With it,
+  `open_document` opens the file it names and `save_document` and
+  `export_document` write to the absolute `path` they give, without asking;
+  replacing a file still needs `overwrite: true`. There is no save dialog, so
+  a save or export without `path` is always refused.
+- **The grant is for this run only.** The MCP Server runs even if you have
+  not allowed it in Xuan, and your settings are read but never written:
+  nothing a headless run does changes the Xuan you use with a window. Turning
+  off plugins that use the network in Xuan's settings still stops it.
+
+The plugin must be installed as for a window (a release package includes
+it; a source checkout needs `cargo build --release` in `plugins/mcp-server`
+and `XUAN_PLUGIN_PATH` pointing at the repository's `plugins` folder). Files
+named on the command line open as they would in a window, except that a
+camera RAW file opens developed with the default settings instead of in a
+Develop tab.
+
 ## Security model
 
 Xuan treats the MCP client as a remote party that should not get more than
@@ -146,7 +198,23 @@ follow instructions hidden in something it read.
   did not write itself since Xuan started (one you saved, say) asks you
   again. The client learns only file names,
   never folders, in answers and in error messages. Xuan's other file
-  commands, the clipboard, settings and other plugins are out of reach.
+  commands, the clipboard and settings are out of reach.
+- **Other plugins' actions** are out of reach too, unless you turn on **Run
+  other plugins' actions** for the MCP Server in **Plugins → Manage
+  Plugins…**. Then a client may list your other plugins' actions and run them,
+  such as Comfy Cloud's **Generate Image…**, which can send your image to a
+  third party and spend credits. The first run of each plugin in a client
+  session asks **Run “Generate Image” for MCP Server (plugin mcp-server)?**,
+  showing the plugin, the prompt and options, and where the result goes, with
+  **Allow**, **Always Allow** and **Cancel**. **Always Allow** shows as **Run
+  them without asking** in Manage Plugins. The plugin's own rules still apply,
+  exactly as from its menu: it must itself be allowed, offline mode stops a
+  network plugin, model downloads are confirmed, a plugin that uses the
+  network asks before the image is sent to it (naming the MCP Server as who
+  started the run), and the result is a proposal you accept or discard. The
+  job shows in the status bar, where you can cancel it, and in the MCP Server
+  pane. Both settings are dropped if the plugin's folder, command or
+  permissions change. A client cannot set an action's file inputs.
 - **Switching documents** is limited to once a second, so a client cannot
   flip your tabs about while you work.
 - **Providers.** `run_command` `remove_background` and `modify_selection`
@@ -195,11 +263,13 @@ larger tool arguments with a tool error saying the request is too large.
 | `list_documents` | The open documents | `document/list` |
 | `get_document` | Size, selection and all layers; with `document`, switches to it first | `document/get` |
 | `get_layer` | One layer | `document/get` |
-| `get_preview` | The flattened image as a PNG (`max_side`, default 1024) | `document/export` |
-| `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer) | `layer/export` |
+| `get_preview` | The flattened image as a PNG (`max_side`, default 1024), or only a `region` of it | `document/export` |
+| `get_layer_image` | A layer's pixels or mask as a PNG (an image's mask comes from its attached mask layer); with `region`, the layer alone as it sits in the document | `layer/export` |
+| `sample_pixels` | The colour at points, as numbers, averaged over a `radius`; of the image or one `layer` | `document/sample` |
+| `get_histogram` | Luminance and RGB histograms with mean, median, range and clipped share; of the image, a `region` or one `layer` | `document/histogram` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
-| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation; a text layer's `text`, `path` and `path_options` | `set`, `set_text`, `transform` |
+| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation (about the centre or a `pivot`), `cover` to scale up until no canvas corner is empty; a text layer's `text`, `runs`, `path` and `path_options` | `set`, `set_text`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
 | `create_text_layer` | Editable text in a box, or with `path` along an SVG path | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
@@ -211,21 +281,27 @@ larger tool arguments with a tool error saying the request is too large.
 | `select_shape` | Rectangle, ellipse, polygon or SVG path selection with a `mode` and optional `feather` | `select_rect`, `select_polygon`, `select_path` |
 | `select_color` | Magic Wand at a point, or Color Range by colours | `select_color`, `select_color_range` |
 | `modify_selection` | All, none, invert, grow, shrink, feather, subject, layer pixels (of `layer`) | `host/run`, `grow_selection`, `feather_selection` |
-| `paint_stroke` | Brush strokes (or eraser) through points: one with `points` or an SVG `path`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`), and mirror or radial `symmetry` | `stroke` |
-| `fill` | Fill the selection with a colour, or with `path` the inside of an SVG path | `fill`, `fill_path` |
+| `paint_stroke` | Brush strokes (or eraser; `mode` dodge, burn or sponge to lighten, darken or (de)saturate what is under the brush; `mask: true` to paint a layer's mask) through points: one with `points` or an SVG `path`, several with `strokes`; a single point is a dab. Points may be `[x, y, pressure]`; optional taper, spacing, scatter and jitter (with a `seed`), and mirror or radial `symmetry` | `stroke` |
+| `fill` | Fill the selection with a colour, or with `path` the inside of an SVG path, or with `mask: true` the layer's mask | `fill`, `fill_path` |
 | `save_path` | Keep an SVG path with the document under a name, for the Paths dialog | `add_path` |
 | `fill_gradient` | Fill the selection with a linear or radial gradient through two or more colour stops, or paint the mask | `gradient` |
-| `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
+| `apply_filter` | Blur, motion blur, noise, lens correction, vignette, bloom, tonal contrast, unsharp mask (sharpen), dither; or a filter layer | `apply_filter`, `add_adjustment_layer` |
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
-| `crop_canvas`, `resize_canvas`, `resize_image` | Crop, Canvas Size, Image Size | `crop`, `resize_canvas`, `resize_image` |
-| `rotate_canvas`, `trim_canvas` | Rotate Canvas (90, 180, 270 degrees clockwise), Trim (transparent, top-left or bottom-right colour margins, per side); `run_command` `crop_to_selection` crops to the selection | `rotate_canvas`, `trim` |
+| `auto_adjust` | Auto `contrast`, `tone` or `white_balance` (grey-world, or from a `neutral` point that should be grey), applied or as an adjustment layer | `auto_adjust` |
+| `set_adjustment` | Change an existing adjustment or filter layer's settings in place; `get_document` lists the current ones under `adjustment` and `filter` | `set_adjustment` |
+| `crop_canvas`, `resize_canvas`, `resize_image` | Crop to a rectangle, to the largest box of a `ratio` (around a `center`), or `straighten` by an angle and crop the empty corners away; Canvas Size; Image Size | `crop`, `crop_to`, `resize_canvas`, `resize_image` |
+| `rotate_canvas`, `trim_canvas` | Rotate Canvas (any angle clockwise; `expand` grows the canvas to fit, the default), Trim (transparent, top-left or bottom-right colour margins, per side); `run_command` `crop_to_selection` crops to the selection | `rotate_canvas`, `trim` |
 | `undo`, `redo` | Up to 20 steps | `host/run` |
 | `batch` | Several edit tools' steps as one undo step, all or nothing | one `document/edit` |
 | `run_command` | Flatten, duplicate, flip, rotate canvas, crop to selection, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
 | `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
-| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file; `quality` (1–100) for JPEG and lossy WebP, `lossless` for WebP | `file/export` |
-| `open_document` | Open an image or project, after the user agrees | `file/open` |
+| `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file; `quality` (1–100) for JPEG and lossy WebP, `lossless` for WebP; with `path`, `layer`, `region` and `max_side` write one layer, a rectangle or a smaller copy as a PNG | `file/export` |
+| `open_document` | Open an image or project, after the user agrees; a camera RAW file opens as a RAW layer developed with the default settings | `file/open` |
+| `develop_raw` | Develop a camera RAW layer again with new Develop settings (white balance, exposure, tone, colour, detail, lens, crop, rotation), `auto_exposure`, or a white balance from a `neutral_point`; only the settings given change | `raw/develop` |
+| `list_plugin_actions` | Other plugins' actions, each with a JSON schema of its inputs; needs **Run other plugins' actions** | `plugins/actions` |
+| `run_plugin_action` | Run one, as from its menu without its dialog, after the user allows it; returns once the job runs | `host/run` |
+| `get_jobs` | The status bar's jobs, and what became of the runs this server started | `jobs/list` |
 
 Filters and adjustments use the shapes `.xuan` files store, for example
 `{"GaussianBlur": {"radius": 4}}`, `"Invert"`, `{"HueSaturation": {"hue": 20,
@@ -294,6 +370,22 @@ options (the others are kept). Moving, scaling or rotating the layer takes
 the path along; `get_document` reports the layer's `text`, with its `path`
 where it is now and its `path_options`.
 
+### Letters in their own font or colour
+
+One text layer can mix fonts and colours: `runs` on `create_text_layer` (and
+`set_layer`) lists letters with their own `family`, `color`, `bold` or
+`italic`. `start` and `end` count Unicode code points from the start of the
+text, `end` excluded:
+
+```json
+{"tool": "create_text_layer", "arguments": {"text": "APPle", "color": "#000000",
+  "runs": [{"start": 0, "end": 3, "family": "Georgia", "color": "#ff0000"}]}}
+```
+
+New `text` from `set_layer` keeps each unchanged letter's style; `runs: []`
+puts every letter back in the layer's own style. `get_document` lists a text
+layer's `runs`.
+
 ### Layers, masks and the active layer
 
 `run_command` and `modify_selection` `layer_pixels` act on the active layer
@@ -360,6 +452,40 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
 - The answer lists the ids of the layers created, in order, and the selection
   or canvas size when a step changed them.
 
+### Other plugins' actions
+
+Once the user turned on **Run other plugins' actions**, `list_plugin_actions`
+lists what the other installed plugins offer, for example Comfy Cloud:
+
+```json
+{"plugin": "comfy-cloud", "action": "generate", "label": "Generate Image…",
+ "kind": "generate", "source": "none", "result": "ask", "into": ["layer", "document"],
+ "network": true, "allowed": true, "available": true,
+ "inputs": {"type": "object", "additionalProperties": false, "properties": {
+   "prompt": {"type": "string", "title": "Prompt", "description": "For example: A lighthouse on a cliff at dusk, painted in gouache"},
+   "model": {"type": "string", "enum": ["seedream-pro", "seedream-flash", "ideogram"], "default": "seedream-pro", …},
+   "aspect": {…}, "resolution": {…}, "seed": {"type": "integer", "title": "Seed"}}}}
+```
+
+- `run_plugin_action` with `plugin`, `action` and `inputs` runs it. Inputs
+  left out take their defaults; a wrong value fails at once and names the
+  input. An action whose `result` is `"ask"` needs `into`: `"layer"` (a new
+  layer in the current document) or `"document"`. `layers` selects layers
+  first, for actions that work on the active layer (`source: "layer"`).
+- The first run of each plugin in a session waits for the user, and a plugin
+  that uses the network asks before the image is sent; the call keeps the
+  client informed meanwhile, as other prompts do. A refusal says nothing ran:
+  ask the user before trying again.
+- The call returns as soon as the job runs, with its `job` id. Cloud jobs
+  often take 30–120 seconds. Call `get_jobs` every 10 seconds or so: `running`
+  has the job's progress and latest message, and `finished` says what became
+  of it: `proposed` (its result is shown to the user), then `accepted` or
+  `discarded`, or `failed` with the error, or `cancelled`. The result is in
+  the document only once the user accepted it; check with `get_document` or
+  `get_preview` then. Other edits keep working while a job runs.
+- These runs may cost the user money. Run what they asked for, not
+  variations to choose from, unless they asked for those.
+
 ### Resources
 
 | URI | Contents |
@@ -369,13 +495,49 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
 | `xuan://document/selection.png` | The selection mask cropped to its bounds |
 | `xuan://layers/<id>/thumbnail.png` | Each layer's pixels, longest side 256 |
 
+### Camera RAW
+
+`open_document` opens a camera RAW file (`.nef`, `.nrw`, `.cr2`, `.cr3`,
+`.crw`, `.raf`, `.arw`) as a document with one RAW layer, developed with
+Xuan's default settings. The layer keeps the camera file, so developing it
+again loses nothing: `develop_raw` changes its Develop settings and renders
+the whole image again from the sensor data, as the Develop workspace does.
+
+- `get_document` lists the RAW layer's camera, lens, ISO, aperture, shutter
+  and focal length, and its current `settings`, under `raw`.
+- `settings` holds only what changes, by the names `.xuan` files use, e.g.
+  `{"exposure": 0.7, "highlights": -40, "shadows": 30, "vibrance": 15}`;
+  `reset: true` starts from the defaults. A misspelt or out-of-range setting
+  is refused with its name and range.
+- White balance: `{"white_balance": "Temperature", "temperature": 5200,
+  "tint": 8}`, back to the camera's with `"AsShot"`, or `neutral_point: [x,
+  y]` (0–1 across the layer as it looks now) on something that should be
+  grey or white.
+- `auto_exposure: true` sets the exposure as Develop's **Auto** button does.
+- Crop and straighten with `crop` (`[left, top, right, bottom]`, 0–1),
+  `rotation` (degrees) and `quarter_turns`; the layer changes size.
+
+A develop takes a few seconds on a large file; it runs in the background and
+the call returns when it is done. Look at the result with `get_preview`.
+
 ### Working well with Xuan
 
 - Look before you edit: `get_document`, then `get_preview`. Check again after
   a change; previews are cheap.
+- Measure rather than judge by eye: `sample_pixels` for the colour of
+  something that should be neutral or for whether a corner is empty,
+  `get_histogram` for exposure, contrast and clipping. Both answer in numbers
+  and cost far less than an image. For analysis in a program of your own,
+  `export_document` with `path` and `max_side`, `region` or `layer` writes a
+  PNG to a file, so the pixels never pass through the conversation.
 - Prefer non-destructive changes the user can adjust: adjustment and filter
   layers (`as_layer: true`), masks, and new layers over painting on the
   original.
+- Local adjustments go through masks: add the adjustment with `as_layer`,
+  `fill` its mask black (`mask: true`), then bring it back where it is wanted
+  with `paint_stroke` (`mask: true`, white, a large soft brush) or
+  `fill_gradient` with `mask`. `set_adjustment` then tunes the strength
+  without repainting.
 - Name the layers you create, so the user can find them.
 - Selections limit fills, strokes, filters and adjustments, and become the
   mask of new adjustment layers. Clear it with `modify_selection` `none` when

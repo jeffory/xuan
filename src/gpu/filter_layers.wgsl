@@ -92,6 +92,9 @@ fn filter_layer(@builtin(global_invocation_id) id: vec3<u32>) {
         result = tonal_contrast_pixel(pixel(position), base, settings.y, config[1].xyz);
     } else if mode == 8u {
         result = dither_pixel(position);
+    } else if mode == 9u {
+        let base = floor(textureLoad(second, position, 0) * 255.0 + 0.5) / 255.0;
+        result = unsharp_mask_pixel(pixel(position), base, settings.y, settings.z);
     } else {
         // A copy to read back for the filters the CPU draws.
         result = pixel(position);

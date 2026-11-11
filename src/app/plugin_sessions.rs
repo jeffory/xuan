@@ -95,6 +95,8 @@ impl EditorApp {
         }
         match request.method.as_str() {
             "document/edit" => true,
+            // Develops a RAW layer again: an edit like any other, run as a job.
+            "raw/develop" => true,
             "host/run" => request
                 .params
                 .get("action")
@@ -206,10 +208,7 @@ impl EditorApp {
                 }
                 continue;
             }
-            let result = self.service_request(&plugin, &request);
-            if let Some(process) = self.plugins.process_mut(&plugin) {
-                let _ = process.respond(request.id, result);
-            }
+            self.serve_request(&plugin, request);
         }
         // Edits that arrived while these were applied wait behind them.
         waiting.append(&mut self.plugins.edit_held);
@@ -254,9 +253,11 @@ impl EditorApp {
     /// request `id` (its client gave up, say). A request still held for the
     /// user is dropped and answered with `-32800`, and the prompt it waits
     /// on is dropped, not just hidden, so a late answer does nothing and it
-    /// does not come back. When other requests still wait, the next frame
-    /// asks about the first of them. A request already answered, or a save
-    /// dialog already open, is not affected.
+    /// does not come back. A run of another plugin's action waiting for
+    /// that plugin's send prompt closes the prompt and the run. When other
+    /// requests still wait, the next frame asks about the first of them. A
+    /// request already answered, or a save dialog already open, is not
+    /// affected.
     pub(super) fn withdraw_request(&mut self, plugin: &str, id: &Id) {
         let mut withdrawn = Vec::new();
         // A direct edit waiting for its session's answer.
@@ -306,6 +307,9 @@ impl EditorApp {
             }
             withdrawn.push(request.id);
         }
+        // A run of another plugin's action, waiting for the run prompt or
+        // for the send prompt of the plugin it runs.
+        withdrawn.extend(self.withdraw_plugin_run(plugin, id));
         for id in withdrawn {
             if let Some(process) = self.plugins.process_mut(plugin) {
                 let _ = process.respond(
@@ -361,7 +365,8 @@ impl EditorApp {
         }
     }
 
-    /// `session/status`: how the plugin's edits are handled in a session.
+    /// `session/status`: how the plugin's edits are handled in a session,
+    /// and whether it saves and runs other plugins' actions without asking.
     pub(super) fn edit_session_status(&self, plugin: &str, request: &Request) -> Value {
         let session = request_session(request);
         let asks = self.asks_before_edits(plugin);
@@ -375,6 +380,8 @@ impl EditorApp {
             "edits": edits,
             "auto": asks && self.edits_without_asking(plugin),
             "save_auto": self.saves_without_asking(plugin),
+            "run_actions": self.runs_other_actions(plugin),
+            "run_auto": self.runs_without_asking(plugin),
         })
     }
 

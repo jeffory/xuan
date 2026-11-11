@@ -362,19 +362,23 @@ fn render_steps(
     height: u32,
 ) -> RgbaImage {
     let mut output = RgbaImage::new(width, height);
+    if width == 0 {
+        return output;
+    }
+    // A row per task: each thread composites whole rows, without per-pixel scheduling.
     output
         .as_mut()
-        .par_chunks_exact_mut(4)
+        .par_chunks_exact_mut(width as usize * 4)
         .enumerate()
-        .for_each_init(Vec::new, |groups, (index, target)| {
-            let x = index as u32 % width;
-            let y = index as u32 / width;
-            let point = Point::new(
-                (x as f32 + 0.5) * document.width as f32 / width as f32,
-                (y as f32 + 0.5) * document.height as f32 / height as f32,
-            );
-            let pixel = composite_at(document, steps, point, groups);
-            target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+        .for_each_init(Vec::new, |groups, (y, row)| {
+            for (x, target) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let point = Point::new(
+                    (x as f32 + 0.5) * document.width as f32 / width as f32,
+                    (y as f32 + 0.5) * document.height as f32 / height as f32,
+                );
+                let pixel = composite_at(document, steps, point, groups);
+                target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+            }
         });
     output
 }

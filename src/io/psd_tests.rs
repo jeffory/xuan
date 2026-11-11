@@ -568,6 +568,9 @@ struct TextSpec {
     second_size: Option<f64>,
     justification: u8,
     warp: &'static str,
+    /// A second style run after this many UTF-16 units, in the second font (Menlo-Regular)
+    /// and this fill colour (ARGB, 0–1), with a `RunLengthArray`.
+    letter_run: Option<(usize, [f64; 4])>,
 }
 
 impl Default for TextSpec {
@@ -581,6 +584,7 @@ impl Default for TextSpec {
             second_size: None,
             justification: 0,
             warp: "warpNone",
+            letter_run: None,
         }
     }
 }
@@ -597,12 +601,25 @@ fn type_tool(spec: &TextSpec) -> Vec<u8> {
         runs.push(' ');
         runs.push_str(&run(size));
     }
+    let mut lengths = String::new();
+    if let Some((split, [a, r, g, b])) = spec.letter_run {
+        runs.push_str(&format!(
+            " << /StyleSheet << /StyleSheetData << /Font 1 /FontSize {} \
+             /FillColor << /Type 1 /Values [ {a} {r} {g} {b} ] >> >> >> >>",
+            spec.size
+        ));
+        let total = spec.content.encode_utf16().count() + 1;
+        lengths = format!(
+            " /RunLengthArray [ {split} {} ]",
+            total.saturating_sub(split)
+        );
+    }
     let mut engine = b"\n\n<<\n\t/EngineDict\n\t<<\n\t\t/Editor << /Text ".to_vec();
     engine.extend(engine_string(&format!("{}\r", spec.content)));
     engine.extend(
         format!(
             " >>\n\t\t/ParagraphRun << /RunArray [ << /ParagraphSheet << /Properties << \
-             /Justification {} >> >> >> ] >>\n\t\t/StyleRun << /RunArray [ {runs} ] >>\n\t\t\
+             /Justification {} >> >> >> ] >>\n\t\t/StyleRun << /RunArray [ {runs} ]{lengths} >>\n\t\t\
              /Rendered << /Shapes << /Children [ << /ShapeType 0 >> ] >> >>\n\t>>\n\t\
              /ResourceDict << /FontSet [ << /Name ",
             spec.justification
@@ -610,6 +627,8 @@ fn type_tool(spec: &TextSpec) -> Vec<u8> {
         .as_bytes(),
     );
     engine.extend(engine_string("Arial-BoldItalicMT"));
+    engine.extend(b" /Type 1 >> << /Name ");
+    engine.extend(engine_string("Menlo-Regular"));
     engine.extend(b" /Type 1 >> ] >>\n>>");
     let (sin, cos) = spec.rotation.to_radians().sin_cos();
     let mut out = 1_u16.to_be_bytes().to_vec();
@@ -1530,6 +1549,66 @@ fn simple_horizontal_text_stays_editable() {
     assert_eq!(report.count(Dropped::PhotoshopTextAsPixels), 6);
     assert_eq!(report.count(Dropped::PhotoshopTextStyles), 1);
     assert_eq!(report.count(Dropped::TextLayout), 1);
+}
+
+/// Letters in another font or colour become style runs, counted in letters: "\r\n" is one
+/// letter and "😀" two UTF-16 units.
+#[test]
+fn photoshop_text_with_letter_fonts_and_colours_keeps_them() {
+    let text = |name: &str, spec: TextSpec| {
+        LayerSpec::solid(name, (10, 4), (30, 12), [255, 255, 0, 255])
+            .with(b"TySh", type_tool(&spec))
+    };
+    let spec = PsdSpec::layers(
+        60,
+        40,
+        vec![
+            text(
+                "Letters",
+                TextSpec {
+                    content: "Hi\r\n😀 there",
+                    // "Hi", the line break and "😀" (6 units) keep the first style.
+                    letter_run: Some((6, [1.0, 0.0, 0.0, 1.0])),
+                    ..Default::default()
+                },
+            ),
+            text(
+                "Bad lengths",
+                TextSpec {
+                    letter_run: Some((usize::MAX / 2, [1.0, 0.0, 0.0, 1.0])),
+                    ..Default::default()
+                },
+            ),
+        ],
+    );
+    let (document, report) = open(&spec);
+    let style = document
+        .layers
+        .iter()
+        .find(|l| l.name == "Letters")
+        .unwrap();
+    let style = style.text.as_ref().unwrap();
+    assert_eq!(style.content, "Hi\n😀 there");
+    assert_eq!(style.family, "Arial");
+    assert_eq!(
+        style.runs,
+        vec![TextRun {
+            start: 4,
+            end: 10,
+            style: RunStyle {
+                family: Some("Menlo".into()),
+                color: Some([0, 0, 255, 255]),
+                bold: Some(false),
+                italic: Some(false),
+            },
+        }]
+    );
+    style.validate().unwrap();
+    // Only font and colour differ, which runs hold.
+    assert_eq!(report.count(Dropped::PhotoshopTextStyles), 0);
+    // A run length that cannot be right keeps the layer as Photoshop drew it.
+    let bad = document.layers.iter().find(|l| l.name == "Bad lengths");
+    assert!(bad.is_none_or(|layer| layer.text.is_none()));
 }
 
 fn rgb_color(r: f64, g: f64, b: f64) -> D {

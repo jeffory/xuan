@@ -93,7 +93,7 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     if params.flags.y != 0u {
-        textureStore(output, position, vec4(mix(dst.rgb, clamp(adjust(dst.rgb, point), vec3(0.0), vec3(1.0)), amount), dst.a));
+        textureStore(output, position, vec4(mix(dst.rgb, clamp(adjust(dst.rgb, point + params.origin.xy), vec3(0.0), vec3(1.0)), amount), dst.a));
         return;
     }
     let local = point - params.bounds.xy - params.bounds.zw * 0.5;
@@ -125,7 +125,7 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     src.a *= fill;
     if params.flags.x == 13u {
-        src.a = select(0.0, 1.0, dissolve_value(vec2<i32>(floor(point))) < src.a);
+        src.a = select(0.0, 1.0, dissolve_value(vec2<i32>(floor(point + params.origin.xy))) < src.a);
     }
     let alpha = src.a + dst.a * (1.0 - src.a);
     let color = ((1.0 - src.a) * dst.a * dst.rgb + (1.0 - dst.a) * src.a * src.rgb

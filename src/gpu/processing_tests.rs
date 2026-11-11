@@ -105,6 +105,18 @@ fn processing_filters_and_resampling_match_cpu() {
     }
 }
 
+/// How much further Unsharp Mask may differ between the GPU and the CPU than other filters:
+/// it multiplies the difference between a pixel and its blur, so the level or two by which
+/// the two blurs round differently is multiplied too, and once more across the threshold.
+pub(super) fn sharpening_slack(filter: &crate::effects::Filter) -> u8 {
+    match *filter {
+        crate::effects::Filter::UnsharpMask { amount, .. } => {
+            1 + (amount / 100.0 * 3.0).ceil() as u8
+        }
+        _ => 0,
+    }
+}
+
 /// Upstream Compositor's filters on the GPU, as the Filter menu applies them, against the
 /// CPU. Dither compares thresholds, so a value one ulp apart may land on the other side of
 /// one: a few pixels may differ by a whole tone, nearly all match.
@@ -141,10 +153,21 @@ fn processing_compositor_filters_match_cpu() {
             midtones: 100.0,
             highlights: -30.0,
         },
+        Filter::UNSHARP_MASK,
+        Filter::UnsharpMask {
+            amount: 150.0,
+            radius: 6.0,
+            threshold: 12.0,
+        },
     ] {
+        let tolerance = 2 + sharpening_slack(&filter);
         for image in [&source, &opaque] {
             let actual = scope(Some(gpu.clone()), || super::filter(image, &filter).unwrap());
-            compare(&actual, &crate::effects::filtered(image, &filter), 2);
+            compare(
+                &actual,
+                &crate::effects::filtered(image, &filter),
+                tolerance,
+            );
         }
         // As a filter layer's backdrop: Vignette paints clear pixels too.
         let actual = scope(Some(gpu.clone()), || {
@@ -153,7 +176,7 @@ fn processing_compositor_filters_match_cpu() {
         compare(
             &actual,
             &crate::effects::filtered_backdrop(&source, &filter),
-            2,
+            tolerance,
         );
     }
     let gpu_styles = [
@@ -1695,6 +1718,7 @@ fn processing_filter_apply_preserves_selections_bounds_masks_and_history_pixels(
             radius: 5.0,
         },
         crate::effects::Filter::TONAL_CONTRAST,
+        crate::effects::Filter::UNSHARP_MASK,
     ] {
         let mut expected = original.clone();
         crate::effects::apply_filter(&mut expected, &filter, false).unwrap();

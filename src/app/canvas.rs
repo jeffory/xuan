@@ -1041,7 +1041,10 @@ impl EditorApp {
                 });
             ui.add_space(15.0);
             ui.label(
-                egui::RichText::new(tr("Transparent canvas · sRGB")).color(ui.palette().muted),
+                egui::RichText::new(super::dialogs::canvas_summary(
+                    self.config.new_canvas_background,
+                ))
+                .color(ui.palette().muted),
             );
             ui.add_space(20.0);
             ui.horizontal(|ui| {
@@ -1055,6 +1058,8 @@ impl EditorApp {
             });
         });
         if create {
+            // The background last chosen in File → New.
+            self.new_canvas_background = self.config.new_canvas_background;
             self.new_document();
         }
         if open {

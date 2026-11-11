@@ -135,3 +135,39 @@ fn other_sliders_fill_from_the_left() {
     };
     assert_eq!(positive.fill(90.0).x_range(), Rangef::new(0.0, 50.0));
 }
+
+/// The selected segment (Basic, Edited) is tinted and outlined with the accent, so it stands
+/// out on the light track too (issue 91); the others are not.
+#[test]
+fn the_selected_segment_is_tinted_with_the_accent() {
+    use super::super::theme::{Palette, contrast_ratio, set_palette};
+    for p in [Palette::DARK, Palette::LIGHT] {
+        let ctx = egui::Context::default();
+        set_palette(&ctx, &p);
+        let mut choice = 0;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                super::segmented(ui, &mut choice, &[(0, "Basic"), (1, "Tone"), (2, "Detail")]);
+            });
+        });
+        let accented: Vec<Rect> = (output.shapes.iter())
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(shape) if shape.stroke.color == p.accent => Some(shape.rect),
+                _ => None,
+            })
+            .collect();
+        let tinted = output.shapes.iter().any(|clipped| match &clipped.shape {
+            egui::Shape::Rect(shape) => shape.fill == p.accent.gamma_multiply(super::SEGMENT_TINT),
+            _ => false,
+        });
+        let name = if p.dark { "dark" } else { "light" };
+        assert_eq!(accented.len(), 1, "{name}: one segment is outlined");
+        assert!(tinted, "{name}: and tinted");
+        assert!(
+            p.segment_track
+                .iter()
+                .all(|track| contrast_ratio(p.accent, *track) >= 3.0),
+            "{name}: the outline reaches 3:1 on the track"
+        );
+    }
+}

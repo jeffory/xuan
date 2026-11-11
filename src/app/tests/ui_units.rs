@@ -5,7 +5,7 @@ use super::*;
 
 /// An editor whose preferences live in a temporary folder, with a `size` document at `ppi`
 /// when `size` is given.
-fn editor(size: Option<[u32; 2]>, ppi: f32) -> (tempfile::TempDir, UiTest) {
+pub(super) fn editor(size: Option<[u32; 2]>, ppi: f32) -> (tempfile::TempDir, UiTest) {
     let directory = tempfile::tempdir().unwrap();
     let mut ui = UiTest::new();
     ui.isolate_config(directory.path());
@@ -19,7 +19,7 @@ fn editor(size: Option<[u32; 2]>, ppi: f32) -> (tempfile::TempDir, UiTest) {
 }
 
 /// The open size dialog's window.
-fn dialog_rect(ui: &UiTest) -> egui::Rect {
+pub(super) fn dialog_rect(ui: &UiTest) -> egui::Rect {
     let title = match ui.app().dialog {
         Some(Dialog::New) => "New canvas",
         Some(Dialog::CanvasSize) => "Canvas size",
@@ -32,7 +32,7 @@ fn dialog_rect(ui: &UiTest) -> egui::Rect {
 }
 
 /// The dialog's number fields, top to bottom and left to right: Width, Height, Resolution.
-fn fields(ui: &UiTest) -> Vec<egui_kittest::Node<'_>> {
+pub(super) fn fields(ui: &UiTest) -> Vec<egui_kittest::Node<'_>> {
     let dialog = dialog_rect(ui);
     let mut fields: Vec<_> = (ui.harness.query_all_by_role(Role::SpinButton))
         .chain(ui.harness.query_all_by_role(Role::TextInput))
@@ -48,13 +48,13 @@ fn fields(ui: &UiTest) -> Vec<egui_kittest::Node<'_>> {
 }
 
 /// Focuses the dialog's `index`th number field, as a click would, so typing replaces its text.
-fn focus_field(ui: &mut UiTest, index: usize) {
+pub(super) fn focus_field(ui: &mut UiTest, index: usize) {
     fields(ui)[index].focus();
     ui.settle();
 }
 
 /// Types `text` into the `index`th field and leaves it, as Tab would.
-fn enter(ui: &mut UiTest, index: usize, text: &str) {
+pub(super) fn enter(ui: &mut UiTest, index: usize, text: &str) {
     focus_field(ui, index);
     ui.type_keys(text);
     ui.ctx().memory_mut(|memory| {
@@ -66,7 +66,7 @@ fn enter(ui: &mut UiTest, index: usize, text: &str) {
 }
 
 /// Picks `choice` from the combo box now showing `current`.
-fn choose(ui: &mut UiTest, current: &str, choice: &str) {
+pub(super) fn choose(ui: &mut UiTest, current: &str, choice: &str) {
     ui.harness
         .get_by_role_and_label(Role::ComboBox, current)
         .click();
@@ -74,7 +74,7 @@ fn choose(ui: &mut UiTest, current: &str, choice: &str) {
     ui.click(choice);
 }
 
-fn commit(ui: &mut UiTest, label: &str) {
+pub(super) fn commit(ui: &mut UiTest, label: &str) {
     ui.harness
         .query_all_by_role_and_label(Role::Button, label)
         .last()
@@ -83,7 +83,7 @@ fn commit(ui: &mut UiTest, label: &str) {
     ui.settle();
 }
 
-fn document(ui: &UiTest) -> (u32, u32, f32) {
+pub(super) fn document(ui: &UiTest) -> (u32, u32, f32) {
     let d = &ui.app().session().unwrap().document;
     (d.width, d.height, d.resolution)
 }

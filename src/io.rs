@@ -224,7 +224,14 @@ pub fn save_hashed(
 }
 
 /// The newest version supported by `load`.
-const LATEST_VERSION: u32 = 16;
+const LATEST_VERSION: u32 = 18;
+
+/// The first version with the Unsharp Mask filter, which older readers do not know and
+/// would refuse the whole project over.
+const UNSHARP_MASK: u32 = 18;
+
+/// The first version with style runs on text layers: letters with their own font or colour.
+const TEXT_RUNS: u32 = 17;
 
 /// The first version that records a collage's layout and cells (`document.collage`).
 const COLLAGE: u32 = 16;
@@ -251,8 +258,23 @@ const PHOTOSHOP_VIGNETTE: u32 = 12;
 /// The lowest format version that can hold everything `document` uses, so
 /// older readers keep opening projects that do not need the newer features.
 fn format_version(document: &Document) -> u32 {
+    if document.layers.iter().any(|l| {
+        matches!(
+            l.filter,
+            Some(crate::effects::Filter::UnsharpMask { .. })
+        )
+    }) {
+        UNSHARP_MASK
+    // Older readers would drop the runs, and with them each letter's font and colour, the
+    // next time the text is edited.
+    } else if document
+        .layers
+        .iter()
+        .any(|l| l.text.as_ref().is_some_and(|t| !t.runs.is_empty()))
+    {
+        TEXT_RUNS
     // Older readers would drop the record, and with it the collage's layout.
-    if document.collage.is_some() {
+    } else if document.collage.is_some() {
         COLLAGE
     // Older readers do not know the adjustment and would refuse the whole project.
     } else if document.layers.iter().any(|l| {
@@ -511,6 +533,10 @@ pub struct ExportOptions {
     pub webp_quality: u8,
     /// WebP without loss, as Xuan always wrote it before lossy WebP.
     pub webp_lossless: bool,
+    /// The image's size in percent of the document's, within [`EXPORT_SCALE`]: the Export
+    /// dialog's Scale. The print size stays, so the resolution written scales with it.
+    /// Layered OpenRaster ignores it, and plugin exports are at 100.
+    pub scale: u16,
 }
 
 impl Default for ExportOptions {
@@ -519,8 +545,26 @@ impl Default for ExportOptions {
             jpeg_quality: 90,
             webp_quality: 85,
             webp_lossless: true,
+            scale: 100,
         }
     }
+}
+
+/// The Export dialog's Scale range, in percent; values outside it are clamped.
+pub const EXPORT_SCALE: std::ops::RangeInclusive<u16> = 1..=400;
+
+/// The pixel size of a `width` × `height` document exported at `scale` percent: each side
+/// rounded, and at least one pixel.
+pub fn export_size(width: u32, height: u32, scale: u16) -> (u32, u32) {
+    let scale = f64::from(scale.clamp(*EXPORT_SCALE.start(), *EXPORT_SCALE.end())) / 100.0;
+    let side = |side: u32| ((f64::from(side) * scale).round() as u32).max(1);
+    (side(width), side(height))
+}
+
+/// The resolution an export at `scale` percent states, so that it prints at the document's
+/// size: 300 ppi at 50 % is 150 ppi.
+pub fn export_resolution(ppi: f32, scale: u16) -> f32 {
+    ppi * f32::from(scale.clamp(*EXPORT_SCALE.start(), *EXPORT_SCALE.end())) / 100.0
 }
 
 /// The quality range of lossy JPEG and WebP exports; values outside it are clamped.
@@ -557,33 +601,64 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
     if extension == "ora" {
         return ora::export(document, path).map(drop);
     }
-    check_export_size(&extension, document.width, document.height)?;
-    let image = render::unaltered(document)
-        .map_or_else(|| render::render(document), |pixels| (*pixels).clone());
+    let (width, height) = export_size(document.width, document.height, options.scale);
+    if (width, height) != (document.width, document.height) {
+        crate::document::validate_size(width, height)
+            .context("Choose a smaller Scale to export at this size")?;
+    }
+    check_export_size(&extension, width, height)?;
+    let image = if (width, height) == (document.width, document.height) {
+        render::unaltered(document)
+            .map_or_else(|| render::render(document), |pixels| (*pixels).clone())
+    } else {
+        render::render_scaled(document, width, height)
+    };
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    match extension.as_str() {
+    let resolution = export_resolution(document.resolution, options.scale);
+    encode(
+        temporary.as_file_mut(),
+        &image,
+        &extension,
+        options,
+        resolution,
+    )?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Writes `image` as the format `extension` names (`png`, `jpg`, `tiff`, `webp`), as
+/// [`export`] does, stating `ppi` where the format can. The Export dialog encodes its preview
+/// and size estimate with it too.
+pub fn encode<W: Write + Seek>(
+    mut writer: W,
+    image: &RgbaImage,
+    extension: &str,
+    options: &ExportOptions,
+    ppi: f32,
+) -> Result<()> {
+    match extension {
         "jpg" | "jpeg" => {
             let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                temporary.as_file_mut(),
+                &mut writer,
                 options
                     .jpeg_quality
                     .clamp(*EXPORT_QUALITY.start(), *EXPORT_QUALITY.end()),
             );
             encoder.set_pixel_density(image::codecs::jpeg::PixelDensity::dpi(
-                document.resolution.round() as u16,
+                ppi.round().max(1.0) as u16
             ));
-            encoder.encode_image(&render::flatten_white(&image))?;
+            encoder.encode_image(&render::flatten_white(image))?;
         }
         "png" => {
-            let mut encoder =
-                png::Encoder::new(temporary.as_file_mut(), image.width(), image.height());
+            let mut encoder = png::Encoder::new(&mut writer, image.width(), image.height());
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
-            let pixels_per_meter = (document.resolution / 0.0254).round() as u32;
+            let pixels_per_meter = (ppi / 0.0254).round() as u32;
             encoder.set_pixel_dims(Some(png::PixelDimensions {
                 xppu: pixels_per_meter,
                 yppu: pixels_per_meter,
@@ -591,22 +666,21 @@ pub fn export(document: &Document, path: &Path, options: &ExportOptions) -> Resu
             }));
             encoder.write_header()?.write_image_data(image.as_raw())?;
         }
-        "tif" | "tiff" => write_tiff(temporary.as_file_mut(), &image, document.resolution)?,
-        "webp" => temporary.write_all(&encode_webp(
-            &image,
+        "tif" | "tiff" => write_tiff(&mut writer, image, ppi)?,
+        "webp" => writer.write_all(&encode_webp(
+            image,
             options.webp_lossless,
             options.webp_quality,
         )?)?,
         _ => bail!("Export as PNG, JPEG, TIFF, WebP or OpenRaster"),
     }
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|e| e.error)?;
+    writer.flush()?;
     Ok(())
 }
 
 /// An uncompressed RGBA TIFF, as `image` writes one, stating `ppi` as its resolution in pixels
 /// per inch (to a hundredth).
-fn write_tiff(file: &mut File, image: &RgbaImage, ppi: f32) -> Result<()> {
+fn write_tiff<W: Write + Seek>(file: W, image: &RgbaImage, ppi: f32) -> Result<()> {
     use tiff::{
         encoder::{Rational, TiffEncoder, colortype::RGBA8},
         tags::{ResolutionUnit, Tag},
@@ -878,6 +952,51 @@ mod tests {
     }
 
     #[test]
+    fn exports_are_scaled_and_keep_their_print_size() {
+        assert_eq!(EXPORT_SCALE, 1..=400);
+        assert_eq!(export_size(1920, 1080, 50), (960, 540));
+        assert_eq!(export_size(3, 3, 50), (2, 2), "rounded");
+        assert_eq!(export_size(10, 1, 1), (1, 1), "never empty");
+        assert_eq!(export_size(10, 10, 0), (1, 1), "clamped to 1 %");
+        assert_eq!(export_size(10, 10, 1000), (40, 40), "clamped to 400 %");
+        assert_eq!(export_resolution(300.0, 50), 150.0);
+
+        let temporary = tempfile::tempdir().unwrap();
+        let mut doc = Document::new(40, 30).unwrap();
+        doc.resolution = 300.0;
+        doc.layers[0].pixels = Some(Arc::new(photo_like(40, 30)));
+        for (scale, size, ppi) in [
+            (50, (20, 15), 150.0),
+            (200, (80, 60), 600.0),
+            (100, (40, 30), 300.0),
+        ] {
+            let options = ExportOptions {
+                scale,
+                ..ExportOptions::default()
+            };
+            for extension in ["png", "jpg", "tiff", "webp"] {
+                let path = temporary.path().join(format!("scaled.{extension}"));
+                export(&doc, &path, &options).unwrap();
+                let (image, resolution) = import_image_with_resolution(&path).unwrap();
+                assert_eq!(image.dimensions(), size, "{extension} at {scale} %");
+                if extension != "webp" {
+                    assert_eq!(resolution, Some(ppi), "{extension} at {scale} %");
+                }
+            }
+        }
+        // A scale past what a canvas may be is refused before anything is written.
+        let mut huge = Document::new(crate::document::MAX_SIDE, 2).unwrap();
+        huge.resolution = 72.0;
+        let path = temporary.path().join("huge.png");
+        let options = ExportOptions {
+            scale: 200,
+            ..ExportOptions::default()
+        };
+        assert!(export(&huge, &path, &options).is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn standalone_masks_round_trip_with_scope_and_transforms() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mask.xuan");
@@ -1123,6 +1242,64 @@ mod tests {
             bad.layers[2] = serde_json::from_value(json).unwrap();
             bad.layers[2].pixels = pixels;
             assert!(bad.validate().is_err(), "{pointer}");
+        }
+    }
+
+    /// Letters with their own font or colour need version 17; text without runs keeps the
+    /// version it needed before and opens unchanged.
+    #[test]
+    fn text_style_runs_round_trip_as_version_17() {
+        use crate::text::{RunStyle, TextRenderer, TextStyle};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runs.xuan");
+        let mut doc = Document::new(240, 80).unwrap();
+        let mut style = TextStyle {
+            content: "APPle".into(),
+            size: 30.0,
+            ..Default::default()
+        };
+        let mut renderer = TextRenderer::default();
+        let mut layer = Layer::image("APPle", renderer.render(&style).unwrap());
+        layer.text = Some(style.clone());
+        doc.insert(layer);
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 1);
+        let old = load(&path).unwrap();
+        assert_eq!(old.layers[1].text, Some(style.clone()));
+
+        style.set_run_style(
+            0..3,
+            &RunStyle {
+                family: Some("Helvetica".into()),
+                color: Some([255, 0, 0, 255]),
+                ..Default::default()
+            },
+        );
+        doc.layers[1].pixels = Some(Arc::new(renderer.render(&style).unwrap()));
+        doc.layers[1].text = Some(style.clone());
+        save(&doc, &path).unwrap();
+        let manifest = manifest_json(&path);
+        assert_eq!(manifest["version"], 17);
+        assert_eq!(
+            manifest["document"]["layers"][1]["text"]["runs"],
+            serde_json::json!([{"start": 0, "end": 3, "family": "Helvetica", "color": [255, 0, 0, 255]}])
+        );
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[1].text, Some(style));
+        assert_eq!(render::render(&loaded), render::render(&doc));
+
+        // Runs that overlap or run past the text are refused on load.
+        for runs in [
+            serde_json::json!([{"start": 0, "end": 9, "bold": true}]),
+            serde_json::json!([{"start": 0, "end": 3, "bold": true}, {"start": 2, "end": 4, "italic": true}]),
+        ] {
+            let mut json = manifest["document"]["layers"][1].clone();
+            json["text"]["runs"] = runs;
+            let mut bad = doc.clone();
+            let pixels = bad.layers[1].pixels.clone();
+            bad.layers[1] = serde_json::from_value(json).unwrap();
+            bad.layers[1].pixels = pixels;
+            assert!(bad.validate().is_err());
         }
     }
 
@@ -1465,6 +1642,63 @@ mod tests {
             }
             save(&plain, &path).unwrap();
             assert_eq!(manifest_json(&path)["version"], 4);
+        }
+    }
+
+    #[test]
+    fn unsharp_mask_round_trips_and_needs_version_18() {
+        use crate::effects::Filter;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sharp.xuan");
+        let filter = Filter::UnsharpMask {
+            amount: 180.0,
+            radius: 2.5,
+            threshold: 6.0,
+        };
+        let mut doc = Document::new(32, 32).unwrap();
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(32, 32, |x, y| {
+            Rgba([(x * 8) as u8, ((x / 4 + y / 4) % 2 * 200) as u8, 128, 255])
+        })));
+        let mut layer = Layer::blank(filter.name(), 32, 32);
+        layer.filter = Some(filter.clone());
+        doc.layers.push(layer);
+        doc.validate().unwrap();
+        save(&doc, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 18);
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.layers[1].filter, Some(filter));
+        assert_eq!(render::render(&loaded), render::render(&doc));
+        assert_ne!(
+            render::render(&doc),
+            render::render(&Document {
+                layers: vec![doc.layers[0].clone()],
+                ..doc.clone()
+            }),
+            "the filter sharpens"
+        );
+        // Without it the document goes back to the version it needs.
+        let mut plain = loaded.clone();
+        plain.layers[1].filter = Some(Filter::GaussianBlur { radius: 1.0 });
+        save(&plain, &path).unwrap();
+        assert_eq!(manifest_json(&path)["version"], 4);
+        for bad in [
+            Filter::UnsharpMask {
+                amount: 501.0,
+                radius: 1.0,
+                threshold: 0.0,
+            },
+            Filter::UnsharpMask {
+                amount: 100.0,
+                radius: 0.0,
+                threshold: 0.0,
+            },
+            Filter::UnsharpMask {
+                amount: 100.0,
+                radius: 1.0,
+                threshold: 256.0,
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
         }
     }
 

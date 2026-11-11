@@ -1,3 +1,5 @@
+# 简体中文 (Simplified Chinese). See docs/TRANSLATING.md.
+@name	简体中文
 Settings	设置
 Settings…	设置…
 General	常规
@@ -108,6 +110,13 @@ Zoom Out	缩小
 Show Transform Controls	显示变换控件
 Keyboard Shortcuts	键盘快捷键
 About Xuan	关于 Xuan
+Quit Xuan	退出 Xuan
+Hide Xuan	隐藏 Xuan
+Hide Others	隐藏其他
+Show All	全部显示
+Services	服务
+Minimize	最小化
+Bring All to Front	前置全部窗口
 Close window	关闭窗口
 Minimize window	最小化窗口
 Maximize window	最大化窗口
@@ -181,7 +190,6 @@ Radius	半径
 Freehand	自由绘制
 Polygonal	多边形
 Polygonal Lasso	多边形套索
-Replace	替换
 Add	添加
 Subtract	减去
 Intersect	交集
@@ -217,7 +225,6 @@ Darken	变暗
 Lighten	变亮
 Colour Dodge	颜色减淡
 Colour Burn	颜色加深
-Linear Dodge	线性减淡
 Linear Burn	线性加深
 Difference	差值
 Exclusion	排除
@@ -254,7 +261,6 @@ Invert mask	反相蒙版
 Delete mask	删除蒙版
 Link Mask	链接蒙版
 Link	链接
-Unlink	取消链接
 Edit text…	编辑文字…
 Edit adjustment…	编辑调整…
 Edit filter…	编辑滤镜…
@@ -269,7 +275,17 @@ Image size	图像大小
 Create canvas	创建画布
 Resolution	分辨率
 Anchor	锚点
+Top left	左上
+Top right	右上
+Bottom left	左下
+Bottom right	右下
 Transparent canvas · sRGB	透明画布 · sRGB
+White canvas · sRGB	白色画布 · sRGB
+Black canvas · sRGB	黑色画布 · sRGB
+Coloured canvas · sRGB	彩色画布 · sRGB
+White	白色
+Transparent	透明
+Custom colour	自定义颜色
 Change the canvas bounds and anchor your composition.	更改画布边界和内容锚点。
 Scale the composition while preserving source pixels.	缩放合成图像并保留源像素。
 Cancel	取消
@@ -285,8 +301,10 @@ Save your changes?	保存更改？
 Some projects have unsaved changes.	部分项目有未保存的更改。
 Discard changes	放弃更改
 Couldn't complete the operation	无法完成操作
+Error	错误
+Copy details	复制详细信息
+Copy the message and Xuan's version, for a bug report	复制消息和 Xuan 的版本，用于报告问题
 Export image	导出图像
-Close / Quit	关闭 / 退出
 Export…	导出…
 Format	格式
 Quality	质量
@@ -294,22 +312,12 @@ JPEG preview · transparency is flattened onto white	JPEG 预览 · 透明区域
 WebP preview · transparency is kept	WebP 预览 · 保留透明区域
 Lossless	无损
 Estimated size:	预计大小：
+Estimating size…	正在估算大小…
+Scale	缩放
 sRGB · Transparent	sRGB · 透明
 Keyboard shortcuts	键盘快捷键
-New / Open / Save	新建 / 打开 / 保存
-Import image as layer	将图像导入为图层
-Undo / Redo	撤销 / 重做
-Duplicate / Merge / Group	复制 / 合并 / 编组
-Select all / Deselect	全选 / 取消选择
-Copy / Paste image	复制 / 粘贴图像
-Fit / Actual pixels	适合窗口 / 实际像素
-Move / Marquee / Lasso / Wand / Crop	移动 / 选框 / 套索 / 魔棒 / 裁剪
-Brush / Eraser / Heal / Clone / Blur	画笔 / 橡皮擦 / 修复 / 仿制 / 模糊
-Gradient / Shape / Eyedropper / Hand / Zoom	渐变 / 形状 / 吸管 / 抓手 / 缩放
-Brush size / Hardness	画笔大小 / 硬度
 Brush or layer opacity	画笔或图层不透明度
 Set clone source	设置仿制来源
-Swap / Reset colours	交换 / 重置颜色
 Pan canvas	平移画布
 Pan canvas horizontally	水平平移画布
 Horizontal wheel / Shift+wheel	水平滚轮 / Shift+滚轮
@@ -319,7 +327,10 @@ Apply crop / Cancel gesture	应用裁剪 / 取消操作
 A space for your next composition.	为下一幅创作留一方天地。
 Native image editor · Rust + egui + wgpu	原生图像编辑器 · Rust + egui + wgpu
 Ported from Compositor by Wonder Assembly LLC.	移植自 Wonder Assembly LLC 的 Compositor。
-Free and open source, under the MIT license.	基于 MIT 许可证的免费开源软件。
+Free and open source, under the MIT licence.	基于 MIT 许可证的免费开源软件。
+Project site	项目主页
+Licences and third-party notices	许可证与第三方声明
+Report a bug	报告问题
 Add text…	添加文字…
 Edit Text	编辑文字
 Font	字体
@@ -340,7 +351,6 @@ Text applied	文字已应用
 Adjustments	调整
 Adjustment	调整
 Hue / Saturation	色相 / 饱和度
-Hue & Saturation	色相与饱和度
 Levels	色阶
 Curves	曲线
 Exposure	曝光
@@ -350,11 +360,9 @@ Colour Balance	色彩平衡
 Midtones	中间调
 Preserve Luminosity	保持明度
 Default	默认值
-Film Grain	胶片颗粒
 Invert	反相
 Gaussian Blur	高斯模糊
 Motion Blur	动感模糊
-Noise	噪点
 Lens Correction	镜头校正
 Original pixels · alpha-weighted histogram	原始像素 · 按透明度加权的直方图
 Input black	输入黑场
@@ -381,6 +389,9 @@ Falloff start	衰减起点
 Falloff end	衰减终点
 Invert selected colour range	反转所选颜色范围
 Click to add a point · Drag points to reshape the curve	单击添加控制点 · 拖动控制点调整曲线
+Curve	曲线
+In	输入
+Out	输出
 Amount	数量
 Distance	距离
 Monochromatic	单色
@@ -500,7 +511,6 @@ Warmth	暖色
 Camera information	相机信息
 Source	来源
 Dimensions	尺寸
-Camera	相机
 Focal length	焦距
 Aperture	光圈
 Shutter	快门
@@ -586,7 +596,6 @@ Images and Xuan projects	图像和 Xuan 项目
 Open Compositor .comp package folder	打开 Compositor .comp 项目包文件夹
 Drag a crop area, then press Enter to apply	拖动选择裁剪区域，按 Enter 应用
 Click the canvas to place text	单击画布放置文字
-New canvas (Ctrl+N)	新建画布 (Ctrl+N)
 Hue/Saturation	色相/饱和度
 Grain	颗粒
 Add Noise	添加杂色
@@ -670,8 +679,6 @@ Custom	自定义
 Lines	直线
 Dashed Lines	虚线
 Dots	点线
-Rulers / Grid / Guides	标尺 / 网格 / 参考线
-Snap / Lock guides	对齐 / 锁定参考线
 Drag from a ruler	从标尺拖动
 New guide	新建参考线
 No document open	未打开文档
@@ -679,8 +686,6 @@ Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
 Layer effects on folders or adjustment layers	文件夹或调整图层上的图层效果
 Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
-Per-letter text colours (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
-Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
 Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以像素导入）
 Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
 Blur or noise settings adapted to Xuan	已按 Xuan 调整的模糊或杂色设置
@@ -1026,7 +1031,10 @@ Make Selection	建立选区
 Shape Layer from Path	从路径创建形状图层
 Rename Path	重命名路径
 Delete Path	删除路径
-This document has no paths yet.	此文档还没有路径。
+No paths yet	还没有路径
+Draw one with the Pen, or trace the selection's outline.	用钢笔绘制一条，或描摹选区的轮廓。
+Draw with Pen	用钢笔绘制
+From selection	从选区建立
 Name	名称
 Rename	重命名
 Shape Layer	形状图层
@@ -1123,6 +1131,36 @@ Story / Reel	快拍 / 短视频
 Video thumbnail	视频缩略图
 Link preview	链接预览
 Banner	横幅
+8K Ultra HD	8K 超高清
+4K Ultra HD	4K 超高清
+Quad HD	2K 四倍高清
+Full High Definition	全高清
+High Definition	高清
+ISO A	ISO A 系列
+ISO B	ISO B 系列
+US	美国
+Photo	照片
+Letter	信纸 (Letter)
+Legal	法律文书 (Legal)
+Tabloid / Ledger	小报 / 账簿 (Tabloid / Ledger)
+Half Letter	半信纸 (Half Letter)
+Executive	行政 (Executive)
+Some canvas presets could not be read and were skipped	部分画布预设无法读取，已跳过
+Save current size as preset…	将当前尺寸存为预设…
+Delete preset	删除预设
+Manage presets…	管理预设…
+Canvas presets	画布预设
+Pixel sizes	像素尺寸
+Print sizes	打印尺寸
+No presets in this list.	此列表中没有预设。
+Move up	上移
+Move down	下移
+Group	分组
+Current size: {size}	当前尺寸：{size}
+Saving replaces the preset of this name.	保存将替换同名预设。
+Save current size	保存当前尺寸
+Delete the presets file and offer the built-in lists again	删除预设文件，恢复内置列表
+Open presets file	打开预设文件
 Swap	交换
 Swap width and height (portrait / landscape)	交换宽度和高度（竖向 / 横向）
 Keep aspect ratio	保持宽高比
@@ -1362,3 +1400,25 @@ Later	稍后
 Skip This Version	跳过此版本
 This release has no notes.	此版本没有发行说明。
 The update check stopped unexpectedly.	更新检查意外停止。
+Font, colour, bold and italic change the {} selected letters	字体、颜色、粗体和斜体只更改所选的 {} 个字符
+Run	运行
+for	为
+asks to run another plugin's action for its client:	请求为其客户端运行另一个插件的操作：
+A run can send document data there and may use paid credits.	运行时可能会将文档数据发送到那里，并可能消耗付费额度。
+It runs as if you chose it from the menu: the other plugin's own prompts still apply, and its result is a proposal you accept or discard. Allow holds for this session's runs of that plugin until the asking plugin stops.	它会像你从菜单中选择一样运行：另一个插件自己的提示仍然适用，其结果是一个由你接受或放弃的提议。“允许”对本次会话中该插件的运行有效，直到发出请求的插件停止。
+Always Allow lets the plugin run other plugins' actions without this prompt until you turn it off in Plugins → Manage Plugins….	“始终允许”让该插件不经此提示运行其他插件的操作，直到你在“插件 → 管理插件…”中将其关闭。
+Regions:	区域：
+Result: a new layer	结果：新图层
+Result: a new document	结果：新文档
+On the layers:	作用于图层：
+Run other plugins' actions	运行其他插件的操作
+Off: the plugin cannot list or start other plugins' actions. On: it can, and Xuan asks you before its first run of each plugin in each session. The other plugin's own permission, send and model prompts still apply, and its result is a proposal you accept or discard.	关闭：该插件无法列出或启动其他插件的操作。开启：可以，且 Xuan 会在每个会话中首次运行某个插件的操作之前询问你。另一个插件自己的权限、发送和模型提示仍然适用，其结果是一个由你接受或放弃的提议。
+Run them without asking	不经询问直接运行
+On: no prompt before the plugin's runs of other plugins' actions. The other plugin's own prompts still apply.	开启：该插件运行其他插件的操作之前不再提示。另一个插件自己的提示仍然适用。
+Started by	启动者：
+started this run for its client.	为其客户端启动了此次运行。
+Started	已启动
+The plugin was stopped	插件已停止
+Colours measured in the image	从图像中测得的颜色
+The image's histogram	图像的直方图
+Unsharp Mask	USM 锐化

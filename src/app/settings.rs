@@ -1,7 +1,7 @@
 use super::theme::PaletteExt as _;
 use super::{EditorApp, widgets};
 use xuan::{
-    config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, Theme, TitleBar},
+    config::{Config, PIXEL_GRID_PERCENT_RANGE, Theme, TitleBar},
     i18n::{self, tr},
     plugins::{manifest::Capability, sandbox},
 };
@@ -99,7 +99,7 @@ impl EditorApp {
         }
         self.load_adjustment_presets();
         self.apply_move_options();
-        i18n::set_language(self.config.language);
+        i18n::set_language(&self.config.language);
         for note in super::commands::override_problems(&self.config.keybindings) {
             eprintln!("Xuan: {note}");
         }
@@ -235,7 +235,7 @@ impl EditorApp {
             });
         ctx.data_mut(|d| d.insert_temp(page_id, page));
         if config != self.config {
-            i18n::set_language(config.language);
+            i18n::set_language(&config.language);
             let keys_changed = config.keybindings != self.config.keybindings;
             let network_changed =
                 config.disable_network_plugins != self.config.disable_network_plugins;
@@ -506,8 +506,9 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
                     .selected_text(config.language.name())
                     .width(180.0)
                     .show_ui(ui, |ui| {
-                        for option in [Language::English, Language::SimplifiedChinese] {
-                            widgets::menu_choice(ui, &mut config.language, option, option.name());
+                        for option in i18n::languages() {
+                            let name = option.name().to_owned();
+                            widgets::menu_choice(ui, &mut config.language, option, name);
                         }
                     });
             },

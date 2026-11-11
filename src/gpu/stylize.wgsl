@@ -52,3 +52,12 @@ fn tonal_contrast_pixel(pixel: vec4<f32>, base: vec4<f32>, amount: f32, strength
     let delta = 0.18 * tanh(detail * 6.0) * weight * (amount / 50.0) * (4.0 * luminance * (1.0 - luminance));
     return vec4(clamp(pixel.rgb + delta, vec3(0.0), vec3(1.0)), pixel.a);
 }
+
+// Straight in and out; `amount` in percent, `threshold` in levels of 255.
+fn unsharp_mask_pixel(pixel: vec4<f32>, base: vec4<f32>, amount: f32, threshold: f32) -> vec4<f32> {
+    if pixel.a <= 0.0 || base.a <= 0.0 { return pixel; }
+    let detail = pixel.rgb - base.rgb;
+    let most = max(max(abs(detail.r), abs(detail.g)), abs(detail.b));
+    let ramp = clamp((most * 255.0 - threshold) / max(threshold, 1.0), 0.0, 1.0);
+    return vec4(clamp(pixel.rgb + detail * (amount / 100.0 * ramp), vec3(0.0), vec3(1.0)), pixel.a);
+}

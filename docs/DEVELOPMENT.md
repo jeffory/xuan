@@ -4,7 +4,7 @@ Run the commands below from the repository root. For installation and editing, s
 
 ## Prerequisites
 
-Requires Rust **1.89+** and a C toolchain.
+Requires Rust **1.89+** (**1.90+** on macOS) and a C toolchain.
 
 ### Linux
 
@@ -373,11 +373,13 @@ audit](GPU_PROCESSING.md) for sample measurements and the remaining decode costs
 
 ### Localization and negative conversion checks
 
-UI text uses `xuan::i18n::tr` with the English text as its key. Simplified Chinese
-translations are UTF-8 tab-separated pairs in `assets/locales/zh-CN.tsv`. Keep UI
-IDs, command identifiers and user document content independent of translated labels.
-The UI test checks the settings shortcut, live language changes and bundled glyph
-coverage. Configuration tests use temporary directories.
+UI text uses `xuan::i18n::tr` (or `tr_args` and `tr_plural`) with the English text as its
+key. Every `assets/locales/<tag>.tsv` is built in as a language; `en.tsv` lists the English
+keys. [Translating Xuan](TRANSLATING.md) covers the file format, adding a language, adding new
+strings, `scripts/check-locales.sh` and font coverage. Keep UI IDs, command identifiers and
+user document content independent of translated labels. The tests check every locale file
+against the source and the bundled fonts, the language picker, the settings shortcut and live
+language changes. Configuration tests use temporary directories.
 
 ```sh
 cargo test --locked negative

@@ -13,11 +13,23 @@ fn slider(
     label: &str,
     suffix: &str,
 ) -> bool {
+    slider_to(ui, value, range, label, suffix, 0)
+}
+
+/// A slider that keeps `decimals` places, for settings where a fraction matters.
+fn slider_to(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    label: &str,
+    suffix: &str,
+    decimals: usize,
+) -> bool {
     let centered = *range.start() < 0.0;
     let mut slider = widgets::Slider::new(value, range)
         .text(tr(label))
         .suffix(suffix)
-        .max_decimals(0);
+        .max_decimals(decimals);
     if centered {
         slider = slider.centered();
     }
@@ -75,6 +87,16 @@ pub(super) fn show(ui: &mut Ui, filter: &mut Filter) -> bool {
             changed |= slider(ui, highlights, -100.0..=100.0, "Highlights", "");
         }
         Filter::Dither(settings) => changed |= dither(ui, settings),
+        Filter::UnsharpMask {
+            amount,
+            radius,
+            threshold,
+        } => {
+            changed |= slider(ui, amount, 0.0..=500.0, "Amount", "%");
+            // A sharpening radius is often a pixel or two: half a pixel matters.
+            changed |= slider_to(ui, radius, 0.1..=100.0, "Radius", " px", 1);
+            changed |= slider(ui, threshold, 0.0..=255.0, "Threshold", "");
+        }
         _ => {}
     }
     changed

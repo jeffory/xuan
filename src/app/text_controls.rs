@@ -5,7 +5,7 @@ use xuan::i18n::tr;
 use xuan::{
     document::{Layer, Point},
     render,
-    text::{self, PathAlign, PathSide, TextPath, TextRenderer, TextStyle},
+    text::{self, PathAlign, PathSide, RunStyle, TextPath, TextRenderer, TextStyle},
 };
 
 /// The Text window's path section: attach one of the document's paths for the text to
@@ -145,6 +145,9 @@ pub(super) struct TextEdit {
     original: Layer,
     pub(super) style: TextStyle,
     fonts: FontPicker,
+    /// The letters selected in the text field (`char` indices), kept while the font and
+    /// colour controls have focus: those controls change just these letters.
+    pub(super) selection: Option<std::ops::Range<usize>>,
     focus: bool,
     changed: bool,
     pub(super) error: Option<String>,
@@ -237,6 +240,7 @@ impl EditorApp {
         } else {
             let mut style = self.text_style.clone();
             style.content = tr("Text").into();
+            style.runs.clear();
             style.color = self.brush.color;
             let renderer = self.text_renderer.get_or_insert_with(TextRenderer::default);
             let pixels = match renderer.render(&style) {
@@ -280,6 +284,7 @@ impl EditorApp {
             style: layer.text.clone().unwrap(),
             original: layer,
             fonts: FontPicker::default(),
+            selection: None,
             focus: true,
             changed: is_new,
             error: None,
@@ -329,8 +334,10 @@ impl EditorApp {
         };
         if apply && edit.changed {
             self.text_style = edit.style;
-            // New text starts in a box; a path belongs to its own layer.
+            // New text starts in a box in one style; a path and the letters' own fonts and
+            // colours belong to their own layer.
             self.text_style.path = None;
+            self.text_style.runs.clear();
             self.brush.color = self.text_style.color;
             let session = self.session_mut().unwrap();
             session.document.select(edit.target, false);
@@ -358,8 +365,16 @@ impl EditorApp {
         };
         let renderer = self.text_renderer.as_mut().unwrap();
         let before = edit.style.clone();
+        // With letters selected, font, colour, bold and italic show and change theirs (the
+        // first selected letter's); otherwise the layer's.
+        let selection = edit.selection.clone().filter(|range| !range.is_empty());
+        let shown = match &selection {
+            Some(range) => edit.style.letter_style(range.start),
+            None => edit.style.resolve(&RunStyle::default()),
+        };
+        let mut letters = shown.clone();
         edit.fonts
-            .handle_keys(ctx, renderer.families(), &mut edit.style.family);
+            .handle_keys(ctx, renderer.families(), &mut letters.family);
         let mut open = true;
         let mut apply = false;
         let mut picked = None;
@@ -371,19 +386,30 @@ impl EditorApp {
                 ctx,
                 |ui| {
                     ui.spacing_mut().item_spacing.y = 10.0;
-                    let response = egui::ScrollArea::vertical()
+                    let mut content = edit.style.content.clone();
+                    let output = egui::ScrollArea::vertical()
                         .id_salt("text_content_scroll")
                         .max_height(140.0)
                         .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut edit.style.content)
-                                    .id_salt("text_content")
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(4)
-                                    .char_limit(text::MAX_TEXT_BYTES),
-                            )
+                            egui::TextEdit::multiline(&mut content)
+                                .id_salt("text_content")
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(4)
+                                .char_limit(text::MAX_TEXT_BYTES)
+                                .show(ui)
                         })
                         .inner;
+                    let response = output.response;
+                    if content != edit.style.content {
+                        // Letters keep their styles; typed ones take their neighbour's.
+                        edit.style.replace_content(content);
+                    }
+                    if response.has_focus()
+                        && let Some(range) = output.cursor_range
+                    {
+                        let (a, b) = (range.primary.index, range.secondary.index);
+                        edit.selection = Some(a.min(b)..a.max(b));
+                    }
                     if edit.focus {
                         response.request_focus();
                         if let Some(mut state) = egui::TextEdit::load_state(ctx, response.id) {
@@ -397,11 +423,22 @@ impl EditorApp {
                         }
                         edit.focus = false;
                     }
+                    let count = edit.style.content.chars().count();
+                    if let Some(range) = selection.as_ref().filter(|r| r.len() < count) {
+                        ui.label(
+                            RichText::new(
+                                tr("Font, colour, bold and italic change the {} selected letters")
+                                    .replace("{}", &range.len().to_string()),
+                            )
+                            .small()
+                            .color(ui.palette().muted),
+                        );
+                    }
                     ui.horizontal(|ui| {
                         ui.label(tr("Font"));
-                        edit.fonts.show(ui, renderer, &mut edit.style.family);
+                        edit.fonts.show(ui, renderer, &mut letters.family);
                     });
-                    if !renderer.has_family(&edit.style.family) {
+                    if !renderer.has_family(&letters.family) {
                         ui.label(
                             RichText::new(tr(
                                 "This font is unavailable. Editing uses a fallback font.",
@@ -420,11 +457,11 @@ impl EditorApp {
                         );
                         ui.add_space(12.0);
                         ui.label(tr("Colour"));
-                        widgets::color_well(ui, &mut edit.style.color);
+                        widgets::color_well(ui, &mut letters.color);
                     });
                     ui.horizontal(|ui| {
-                        widgets::checkbox(ui, &mut edit.style.bold, tr("Bold"));
-                        widgets::checkbox(ui, &mut edit.style.italic, tr("Italic"));
+                        widgets::checkbox(ui, &mut letters.bold, tr("Bold"));
+                        widgets::checkbox(ui, &mut letters.italic, tr("Italic"));
                         widgets::checkbox(ui, &mut edit.style.underline, tr("Underline"));
                         widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
                     });
@@ -454,6 +491,20 @@ impl EditorApp {
         if cancel || !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.finish_text(false);
             return;
+        }
+        if let Some(edit) = &mut self.text_edit {
+            let change = RunStyle {
+                family: (letters.family != shown.family).then_some(letters.family),
+                color: (letters.color != shown.color).then_some(letters.color),
+                bold: (letters.bold != shown.bold).then_some(letters.bold),
+                italic: (letters.italic != shown.italic).then_some(letters.italic),
+            };
+            if !change.is_empty() {
+                match selection {
+                    Some(range) => edit.style.set_run_style(range, &change),
+                    None => edit.style.set_style_all(&change),
+                }
+            }
         }
         if let Some(pick) = picked {
             self.attach_text_path(pick);

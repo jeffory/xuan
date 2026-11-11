@@ -211,7 +211,7 @@ impl FilterLayers {
         sigma: f32,
     ) {
         let sigma = sigma.max(0.01);
-        let length = ((((sigma - 0.8) / 0.3 + 1.0) * 2.0 + 1.0).max(3.0) as u32) | 1;
+        let length = blur_length(sigma);
         let mut weights: Vec<f32> = (0..length)
             .map(|i| (-0.5 * ((i as f32 - (length / 2) as f32) / sigma).powi(2)).exp())
             .collect();
@@ -297,7 +297,9 @@ impl FilterLayers {
                 let [r, g, b] = color.map(|v| v as f32 / 255.0);
                 config.push([r, g, b, 0.0]);
             }
-            &Filter::Bloom { radius, .. } | &Filter::TonalContrast { radius, .. } => {
+            &Filter::Bloom { radius, .. }
+            | &Filter::TonalContrast { radius, .. }
+            | &Filter::UnsharpMask { radius, .. } => {
                 let scratch = self.scratch.get_or_insert_with(|| {
                     target(device, size, wgpu::TextureFormat::Rgba32Float, 1)
                 });
@@ -326,6 +328,9 @@ impl FilterLayers {
                         config[0] = [7.0, amount, 0.0, 0.0];
                         config.push([shadows, midtones, highlights, 0.0]);
                     }
+                    Filter::UnsharpMask {
+                        amount, threshold, ..
+                    } => config[0] = [9.0, amount, threshold, 0.0],
                     _ => unreachable!(),
                 }
             }
@@ -344,6 +349,12 @@ impl FilterLayers {
         );
         &self.output
     }
+}
+
+/// The taps of `FilterLayers::blur`'s kernel for `sigma`, an odd count.
+pub(super) fn blur_length(sigma: f32) -> u32 {
+    let sigma = sigma.max(0.01);
+    ((((sigma - 0.8) / 0.3 + 1.0) * 2.0 + 1.0).max(3.0) as u32) | 1
 }
 
 /// `sources` are the filtered texture and a second input (the blurred copy, or the same).

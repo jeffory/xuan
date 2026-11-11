@@ -843,6 +843,135 @@ impl CanvasRotation {
 /// placement, mask placement, guide, document path and the selection turn with it, and a quarter
 /// turn swaps the canvas width and height. Pixels are not resampled, so text, shapes and
 /// effects stay live (an effect's light angle stays put, as with Photoshop's global light).
+/// An angle in degrees brought into (-180, 180].
+fn normalized_angle(degrees: f32) -> f32 {
+    let angle = degrees.rem_euclid(360.0);
+    if angle > 180.0 { angle - 360.0 } else { angle }
+}
+
+/// Sine and cosine of an angle in degrees, exact at the quarter turns.
+fn sin_cos_degrees(degrees: f32) -> (f64, f64) {
+    let quarter = f64::from(degrees) / 90.0;
+    if (quarter - quarter.round()).abs() < 1e-9 {
+        return match (quarter.round() as i64).rem_euclid(4) {
+            0 => (0.0, 1.0),
+            1 => (1.0, 0.0),
+            2 => (0.0, -1.0),
+            _ => (-1.0, 0.0),
+        };
+    }
+    f64::from(degrees).to_radians().sin_cos()
+}
+
+/// The size of the smallest canvas that holds a `width` × `height` canvas turned `degrees`.
+pub fn rotated_canvas_size(width: u32, height: u32, degrees: f32) -> (u32, u32) {
+    let (sin, cos) = sin_cos_degrees(degrees);
+    let (w, h) = (f64::from(width), f64::from(height));
+    // A hair under, so rounding noise does not add a column to an exact fit.
+    let side = |length: f64| ((length - 1e-6).ceil().max(1.0)) as u32;
+    (
+        side(w * cos.abs() + h * sin.abs()),
+        side(w * sin.abs() + h * cos.abs()),
+    )
+}
+
+/// The largest upright box with `ratio` (width / height) that fits inside a `width` ×
+/// `height` rectangle turned `degrees` about its centre: what straightening keeps.
+pub fn inscribed_size(width: f32, height: f32, degrees: f32, ratio: f32) -> (f32, f32) {
+    let (sin, cos) = sin_cos_degrees(degrees);
+    let (sin, cos, ratio) = (sin.abs(), cos.abs(), f64::from(ratio));
+    let tall =
+        (f64::from(width) / (ratio * cos + sin)).min(f64::from(height) / (ratio * sin + cos));
+    ((tall * ratio) as f32, tall as f32)
+}
+
+/// Image → Rotate by any angle, clockwise: every layer, mask, path and the selection turns
+/// about the canvas centre. Layers keep their pixels and only change their placement, as
+/// with the quarter turns, so nothing is resampled or lost. With `expand` the canvas grows
+/// to hold all of the turned canvas, leaving transparent corners; without, it keeps its
+/// size and the corners that turn out of it are hidden. Guides only survive quarter turns.
+pub fn rotate_canvas_by(document: &mut Document, degrees: f32, expand: bool) -> Result<()> {
+    ensure!(
+        degrees.is_finite(),
+        "The rotation must be a number of degrees"
+    );
+    let degrees = normalized_angle(degrees);
+    ensure!(degrees != 0.0, "The rotation must not be a whole turn");
+    if expand
+        && degrees.fract() == 0.0
+        && let Some(rotation) = CanvasRotation::from_degrees(degrees as i32)
+    {
+        rotate_canvas(document, rotation);
+        return Ok(());
+    }
+    let (old_width, old_height) = (document.width, document.height);
+    let (width, height) = if expand {
+        rotated_canvas_size(old_width, old_height, degrees)
+    } else {
+        (old_width, old_height)
+    };
+    validate_size(width, height)?;
+    let (sin, cos) = sin_cos_degrees(degrees);
+    let from = (f64::from(old_width) / 2.0, f64::from(old_height) / 2.0);
+    let to = (f64::from(width) / 2.0, f64::from(height) / 2.0);
+    let map = |point: Point| {
+        let (x, y) = (f64::from(point.x) - from.0, f64::from(point.y) - from.1);
+        Point::new(
+            (to.0 + cos * x - sin * y) as f32,
+            (to.1 + sin * x + cos * y) as f32,
+        )
+    };
+    let turn = |t: &mut Transform| {
+        let center = map(t.center());
+        t.x = center.x - t.width * 0.5;
+        t.y = center.y - t.height * 0.5;
+        t.rotation = normalized_angle(t.rotation + degrees);
+    };
+    for layer in &mut document.layers {
+        turn(&mut layer.transform);
+        if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
+            turn(placement);
+        }
+    }
+    // A guide is upright or level; turned by another angle it would be neither.
+    document.guides.clear();
+    crate::vector::transform_paths(
+        &mut document.paths,
+        kurbo::Affine::translate(to)
+            * kurbo::Affine::new([cos, sin, -sin, cos, 0.0, 0.0])
+            * kurbo::Affine::translate((-from.0, -from.1)),
+    );
+    if let Some(selection) = &document.selection {
+        // Each new pixel reads the old selection where it came from, between pixels.
+        let old = &**selection;
+        let level = |x: i64, y: i64| -> f64 {
+            if x < 0 || y < 0 || x >= i64::from(old.width()) || y >= i64::from(old.height()) {
+                0.0
+            } else {
+                f64::from(old.get_pixel(x as u32, y as u32).0[0])
+            }
+        };
+        let turned = image::GrayImage::from_fn(width, height, |x, y| {
+            let (dx, dy) = (f64::from(x) + 0.5 - to.0, f64::from(y) + 0.5 - to.1);
+            let sx = from.0 + cos * dx + sin * dy - 0.5;
+            let sy = from.1 - sin * dx + cos * dy - 0.5;
+            let (x0, y0) = (sx.floor(), sy.floor());
+            let (fx, fy) = (sx - x0, sy - y0);
+            let (x0, y0) = (x0 as i64, y0 as i64);
+            let top = level(x0, y0) * (1.0 - fx) + level(x0 + 1, y0) * fx;
+            let bottom = level(x0, y0 + 1) * (1.0 - fx) + level(x0 + 1, y0 + 1) * fx;
+            image::Luma([(top * (1.0 - fy) + bottom * fy).round().clamp(0.0, 255.0) as u8])
+        });
+        document.selection = turned
+            .pixels()
+            .any(|p| p.0[0] > 0)
+            .then(|| Arc::new(turned));
+    }
+    document.width = width;
+    document.height = height;
+    Ok(())
+}
+
 pub fn rotate_canvas(document: &mut Document, rotation: CanvasRotation) {
     let (width, height) = (document.width as f32, document.height as f32);
     let turn = |t: &mut Transform| {

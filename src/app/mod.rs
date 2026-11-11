@@ -1,7 +1,9 @@
 use theme::PaletteExt as _;
 use xuan::i18n::tr;
 mod ai_regions;
+mod anchor_picker;
 mod canvas;
+mod canvas_presets_dialog;
 mod channel_pane;
 mod chrome;
 mod clipboard;
@@ -10,18 +12,23 @@ mod color_lookup;
 mod color_range;
 mod commands;
 mod crop_tool;
+mod curves_controls;
 mod develop;
 mod develop_controls;
 mod develop_preview;
 mod dialogs;
 mod drops;
+mod export_preview;
 mod eyedropper;
+#[cfg(target_os = "linux")]
+mod file_drop;
 mod filter_controls;
 mod filter_preview;
 mod font_picker;
 mod gpu_preview;
 mod grid_settings;
 mod guides;
+pub mod headless;
 mod icons;
 mod jobs;
 mod keybindings;
@@ -31,6 +38,15 @@ mod layout_grid;
 mod levels_controls;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_menu;
+// The macOS menu bar's logic, tested on every platform.
+#[cfg(any(target_os = "macos", test))]
+mod menu_keys;
+mod menu_model;
+// The macOS menu bar's logic, tested on every platform.
+#[cfg(any(target_os = "macos", test))]
+mod menu_sync;
 mod menus;
 mod navigator;
 mod palette;
@@ -46,6 +62,8 @@ mod plugin_files;
 mod plugin_install;
 mod plugin_models;
 mod plugin_panes;
+mod plugin_raw;
+mod plugin_runs;
 mod plugin_sessions;
 mod plugins;
 mod presets_dialog;
@@ -480,6 +498,8 @@ enum Dialog {
     PluginFile,
     /// Allow a plugin's direct edits for its session.
     PluginEditSession,
+    /// Allow a plugin to run another plugin's action.
+    PluginRun,
     Plugins,
     /// Plugins → Install from Folder or Zip…: choose, review and install.
     PluginInstall,
@@ -497,6 +517,8 @@ enum Dialog {
     Paths,
     /// Layer → Adjustment Presets….
     AdjustmentPresets,
+    /// File → New → Preset → Manage presets…; closing it returns to File → New.
+    CanvasPresets,
     /// Edit → Stroke….
     Stroke,
     /// File → New Collage… and Image → Collage Layout….
@@ -507,7 +529,8 @@ enum Dialog {
 
 struct EffectEdit {
     original: Document,
-    // The histogram uses the immutable original, independent of live preview edits.
+    // Levels' and Curves' histograms use the immutable original, independent of live
+    // preview edits.
     levels_source: Option<RgbaImage>,
     adjustment: Option<Adjustment>,
     filter: Option<Filter>,
@@ -597,6 +620,9 @@ pub struct EditorApp {
     /// Checks for a newer release and the update dialog.
     updates: updates::Updates,
     tablet: Option<tablet::TabletInput>,
+    /// Files dragged onto a Wayland window, which winit does not report.
+    #[cfg(target_os = "linux")]
+    file_drops: Option<file_drop::FileDrops>,
     context: egui::Context,
     window_title: String,
     /// The colours installed in the egui context, switched by `sync_palette`.
@@ -656,6 +682,8 @@ pub struct EditorApp {
     presets_edit: Option<presets_dialog::PresetsEdit>,
     /// The saved adjustment presets.
     adjustment_presets: xuan::adjustment_presets::Library,
+    /// File → New's size presets, read again each time it opens, and what reading them reported.
+    canvas_presets: canvas_presets_dialog::CanvasPresets,
     /// The Pen tool's path being drawn and the path shown for editing.
     pen: pen_tool::PenState,
     expand_amount: u32,
@@ -712,6 +740,10 @@ pub struct EditorApp {
     new_image_generate: bool,
     new_image_exact: bool,
     new_image_action: Option<(String, String)>,
+    /// File → New: what the canvas is filled with, and the size of the image on the clipboard
+    /// when it opened, offered as a preset.
+    new_canvas_background: xuan::config::CanvasBackground,
+    new_canvas_clipboard: Option<[u32; 2]>,
     anchor: [f32; 2],
     /// The size dialogs' units, Resample and Relative.
     size_units: size_units::SizeUnits,
@@ -744,6 +776,11 @@ pub struct EditorApp {
     decorated: bool,
     /// The system draws the window buttons and resize edges (macOS), see [`chrome::NATIVE_BUTTONS`].
     native_buttons: bool,
+    /// Whether the menus are in the system menu bar, so the window draws none (macOS).
+    system_menu_bar: bool,
+    /// The macOS menu bar, while the menus are there.
+    #[cfg(target_os = "macos")]
+    native_menu: Option<macos_menu::NativeMenu>,
     /// The title bar style the window was created with.
     startup_title_bar: xuan::config::TitleBar,
     button_layout: chrome::ButtonLayout,
@@ -755,14 +792,15 @@ pub struct EditorApp {
     /// Whole layers copied with those pixels, pasted while the system clipboard still holds them.
     copied_layers: Option<clipboard::CopiedLayers>,
     system_clipboard: Option<arboard::Clipboard>,
-    /// The Export dialog's JPEG and WebP choices, kept while Xuan runs.
+    /// The Export dialog's JPEG and WebP choices and Scale, kept while Xuan runs.
     export_options: io::ExportOptions,
     export_format: String,
     export_texture: Option<TextureHandle>,
-    /// The export's estimated size: the preview's, scaled up to the document.
-    export_bytes: usize,
-    export_changed: bool,
+    /// The Export dialog's preview and estimated size, made in the background.
+    export_preview: export_preview::ExportPreview,
     screenshot: Option<PathBuf>,
+    /// Running without a window (`--headless`): who answers the prompts nobody can.
+    headless: Option<headless::Headless>,
     screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
@@ -805,8 +843,19 @@ impl EditorApp {
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
+        #[cfg(target_os = "linux")]
+        {
+            app.file_drops = file_drop::FileDrops::new(cc);
+        }
         #[cfg(target_os = "macos")]
         macos::install_quit_handler(&cc.egui_ctx);
+        #[cfg(target_os = "macos")]
+        macos::keep_title_bar_drags();
+        // Before the menu bar is built: AppKit would add Show Tab Bar to the View menu.
+        #[cfg(target_os = "macos")]
+        macos::disallow_window_tabs();
+        #[cfg(target_os = "macos")]
+        app.install_native_menu(&cc.egui_ctx);
         // Install the native renderer before the first RAW worker is started.
         xuan::gpu::scope(app.processor.clone(), || {
             for path in paths {
@@ -845,7 +894,7 @@ impl EditorApp {
         demo: bool,
         screenshot: Option<PathBuf>,
     ) -> Self {
-        xuan::i18n::set_language(xuan::config::Language::English);
+        xuan::i18n::set_language(&xuan::config::Language::english());
         theme::apply(ctx, &theme::Palette::DARK);
         egui_extras::install_image_loaders(ctx);
         let mut app = Self {
@@ -861,6 +910,8 @@ impl EditorApp {
             plugins: Default::default(),
             updates: Default::default(),
             tablet: None,
+            #[cfg(target_os = "linux")]
+            file_drops: None,
             context: ctx.clone(),
             window_title: String::new(),
             palette_applied: theme::Palette::DARK,
@@ -904,6 +955,7 @@ impl EditorApp {
             paths_edit: None,
             presets_edit: None,
             adjustment_presets: Default::default(),
+            canvas_presets: Default::default(),
             pen: Default::default(),
             expand_amount: 2,
             contract_amount: 2,
@@ -947,6 +999,8 @@ impl EditorApp {
             new_image_generate: false,
             new_image_exact: false,
             new_image_action: None,
+            new_canvas_background: Default::default(),
+            new_canvas_clipboard: None,
             anchor: [0.5, 0.5],
             size_units: Default::default(),
             effect: None,
@@ -969,6 +1023,9 @@ impl EditorApp {
             decorated: false,
             // Tests see the Linux and Windows title bar wherever they run.
             native_buttons: chrome::NATIVE_BUTTONS && !cfg!(test),
+            system_menu_bar: false,
+            #[cfg(target_os = "macos")]
+            native_menu: None,
             startup_title_bar: xuan::config::TitleBar::Compact,
             button_layout: Default::default(),
             #[cfg(target_os = "linux")]
@@ -979,9 +1036,9 @@ impl EditorApp {
             export_options: io::ExportOptions::default(),
             export_format: "png".into(),
             export_texture: None,
-            export_bytes: 0,
-            export_changed: true,
+            export_preview: Default::default(),
             screenshot,
+            headless: None,
             screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
@@ -1098,12 +1155,21 @@ impl EditorApp {
         match Document::new(self.dimensions[0], self.dimensions[1]) {
             Ok(mut document) => {
                 document.resolution = self.resolution;
+                if let Some(color) = self.new_canvas_background.pixel() {
+                    document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+                        document.width,
+                        document.height,
+                        image::Rgba(color),
+                    )));
+                }
                 let resolution = Some(self.resolution);
                 if self.config.new_canvas_size != Some(self.dimensions)
                     || self.config.units.new_canvas_resolution != resolution
+                    || self.config.new_canvas_background != self.new_canvas_background
                 {
                     self.config.new_canvas_size = Some(self.dimensions);
                     self.config.units.new_canvas_resolution = resolution;
+                    self.config.new_canvas_background = self.new_canvas_background;
                     self.save_config();
                 }
                 self.sessions
@@ -1716,6 +1782,8 @@ impl EditorApp {
                     self.dimensions = size;
                 }
                 self.resolution = self.config.units.new_canvas_resolution();
+                self.new_canvas_background = self.config.new_canvas_background;
+                self.new_canvas_clipboard = self.clipboard_image_size();
                 // Percent needs a document to be a percentage of.
                 let unit = Some(self.config.units.size)
                     .filter(|unit| *unit != xuan::units::Unit::Percent)
@@ -1723,6 +1791,7 @@ impl EditorApp {
                 let units = self.config.units;
                 self.size_units
                     .open(self.dimensions, unit, units.resolution);
+                self.load_canvas_presets();
                 self.dialog = Some(Dialog::New);
             }
             "new_collage" => self.open_new_collage(),
@@ -1746,7 +1815,8 @@ impl EditorApp {
             }
             "export" => {
                 self.dialog = Some(Dialog::Export);
-                self.export_changed = true;
+                self.export_preview.reset();
+                self.export_texture = None;
             }
             "close" => self.request_project_close(self.current),
             "undo" | "redo" => {
@@ -2151,14 +2221,24 @@ impl EditorApp {
 
 impl eframe::App for EditorApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        #[cfg(target_os = "macos")]
+        self.give_back_native_menu_keys(input);
         if let Some(tablet) = &mut self.tablet {
             self.pen_samples = tablet.update(ctx, input);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(drops) = &mut self.file_drops {
+            drops.update(input);
         }
     }
 
     fn on_exit(&mut self) {
-        // Stop the tablet queue before eframe destroys its Wayland window/display.
+        // Stop the tablet and file drop queues before eframe destroys its Wayland window/display.
         self.tablet = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.file_drops = None;
+        }
         self.plugins.stop_all();
     }
 
@@ -2181,7 +2261,7 @@ impl eframe::App for EditorApp {
 
 impl EditorApp {
     fn show(&mut self, ctx: &egui::Context) {
-        xuan::i18n::set_language(self.config.language);
+        xuan::i18n::set_language(&self.config.language);
         if self.processor.is_none() {
             self.processor = self
                 .gpu_state
@@ -2233,6 +2313,9 @@ impl EditorApp {
     }
 
     fn show_with_processor(&mut self, ctx: &egui::Context) {
+        // Items clicked in the macOS menu bar; the keys it took came back in `raw_input_hook`.
+        #[cfg(target_os = "macos")]
+        self.run_native_menu_clicks(ctx);
         self.forget_crop_of_other_documents();
         self.sync_move_options();
         self.sync_palette(ctx);
@@ -2278,15 +2361,19 @@ impl EditorApp {
         self.window_resize(ctx);
         self.poll_plugins();
         self.poll_updates();
-        self.menus(ctx);
+        #[cfg(target_os = "macos")]
+        self.sync_native_menu();
+        if !self.system_menu_bar {
+            self.menus(ctx);
+        }
         if self.develop.is_some() {
             // The Develop workspace has its own toolbar; RAW tabs stay reachable above it.
             self.tabs(ctx);
             self.develop_workspace(ctx);
         } else {
-            // Tool options, then the tabs as the canvas's own header.
-            self.tool_options(ctx);
+            // The tabs, then the tool options, as in the Develop workspace.
             self.tabs(ctx);
+            self.tool_options(ctx);
             self.reload_bar(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);
@@ -2340,6 +2427,7 @@ impl EditorApp {
                 .develop
                 .as_ref()
                 .is_none_or(|d| d.ready_for_screenshot())
+            && (self.dialog != Some(Dialog::Export) || self.export_preview.settled())
         {
             self.screenshot_requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));

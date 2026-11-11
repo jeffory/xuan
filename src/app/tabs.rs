@@ -1,8 +1,9 @@
 //! The document tab bar (issues #48 and #50).
 //!
-//! Issue #50 restyled them after KDE's (Breeze) tabs and moved the bar directly above the
-//! canvas. Tabs are flat, with a document icon, 1 px separators and a lighter active tab with
-//! an accent line; the others light up under the pointer.
+//! Issue #50 restyled them after KDE's (Breeze) tabs. The bar sits above the tool options, as
+//! it does above the Develop toolbar. Tabs are flat, with a document icon, 1 px separators and
+//! a lighter active tab with an accent line, open onto the bar below; the others light up under
+//! the pointer.
 //! Tabs share the width between [`MIN_TAB`] and [`MAX_TAB`]; when even the narrowest no longer
 //! fit, the strip scrolls, with arrows and a "List all tabs" menu at its end. Tabs can be
 //! dragged into a new order, closed with the middle button, and have a context menu. The
@@ -13,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{FontId, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{FontId, Painter, Rangef, Rect, Sense, Stroke, Ui, pos2, vec2};
 use uuid::Uuid;
 use xuan::i18n::tr;
 
@@ -158,6 +159,21 @@ struct TabLook<'a> {
 /// Whether the close button shows (else a dirty tab shows its dot there).
 fn shows_close(look: &TabLook<'_>) -> bool {
     look.hovered || look.close_hovered || (look.selected && !look.dirty)
+}
+
+/// The parts of the line along the bottom of the tab bar: all of `bar`, except under the
+/// `selected` tab, which opens onto the bar below it as a browser's tab does.
+fn divider_spans(bar: Rangef, selected: Option<Rangef>) -> Vec<Rangef> {
+    let Some(gap) = selected
+        .filter(|tab| tab.intersects(bar))
+        .map(|tab| tab.intersection(bar))
+    else {
+        return vec![bar];
+    };
+    [Rangef::new(bar.min, gap.min), Rangef::new(gap.max, bar.max)]
+        .into_iter()
+        .filter(|span| span.span() > 0.0)
+        .collect()
 }
 
 fn close_rect(tab: Rect) -> Rect {
@@ -490,6 +506,15 @@ impl EditorApp {
         }
     }
 
+    /// The tab bar's height: the title row's on macOS, when the tabs are the top row.
+    fn bar_height(&self) -> f32 {
+        if self.tabs_in_title_row() {
+            super::chrome::MAC_TITLE_HEIGHT
+        } else {
+            TAB_HEIGHT
+        }
+    }
+
     pub(super) fn tabs(&mut self, ctx: &egui::Context) {
         self.process_tab_closes();
         let blocked = self.job.is_some()
@@ -499,18 +524,30 @@ impl EditorApp {
             || self.close_tab.is_some()
             || self.develop_close_requested.is_some();
         let mut actions = Actions::default();
+        let height = self.bar_height();
         egui::TopBottomPanel::top("project_tabs")
-            .exact_height(TAB_HEIGHT)
+            .exact_height(height)
+            // Drawn below instead, open under the selected tab.
+            .show_separator_line(false)
             .frame(
                 egui::Frame::new()
                     .fill(ctx.palette().titlebar)
                     .inner_margin(egui::Margin::ZERO),
             )
             .show(ctx, |ui| {
+                let bar = ui.max_rect();
+                let mut selected = None;
                 ui.add_enabled_ui(!blocked, |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        self.tab_strip_ui(ui, &mut actions);
+                        // The window buttons' corner moves the window, like the title row.
+                        let inset = self.title_row_inset(ui.ctx());
+                        if inset > 0.0 {
+                            let (_, response) = ui
+                                .allocate_exact_size(vec2(inset, height), Sense::click_and_drag());
+                            super::chrome::title_row_gesture(ui.ctx(), &response);
+                        }
+                        selected = self.tab_strip_ui(ui, &mut actions);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             ui.add_space(8.0);
@@ -522,6 +559,22 @@ impl EditorApp {
                         });
                     });
                 });
+                // While something blocks the tabs, the title row still moves and zooms the window:
+                // macOS has no other place to grab it.
+                if blocked && self.tabs_in_title_row() {
+                    let response = ui.interact(
+                        bar,
+                        ui.id().with("title_row_while_blocked"),
+                        Sense::click_and_drag(),
+                    );
+                    super::chrome::title_row_gesture(ui.ctx(), &response);
+                }
+                // Where egui draws a panel's line: inside its bottom edge.
+                let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+                let y = bar.bottom() - 0.5 * stroke.width;
+                for span in divider_spans(bar.x_range(), selected) {
+                    ui.painter().hline(span, y, stroke);
+                }
             });
         self.apply_tab_actions(ctx, actions);
     }
@@ -551,12 +604,15 @@ impl EditorApp {
         });
     }
 
-    fn tab_strip_ui(&mut self, ui: &mut Ui, actions: &mut Actions) {
+    /// Draws the tabs and returns the visible part of the selected one, left to right.
+    fn tab_strip_ui(&mut self, ui: &mut Ui, actions: &mut Actions) -> Option<Rangef> {
+        let height = self.bar_height();
+        let title_row = self.tabs_in_title_row();
         let p = ui.palette();
         let keys = self.tab_keys();
         let selected = self.selected_tab();
         let documents = self.sessions.len();
-        let new_button = TAB_HEIGHT;
+        let new_button = height;
         let available = (ui.available_width() - ZOOM_BUTTONS - new_button).max(MIN_TAB);
         let strip = Strip::new(keys.len(), available);
         let overflow = strip.overflows(available);
@@ -593,9 +649,14 @@ impl EditorApp {
         } else {
             strip.content.max(0.0)
         };
-        let (viewport, background) =
-            ui.allocate_exact_size(vec2(width, TAB_HEIGHT), Sense::click());
-        // A double click on the bar's empty part starts a new document, as in browsers.
+        let bar_sense = if title_row {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        };
+        let (viewport, background) = ui.allocate_exact_size(vec2(width, height), bar_sense);
+        // A double click on the bar's empty part starts a new document, as in browsers; as the
+        // macOS title row it zooms the window.
         let empty = ui.interact(
             Rect::from_min_max(
                 viewport.right_top(),
@@ -605,9 +666,13 @@ impl EditorApp {
                 ),
             ),
             ui.id().with("tab_bar_empty"),
-            Sense::click(),
+            bar_sense,
         );
-        if background.double_clicked() || empty.double_clicked() {
+        if title_row {
+            // The empty bar is the title row: it moves and zooms the window.
+            super::chrome::title_row_gesture(ui.ctx(), &background);
+            super::chrome::title_row_gesture(ui.ctx(), &empty);
+        } else if background.double_clicked() || empty.double_clicked() {
             actions.command = Some("new");
         }
         if overflow && ui.rect_contains_pointer(viewport) {
@@ -620,13 +685,17 @@ impl EditorApp {
             .clip_rect()
             .intersect(viewport.expand2(vec2(0.0, 2.0)));
         let mut drag = None;
+        let mut selected_span = None;
         for (index, &key) in keys.iter().enumerate() {
             let rect = Rect::from_min_size(
                 pos2(viewport.left() + strip.left(index) - offset, viewport.top()),
-                vec2(strip.tab, TAB_HEIGHT),
+                vec2(strip.tab, height),
             );
             if !rect.intersects(viewport) {
                 continue;
+            }
+            if selected == Some(key) {
+                selected_span = Some(rect.intersect(viewport).x_range());
             }
             let title = self.tab_title(key);
             let id = ui.id().with(("tab", key));
@@ -779,7 +848,7 @@ impl EditorApp {
         }
         self.tab_strip.offset = offset;
 
-        let (rect, new) = ui.allocate_exact_size(vec2(TAB_HEIGHT, TAB_HEIGHT), Sense::click());
+        let (rect, new) = ui.allocate_exact_size(vec2(height, height), Sense::click());
         new.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tr("New canvas"))
         });
@@ -802,6 +871,7 @@ impl EditorApp {
         {
             actions.command = Some("new");
         }
+        selected_span
     }
 
     /// A tab's context menu.
@@ -886,7 +956,7 @@ impl EditorApp {
 }
 
 /// Opens the file manager at `path`, with the file selected where the platform allows.
-fn show_in_folder(path: &Path) -> std::io::Result<()> {
+pub(super) fn show_in_folder(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     {
         // Tests never start a file manager.

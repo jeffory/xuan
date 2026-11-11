@@ -24,6 +24,9 @@ mod palette;
 #[path = "ui_appearance.rs"]
 mod appearance;
 
+#[path = "ui_language.rs"]
+mod language;
+
 #[path = "ui_empty_state.rs"]
 mod empty_state;
 
@@ -41,6 +44,9 @@ mod dialogs;
 
 #[path = "ui_units.rs"]
 mod units;
+
+#[path = "ui_canvas_presets.rs"]
+mod canvas_presets;
 
 #[path = "ui_updates.rs"]
 mod updates;
@@ -80,6 +86,21 @@ mod collage;
 
 #[path = "ui_camera_raw.rs"]
 mod camera_raw;
+
+#[path = "ui_text_runs.rs"]
+mod text_runs;
+
+#[path = "ui_paths.rs"]
+mod paths;
+
+#[path = "ui_mac_keys.rs"]
+mod mac_keys;
+
+#[path = "ui_anchor.rs"]
+mod anchor;
+
+#[path = "ui_curves.rs"]
+mod curves;
 
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
@@ -377,6 +398,28 @@ fn file_menu_quit_with_unsaved_changes_prompts_instead_of_closing() {
     ui.click("Cancel");
     assert!(!ui.app().close_app);
     assert_eq!(ui.app().sessions.len(), 1);
+}
+
+/// Quitting with unsaved work names each project that has changes, and only those (issue 91).
+#[test]
+fn quitting_lists_the_unsaved_projects() {
+    let mut ui = dirty_document();
+    ui.app_mut().sessions[0].title = "Poster".into();
+    for (title, dirty) in [("Sketch", false), ("Banner", true)] {
+        ui.app_mut().new_document();
+        ui.app_mut().sessions.last_mut().unwrap().title = title.into();
+        if dirty {
+            ui.app_mut().command("fill_fg");
+        }
+    }
+    ui.settle();
+    ui.open_menu("File");
+    ui.click_and_stop(QUIT);
+    ui.settle();
+    assert!(ui.has("Save your changes?"));
+    assert!(ui.has("• Poster") && ui.has("• Banner"));
+    assert!(!ui.has("• Sketch"), "a saved project is not listed");
+    ui.click("Cancel");
 }
 
 #[test]
@@ -1219,6 +1262,62 @@ mod about {
         assert!(ui.has("Copy version"));
         ui.click("Copy version");
     }
+
+    #[test]
+    fn about_links_open_the_project_licences_and_issue_tracker() {
+        let mut ui = UiTest::new();
+        ui.app_mut().dialog = Some(Dialog::About);
+        ui.settle();
+        assert!(ui.has("Xuan"));
+        let site = format!("https://github.com/{}", xuan::update::REPOSITORY);
+        for (label, url) in [
+            ("Project site", site.clone()),
+            (
+                "Licences and third-party notices",
+                crate::app::dialogs::about_links(
+                    xuan::update::REPOSITORY,
+                    &xuan::buildinfo::current(),
+                )[1]
+                .1
+                .clone(),
+            ),
+            ("Report a bug", format!("{site}/issues/new")),
+        ] {
+            ui.click_and_stop(label);
+            let opened = ui
+                .harness
+                .output()
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::OpenUrl(open) => Some(open.url.clone()),
+                    _ => None,
+                });
+            assert_eq!(opened, Some(url), "{label}");
+            ui.settle();
+        }
+    }
+
+    #[test]
+    fn about_links_the_notices_at_the_release_tag_or_main() {
+        use crate::app::dialogs::about_links;
+        let mut build = xuan::buildinfo::current();
+        build.release = true;
+        build.version = "1.2.3";
+        let links = about_links("jeffory/xuan", &build);
+        assert_eq!(links[0].1, "https://github.com/jeffory/xuan");
+        assert_eq!(
+            links[1].1,
+            "https://github.com/jeffory/xuan/blob/v1.2.3/THIRD_PARTY.md"
+        );
+        assert_eq!(links[2].1, "https://github.com/jeffory/xuan/issues/new");
+        build.release = false;
+        assert_eq!(
+            about_links("jeffory/xuan", &build)[1].1,
+            "https://github.com/jeffory/xuan/blob/main/THIRD_PARTY.md"
+        );
+    }
 }
 
 mod color_range {
@@ -1281,6 +1380,24 @@ mod color_range {
         assert_eq!(ui.app().session().unwrap().history.revision, revision + 1);
         // The tool from before is back.
         assert_ne!(ui.app().tool, Tool::Dropper);
+    }
+
+    #[test]
+    fn the_hint_sits_inside_the_empty_matte_until_a_pick() {
+        let mut ui = halves();
+        ui.open_menu("Select");
+        ui.click("Colour Range…");
+        let hint = "Click the image to pick the colour to select.";
+        let node = ui.harness.get_by_label(hint).rect();
+        // The hint is the matte preview itself, between the mode buttons and Fuzziness.
+        let fuzziness = ui.harness.get_by_label("Fuzziness").rect();
+        let pick = ui.harness.get_by_label("Pick").rect();
+        assert!(node.height() > 100.0, "{node:?}");
+        assert!(node.top() > pick.bottom() && node.bottom() < fuzziness.top());
+        let pos = at(&ui, 3.5, 4.5);
+        ui.click_at(pos);
+        assert!(!ui.has(hint));
+        assert!(ui.has("Shift-click adds a colour, Alt-click takes one away."));
     }
 
     #[test]
@@ -1375,6 +1492,7 @@ mod status_bar {
             provider: None,
             surface: None,
             ai_boxes: Vec::new(),
+            caller: None,
         }
     }
 

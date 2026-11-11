@@ -168,6 +168,24 @@ pub fn filter_with(
                     size,
                 )?
             }
+            &Filter::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => {
+                let blurred = gpu.separable(image.as_raw(), size, size, 0, Some(radius))?;
+                gpu.simple(
+                    "unsharp_mask",
+                    RASTER,
+                    image.as_raw(),
+                    &blurred,
+                    &[
+                        [size[0] as f32, size[1] as f32, 0.0, 0.0],
+                        [amount, threshold, 0.0, 0.0],
+                    ],
+                    size,
+                )?
+            }
             Filter::Dither(settings) => {
                 let mut config = vec![[size[0] as f32, size[1] as f32, 0.0, 0.0]];
                 config.extend(dither_params(settings));

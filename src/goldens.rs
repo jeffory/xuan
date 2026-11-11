@@ -89,6 +89,7 @@ const SCENES: &[&str] = &[
     "text_on_path",
     "remove_background",
     "compositor_filters",
+    "unsharp_mask",
     "dither_styles",
     "raw_default",
     "raw_negative",
@@ -158,6 +159,7 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("text_on_path", text_on_path()),
         composite("remove_background", remove_background()),
         composite("compositor_filters", compositor_filters()),
+        composite("unsharp_mask", unsharp_mask()),
         Scene {
             // Thresholds: a pixel one level off on the GPU can land on the other side of a
             // dither threshold, which moves it by a whole tone.
@@ -606,6 +608,45 @@ fn filter_layer(filter: crate::effects::Filter, mask: Option<Mask>) -> Layer {
 /// spots (top left), Tonal Contrast on a fine checker (top right), a card with a Vignette
 /// attached to it (bottom left, framing the card), and a Vignette filter layer over the
 /// whole canvas.
+/// Soft texture and hard-edged tiles under Unsharp Mask filter layers: a fine, strong one in
+/// the top-left cell, a wide one with a threshold in the bottom-right, the rest untouched.
+fn unsharp_mask() -> Document {
+    use crate::effects::Filter;
+    let texture = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let wave = (x as f32 / 9.0).sin() * (y as f32 / 11.0).sin();
+        let v = (128.0 + 70.0 * wave) as u8;
+        Rgba([v, (v as f32 * 0.9) as u8, 255 - v, 220])
+    });
+    let tiles = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if (x / 16 + y / 16) % 4 == 0 && x % 16 > 3 && y % 16 > 3 {
+            [235, 200, 60, 255]
+        } else {
+            [0, 0, 0, 0]
+        })
+    });
+    document(vec![
+        Layer::image("Hues", hue_ramp(SIZE, SIZE)),
+        Layer::image("Texture", texture),
+        Layer::image("Tiles", tiles),
+        filter_layer(
+            Filter::UnsharpMask {
+                amount: 250.0,
+                radius: 2.0,
+                threshold: 0.0,
+            },
+            Some(cell_mask(2, 2, 0)),
+        ),
+        filter_layer(
+            Filter::UnsharpMask {
+                amount: 120.0,
+                radius: 12.0,
+                threshold: 24.0,
+            },
+            Some(cell_mask(2, 2, 3)),
+        ),
+    ])
+}
+
 fn compositor_filters() -> Document {
     use crate::effects::Filter;
     let spots = RgbaImage::from_fn(SIZE, SIZE, |x, y| {

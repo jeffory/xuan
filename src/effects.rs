@@ -453,9 +453,24 @@ pub enum Filter {
         highlights: f32,
     },
     Dither(Box<DitherSettings>),
+    /// Sharpening: the difference between each pixel and the image blurred at Radius
+    /// 0.1–100 px is added back, Amount 0–500% of it, where it is at least Threshold
+    /// 0–255 levels (so noise in flat areas is left alone). It needs format 18.
+    UnsharpMask {
+        amount: f32,
+        radius: f32,
+        threshold: f32,
+    },
 }
 
 impl Filter {
+    /// Unsharp Mask as the Filter menu opens it.
+    pub const UNSHARP_MASK: Self = Self::UnsharpMask {
+        amount: 100.0,
+        radius: 1.5,
+        threshold: 0.0,
+    };
+
     /// Upstream's defaults for the new filters, as the Filter menu opens them.
     pub const VIGNETTE: Self = Self::Vignette {
         amount: 35.0,
@@ -478,7 +493,7 @@ impl Filter {
     };
 
     /// Every filter with the settings the Filter menu opens it with, in menu order.
-    pub fn defaults() -> [Self; 8] {
+    pub fn defaults() -> [Self; 9] {
         [
             Self::GaussianBlur { radius: 4.0 },
             Self::MotionBlur {
@@ -497,6 +512,7 @@ impl Filter {
             Self::BLOOM,
             Self::Dither(Box::default()),
             Self::TONAL_CONTRAST,
+            Self::UNSHARP_MASK,
         ]
     }
 
@@ -559,6 +575,15 @@ impl Filter {
                 within("TonalContrast.highlights", highlights, -100.0, 100.0)
             }
             Self::Dither(settings) => settings.validate(),
+            &Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => {
+                within("UnsharpMask.amount", amount, 0.0, 500.0)?;
+                within("UnsharpMask.radius", radius, 0.1, 100.0)?;
+                within("UnsharpMask.threshold", threshold, 0.0, 255.0)
+            }
         }
     }
 
@@ -589,6 +614,15 @@ impl Filter {
                 highlights,
             },
             Self::Dither(ref settings) => Self::Dither(Box::new(settings.scaled(scale))),
+            Self::UnsharpMask {
+                amount,
+                radius,
+                threshold,
+            } => Self::UnsharpMask {
+                amount,
+                radius: radius * scale,
+                threshold,
+            },
             _ => self.clone(),
         }
     }
@@ -603,6 +637,7 @@ impl Filter {
             Self::Bloom { .. } => "Bloom / Glow",
             Self::TonalContrast { .. } => "Tonal Contrast",
             Self::Dither(_) => "Dither",
+            Self::UnsharpMask { .. } => "Unsharp Mask",
         }
     }
 
@@ -728,6 +763,11 @@ fn filtered_with(image: &RgbaImage, filter: &Filter, fills_clear: bool) -> RgbaI
             [shadows, midtones, highlights],
         ),
         Filter::Dither(settings) => dither::dither(image, settings),
+        &Filter::UnsharpMask {
+            amount,
+            radius,
+            threshold,
+        } => stylize::unsharp_mask(image, &gaussian_blurred(image, radius), amount, threshold),
     }
 }
 
@@ -1164,6 +1204,90 @@ pub fn histogram(image: &RgbaImage) -> [u32; 256] {
         bins[value.min(255)] += 1;
     }
     bins
+}
+
+/// The darkest and lightest levels of 256 counts once the outlying 0.5% at each end are
+/// left out, as [`auto_levels`] clips them.
+fn clipped_range(bins: &[u64; 256]) -> (f32, f32) {
+    let total: u64 = bins.iter().sum();
+    let cutoff = total / 200;
+    let mut sum = 0;
+    let black = bins
+        .iter()
+        .position(|n| {
+            sum += n;
+            sum > cutoff
+        })
+        .unwrap_or(0) as f32;
+    sum = 0;
+    let white = 255
+        - bins
+            .iter()
+            .rev()
+            .position(|n| {
+                sum += n;
+                sum > cutoff
+            })
+            .unwrap_or(0);
+    (black.min(254.0), (white as f32).max(black.min(254.0) + 1.0))
+}
+
+/// Auto Tone: each of red, green and blue stretched to the full range on its own, the
+/// outlying 0.5% at each end clipped. Unlike [`auto_levels`], which stretches the
+/// lightness and keeps the colours, this also removes a colour cast from the darkest and
+/// lightest tones.
+pub fn auto_tone(image: &RgbaImage) -> Adjustment {
+    let mut bins = [[0u64; 256]; 3];
+    for pixel in image.pixels().filter(|p| p[3] != 0) {
+        for channel in 0..3 {
+            bins[channel][usize::from(pixel[channel])] += 1;
+        }
+    }
+    let mut ranges = [[0.0, 1.0, 255.0, 0.0, 255.0]; 4];
+    for channel in 0..3 {
+        let (black, white) = clipped_range(&bins[channel]);
+        ranges[channel + 1] = [black, 1.0, white, 0.0, 255.0];
+    }
+    Adjustment::LevelsChannels { ranges }
+}
+
+/// The average colour of an image for a grey-world white balance: its pixels that are
+/// neither transparent nor clipped in any channel, or every visible pixel when all are
+/// clipped. `None` for an image with nothing visible.
+pub fn average_color(image: &RgbaImage) -> Option<[f32; 3]> {
+    let mean = |clipped: bool| {
+        let (mut sum, mut count) = ([0u64; 3], 0u64);
+        for pixel in image.pixels().filter(|p| p[3] != 0) {
+            if !clipped && pixel.0[..3].iter().any(|v| !(5..=250).contains(v)) {
+                continue;
+            }
+            for channel in 0..3 {
+                sum[channel] += u64::from(pixel[channel]);
+            }
+            count += 1;
+        }
+        (count > 0).then(|| sum.map(|channel| channel as f32 / count as f32))
+    };
+    mean(false).or_else(|| mean(true))
+}
+
+/// Auto white balance: per-channel levels that make `neutral`, a colour that should be
+/// grey (the image's average for a grey-world balance, or a sampled grey card), grey at
+/// the same lightness. Each channel is scaled by at most 4 either way.
+pub fn white_balance(neutral: [f32; 3]) -> Adjustment {
+    let target = 0.2126 * neutral[0] + 0.7152 * neutral[1] + 0.0722 * neutral[2];
+    let mut ranges = [[0.0, 1.0, 255.0, 0.0, 255.0]; 4];
+    for channel in 0..3 {
+        let gain = (target / neutral[channel].max(0.5)).clamp(0.25, 4.0);
+        ranges[channel + 1] = if gain >= 1.0 {
+            // Brighter: a lower white point.
+            [0.0, 1.0, (255.0 / gain).max(1.0), 0.0, 255.0]
+        } else {
+            // Darker: a lower output white.
+            [0.0, 1.0, 255.0, 0.0, 255.0 * gain]
+        };
+    }
+    Adjustment::LevelsChannels { ranges }
 }
 
 pub fn auto_levels(image: &RgbaImage) -> Adjustment {

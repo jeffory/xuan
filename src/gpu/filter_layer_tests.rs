@@ -95,9 +95,16 @@ fn filter_layers_match_cpu_and_reuse_sources() {
             midtones: 100.0,
             highlights: 40.0,
         },
+        Filter::UNSHARP_MASK,
+        Filter::UnsharpMask {
+            amount: 150.0,
+            radius: 6.0,
+            threshold: 12.0,
+        },
     ] {
         document.layers[2].filter = Some(filter.clone());
         document.validate().unwrap();
+        let slack = super::processing_tests::sharpening_slack(&filter);
         for size in [[160, 144], [80, 72]] {
             // Repeated changes must reuse the source upload, even though filtering changes.
             scope(Some(processor.clone()), || {
@@ -124,7 +131,9 @@ fn filter_layers_match_cpu_and_reuse_sources() {
                     b[3],
                 ];
                 assert!(
-                    a.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 3),
+                    a.iter()
+                        .zip(expected)
+                        .all(|(a, b)| a.abs_diff(b) <= 3 + slack),
                     "{filter:?} {size:?} pixel {index}: GPU {a:?}, CPU {expected:?}"
                 );
             }
@@ -139,7 +148,7 @@ fn filter_layers_match_cpu_and_reuse_sources() {
         let expected = render::render(&document);
         for (a, b) in actual.pixels().zip(expected.pixels()) {
             assert!(
-                a.0.iter().zip(b.0).all(|(a, b)| a.abs_diff(b) <= 4),
+                a.0.iter().zip(b.0).all(|(a, b)| a.abs_diff(b) <= 4 + slack),
                 "{filter:?}: GPU {a:?}, CPU {b:?}"
             );
         }

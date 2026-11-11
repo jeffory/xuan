@@ -15,7 +15,19 @@ use super::{
 };
 
 fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
-    slider_from(ui, label, value, range, unit, false);
+    let decimals = decimals(&range);
+    slider_from(ui, label, value, range, unit, false, decimals);
+}
+
+/// The decimals a Develop slider shows: whole numbers ("6500 K", "0 %") for wide ranges, where
+/// a step of one is already fine, and hundredths for narrow ones such as Exposure or Radius,
+/// whose values are fractional by nature.
+fn decimals(range: &RangeInclusive<f32>) -> usize {
+    if range.end() - range.start() > 20.0 {
+        0
+    } else {
+        2
+    }
 }
 
 /// A slider whose neutral value is 0 in the middle of its range: it fills from 0.
@@ -26,7 +38,8 @@ fn bipolar(
     range: RangeInclusive<f32>,
     unit: &str,
 ) {
-    slider_from(ui, label, value, range, unit, true);
+    let decimals = decimals(&range);
+    slider_from(ui, label, value, range, unit, true, decimals);
 }
 
 fn slider_from(
@@ -36,6 +49,7 @@ fn slider_from(
     range: RangeInclusive<f32>,
     unit: &str,
     centered: bool,
+    decimals: usize,
 ) {
     ui.horizontal(|ui| {
         ui.add_sized(
@@ -47,7 +61,7 @@ fn slider_from(
         let mut slider = widgets::Slider::new(value, range)
             .clamp_existing_to_range(false)
             .suffix(unit)
-            .max_decimals(2);
+            .max_decimals(decimals);
         if centered {
             slider = slider.centered();
         }
@@ -66,7 +80,7 @@ fn tool_checkbox(ui: &mut egui::Ui, d: &mut Develop, tool: CanvasTool, label: &s
 }
 
 fn percent(ui: &mut egui::Ui, label: &str, value: &mut f32) {
-    bipolar(ui, label, value, -100.0..=100.0, "%");
+    bipolar(ui, label, value, -100.0..=100.0, " %");
 }
 
 pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
@@ -452,7 +466,7 @@ fn tones(ui: &mut egui::Ui, d: &mut Develop) {
         tr("Shadow amount"),
         &mut d.settings.shadow_tone[1],
         0.0..=100.0,
-        "%",
+        " %",
     );
     slider(
         ui,
@@ -466,7 +480,7 @@ fn tones(ui: &mut egui::Ui, d: &mut Develop) {
         tr("Highlight amount"),
         &mut d.settings.highlight_tone[1],
         0.0..=100.0,
-        "%",
+        " %",
     );
     percent(ui, tr("Balance"), &mut d.settings.tone_balance);
 }
@@ -478,17 +492,17 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
         tr("Luminance"),
         &mut d.settings.luminance_noise,
         0.0..=100.0,
-        "%",
+        " %",
     );
     slider(
         ui,
         tr("Colour"),
         &mut d.settings.color_noise,
         0.0..=100.0,
-        "%",
+        " %",
     );
     heading(ui, tr("Sharpening"));
-    slider(ui, tr("Amount"), &mut d.settings.sharpen, 0.0..=200.0, "%");
+    slider(ui, tr("Amount"), &mut d.settings.sharpen, 0.0..=200.0, " %");
     slider(
         ui,
         tr("Radius"),
@@ -524,7 +538,7 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
             tr("Defringe"),
             &mut d.settings.defringe,
             0.0..=100.0,
-            "%",
+            " %",
         );
         percent(ui, tr("Vignetting"), &mut d.settings.vignette);
         return;
@@ -543,7 +557,7 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
         tr("Defringe"),
         &mut d.settings.defringe,
         0.0..=100.0,
-        "%",
+        " %",
     );
     percent(ui, tr("Vignetting"), &mut d.settings.vignette);
     heading(ui, tr("Geometry"));
@@ -555,12 +569,15 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
             d.rotate(true);
         }
     });
-    slider(
+    // Drawn along a horizon, the angle is rarely whole: tenths of a degree.
+    slider_from(
         ui,
         tr("Straighten"),
         &mut d.settings.rotation,
         -45.0..=45.0,
         "°",
+        false,
+        1,
     );
     percent(ui, tr("Horizontal"), &mut d.settings.perspective[0]);
     percent(ui, tr("Vertical"), &mut d.settings.perspective[1]);
@@ -889,5 +906,27 @@ fn load_preset(d: &mut Develop) {
             d.leave_tool(CanvasTool::DrawMask);
         }
         Err(error) => d.error = Some(format!("{}: {error}", tr("Could not load RAW settings"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decimals;
+
+    #[test]
+    fn wide_ranges_show_whole_numbers_and_narrow_ones_hundredths() {
+        // Temperature, percentages, hue and Tint.
+        for range in [
+            2000.0..=25_000.0,
+            -100.0..=100.0,
+            0.0..=360.0,
+            -150.0..=150.0,
+        ] {
+            assert_eq!(decimals(&range), 0, "{range:?}");
+        }
+        // Exposure, Radius, Threshold, crop fractions.
+        for range in [-10.0..=10.0, 0.3..=5.0, 0.0..=0.2, 0.0..=1.0] {
+            assert_eq!(decimals(&range), 2, "{range:?}");
+        }
     }
 }
