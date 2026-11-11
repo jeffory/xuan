@@ -1202,7 +1202,9 @@ stretches over. The document's description lists the paths saved with it under
 "Ellipse" | "RoundedRectangle" | "Path", color: "#rrggbbaa", corner_radius}`;
 `null` for other kinds), `raw`, `group`, `mask`, `adjustment` or `filter`. `flip_x`
 and `flip_y` are the layer's flips, which **Flip Horizontal** and **Flip
-Vertical** toggle.
+Vertical** toggle. Several layers flipped together mirror across their
+combined bounds, so they also trade places, and each layer's own flip is
+toggled; the `transform` op sets them.
 
 Masks are layers. **Add Mask from Selection** on an image adds a child layer
 of kind `mask` whose `parent` is the image; adjustment and filter layers can
@@ -1267,13 +1269,19 @@ Layers and their properties:
   into or next to itself or its own children. The layer becomes the active
   layer.
 - `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?,
-  "pivot"?, "cover"?}`: move, scale or rotate a layer (a group with its
-  layers) to this box in document units, as **Free Transform** does; missing
-  fields keep their value. The layer must not be locked. `rotation` (degrees
-  clockwise) turns the layer about its centre, or about `pivot` (`[x, y]` in
-  document pixels) when given. `cover: true` then scales the layer up about
-  its centre just enough to cover the whole canvas, so no corner is empty; a
-  layer that already covers it is left alone.
+  "pivot"?, "cover"?, "flip_x"?, "flip_y"?}`: move, scale or rotate a layer
+  (a group with its layers) to this box in document units, as **Free
+  Transform** does; missing fields keep their value. The layer must not be
+  locked. `rotation` (degrees clockwise) turns the layer about its centre, or
+  about `pivot` (`[x, y]` in document pixels) when given. `cover: true` then
+  scales the layer up about its centre just enough to cover the whole canvas,
+  so no corner is empty; a layer that already covers it is left alone.
+  `flip_x` and `flip_y` say whether the layer is mirrored left to right and
+  top to bottom about its centre, as `document/get` reports them: `true`
+  flips a layer that is not flipped, `false` unflips one that is, and a flip
+  it already has changes nothing. A group mirrors as a whole across its
+  layers' bounds, as **Flip Horizontal** on it does, its layers trading
+  places.
 - `{"op": "add_empty_layer", "name"?, "above"?}` and `{"op": "add_mask_layer",
   "name"?, "above"?}`: an empty pixel layer, or a mask layer made from the
   selection (all white without one), the size of the canvas.

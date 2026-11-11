@@ -2657,6 +2657,24 @@ fn host_run_picks_its_layers_and_reports_what_it_added_and_started() {
         (&flipped["flip_x"], &flipped["flip_y"]),
         (&json!(true), &json!(false))
     );
+    // Several layers flip together, as one step, and each reports its own flip.
+    let steps = app.session().unwrap().history.names().count();
+    plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "flip_h", "layers": [base, copies[0]]}),
+    )
+    .unwrap();
+    assert_eq!(app.session().unwrap().history.names().count(), steps + 1);
+    for (id, flip_x) in [(base, false), (copies[0], true)] {
+        let layer = describe(&mut app, id);
+        assert_eq!(
+            (&layer["flip_x"], &layer["x"]),
+            (&json!(flip_x), &json!(0.0))
+        );
+    }
+    let document = &app.session().unwrap().document;
+    assert!(document.layers.iter().all(|l| l.transform.warp.is_none()));
 
     // A mask attached to the image is reported on it and exported through it.
     let answer = plugin_request(

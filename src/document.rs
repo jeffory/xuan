@@ -173,12 +173,27 @@ impl Transform {
         result
     }
 
+    /// This transform carried along as the box `old` becomes `new`, as the layers in a
+    /// transformed selection or group follow its bounds.
     pub fn following(self, old: Self, new: Self) -> Self {
+        if old.flip_x != new.flip_x || old.flip_y != new.flip_y {
+            // A flipped box mirrors what follows it. Store that mirror as the transform's own
+            // flip, as Flip Canvas does, not as a warp, so a layer flipped with others still
+            // says it is flipped and stays unwarped. Anything else that changed follows the
+            // mirrored box.
+            if old.width == new.width && old.height == new.height && old.warp == new.warp {
+                return self.mirrored(old, new);
+            }
+            let flipped = Self {
+                flip_x: new.flip_x,
+                flip_y: new.flip_y,
+                ..old
+            };
+            return self.mirrored(old, flipped).following(flipped, new);
+        }
         if old.width == new.width
             && old.height == new.height
             && old.rotation == new.rotation
-            && old.flip_x == new.flip_x
-            && old.flip_y == new.flip_y
             && old.warp == new.warp
         {
             return Self {
@@ -187,6 +202,12 @@ impl Transform {
                 ..self
             };
         }
+        self.reshaped(old, new)
+    }
+
+    /// [`following`](Self::following) in general: scaled and turned with the box, with a warp
+    /// for whatever the box's map does that size and rotation cannot (a shear, or a mirror).
+    fn reshaped(self, old: Self, new: Self) -> Self {
         let map = |point| new.point(old.inverse(point));
         let center = map(self.center());
         let mut result = self;
@@ -200,6 +221,30 @@ impl Transform {
         if crate::geometry::Homography::from_quad(quad).is_some() {
             result.warp = Some(quad);
         }
+        result
+    }
+
+    /// [`following`](Self::following) for boxes of the same size and warp whose flips differ:
+    /// the map from `old` to `new` is then a mirror (with a turn and a move), which keeps this
+    /// transform's size and warp, toggles the same flips and reflects its rotation.
+    fn mirrored(self, old: Self, new: Self) -> Self {
+        if self == old {
+            return new;
+        }
+        let (flip_x, flip_y) = (old.flip_x != new.flip_x, old.flip_y != new.flip_y);
+        let center = new.point(old.inverse(self.center()));
+        let mut result = self;
+        result.flip_x ^= flip_x;
+        result.flip_y ^= flip_y;
+        // One flip reverses the sense of turning; two flips are a half turn, which the two
+        // toggled flips already make.
+        result.rotation = if flip_x != flip_y {
+            new.rotation + old.rotation - self.rotation
+        } else {
+            self.rotation + new.rotation - old.rotation
+        };
+        result.x = center.x - self.width * 0.5;
+        result.y = center.y - self.height * 0.5;
         result
     }
 }
@@ -1089,6 +1134,209 @@ mod tests {
             };
             let p = Point::new(0.17, 0.89);
             assert!(t.inverse(t.point(p)).distance(p) < 0.00001);
+        }
+    }
+
+    /// Transforms a group flip moves: plain, turned and scaled, already flipped, and warped.
+    fn followers() -> [Transform; 4] {
+        let quad = [
+            Point::new(0.1, 0.0),
+            Point::new(1.0, 0.15),
+            Point::new(0.85, 1.0),
+            Point::new(0.0, 0.9),
+        ];
+        [
+            Transform {
+                x: 10.0,
+                y: 20.0,
+                ..Transform::new(30, 15)
+            },
+            Transform {
+                x: -13.0,
+                y: 25.0,
+                width: 90.0,
+                height: 45.0,
+                rotation: 37.0,
+                flip_x: false,
+                flip_y: true,
+                warp: None,
+            },
+            Transform {
+                x: 60.0,
+                y: 5.0,
+                width: 12.5,
+                height: 70.0,
+                rotation: -120.0,
+                flip_x: true,
+                flip_y: false,
+                warp: None,
+            },
+            Transform {
+                x: 40.0,
+                y: 40.0,
+                rotation: 15.0,
+                warp: Some(quad),
+                ..Transform::new(50, 20)
+            },
+        ]
+    }
+
+    /// Whether two transforms put the corners and some inner points of a layer in the same places.
+    fn same_place(a: Transform, b: Transform) -> bool {
+        let close = |p: Point, q: Point| p.distance(q) < 0.001;
+        a.corners()
+            .into_iter()
+            .zip(b.corners())
+            .all(|(p, q)| close(p, q))
+            && [Point::new(0.3, 0.7), Point::new(0.5, 0.5)]
+                .into_iter()
+                .all(|p| close(a.point(p), b.point(p)))
+    }
+
+    #[test]
+    fn a_flipped_box_flips_what_follows_it_where_the_old_warp_put_it() {
+        let boxes = [
+            // Several layers' upright bounds, as Flip Horizontal on them flips.
+            Transform {
+                x: -20.0,
+                y: 0.0,
+                ..Transform::new(140, 90)
+            },
+            // A turned and flipped box, as a layer's own transform is for its linked mask.
+            Transform {
+                x: 5.0,
+                y: -10.0,
+                rotation: 25.0,
+                flip_y: true,
+                ..Transform::new(70, 60)
+            },
+        ];
+        for old in boxes {
+            for (flip_x, flip_y) in [(true, false), (false, true), (true, true)] {
+                let new = Transform {
+                    flip_x: old.flip_x ^ flip_x,
+                    flip_y: old.flip_y ^ flip_y,
+                    ..old
+                };
+                for layer in followers() {
+                    let followed = layer.following(old, new);
+                    // `reshaped` is what `following` did before: the mirror as a warp.
+                    let warped = layer.reshaped(old, new);
+                    assert!(warped.warp.is_some());
+                    assert!(same_place(followed, warped), "{layer:?} in {new:?}");
+                    assert_eq!(followed.warp, layer.warp, "no warp is added or lost");
+                    assert_eq!(
+                        (followed.flip_x, followed.flip_y),
+                        (layer.flip_x ^ flip_x, layer.flip_y ^ flip_y)
+                    );
+                    assert_eq!(
+                        (followed.width, followed.height),
+                        (layer.width, layer.height)
+                    );
+                    // Flipped back, it is where it was.
+                    let back = followed.following(new, old);
+                    assert_eq!(
+                        (back.flip_x, back.flip_y, back.warp),
+                        (layer.flip_x, layer.flip_y, layer.warp)
+                    );
+                    assert!((back.rotation - layer.rotation).abs() < 0.001);
+                    assert!(same_place(back, layer));
+                }
+            }
+        }
+
+        // Flipped across upright bounds, a turned layer turns the other way, as Flip Canvas
+        // turns it, and the box's own transform is the flipped box.
+        let old = boxes[0];
+        let new = Transform {
+            flip_x: true,
+            ..old
+        };
+        assert_eq!(followers()[1].following(old, new).rotation, -37.0);
+        assert_eq!(old.following(old, new), new);
+
+        // A box that flips while it also grows and turns still flips what follows it, and the
+        // rest follows as before.
+        let new = Transform {
+            width: 200.0,
+            rotation: 10.0,
+            flip_x: true,
+            ..old
+        };
+        for layer in followers() {
+            let followed = layer.following(old, new);
+            assert!(same_place(followed, layer.reshaped(old, new)), "{layer:?}");
+            assert_eq!(followed.flip_x, !layer.flip_x);
+        }
+    }
+
+    #[test]
+    fn layers_flipped_together_render_as_the_old_warp_drew_them() {
+        let pattern = |width, height, seed: u32| {
+            RgbaImage::from_fn(width, height, |x, y| {
+                let v = (x * 37 + y * 91 + seed * 53) % 256;
+                image::Rgba([v as u8, (255 - v) as u8, ((x * 255) / width) as u8, 255])
+            })
+        };
+        let mut document = Document::new(96, 72).unwrap();
+        document.layers.clear();
+        for (index, transform) in followers().into_iter().enumerate() {
+            let pixels = pattern(
+                transform.width.round() as u32 / 2 + 3,
+                transform.height.round() as u32 / 2 + 3,
+                index as u32,
+            );
+            let mut layer = Layer::image(format!("Layer {index}"), pixels);
+            layer.transform = transform;
+            document.layers.push(layer);
+        }
+        // A linked mask placed apart from its layer follows it.
+        document.layers[1].mask = Some(Mask {
+            pixels: Arc::new(GrayImage::from_fn(8, 8, |x, y| {
+                image::Luma([((x + y) * 16) as u8])
+            })),
+            placement: Some(Transform {
+                x: -5.0,
+                y: 30.0,
+                rotation: 10.0,
+                ..Transform::new(40, 30)
+            }),
+            ..Mask::white()
+        });
+        document.selected = document.layers.iter().map(|l| l.id).collect();
+        document.active = Some(document.layers[0].id);
+        let unflipped = crate::render::render(&document);
+        for (flip_x, flip_y) in [(true, false), (false, true), (true, true)] {
+            let old = crate::operations::transform_box(&document, false).unwrap();
+            let new = Transform {
+                flip_x,
+                flip_y,
+                ..old
+            };
+            let mut flipped = document.clone();
+            crate::operations::apply_transform(&mut flipped, new, false).unwrap();
+            let mut warped = document.clone();
+            for layer in &mut warped.layers {
+                layer.set_transform(layer.transform.reshaped(old, new));
+            }
+            for (layer, before) in flipped.layers.iter().zip(&document.layers) {
+                assert_eq!(layer.transform.flip_x, before.transform.flip_x ^ flip_x);
+                assert_eq!(layer.transform.flip_y, before.transform.flip_y ^ flip_y);
+                assert_eq!(layer.transform.warp, before.transform.warp);
+            }
+            let (flipped, warped) = (
+                crate::render::render(&flipped),
+                crate::render::render(&warped),
+            );
+            assert_ne!(flipped, unflipped);
+            let worst = flipped
+                .as_raw()
+                .iter()
+                .zip(warped.as_raw())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(worst <= 2, "{flip_x} {flip_y}: off by {worst}");
         }
     }
 

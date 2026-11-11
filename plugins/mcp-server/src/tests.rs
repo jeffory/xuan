@@ -3100,3 +3100,45 @@ fn auto_adjust_sends_its_kind_and_where_to_measure() {
     );
     assert_eq!(unknown.is_error, Some(true));
 }
+
+#[test]
+fn set_layer_sets_flips_with_the_placement_and_run_command_says_layers_flip_together() {
+    let editor = FakeEditor::new(false);
+    let layer = "11111111-1111-1111-1111-111111111111";
+    let sent = |editor: &FakeEditor| edit_requests(editor).pop().unwrap()["edits"].clone();
+    let result = call_tool(
+        &editor,
+        "set_layer",
+        json!({"layer": layer, "flip_x": true, "flip_y": false}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "transform", "layer": layer, "flip_x": true, "flip_y": false}])
+    );
+    // A flip goes with the rest of the placement, apart from the layer's properties.
+    call_tool(
+        &editor,
+        "set_layer",
+        json!({"layer": layer, "opacity": 0.5, "x": 4, "flip_y": true}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([
+            {"op": "set", "layer": layer, "opacity": 0.5},
+            {"op": "transform", "layer": layer, "x": 4, "flip_y": true},
+        ])
+    );
+    let tools = tools::list();
+    let tool = |name: &str| tools.iter().find(|t| t.name == name).unwrap();
+    let schema = &tool("set_layer").input_schema["properties"];
+    assert_eq!(schema["flip_x"]["type"], "boolean");
+    assert_eq!(schema["flip_y"]["type"], "boolean");
+    let description = |name: &str| tool(name).description.clone().unwrap_or_default();
+    assert!(description("set_layer").contains("`flip_x`"));
+    assert!(
+        description("run_command").contains("flip together as a group"),
+        "{}",
+        description("run_command")
+    );
+}

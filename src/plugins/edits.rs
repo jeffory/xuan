@@ -789,6 +789,14 @@ pub enum Edit {
         /// cover the whole canvas, leaving no corner empty.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cover: bool,
+        /// Whether the layer is mirrored left to right, as Flip Horizontal
+        /// leaves it, about its own centre; a group mirrors as a whole across
+        /// its layers' bounds. Missing, it does not change.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_x: Option<bool>,
+        /// The same top to bottom, as Flip Vertical leaves it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_y: Option<bool>,
     },
     /// A rectangle or ellipse combined with the selection, its edge
     /// softened by `feather` pixels first.
@@ -2233,12 +2241,25 @@ fn apply_each(
                 rotation,
                 pivot,
                 cover,
+                flip_x,
+                flip_y,
             } => {
                 let target = find(document, *layer)?;
                 ensure!(!target.locked, "Layer {} is locked", target.name);
+                let flipped = (target.transform.flip_x, target.transform.flip_y);
                 document.select(*layer, false);
                 let mut transform = crate::operations::transform_box(document, false)
                     .context("The layer cannot be transformed")?;
+                // Flip the box when the layer is not as asked: a layer's box is the layer, and
+                // a group's, its layers' bounds, mirrors them together, as Flip Horizontal does.
+                for (wanted, now, flip) in [
+                    (flip_x, flipped.0, &mut transform.flip_x),
+                    (flip_y, flipped.1, &mut transform.flip_y),
+                ] {
+                    if wanted.is_some_and(|wanted| wanted != now) {
+                        *flip = !*flip;
+                    }
+                }
                 let turned_from = transform.rotation;
                 for (value, field) in [
                     (x, &mut transform.x),
@@ -6044,6 +6065,118 @@ mod tests {
         )
         .unwrap();
         assert!(covered(&document));
+    }
+
+    #[test]
+    fn transform_sets_flips_about_the_layer_or_mirrors_a_group_as_one() {
+        let (mut document, base) = grey_document();
+        let mut pixels = (**document.layers[0].pixels.as_ref().unwrap()).clone();
+        for y in 0..30 {
+            pixels.put_pixel(0, y, image::Rgba([255, 0, 0, 255]));
+        }
+        document.layers[0].pixels = Some(Arc::new(pixels));
+        let flips = |document: &Document, id| {
+            let layer = described(document, id);
+            (layer["flip_x"].clone(), layer["flip_y"].clone())
+        };
+        let placed = |document: &Document, id| {
+            let t = document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .unwrap()
+                .transform;
+            (t.x, t.y, t.width, t.height, t.warp)
+        };
+        let before = placed(&document, base);
+
+        // A layer flips about its own centre, and the flips are absolute.
+        for (sent, expected) in [
+            (json!({"flip_x": true}), (json!(true), json!(false))),
+            (json!({"flip_x": true}), (json!(true), json!(false))),
+            (json!({"flip_y": true}), (json!(true), json!(true))),
+            (
+                json!({"flip_x": false, "flip_y": false}),
+                (json!(false), json!(false)),
+            ),
+            (json!({"flip_x": false}), (json!(false), json!(false))),
+        ] {
+            let mut op = json!({"op": "transform", "layer": base});
+            op.as_object_mut()
+                .unwrap()
+                .extend(sent.as_object().unwrap().clone());
+            run(&mut document, &[edit(op)]).unwrap();
+            assert_eq!(flips(&document, base), expected, "{sent}");
+            assert_eq!(placed(&document, base), before, "{sent}");
+        }
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": base, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        let shown = crate::render::render(&document);
+        assert_eq!(shown.get_pixel(39, 10).0, [255, 0, 0, 255]);
+        assert_eq!(shown.get_pixel(0, 10).0, [100, 100, 100, 255]);
+
+        // A group mirrors as a whole, its layers trading places and each reporting the flip.
+        let shape = |x: f32| {
+            edit(json!({
+                "op": "add_shape_layer", "shape": "Rectangle", "x": x, "y": 4,
+                "width": 10, "height": 6, "color": "#0000ff",
+            }))
+        };
+        let added = run(&mut document, &[shape(2.0), shape(20.0)]).unwrap();
+        let (left, right) = (added[0], added[1]);
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [left, right]}))],
+        )
+        .unwrap()[0];
+        let (left_before, right_before) = (placed(&document, left), placed(&document, right));
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        for id in [group, left, right] {
+            assert_eq!(flips(&document, id), (json!(true), json!(false)));
+        }
+        let x = |document: &Document, id| placed(document, id).0;
+        assert!((x(&document, left) - 20.0).abs() < 0.001);
+        assert!((x(&document, right) - 2.0).abs() < 0.001);
+        assert_eq!(placed(&document, left).4, None, "no warp");
+        // Asked again, the group is already flipped; asked back, it returns.
+        let flipped = document.clone();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(placed(&document, left), placed(&flipped, left));
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": false}),
+            )],
+        )
+        .unwrap();
+        for (id, before) in [(left, left_before), (right, right_before)] {
+            assert_eq!(flips(&document, id), (json!(false), json!(false)));
+            let now = placed(&document, id);
+            assert!((now.0 - before.0).abs() < 0.001 && (now.1 - before.1).abs() < 0.001);
+        }
+        assert!(
+            serde_json::from_value::<Edit>(
+                json!({"op": "transform", "layer": base, "flip_x": "yes"})
+            )
+            .is_err()
+        );
     }
 
     #[test]

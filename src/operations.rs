@@ -1691,6 +1691,66 @@ mod tests {
     }
 
     #[test]
+    fn layers_flipped_together_are_each_flipped_as_flip_canvas_flips_them() {
+        let mut doc = Document::new(40, 30).unwrap();
+        doc.layers.clear();
+        // The first two span the canvas, so the layers' bounds are the canvas.
+        let mut top_left = Layer::blank("Top left", 12, 8);
+        top_left.transform.flip_y = true;
+        let mut bottom_right = Layer::blank("Bottom right", 12, 8);
+        bottom_right.transform.x = 28.0;
+        bottom_right.transform.y = 22.0;
+        let mut turned = Layer::blank("Turned", 10, 6);
+        turned.transform.x = 8.0;
+        turned.transform.y = 11.0;
+        turned.transform.rotation = 30.0;
+        turned.transform.flip_x = true;
+        doc.selected = [top_left.id, bottom_right.id, turned.id].into();
+        doc.active = Some(turned.id);
+        doc.layers = vec![top_left, bottom_right, turned];
+        for horizontal in [true, false] {
+            let mut together = doc.clone();
+            let mut new = transform_box(&together, false).unwrap();
+            assert_eq!(new, Transform::new(40, 30));
+            if horizontal {
+                new.flip_x = true;
+            } else {
+                new.flip_y = true;
+            }
+            apply_transform(&mut together, new, false).unwrap();
+            let mut canvas = doc.clone();
+            flip_canvas(&mut canvas, horizontal);
+            for (layer, expected) in together.layers.iter().zip(&canvas.layers) {
+                let (a, b) = (layer.transform, expected.transform);
+                assert_eq!((a.flip_x, a.flip_y, a.warp), (b.flip_x, b.flip_y, b.warp));
+                assert_eq!((a.width, a.height), (b.width, b.height));
+                assert!((a.rotation - b.rotation).abs() < 0.001, "{}", layer.name);
+                assert!((a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001);
+            }
+        }
+    }
+
+    #[test]
+    fn flipping_an_image_with_attached_layers_flips_it_and_them() {
+        let mut doc = Document::new(20, 20).unwrap();
+        let image = doc.layers[0].id;
+        doc.layers[0].transform.rotation = 20.0;
+        let mut mask = Layer::mask("Mask", 20, 20);
+        mask.parent = Some(image);
+        mask.transform = doc.layers[0].transform;
+        doc.layers.push(mask);
+        doc.select(image, false);
+        assert_eq!(doc.movement_targets().len(), 2);
+        let mut new = transform_box(&doc, false).unwrap();
+        new.flip_x = true;
+        apply_transform(&mut doc, new, false).unwrap();
+        // The layers follow the image's own box, which is the image.
+        for layer in &doc.layers {
+            assert_eq!(layer.transform, new, "{}", layer.name);
+        }
+    }
+
+    #[test]
     fn resize_and_crop_preserve_source_resolution_and_undo_assets() {
         let mut doc = Document::new(100, 80).unwrap();
         doc.layers[0] = Layer::image("Image", RgbaImage::new(100, 80));
