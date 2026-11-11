@@ -288,7 +288,7 @@ impl EditorApp {
                 if unchanged {
                     session.history.cancel(&mut session.document);
                 } else {
-                    session.history.commit();
+                    session.commit();
                 }
             }
             self.dialog = None;

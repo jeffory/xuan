@@ -194,9 +194,11 @@ impl PreviewWorker {
         PreparedPreview::cpu(pixels, warnings, cancel)
     }
 
+    /// The image as `baseline` (settings that change nothing) develops it.
     pub fn original(
         &mut self,
         input: &Arc<DecodedRaw>,
+        baseline: &DevelopSettings,
         native: bool,
         cancel: &AtomicBool,
     ) -> Result<PreviewImage> {
@@ -206,7 +208,7 @@ impl PreviewWorker {
             .as_ref()
             .is_none_or(|(previous, _)| *previous != side)
         {
-            let preview = self.render(input, &DevelopSettings::default(), false, native, cancel)?;
+            let preview = self.render(input, baseline, false, native, cancel)?;
             self.original = Some((side, preview.image));
         }
         Ok(self.original.as_ref().unwrap().1.clone())

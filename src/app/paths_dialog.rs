@@ -227,6 +227,7 @@ impl EditorApp {
         let mut add = false;
         let mut edit_on_canvas = false;
         let mut from_selection = false;
+        let mut draw_with_pen = false;
         let has_selection = self
             .session()
             .is_some_and(|s| s.document.selection.is_some());
@@ -237,101 +238,54 @@ impl EditorApp {
             .default_width(420.0)
             .show(ctx, |ui| {
                 if paths.is_empty() {
-                    ui.label(tr("This document has no paths yet."));
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(160.0)
-                    .show(ui, |ui| {
-                        for (id, name) in &paths {
-                            if ui
-                                .selectable_label(edit.selected == Some(*id), name)
-                                .clicked()
-                            {
-                                edit.selected = Some(*id);
-                                edit.name = name.clone();
-                            }
-                        }
-                    });
-                ui.add_enabled_ui(edit.selected.is_some(), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(tr("Name"));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut edit.name).desired_width(f32::INFINITY),
+                    // Nothing to act on yet: only the ways to make a path.
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(12.0);
+                        widgets::subheading(ui, tr("No paths yet"));
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(tr(
+                                "Draw one with the Pen, or trace the selection's outline.",
+                            ))
+                            .color(ui.palette().muted),
                         );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            // Centre the pair of buttons by the width they took last frame.
+                            let id = ui.id().with("empty_actions");
+                            let width: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
+                            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+                            let pen = widgets::primary_button(ui, tr("Draw with Pen"));
+                            let trace = ui
+                                .add_enabled_ui(has_selection, |ui| {
+                                    widgets::button(ui, tr("From selection"))
+                                })
+                                .inner;
+                            draw_with_pen = pen.clicked();
+                            from_selection = trace.clicked();
+                            let used = trace.rect.max.x - pen.rect.min.x;
+                            ui.data_mut(|d| d.insert_temp(id, used));
+                        });
+                        ui.add_space(12.0);
                     });
-                    // The buttons get their own row, so they never widen the window.
-                    ui.horizontal_wrapped(|ui| {
-                        if widgets::button(ui, tr("Rename")).clicked() {
-                            action = Some(PathAction::Rename);
-                        }
-                        if widgets::button(ui, tr("Delete")).clicked() {
-                            action = Some(PathAction::Delete);
-                        }
-                        if widgets::button(ui, tr("Edit with Pen")).clicked() {
-                            edit_on_canvas = true;
-                        }
+                } else {
+                    egui::ScrollArea::vertical()
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            for (id, name) in &paths {
+                                if ui
+                                    .selectable_label(edit.selected == Some(*id), name)
+                                    .clicked()
+                                {
+                                    edit.selected = Some(*id);
+                                    edit.name = name.clone();
+                                }
+                            }
+                        });
+                    ui.add_enabled_ui(edit.selected.is_some(), |ui| {
+                        path_controls(ui, &mut edit, &mut action, &mut edit_on_canvas);
                     });
                     ui.separator();
-                    ui.horizontal(|ui| {
-                        if widgets::button(ui, tr("Fill Path")).clicked() {
-                            action = Some(PathAction::Fill);
-                        }
-                        if widgets::button(ui, tr("Stroke Path")).clicked() {
-                            action = Some(PathAction::Stroke);
-                        }
-                        if widgets::button(ui, tr("Shape Layer")).clicked() {
-                            action = Some(PathAction::ShapeLayer);
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(tr("Stroke with"));
-                        widgets::segmented(
-                            ui,
-                            &mut edit.pencil,
-                            &[(false, tr("Brush")), (true, tr("Pencil"))],
-                        );
-                    });
-                    widgets::checkbox(
-                        ui,
-                        &mut edit.evenodd,
-                        tr("Even-odd fill (inner subpaths cut holes)"),
-                    );
-                    ui.horizontal(|ui| {
-                        if widgets::button(ui, tr("Make Selection")).clicked() {
-                            action = Some(PathAction::Select);
-                        }
-                        ui.label(tr("Feather"));
-                        ui.add(
-                            widgets::Number::new(&mut edit.feather)
-                                .range(0.0..=256.0)
-                                .speed(0.5)
-                                .suffix(" px"),
-                        );
-                    });
-                    widgets::segmented(
-                        ui,
-                        &mut edit.mode,
-                        &[
-                            (SelectionMode::Replace, tr("New")),
-                            (SelectionMode::Add, tr("Add")),
-                            (SelectionMode::Subtract, tr("Subtract")),
-                            (SelectionMode::Intersect, tr("Intersect")),
-                        ],
-                    );
-                });
-                ui.separator();
-                ui.label(tr(
-                    "New path from SVG path data, e.g. M 0 70 C 12 64 38 64 51 70 Z",
-                ));
-                ui.add(
-                    egui::TextEdit::multiline(&mut edit.data)
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY),
-                );
-                ui.horizontal(|ui| {
-                    if widgets::button(ui, tr("Add Path")).clicked() {
-                        add = true;
-                    }
                     if ui
                         .add_enabled_ui(has_selection, |ui| {
                             widgets::button(ui, tr("Make Path from Selection"))
@@ -341,7 +295,22 @@ impl EditorApp {
                     {
                         from_selection = true;
                     }
-                });
+                }
+                egui::CollapsingHeader::new(tr("Advanced"))
+                    .id_salt("paths_advanced")
+                    .show(ui, |ui| {
+                        ui.label(tr(
+                            "New path from SVG path data, e.g. M 0 70 C 12 64 38 64 51 70 Z",
+                        ));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut edit.data)
+                                .desired_rows(2)
+                                .desired_width(f32::INFINITY),
+                        );
+                        if widgets::button(ui, tr("Add Path")).clicked() {
+                            add = true;
+                        }
+                    });
                 if let Some(error) = &edit.error {
                     ui.colored_label(ui.palette().error, error);
                 }
@@ -376,6 +345,12 @@ impl EditorApp {
         if edit.selected != before || edit_on_canvas {
             self.pen_select(edit.selected.map(super::pen_tool::PenTarget::Path));
         }
+        // Draw with Pen: a new path is drawn on the canvas, so nothing is shown to edit.
+        if draw_with_pen {
+            self.pen_select(None);
+            self.set_tool(super::Tool::Pen);
+            open = false;
+        }
         if edit_on_canvas && edit.selected.is_some() {
             self.set_tool(super::Tool::Pen);
             open = false;
@@ -386,4 +361,76 @@ impl EditorApp {
             self.paths_edit = Some(edit);
         }
     }
+}
+
+/// The selected path's name, its actions and their options.
+fn path_controls(
+    ui: &mut egui::Ui,
+    edit: &mut PathsEdit,
+    action: &mut Option<PathAction>,
+    edit_on_canvas: &mut bool,
+) {
+    ui.horizontal(|ui| {
+        ui.label(tr("Name"));
+        ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(f32::INFINITY));
+    });
+    // The buttons get their own row, so they never widen the window.
+    ui.horizontal_wrapped(|ui| {
+        if widgets::button(ui, tr("Rename")).clicked() {
+            *action = Some(PathAction::Rename);
+        }
+        if widgets::button(ui, tr("Delete")).clicked() {
+            *action = Some(PathAction::Delete);
+        }
+        if widgets::button(ui, tr("Edit with Pen")).clicked() {
+            *edit_on_canvas = true;
+        }
+    });
+    ui.separator();
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Fill Path")).clicked() {
+            *action = Some(PathAction::Fill);
+        }
+        if widgets::button(ui, tr("Stroke Path")).clicked() {
+            *action = Some(PathAction::Stroke);
+        }
+        if widgets::button(ui, tr("Shape Layer")).clicked() {
+            *action = Some(PathAction::ShapeLayer);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(tr("Stroke with"));
+        widgets::segmented(
+            ui,
+            &mut edit.pencil,
+            &[(false, tr("Brush")), (true, tr("Pencil"))],
+        );
+    });
+    widgets::checkbox(
+        ui,
+        &mut edit.evenodd,
+        tr("Even-odd fill (inner subpaths cut holes)"),
+    );
+    ui.horizontal(|ui| {
+        if widgets::button(ui, tr("Make Selection")).clicked() {
+            *action = Some(PathAction::Select);
+        }
+        ui.label(tr("Feather"));
+        ui.add(
+            widgets::Number::new(&mut edit.feather)
+                .range(0.0..=256.0)
+                .speed(0.5)
+                .suffix(" px"),
+        );
+    });
+    widgets::segmented(
+        ui,
+        &mut edit.mode,
+        &[
+            (SelectionMode::Replace, tr("New")),
+            (SelectionMode::Add, tr("Add")),
+            (SelectionMode::Subtract, tr("Subtract")),
+            (SelectionMode::Intersect, tr("Intersect")),
+        ],
+    );
 }

@@ -64,14 +64,14 @@ fn an_outside_stroke_rings_the_shape_and_an_inside_one_covers_its_edge() {
         }),
         ..LayerEffects::default()
     };
-    let result = render_cpu(&source, &effects);
+    let result = render_cpu(&source, &effects, 1.0);
     // Square from 5 to 14; the stroke reaches two pixels out, square, not round.
     assert_eq!(result.get_pixel(3, 3).0, [255, 0, 0, 255]);
     assert_eq!(result.get_pixel(4, 9).0, [255, 0, 0, 255]);
     assert_eq!(result.get_pixel(2, 9).0[3], 0);
     assert_eq!(result.get_pixel(5, 5).0, [0, 0, 255, 255]);
     effects.stroke.as_mut().unwrap().inside = true;
-    let result = render_cpu(&source, &effects);
+    let result = render_cpu(&source, &effects, 1.0);
     assert_eq!(result.get_pixel(4, 9).0[3], 0);
     assert_eq!(result.get_pixel(6, 9).0, [255, 0, 0, 255]);
     assert_eq!(result.get_pixel(7, 9).0, [0, 0, 255, 255]);
@@ -90,7 +90,7 @@ fn a_drop_shadow_falls_away_from_the_light() {
         }),
         ..LayerEffects::default()
     };
-    let result = render_cpu(&source, &effects);
+    let result = render_cpu(&source, &effects, 1.0);
     // Light from above: the shadow drops straight down by eight pixels.
     // The square covers 15–24; its shadow 23–32.
     assert_eq!(result.get_pixel(20, 30).0, [0, 0, 0, 255]);
@@ -105,7 +105,7 @@ fn a_drop_shadow_falls_away_from_the_light() {
         }),
         ..LayerEffects::default()
     };
-    let result = render_cpu(&square(80, 10, [255; 3]), &soft);
+    let result = render_cpu(&square(80, 10, [255; 3]), &soft, 1.0);
     let left = result.get_pixel(20, 40).0[3];
     let right = result.get_pixel(55, 40).0[3];
     assert!(left > 10 && right == 0, "{left} {right}");
@@ -117,7 +117,7 @@ fn color_overlay_keeps_the_alpha_of_semi_transparent_pixels() {
         let source = RgbaImage::from_pixel(4, 4, Rgba([0, 0, 0, alpha]));
         let mut effects = LayerEffects::default();
         effects.add(EffectKind::ColorOverlay, [255, 255, 255]);
-        let result = render_cpu(&source, &effects);
+        let result = render_cpu(&source, &effects, 1.0);
         assert_eq!(
             result.get_pixel(1, 1).0,
             [255, 255, 255, alpha],
@@ -125,7 +125,7 @@ fn color_overlay_keeps_the_alpha_of_semi_transparent_pixels() {
         );
         for opacity in [0.5f32, 0.25] {
             effects.color_overlay.as_mut().unwrap().opacity = opacity;
-            let result = render_cpu(&source, &effects);
+            let result = render_cpu(&source, &effects, 1.0);
             let p = result.get_pixel(1, 1).0;
             let expected = (opacity * 255.0).round() as i32;
             assert!((p[0] as i32 - expected).abs() <= 1, "{p:?} at {opacity}");
@@ -137,7 +137,7 @@ fn color_overlay_keeps_the_alpha_of_semi_transparent_pixels() {
 #[test]
 fn overlay_and_inner_effects_stay_inside_the_shape() {
     let source = square(40, 20, [0, 0, 255]);
-    let overlay = render_cpu(&source, &only(EffectKind::ColorOverlay));
+    let overlay = render_cpu(&source, &only(EffectKind::ColorOverlay), 1.0);
     assert_eq!(overlay.get_pixel(20, 20).0, [255, 0, 0, 255]);
     assert_eq!(overlay.get_pixel(5, 5).0[3], 0);
     for kind in [EffectKind::InnerShadow, EffectKind::InnerGlow] {
@@ -146,7 +146,7 @@ fn overlay_and_inner_effects_stay_inside_the_shape() {
             .inner_glow
             .iter_mut()
             .for_each(|g| g.color = [255, 0, 0]);
-        let result = render_cpu(&source, &effects);
+        let result = render_cpu(&source, &effects, 1.0);
         assert!(
             result
                 .pixels()
@@ -156,14 +156,14 @@ fn overlay_and_inner_effects_stay_inside_the_shape() {
         assert_ne!(result.get_pixel(10, 20).0, [0, 0, 255, 255], "{kind:?}");
     }
     // The inner glow is strongest at the edge and fades inward.
-    let result = render_cpu(&source, &only(EffectKind::InnerGlow));
+    let result = render_cpu(&source, &only(EffectKind::InnerGlow), 1.0);
     assert!(result.get_pixel(10, 20)[0] > result.get_pixel(14, 20)[0]);
 }
 
 #[test]
 fn an_outer_glow_surrounds_the_shape_without_covering_it() {
     let source = square(60, 10, [0, 0, 255]);
-    let result = render_cpu(&source, &only(EffectKind::OuterGlow));
+    let result = render_cpu(&source, &only(EffectKind::OuterGlow), 1.0);
     assert_eq!(result.get_pixel(30, 30).0, [0, 0, 255, 255]);
     let near = result.get_pixel(23, 30);
     let far = result.get_pixel(12, 30);

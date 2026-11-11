@@ -224,13 +224,13 @@ fn every_registry_entry_is_reachable_from_the_palette() {
 #[test]
 fn translated_labels_and_english_names_both_match() {
     let keymap = Keymap::default();
-    i18n::set_language(Language::SimplifiedChinese);
+    i18n::set_language(&Language::new("zh-CN"));
     let chinese = find(&keymap, false, "新建画布", &[]);
     let english_id = find(&keymap, false, "new_layer", &[]);
     let english_label = find(&keymap, false, "New Canvas", &[]);
     let alias = find(&keymap, false, "hotkeys", &[]);
     let rows = rank(keymap.entries(), false, "新建画布", &[]);
-    i18n::set_language(Language::English);
+    i18n::set_language(&Language::english());
     assert_eq!(chinese.first().map(String::as_str), Some("new"));
     assert!(english_id.contains(&"new_layer".to_owned()));
     assert_eq!(english_label.first().map(String::as_str), Some("new"));

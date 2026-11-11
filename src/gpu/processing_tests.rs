@@ -105,6 +105,170 @@ fn processing_filters_and_resampling_match_cpu() {
     }
 }
 
+/// How much further Unsharp Mask may differ between the GPU and the CPU than other filters:
+/// it multiplies the difference between a pixel and its blur, so the level or two by which
+/// the two blurs round differently is multiplied too, and once more across the threshold.
+pub(super) fn sharpening_slack(filter: &crate::effects::Filter) -> u8 {
+    match *filter {
+        crate::effects::Filter::UnsharpMask { amount, .. } => {
+            1 + (amount / 100.0 * 3.0).ceil() as u8
+        }
+        _ => 0,
+    }
+}
+
+/// Upstream Compositor's filters on the GPU, as the Filter menu applies them, against the
+/// CPU. Dither compares thresholds, so a value one ulp apart may land on the other side of
+/// one: a few pixels may differ by a whole tone, nearly all match.
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_compositor_filters_match_cpu() {
+    use crate::effects::{DitherColors, DitherPixelShape, DitherSettings, DitherStyle, Filter};
+    let gpu = processor();
+    // Large enough that the GPU is used (16,384 pixels).
+    let source = fixture(163, 121);
+    let opaque = RgbaImage::from_fn(163, 121, |x, y| {
+        Rgba([(x * 2) as u8, (y * 2) as u8, ((x + y) % 256) as u8, 255])
+    });
+    for filter in [
+        Filter::VIGNETTE,
+        Filter::Vignette {
+            amount: 100.0,
+            color: [200, 30, 90],
+            midpoint: 10.0,
+            roundness: -100.0,
+            feather: 0.0,
+            highlights: 100.0,
+        },
+        Filter::BLOOM,
+        Filter::Bloom {
+            amount: 100.0,
+            radius: 3.0,
+        },
+        Filter::TONAL_CONTRAST,
+        Filter::TonalContrast {
+            amount: 100.0,
+            radius: 40.0,
+            shadows: -100.0,
+            midtones: 100.0,
+            highlights: -30.0,
+        },
+        Filter::UNSHARP_MASK,
+        Filter::UnsharpMask {
+            amount: 150.0,
+            radius: 6.0,
+            threshold: 12.0,
+        },
+    ] {
+        let tolerance = 2 + sharpening_slack(&filter);
+        for image in [&source, &opaque] {
+            let actual = scope(Some(gpu.clone()), || super::filter(image, &filter).unwrap());
+            compare(
+                &actual,
+                &crate::effects::filtered(image, &filter),
+                tolerance,
+            );
+        }
+        // As a filter layer's backdrop: Vignette paints clear pixels too.
+        let actual = scope(Some(gpu.clone()), || {
+            super::filter_with(&source, &filter, true).unwrap()
+        });
+        compare(
+            &actual,
+            &crate::effects::filtered_backdrop(&source, &filter),
+            tolerance,
+        );
+    }
+    let gpu_styles = [
+        DitherSettings {
+            style: DitherStyle::Bayer2,
+            pixel_size: 1.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Bayer8,
+            levels: 4.0,
+            colors: DitherColors::Original,
+            density: 30.0,
+            contrast: -20.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Bayer4,
+            pixel_size: 4.0,
+            pixel_shape: DitherPixelShape::Dot,
+            colors: DitherColors::TwoColors,
+            dark: [20, 40, 90],
+            light: [250, 240, 200],
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDots,
+            pixel_size: 1.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneLines,
+            angle: -30.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDiamonds,
+            light_on_dark: false,
+            contrast: 60.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::MacPatterns,
+            pixel_size: 1.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            glow: 0.0,
+            dots: 70.0,
+            wobble: 5.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            glow: 0.0,
+            line_spacing: 7.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+    ];
+    for settings in gpu_styles {
+        assert!(settings.runs_on_gpu());
+        let filter = Filter::Dither(Box::new(settings));
+        for image in [&source, &opaque] {
+            let actual = scope(Some(gpu.clone()), || super::filter(image, &filter).unwrap());
+            let expected = crate::effects::filtered(image, &filter);
+            let differing = differing_pixels(&actual, &expected, 2);
+            assert!(
+                differing * 200 <= image.len() / 4,
+                "{filter:?}: {differing} pixels differ"
+            );
+        }
+    }
+    // Diffusion, ASCII and glowing scanlines stay on the CPU.
+    for settings in [
+        DitherSettings::default(),
+        DitherSettings {
+            style: DitherStyle::Ascii,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            ..Default::default()
+        },
+    ] {
+        let filter = Filter::Dither(Box::new(settings));
+        assert!(scope(Some(gpu.clone()), || super::filter(&source, &filter)).is_none());
+    }
+}
+
 #[test]
 #[ignore = "requires native compute adapter"]
 fn processing_adjustments_and_composition_match_cpu() {
@@ -289,8 +453,13 @@ fn processing_blend_modes_match_cpu() {
         top.transform.rotation = 11.0;
         top.opacity = 0.8;
         document.layers.push(top);
-        for mode in BlendMode::ALL {
+        // Fill fades most modes as opacity does and changes the blend of the eight others.
+        for (mode, fill) in BlendMode::ALL
+            .into_iter()
+            .flat_map(|mode| [(mode, 1.0), (mode, 0.45)])
+        {
             document.layers[1].blend = mode;
+            document.layers[1].fill = fill;
             let cpu = crate::render::render(&document);
             let actual = gpu.compose(&document, 96, 80).unwrap();
             let allowed = match mode {
@@ -303,7 +472,7 @@ fn processing_blend_modes_match_cpu() {
             let mismatches = premultiplied_mismatches(&actual, &cpu, 3);
             assert!(
                 mismatches <= allowed,
-                "{} (opaque backdrop {opaque}): {mismatches} pixels differ",
+                "{} at fill {fill} (opaque backdrop {opaque}): {mismatches} pixels differ",
                 mode.name()
             );
         }
@@ -343,9 +512,12 @@ fn processing_layer_effects_match_cpu() {
     cases.push(sharp);
     for effects in cases {
         let padded = pad(&source, crate::layer_effects::margin(&effects));
-        let expected = render_cpu(&padded, &effects);
-        let actual = gpu.layer_effects(&padded, &effects).unwrap();
-        compare(&actual, &expected, 2);
+        // Fill fades the pixels under the effects on both.
+        for fill in [1.0, 0.4, 0.0] {
+            let expected = render_cpu(&padded, &effects, fill);
+            let actual = gpu.layer_effects(&padded, &effects, fill).unwrap();
+            compare(&actual, &expected, 2);
+        }
     }
 }
 
@@ -363,11 +535,11 @@ fn processing_color_overlay_keeps_alpha_like_cpu() {
         let mut effects = LayerEffects::default();
         effects.add(EffectKind::ColorOverlay, [255, 255, 255]);
         effects.color_overlay.as_mut().unwrap().opacity = opacity;
-        let expected = render_cpu(&source, &effects);
+        let expected = render_cpu(&source, &effects, 1.0);
         for (a, b) in source.pixels().zip(expected.pixels()) {
             assert_eq!(a[3], b[3], "the CPU render changed the alpha");
         }
-        let actual = gpu.layer_effects(&source, &effects).unwrap();
+        let actual = gpu.layer_effects(&source, &effects, 1.0).unwrap();
         compare(&actual, &expected, 2);
     }
 }
@@ -536,6 +708,60 @@ fn processing_raw_matches_cpu_at_both_depths() {
         assert!(
             error <= 8 || (s.sharpen_threshold > 0.0 && error <= 256 && outliers <= 8),
             "16-bit RAW error {error}, outliers {outliers}"
+        );
+    }
+
+    // The Camera Raw Filter: an 8-bit layer through the same pipeline. Large enough for the
+    // GPU path, which leaves the layer exactly as it was at the filter's defaults.
+    let layer = fixture(160, 120);
+    let source = filter_source(&layer).unwrap();
+    let identity = DevelopSettings::camera_raw_filter();
+    let adjusted = DevelopSettings {
+        white_balance: WhiteBalance::Temperature,
+        temperature: 4200.0,
+        tint: 12.0,
+        exposure: 0.6,
+        contrast: 21.0,
+        highlights: -35.0,
+        shadows: 28.0,
+        vibrance: 17.0,
+        clarity: 15.0,
+        luminance_noise: 20.0,
+        sharpen: 40.0,
+        chromatic_red: 9.0,
+        defringe: 12.0,
+        vignette: -25.0,
+        shadow_tone: [210.0, 14.0],
+        ..identity.clone()
+    };
+    for s in [&identity, &adjusted] {
+        let cpu = super::scope(None, || render_filter(&source, &layer, s, &cancel).unwrap());
+        let filtered = super::scope(Some(gpu.clone()), || {
+            render_filter(&source, &layer, s, &cancel).unwrap()
+        });
+        compare(&filtered, &cpu, 1);
+        let developed = RgbaImage::from_raw(
+            160,
+            120,
+            gpu.develop(&source, s, white_balance(&source, s), 8, &cancel)
+                .unwrap(),
+        )
+        .unwrap();
+        let reference = super::scope(None, || crate::raw::render(&source, s, &cancel).unwrap());
+        compare(&developed, &reference, 1);
+    }
+    let developed = RgbaImage::from_raw(
+        160,
+        120,
+        gpu.develop(&source, &identity, [1.0; 3], 8, &cancel)
+            .unwrap(),
+    )
+    .unwrap();
+    for (out, original) in developed.pixels().zip(layer.pixels()) {
+        assert_eq!(
+            out.0[..3],
+            original.0[..3],
+            "the GPU filter at its defaults"
         );
     }
 }
@@ -883,6 +1109,154 @@ fn processing_low_opacity_stroke_coverage_matches_cpu() {
                 );
             }
         }
+    }
+}
+
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_low_flow_stroke_builds_up_as_on_the_cpu() {
+    use crate::paint::{Brush, PaintMode, Stroke, StrokeOptions};
+    let gpu = processor();
+    let mut base = Document::new(560, 400).unwrap();
+    base.insert(Layer::image("Pixels", fixture(560, 400)));
+    base.selection = Some(Arc::new(image::GrayImage::from_fn(560, 400, |x, y| {
+        image::Luma([(x * 19 + y * 11) as u8])
+    })));
+    // Dabs of 300 px are large enough for the GPU path; the stroke goes
+    // back over itself, so the flow builds up.
+    let brush = Brush {
+        diameter: 300.0,
+        hardness: 0.6,
+        opacity: 0.9,
+        flow: 0.3,
+        color: [31, 57, 93, 173],
+        ..Default::default()
+    };
+    let points = [
+        Point::new(150.0, 160.0),
+        Point::new(400.0, 230.0),
+        Point::new(160.0, 200.0),
+        Point::new(380.0, 170.0),
+    ];
+    for mask in [false, true] {
+        for mode in [PaintMode::Paint, PaintMode::Erase] {
+            let apply = |device: Option<Arc<Processor>>| {
+                let mut document = base.clone();
+                let mut stroke = Stroke::default();
+                let options = || StrokeOptions {
+                    mode,
+                    mask_target: mask,
+                    source: None,
+                    clone_offset: Point::default(),
+                };
+                scope(device, || {
+                    for pair in points.windows(2) {
+                        stroke
+                            .segment(&mut document, pair[0], pair[1], &brush, &brush, options())
+                            .unwrap();
+                    }
+                    stroke.finish(&mut document, options()).unwrap();
+                });
+                document
+            };
+            let expected = apply(None);
+            let actual = apply(Some(gpu.clone()));
+            if mask {
+                let a = &actual.active().unwrap().mask.as_ref().unwrap().pixels;
+                let b = &expected.active().unwrap().mask.as_ref().unwrap().pixels;
+                assert!(
+                    a.as_raw()
+                        .iter()
+                        .zip(b.as_raw())
+                        .all(|(a, b)| a.abs_diff(*b) <= 1)
+                );
+            } else {
+                compare(
+                    actual.active().unwrap().pixels.as_ref().unwrap(),
+                    expected.active().unwrap().pixels.as_ref().unwrap(),
+                    1,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_dodge_burn_and_sponge_match_cpu() {
+    use crate::paint::{Brush, PaintMode, Stroke, StrokeOptions, Tone, ToneRange};
+    let gpu = processor();
+    let mut base = Document::new(560, 400).unwrap();
+    base.insert(Layer::image("Pixels", fixture(560, 400)));
+    base.selection = Some(Arc::new(image::GrayImage::from_fn(560, 400, |x, y| {
+        image::Luma([(x * 19 + y * 11) as u8])
+    })));
+    // Dabs of 300 px are large enough for the GPU path; the stroke goes
+    // back over itself, which must not compound.
+    let points = [
+        Point::new(150.0, 160.0),
+        Point::new(400.0, 230.0),
+        Point::new(160.0, 200.0),
+        Point::new(380.0, 170.0),
+    ];
+    for (mode, range, saturate) in [
+        (PaintMode::Dodge, ToneRange::Shadows, false),
+        (PaintMode::Dodge, ToneRange::Midtones, false),
+        (PaintMode::Burn, ToneRange::Midtones, false),
+        (PaintMode::Burn, ToneRange::Highlights, false),
+        (PaintMode::Sponge, ToneRange::Midtones, false),
+        (PaintMode::Sponge, ToneRange::Midtones, true),
+    ] {
+        let brush = Brush {
+            diameter: 300.0,
+            hardness: 0.6,
+            opacity: 0.9,
+            tone: Tone {
+                range,
+                exposure: 0.8,
+                saturate,
+            },
+            ..Default::default()
+        };
+        let apply = |device: Option<Arc<Processor>>| {
+            let mut document = base.clone();
+            let mut stroke = Stroke::default();
+            let options = || StrokeOptions {
+                mode,
+                mask_target: false,
+                source: None,
+                clone_offset: Point::default(),
+            };
+            scope(device, || {
+                for pair in points.windows(2) {
+                    stroke
+                        .segment(&mut document, pair[0], pair[1], &brush, &brush, options())
+                        .unwrap();
+                }
+                stroke.finish(&mut document, options()).unwrap();
+            });
+            document
+        };
+        let expected = apply(None);
+        let actual = apply(Some(gpu.clone()));
+        let original = base.active().unwrap().pixels.as_ref().unwrap();
+        let expected = expected.active().unwrap().pixels.as_ref().unwrap();
+        assert!(
+            differing_pixels(expected, original, 2) > 1000,
+            "{mode:?} {range:?} changed too little to compare"
+        );
+        // Alpha is untouched on both paths.
+        assert!(
+            expected
+                .pixels()
+                .zip(original.pixels())
+                .all(|(a, b)| a[3] == b[3])
+        );
+        compare(
+            actual.active().unwrap().pixels.as_ref().unwrap(),
+            expected,
+            1,
+        );
     }
 }
 
@@ -1338,6 +1712,13 @@ fn processing_filter_apply_preserves_selections_bounds_masks_and_history_pixels(
             distortion: 19.0,
             vignette: 13.0,
         },
+        crate::effects::Filter::VIGNETTE,
+        crate::effects::Filter::Bloom {
+            amount: 70.0,
+            radius: 5.0,
+        },
+        crate::effects::Filter::TONAL_CONTRAST,
+        crate::effects::Filter::UNSHARP_MASK,
     ] {
         let mut expected = original.clone();
         crate::effects::apply_filter(&mut expected, &filter, false).unwrap();

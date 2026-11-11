@@ -387,10 +387,24 @@ impl EditorApp {
                     ui.interact(viewport, ui.id().with("canvas"), Sense::click_and_drag());
                 let ruler_responses = rulers.map(|layout| {
                     (
-                        ui.interact(layout.top, ui.id().with("ruler_top"), Sense::drag()),
-                        ui.interact(layout.left, ui.id().with("ruler_left"), Sense::drag()),
+                        ui.interact(
+                            layout.top,
+                            ui.id().with("ruler_top"),
+                            Sense::click_and_drag(),
+                        ),
+                        ui.interact(
+                            layout.left,
+                            ui.id().with("ruler_left"),
+                            Sense::click_and_drag(),
+                        ),
                     )
                 });
+                // Right-click either ruler to choose what both measure in.
+                if let Some((top, left)) = &ruler_responses {
+                    for ruler in [top, left] {
+                        ruler.context_menu(|ui| self.ruler_unit_menu(ui));
+                    }
+                }
                 self.release_sample_caches();
                 let mask_target = self.transforming_mask();
                 let session = &mut self.sessions[self.current];
@@ -646,33 +660,21 @@ impl EditorApp {
                     );
                 }
                 if let Some(layout) = &rulers {
-                    super::rulers::paint(ui.painter(), layout, origin, zoom);
+                    let document = &self.sessions[self.current].document;
+                    let unit = self.config.units.rulers;
+                    let scales = [document.width, document.height].map(|side| {
+                        super::rulers::RulerScale::new(unit, document.resolution, side)
+                    });
+                    super::rulers::paint(ui.painter(), layout, origin, zoom, scales);
                 }
-                if let Some((start, end)) = self.crop_rect {
-                    let rect = Rect::from_two_pos(map(start), map(end));
-                    painter.rect_stroke(
-                        rect,
-                        0.0,
-                        Stroke::new(1.5_f32, Color32::WHITE),
-                        StrokeKind::Inside,
-                    );
-                    for f in [1.0 / 3.0, 2.0 / 3.0] {
-                        painter.line_segment(
-                            [
-                                pos2(rect.left() + rect.width() * f, rect.top()),
-                                pos2(rect.left() + rect.width() * f, rect.bottom()),
-                            ],
-                            Stroke::new(0.7_f32, Color32::from_white_alpha(140)),
-                        );
-                        painter.line_segment(
-                            [
-                                pos2(rect.left(), rect.top() + rect.height() * f),
-                                pos2(rect.right(), rect.top() + rect.height() * f),
-                            ],
-                            Stroke::new(0.7_f32, Color32::from_white_alpha(140)),
-                        );
-                    }
-                }
+                let crop_cursor = if self.tool == Tool::Crop {
+                    let hover = response
+                        .hover_pos()
+                        .map(|p| Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom));
+                    self.paint_crop(&painter, canvas, origin, zoom, hover)
+                } else {
+                    None
+                };
                 if let Some(gesture) = &self.gesture {
                     let rect = Rect::from_two_pos(map(gesture.start), map(gesture.last));
                     if (matches!(self.tool, Tool::Marquee | Tool::Shape)
@@ -816,6 +818,8 @@ impl EditorApp {
                         cursor
                     } else if hover_handle.is_some() {
                         egui::CursorIcon::ResizeNwSe
+                    } else if let Some(cursor) = crop_cursor {
+                        cursor
                     } else if self.tool == Tool::Move {
                         egui::CursorIcon::Move
                     } else if self.tool == Tool::Text {
@@ -1037,7 +1041,10 @@ impl EditorApp {
                 });
             ui.add_space(15.0);
             ui.label(
-                egui::RichText::new(tr("Transparent canvas · sRGB")).color(ui.palette().muted),
+                egui::RichText::new(super::dialogs::canvas_summary(
+                    self.config.new_canvas_background,
+                ))
+                .color(ui.palette().muted),
             );
             ui.add_space(20.0);
             ui.horizontal(|ui| {
@@ -1051,6 +1058,8 @@ impl EditorApp {
             });
         });
         if create {
+            // The background last chosen in File → New.
+            self.new_canvas_background = self.config.new_canvas_background;
             self.new_document();
         }
         if open {
@@ -1207,6 +1216,11 @@ impl EditorApp {
                     self.select_canvas_layer(point, modifiers.shift, false);
                 }
             }
+            // Without perspective corners, each click places one.
+            Tool::Crop if self.crop.perspective && self.crop.quad.is_none() => {
+                self.forget_crop_of_other_documents();
+                self.crop.place_corner(point);
+            }
             Tool::Wand if self.wand_object => {
                 let mode = self.selection_mode(modifiers);
                 self.select_object(
@@ -1230,6 +1244,7 @@ impl EditorApp {
                     );
                 });
             }
+            Tool::Bucket => self.bucket_fill(point),
             Tool::Zoom => {
                 if let Some(s) = self.session_mut() {
                     s.zoom = (s.zoom * if modifiers.alt { 0.8 } else { 1.25 })
@@ -1321,6 +1336,38 @@ impl EditorApp {
         });
     }
 
+    /// A Paint Bucket click: one undo step, or none when nothing was filled.
+    fn bucket_fill(&mut self, point: Point) {
+        let options = paint::BucketOptions {
+            color: self.brush.color,
+            opacity: self.brush.opacity,
+            tolerance: self.bucket.tolerance,
+            contiguous: self.bucket.contiguous,
+            anti_alias: self.bucket.anti_alias,
+            all_layers: self.bucket.all_layers,
+            mask_target: self.editing_mask(),
+        };
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        session.history.begin(tr("Paint Bucket"), &session.document);
+        match paint::bucket(&mut session.document, point, options)
+            .and_then(|filled| paint::refresh_shapes(&mut session.document).map(|()| filled))
+        {
+            Ok(true) => {
+                session.commit();
+                session.invalidate();
+                self.status = tr("Paint Bucket").into();
+            }
+            Ok(false) => session.history.cancel(&mut session.document),
+            Err(error) => {
+                session.history.cancel(&mut session.document);
+                session.invalidate();
+                self.error = Some(error.to_string());
+            }
+        }
+    }
+
     fn begin_gesture(
         &mut self,
         point: Point,
@@ -1366,7 +1413,8 @@ impl EditorApp {
             });
             return;
         }
-        if tool == Tool::Text {
+        // The Paint Bucket fills on a click; a drag does nothing.
+        if matches!(tool, Tool::Text | Tool::Bucket) {
             return;
         }
         if tool == Tool::Region {
@@ -1405,6 +1453,15 @@ impl EditorApp {
         if tool == Tool::Heal && self.editing_mask() {
             // As upstream: Spot Healing reworks image pixels and has nothing to do on a mask.
             self.status = tr("Spot Healing works on layer pixels, not masks").into();
+            return;
+        }
+        if tool == Tool::Dodge && self.editing_mask() {
+            // As upstream: a mask has no tones or colours to change.
+            self.status = tr("Dodge, Burn and Sponge work on layer pixels, not masks").into();
+            return;
+        }
+        if tool == Tool::Blur && self.blur_mode == PaintMode::Liquify && self.editing_mask() {
+            self.status = tr("Liquify works on layer pixels, not masks").into();
             return;
         }
         if tool == Tool::Clone && self.clone_source.is_none() {
@@ -1449,18 +1506,33 @@ impl EditorApp {
             return;
         }
         let mask_target = self.transforming_mask();
+        if tool == Tool::Crop {
+            self.forget_crop_of_other_documents();
+            let zoom = self.sessions[self.current].zoom;
+            self.crop.drag = if self.crop.perspective {
+                // Without corners, a drag does nothing; clicks place them.
+                self.crop.press_quad(point, zoom)
+            } else {
+                Some(self.crop.press(point, zoom))
+            };
+        }
+        let drawing_crop = self.crop.drag == Some(super::crop_tool::CropDrag::Draw);
         // A marquee, shape or crop starts on a nearby Snap To target; Ctrl starts it freely.
         let snapping = self
             .snap_options()
             .filter(|_| {
-                !ctrl_or_cmd(modifiers) && matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop)
+                !ctrl_or_cmd(modifiers)
+                    && (matches!(tool, Tool::Marquee | Tool::Shape)
+                        || (tool == Tool::Crop && drawing_crop))
             })
             .map(|options| (options, self.displayed_guides()));
         let session = &mut self.sessions[self.current];
         if tool == Tool::Move && session.document.active.is_none() {
             return;
         }
-        session.history.begin(tool.label(), &session.document);
+        let liquify = tool == Tool::Blur && self.blur_mode == PaintMode::Liquify;
+        let name = if liquify { tr("Liquify") } else { tool.label() };
+        session.history.begin(name, &session.document);
         if tool == Tool::Move && modifiers.alt {
             operations::duplicate(&mut session.document);
         }
@@ -1493,7 +1565,8 @@ impl EditorApp {
                 kind = TransformDrag::Selection;
             }
         }
-        let source = if matches!(tool, Tool::Clone | Tool::Blur) {
+        // Liquify warps the layer as it is, without a copy to sample.
+        let source = if matches!(tool, Tool::Clone | Tool::Blur) && !liquify {
             if tool == Tool::Clone && self.clone_all {
                 Some(Arc::new(render::render(&session.document)))
             } else {
@@ -1603,7 +1676,9 @@ impl EditorApp {
         if let Some(smoothing) = &mut gesture.smoothing {
             point = smoothing.update(point);
         }
-        let shaped = matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop)
+        // Moving or resizing a crop box follows the pointer without snapping.
+        let shaped = (matches!(tool, Tool::Shape | Tool::Marquee)
+            || (tool == Tool::Crop && self.crop.drag == Some(super::crop_tool::CropDrag::Draw)))
             && matches!(gesture.kind, TransformDrag::Move);
         let moving = tool == Tool::Move
             || matches!(
@@ -1630,7 +1705,8 @@ impl EditorApp {
             );
             (point, self.snap_lines) = targets.snap_point(point, tolerance);
         }
-        if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop) {
+        // The Crop tool keeps its own ratio (a square with Shift when Free).
+        if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee) {
             let dx = point.x - gesture.start.x;
             let dy = point.y - gesture.start.y;
             let size = dx.abs().max(dy.abs());
@@ -1679,7 +1755,7 @@ impl EditorApp {
                     Ok(())
                 }
                 tool if tool.is_brush() => {
-                    let mode = Self::paint_mode(tool, self.blur_mode);
+                    let mode = Self::paint_mode(tool, self.blur_mode, self.tone_mode);
                     let offset = if mode == PaintMode::Smudge {
                         Point::new(gesture.last.x - point.x, gesture.last.y - point.y)
                     } else {
@@ -1824,7 +1900,9 @@ impl EditorApp {
                     Ok(())
                 }
                 Tool::Crop => {
-                    self.crop_rect = Some((gesture.start, point));
+                    let canvas = [gesture.original.width, gesture.original.height];
+                    self.crop
+                        .drag_to(gesture.start, point, canvas, modifiers.shift);
                     Ok(())
                 }
                 _ => Ok(()),
@@ -1845,13 +1923,14 @@ impl EditorApp {
     }
 
     /// How a painting tool paints.
-    fn paint_mode(tool: Tool, blur_mode: PaintMode) -> PaintMode {
+    fn paint_mode(tool: Tool, blur_mode: PaintMode, tone_mode: PaintMode) -> PaintMode {
         match tool {
             Tool::Erase => PaintMode::Erase,
             Tool::Pencil => PaintMode::Pencil,
             Tool::Clone => PaintMode::Clone,
             Tool::Heal => PaintMode::Heal,
             Tool::Blur => blur_mode,
+            Tool::Dodge => tone_mode,
             _ => PaintMode::Paint,
         }
     }
@@ -1916,7 +1995,7 @@ impl EditorApp {
         }
         let mode = self.selection_mode(modifiers);
         let mask_target = self.editing_mask();
-        let paint_mode = Self::paint_mode(tool, self.blur_mode);
+        let paint_mode = Self::paint_mode(tool, self.blur_mode, self.tone_mode);
         let session = &mut self.sessions[self.current];
         let start = gesture.start;
         let end = gesture.last;
@@ -1984,6 +2063,7 @@ impl EditorApp {
                 }
                 Tool::Crop => {
                     session.history.cancel(&mut session.document);
+                    self.crop.release();
                     return;
                 }
                 // A brush that tapers at the end paints the stroke again now
@@ -2001,12 +2081,24 @@ impl EditorApp {
             }
         };
         if !changes_composition && result.is_ok() {
-            session.history.commit();
+            session.commit();
+            return;
+        }
+        // A Dodge, Burn or Sponge stroke that changed no pixel (0% exposure,
+        // or only over transparent pixels), or a Blur, Smudge or Liquify
+        // stroke that moved nothing, leaves no undo step.
+        if matches!(tool, Tool::Dodge | Tool::Blur)
+            && result.is_ok()
+            && same_pixels(&gesture.original, &session.document)
+        {
+            session.history.cancel(&mut session.document);
+            session.invalidate();
+            self.last_brush = Some(end);
             return;
         }
         match result {
             Ok(()) => match paint::refresh_shapes(&mut session.document) {
-                Ok(()) => session.history.commit(),
+                Ok(()) => session.commit(),
                 Err(error) => {
                     session.history.cancel(&mut session.document);
                     self.error = Some(error.to_string());
@@ -2022,6 +2114,24 @@ impl EditorApp {
         if tool.is_brush() {
             self.last_brush = Some(end);
         }
+    }
+}
+
+/// Whether the active layer's pixels are as they were in `original`. A layer
+/// that only gained an empty pixel buffer counts as unchanged.
+fn same_pixels(original: &xuan::document::Document, document: &xuan::document::Document) -> bool {
+    let Some(layer) = document.active() else {
+        return true;
+    };
+    let before = original
+        .layers
+        .iter()
+        .find(|l| l.id == layer.id)
+        .and_then(|l| l.pixels.as_ref());
+    match (before, &layer.pixels) {
+        (Some(before), Some(after)) => Arc::ptr_eq(before, after) || before == after,
+        (None, Some(after)) => after.as_raw().iter().all(|v| *v == 0),
+        (_, None) => before.is_none(),
     }
 }
 

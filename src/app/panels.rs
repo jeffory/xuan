@@ -52,7 +52,7 @@ impl EditorApp {
             .min_height(42.0)
             .frame(theme::frame(&ctx.palette()))
             .show(ctx, |ui| {
-                // The bar keeps its height with no document, so the tabs and canvas do not move
+                // The bar keeps its height with no document, so the canvas does not move
                 // when the first one opens; there is just nothing in it to use yet.
                 if self.session().is_none() {
                     return;
@@ -153,8 +153,12 @@ impl EditorApp {
                                                 &[
                                                     (PaintMode::Blur, tr("Blur")),
                                                     (PaintMode::Smudge, tr("Smudge")),
+                                                    (PaintMode::Liquify, tr("Liquify")),
                                                 ],
                                             );
+                                        }
+                                        if self.tool == Tool::Dodge {
+                                            self.tone_options(ui);
                                         }
                                         if self.tool == Tool::Heal {
                                             widgets::segmented(
@@ -198,7 +202,10 @@ impl EditorApp {
                                                 .percentage(),
                                             );
                                         }
-                                        ui.label(tr("Opacity"));
+                                        // Liquify's strength is how far the pixels follow the brush.
+                                        let liquify = self.tool == Tool::Blur
+                                            && self.blur_mode == PaintMode::Liquify;
+                                        ui.label(if liquify { tr("Strength") } else { tr("Opacity") });
                                         ui.add(
                                             widgets::Slider::new(
                                                 &mut self.brush.opacity,
@@ -207,13 +214,33 @@ impl EditorApp {
                                             .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
                                             .percentage(),
                                         );
-                                        widgets::color_well(ui, &mut self.brush.color);
+                                        if matches!(self.tool, Tool::Brush | Tool::Erase) {
+                                            ui.label(tr("Flow"));
+                                            ui.add(
+                                                widgets::Slider::new(
+                                                    &mut self.brush.flow,
+                                                    0.01..=1.0,
+                                                )
+                                                .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                                                .percentage(),
+                                            )
+                                            .on_hover_text(tr(
+                                                "How much paint one pass lays down. Going over the same spot in one stroke builds up to the opacity.",
+                                            ));
+                                        }
+                                        // Dodge, Burn and Sponge use no colour.
+                                        if self.tool != Tool::Dodge {
+                                            widgets::color_well(ui, &mut self.brush.color);
+                                        }
                                         ui.menu_button(tr("Pen dynamics"), |ui| {
                                             widgets::checkbox(ui, &mut self.pressure_size, tr("Pressure: size"));
                                             widgets::checkbox(ui, &mut self.pressure_opacity, tr("Pressure: opacity"));
+                                            if matches!(self.tool, Tool::Brush | Tool::Erase) {
+                                                widgets::checkbox(ui, &mut self.pressure_flow, tr("Pressure: flow"));
+                                            }
                                             widgets::checkbox(ui, &mut self.tilt_shape, tr("Tilt: shape"));
                                         });
-                                        if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase) {
+                                        if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase | Tool::Dodge) {
                                             ui.menu_button(tr("Brush dynamics"), |ui| self.brush_dynamics(ui));
                                             ui.menu_button(tr("Symmetry"), |ui| self.brush_symmetry(ui));
                                         }
@@ -232,7 +259,7 @@ impl EditorApp {
                                             ui,
                                             &mut self.selection_mode,
                                             &[
-                                                (SelectionMode::Replace, "New"),
+                                                (SelectionMode::Replace, tr("New")),
                                                 (SelectionMode::Add, tr("Add")),
                                                 (SelectionMode::Subtract, tr("Subtract")),
                                                 (SelectionMode::Intersect, tr("Intersect")),
@@ -304,6 +331,34 @@ impl EditorApp {
                                             .percentage(),
                                         );
                                     }
+                                    Tool::Bucket => {
+                                        widgets::color_well(ui, &mut self.brush.color);
+                                        ui.label(tr("Opacity"));
+                                        ui.add(
+                                            widgets::Slider::new(
+                                                &mut self.brush.opacity,
+                                                0.01..=1.0,
+                                            )
+                                            .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                                            .percentage(),
+                                        );
+                                        ui.separator();
+                                        ui.label(tr("Tolerance"));
+                                        ui.add(
+                                            widgets::Number::new(&mut self.bucket.tolerance)
+                                                .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
+                                                .range(0..=255),
+                                        );
+                                        widgets::checkbox(ui, &mut self.bucket.contiguous, tr("Contiguous"));
+                                        widgets::checkbox(ui, &mut self.bucket.anti_alias, tr("Anti-alias"));
+                                        ui.separator();
+                                        ui.label(tr("Sample"));
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.bucket.all_layers,
+                                            &[(false, tr("Current Layer")), (true, tr("All Layers"))],
+                                        );
+                                    }
                                     Tool::Shape => {
                                         widgets::segmented(
                                             ui,
@@ -334,14 +389,7 @@ impl EditorApp {
                                         );
                                     }
                                     Tool::Text => self.text_options(ui),
-                                    Tool::Crop => {
-                                        ui.label(
-                                            RichText::new(
-                                                tr("Drag a crop area, then press Enter to apply"),
-                                            )
-                                            .color(ui.palette().muted),
-                                        );
-                                    }
+                                    Tool::Crop => self.crop_options(ui),
                                     Tool::Dropper => {
                                         ui.label(tr("Sample"));
                                         widgets::segmented(
@@ -448,6 +496,8 @@ impl EditorApp {
                     }
                     let hint = if !has_document {
                         self.empty_hint()
+                    } else if self.tool == Tool::Crop && self.crop.perspective {
+                        tr("Drag the corners onto the edges of a page, screen or sign · Drag inside to move them · Enter straightens · Escape cancels · Shift+C switches to the box").to_owned()
                     } else if self.tool == Tool::Region && self.plugins.action.is_none() {
                         tr("Drag a box and say what to do there · Click a box to change it · Delete removes it").to_owned()
                     } else {
@@ -592,6 +642,52 @@ impl EditorApp {
         if let Some(tool) = tool {
             self.set_tool(tool);
         }
+    }
+
+    /// The Dodge / Burn tool's mode, then Range and Exposure (Dodge and Burn)
+    /// or Saturate / Desaturate and Exposure (Sponge).
+    fn tone_options(&mut self, ui: &mut egui::Ui) {
+        use xuan::paint::ToneRange;
+        widgets::segmented(
+            ui,
+            &mut self.tone_mode,
+            &[
+                (PaintMode::Dodge, tr("Dodge")),
+                (PaintMode::Burn, tr("Burn")),
+                (PaintMode::Sponge, tr("Sponge")),
+            ],
+        );
+        let tone = &mut self.brush.tone;
+        if self.tone_mode == PaintMode::Sponge {
+            widgets::segmented(
+                ui,
+                &mut tone.saturate,
+                &[(false, tr("Desaturate")), (true, tr("Saturate"))],
+            );
+        } else {
+            ui.label(tr("Range"));
+            widgets::segmented(
+                ui,
+                &mut tone.range,
+                &[
+                    (ToneRange::Shadows, tr("Shadows")),
+                    (ToneRange::Midtones, tr("Midtones")),
+                    (ToneRange::Highlights, tr("Highlights")),
+                ],
+            )
+            .on_hover_text(tr(
+                "The tones that change most. The effect fades out smoothly into the other tones.",
+            ));
+        }
+        ui.label(tr("Exposure"));
+        ui.add(
+            widgets::Slider::new(&mut tone.exposure, 0.0..=1.0)
+                .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                .percentage(),
+        )
+        .on_hover_text(tr(
+            "How strong the effect is. Going over the same spot in one stroke does not add to it; start a new stroke to go further.",
+        ));
     }
 
     /// Tool options → Brush dynamics: spacing, taper, scatter and jitter.

@@ -70,11 +70,12 @@ impl EditorApp {
         match id {
             panes::LAYERS => Some(tr("Layers").into()),
             panes::NAVIGATOR => Some(tr("Navigator").into()),
+            panes::CHANNELS => Some(tr("Channels").into()),
             _ => self.plugin_pane_title(id),
         }
     }
 
-    fn pane_detail(&self, id: &str) -> Option<String> {
+    pub(super) fn pane_detail(&self, id: &str) -> Option<String> {
         match id {
             panes::LAYERS => self
                 .session()
@@ -82,6 +83,12 @@ impl EditorApp {
             panes::NAVIGATOR => self
                 .session()
                 .map(|session| super::navigator::format_zoom_percent(session.zoom)),
+            // The targeted channels, when not all of them.
+            panes::CHANNELS => self
+                .session()
+                .map(|session| session.channel_targets)
+                .filter(|targets| *targets != xuan::channels::Channels::ALL)
+                .map(|targets| targets.letters()),
             _ => None,
         }
     }
@@ -338,6 +345,7 @@ impl EditorApp {
         match id {
             panes::LAYERS => self.layers_pane(ui, enabled),
             panes::NAVIGATOR => self.navigator_pane(ui, enabled),
+            panes::CHANNELS => self.channels_pane(ui, enabled),
             _ => self.plugin_pane(ui, id, enabled),
         }
     }

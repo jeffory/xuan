@@ -38,6 +38,20 @@ struct Args {
         value_parser = ["levels", "hue", "curves", "export", "brush", "selection", "gradient", "shape", "text", "new", "settings"]
     )]
     screenshot_panel: Option<String>,
+
+    /// Run without a window and serve the MCP Server plugin for agents: no display, GPU or
+    /// EGL is used. Runs until Ctrl+C
+    #[arg(long, conflicts_with_all = ["screenshot", "screenshot_panel"])]
+    headless: bool,
+
+    /// With --headless: open the files clients ask for and write files to the paths they
+    /// name, without asking
+    #[arg(long, requires = "headless")]
+    allow_files: bool,
+
+    /// With --headless: the MCP server's port on 127.0.0.1 (0: any free port)
+    #[arg(long, value_name = "PORT", requires = "headless")]
+    mcp_port: Option<u16>,
 }
 
 fn main() -> eframe::Result {
@@ -55,7 +69,23 @@ fn main() -> eframe::Result {
         demo,
         screenshot,
         screenshot_panel,
+        headless,
+        allow_files,
+        mcp_port,
     } = Args::parse();
+    if headless {
+        // Before anything that opens a window or a GPU device.
+        let options = app::headless::Options {
+            allow_files,
+            port: mcp_port,
+            demo,
+        };
+        if let Err(error) = app::headless::run(paths, options) {
+            eprintln!("Xuan: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let icon = image::load_from_memory(include_bytes!(
         "../assets/icons/hicolor/256x256/apps/me.silverl.xuan.png"
     ))
@@ -200,6 +230,43 @@ mod cli_tests {
             (
                 vec!["xuan", "--screenshot", "--demo"],
                 ErrorKind::InvalidValue,
+            ),
+        ] {
+            let error = Args::try_parse_from(&args).unwrap_err();
+            assert_eq!(error.kind(), kind, "arguments: {args:?}");
+        }
+    }
+
+    #[test]
+    fn headless_options_go_with_headless() {
+        let args = Args::try_parse_from([
+            "xuan",
+            "--headless",
+            "--allow-files",
+            "--mcp-port",
+            "0",
+            "photo.NEF",
+        ])
+        .unwrap();
+        assert!(args.headless && args.allow_files);
+        assert_eq!(args.mcp_port, Some(0));
+        assert_eq!(args.paths, [PathBuf::from("photo.NEF")]);
+        for (args, kind) in [
+            (
+                vec!["xuan", "--allow-files"],
+                ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                vec!["xuan", "--mcp-port", "9000"],
+                ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                vec!["xuan", "--headless", "--screenshot", "out.png"],
+                ErrorKind::ArgumentConflict,
+            ),
+            (
+                vec!["xuan", "--headless", "--mcp-port", "70000"],
+                ErrorKind::ValueValidation,
             ),
         ] {
             let error = Args::try_parse_from(&args).unwrap_err();

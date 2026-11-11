@@ -98,3 +98,29 @@ fn file_uris_escape_what_a_uri_cannot_hold() {
         "file:///home/me/My%20Photos/%C3%A9t%C3%A9%20%231.png"
     );
 }
+
+#[test]
+fn the_bar_line_opens_under_the_selected_tab_only() {
+    let bar = Rangef::new(0.0, 1000.0);
+    // No selected tab in view: one line across the bar.
+    assert_eq!(divider_spans(bar, None), [bar]);
+    // A selected tab: the line stops under it and goes on after it.
+    assert_eq!(
+        divider_spans(bar, Some(Rangef::new(200.0, 420.0))),
+        [Rangef::new(0.0, 200.0), Rangef::new(420.0, 1000.0)]
+    );
+    // At either end there is nothing left on that side.
+    assert_eq!(
+        divider_spans(bar, Some(Rangef::new(0.0, 220.0))),
+        [Rangef::new(220.0, 1000.0)]
+    );
+    assert_eq!(
+        divider_spans(bar, Some(Rangef::new(780.0, 1000.0))),
+        [Rangef::new(0.0, 780.0)]
+    );
+    // Only the part inside the bar counts.
+    assert_eq!(
+        divider_spans(bar, Some(Rangef::new(-50.0, 100.0))),
+        [Rangef::new(100.0, 1000.0)]
+    );
+}

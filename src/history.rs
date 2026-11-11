@@ -31,6 +31,11 @@ impl History {
         }
     }
 
+    /// The document as it was when the open edit began.
+    pub fn pending_document(&self) -> Option<&Document> {
+        self.pending.as_ref().map(|entry| &entry.document)
+    }
+
     pub fn commit(&mut self) {
         if let Some(entry) = self.pending.take() {
             self.undo.push(entry);
@@ -66,6 +71,12 @@ impl History {
                     && seen.insert(std::sync::Arc::as_ptr(&mask.pixels) as usize)
                 {
                     bytes += mask.pixels.as_raw().len();
+                }
+                if let Some(crate::document::Adjustment::ColorLookup { table, .. }) =
+                    &layer.adjustment
+                    && seen.insert(std::sync::Arc::as_ptr(table) as usize)
+                {
+                    bytes += table.bytes();
                 }
             }
             if let Some(selection) = &entry.document.selection
