@@ -151,6 +151,90 @@ fn send_without_asking(app: &EditorApp) -> bool {
 }
 
 #[test]
+fn plugins_measure_colours_histograms_and_regions_of_the_image() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 6];
+    app.new_document();
+    let layer = {
+        let session = app.session_mut().unwrap();
+        let mut pixels = image::RgbaImage::from_pixel(8, 6, image::Rgba([10, 20, 30, 255]));
+        pixels.put_pixel(7, 5, image::Rgba([255, 255, 255, 255]));
+        let layer = &mut session.document.layers[0];
+        layer.pixels = Some(std::sync::Arc::new(pixels));
+        layer.id
+    };
+
+    let sampled = plugin_request(
+        &mut app,
+        "document/sample",
+        json!({"points": [[0, 0], [7.5, 5.5], [8, 0]]}),
+    )
+    .unwrap();
+    assert_eq!(sampled["samples"][0]["color"], "#0a141eff");
+    assert_eq!(sampled["samples"][1]["rgba"], json!([255, 255, 255, 255]));
+    assert_eq!(sampled["samples"][2]["color"], serde_json::Value::Null);
+    let one = plugin_request(
+        &mut app,
+        "document/sample",
+        json!({"points": [[1, 1]], "layer": layer, "radius": 1}),
+    )
+    .unwrap();
+    assert_eq!(one["samples"][0]["rgba"], json!([10, 20, 30, 255]));
+
+    let whole = plugin_request(&mut app, "document/histogram", json!({})).unwrap();
+    assert_eq!(whole["pixels"], 48);
+    assert_eq!(whole["red"]["bins"][10], 47);
+    assert_eq!(whole["blue"]["max"], 255);
+    let corner = plugin_request(
+        &mut app,
+        "document/histogram",
+        json!({"region": [0, 0, 2, 2], "layer": layer}),
+    )
+    .unwrap();
+    assert_eq!(
+        (&corner["pixels"], &corner["green"]["mean"]),
+        (&json!(4), &json!(20.0))
+    );
+
+    for (method, what) in [
+        ("document/export", json!({})),
+        ("layer/export", json!({"layer": layer})),
+    ] {
+        let mut params = what;
+        params["region"] = json!([6, 4, 10, 10]);
+        let export = plugin_request(&mut app, method, params).unwrap();
+        assert_eq!(export["region"], json!([6, 4, 2, 2]), "{method}");
+        assert_eq!((&export["x"], &export["y"]), (&json!(6), &json!(4)));
+        let image = image::open(export["path"].as_str().unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(image.dimensions(), (2, 2));
+        assert_eq!(image.get_pixel(1, 1).0, [255, 255, 255, 255]);
+    }
+
+    for (method, params) in [
+        ("document/sample", json!({})),
+        (
+            "document/sample",
+            json!({"points": [[0, 0]], "radius": 500}),
+        ),
+        ("document/histogram", json!({"region": [90, 0, 1, 1]})),
+        ("document/histogram", json!({"layer": "nope"})),
+        ("document/export", json!({"region": [0, 0]})),
+    ] {
+        let error = plugin_request(&mut app, method, params.clone()).unwrap_err();
+        assert_eq!(
+            error.code,
+            xuan::plugins::protocol::INVALID_PARAMS,
+            "{method} {params}"
+        );
+    }
+}
+
+#[test]
 fn exports_to_network_plugins_follow_the_consent_rules() {
     use crate::app::plugin_consent::ConsentRequest;
     use serde_json::json;
@@ -170,7 +254,13 @@ fn exports_to_network_plugins_follow_the_consent_rules() {
     install_network_mock(&mut app, dir.path());
     assert!(app.sends_need_consent("mock"));
     assert_eq!(app.export_answer("mock"), None);
-    for method in ["document/export", "layer/export", "selection/export"] {
+    for method in [
+        "document/export",
+        "layer/export",
+        "selection/export",
+        "document/sample",
+        "document/histogram",
+    ] {
         let refused = plugin_request(&mut app, method, json!({})).unwrap_err();
         assert_eq!(refused.code, CANCELLED, "{method}");
     }
@@ -260,7 +350,15 @@ fn reset_panel_layout_keeps_the_installed_plugin_panes() {
     app.config.panes.ensure("plugin:gone/pane");
     app.command("reset_panels");
     let ids: Vec<_> = app.config.panes.0.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, [xuan::panes::NAVIGATOR, xuan::panes::LAYERS, key]);
+    assert_eq!(
+        ids,
+        [
+            xuan::panes::NAVIGATOR,
+            xuan::panes::CHANNELS,
+            xuan::panes::LAYERS,
+            key
+        ]
+    );
     let pane = app.config.panes.get(key).unwrap();
     assert!(!pane.hidden && !pane.collapsed && pane.height == 0.0);
     assert!(!app.config.panes.get(xuan::panes::LAYERS).unwrap().collapsed);
@@ -426,6 +524,10 @@ fn mock_job(app: &EditorApp) -> crate::app::plugins::PluginJob {
         message: String::new(),
         cancelled: false,
         consented: false,
+        provider: None,
+        surface: None,
+        ai_boxes: Vec::new(),
+        caller: None,
     }
 }
 
@@ -490,6 +592,7 @@ fn image_outputs_may_declare_their_placed_size() {
         (json!({"width": 1e9}), false),
         (json!({"fit": "bogus"}), false),
         (json!({"fit": "source"}), false),
+        (json!({"fit": "cover"}), false),
         (json!({"fit": "source", "width": 4}), false),
         (json!({"width": 12.0, "height": 6.0}), true),
     ] {
@@ -500,6 +603,82 @@ fn image_outputs_may_declare_their_placed_size() {
             .extend(extra.as_object().unwrap().clone());
         let result = app.apply_job_result(&job, json!({"outputs": [output]}));
         assert_eq!(result.is_ok(), ok, "{extra}: {result:?}");
+    }
+}
+
+#[test]
+fn an_exact_size_document_result_covers_a_canvas_of_that_size() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    // 40x10 from the model for a 20x20 canvas: covers the height, hangs over the sides.
+    let wide = dir.path().join("wide.png");
+    RgbaImage::from_pixel(40, 10, image::Rgba([9, 9, 9, 255]))
+        .save(&wide)
+        .unwrap();
+    let mut job = mock_job_without_document();
+    job.into = xuan::plugins::manifest::ResultInto::Document;
+    job.surface = Some(crate::app::surfaces::SurfaceRun {
+        surface: xuan::plugins::manifest::Surface::Document,
+        target: (20, 20),
+        exact: true,
+        resolution: 300.0,
+        boxes: Vec::new(),
+    });
+    app.apply_job_result(
+        &job,
+        json!({"outputs": [{"kind": "image", "path": wide, "name": "A fox"}]}),
+    )
+    .unwrap();
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (20, 20));
+    assert_eq!(document.resolution, 300.0);
+    let layer = &document.layers[0];
+    assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (40, 10));
+    assert_eq!(
+        (
+            layer.transform.x,
+            layer.transform.y,
+            layer.transform.width,
+            layer.transform.height
+        ),
+        (-30.0, 0.0, 80.0, 20.0)
+    );
+    assert!(
+        app.status
+            .contains(xuan::i18n::tr("Move the layer to reframe"))
+    );
+    // Without exact the document takes the image's own size.
+    job.surface.as_mut().unwrap().exact = false;
+    app.apply_job_result(&job, json!({"outputs": [{"kind": "image", "path": wide}]}))
+        .unwrap();
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (40, 10));
+}
+
+/// A finished job of the mock plugin that started with no document open.
+fn mock_job_without_document() -> crate::app::plugins::PluginJob {
+    crate::app::plugins::PluginJob {
+        id: uuid::Uuid::new_v4(),
+        plugin: "mock".into(),
+        action: "echo".into(),
+        label: "Echo".into(),
+        document: uuid::Uuid::nil(),
+        _work_dir: xuan::plugins::private_dir("xuan-job-").unwrap(),
+        prepared: xuan::plugins::jobs::Prepared::none(),
+        regions: Vec::new(),
+        inputs: serde_json::json!({}),
+        into: xuan::plugins::manifest::ResultInto::Layer,
+        mask_to_regions: false,
+        progress: None,
+        message: String::new(),
+        cancelled: false,
+        consented: false,
+        provider: None,
+        surface: None,
+        ai_boxes: Vec::new(),
+        caller: None,
     }
 }
 
@@ -726,9 +905,9 @@ fn extending_the_canvas_needs_document_edit_even_in_a_result() {
     app.resolve_proposal(false);
     assert_eq!(size(&app), (8, 8));
     // Past the size limits the request changes nothing.
-    let huge = json!({"op": "extend_canvas", "right": 30_000});
+    let huge = json!({"op": "extend_canvas", "right": xuan::document::MAX_SIDE});
     let error = plugin_request(&mut app, "document/edit", json!({"edits": [huge]})).unwrap_err();
-    assert!(error.message.contains("30000"), "{}", error.message);
+    assert!(error.message.contains("65,535"), "{}", error.message);
     assert_eq!(size(&app), (8, 8));
 }
 
@@ -856,6 +1035,9 @@ fn the_send_prompt_names_the_extension() {
         previous_tool: app.tool,
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
+        provider: None,
+        surface: None,
+        caller: None,
     };
     app.plugins.action = Some(edit(6));
     assert_eq!(
@@ -1350,9 +1532,9 @@ fn the_permission_review_says_what_a_read_only_plugin_can_do() {
     ui.drop_files(&[&folder]);
     assert!(ui.has("Id: inst"));
     assert!(ui.has(
-        "• Can read the document and propose selections or new documents, but can't change your image"
+        "Can read the document and propose selections or new documents, but can't change your image"
     ));
-    assert!(!ui.has("• Edits documents directly (as undoable steps)"));
+    assert!(!ui.has("Edits documents directly (as undoable steps)"));
 }
 
 #[test]
@@ -1414,7 +1596,12 @@ fn invalid_and_oversized_masks_are_refused() {
     app.session_mut().unwrap().history.commit();
     let mask = write_mask(dir.path(), "mask.png", (8, 8), |_, _| 255);
     // Wider than any image Xuan opens: refused from its header.
-    let wide = write_mask(dir.path(), "wide.png", (30_001, 1), |_, _| 255);
+    let wide = write_mask(
+        dir.path(),
+        "wide.png",
+        (xuan::document::MAX_SIDE + 1, 1),
+        |_, _| 255,
+    );
     let foreign = write_mask(outside.path(), "foreign.png", (8, 8), |_, _| 255);
     let text = dir.path().join("not-a.png");
     std::fs::write(&text, "not a png\r\n").unwrap();
@@ -1780,6 +1967,9 @@ fn a_selection_mask_is_listed_for_consent_and_needs_a_selection() {
         previous_tool: app.tool,
         into: xuan::plugins::manifest::ResultInto::Layer,
         consented: false,
+        provider: None,
+        surface: None,
+        caller: None,
     });
     // Nothing selected: the action refuses to start, and no mask is listed.
     app.start_plugin_action("mock", "inpaint");
@@ -1959,11 +2149,11 @@ fn the_install_review_shows_the_plugin_before_anything_is_copied() {
     assert!(ui.has(&format!("From: {}", folder.display())));
     assert!(ui.has(&format!("Installs to: {}", target.display())));
     assert!(ui.has("Runs: sh plugin.sh"));
-    assert!(ui.has("• Says it connects to: example.com"));
-    assert!(ui.has("• Edits documents directly (as undoable steps)"));
-    assert!(ui.has(
-        "• Installing does not allow it to run: Xuan asks for that the first time it starts."
-    ));
+    assert!(ui.has("Says it connects to: example.com"));
+    assert!(ui.has("Edits documents directly (as undoable steps)"));
+    assert!(
+        ui.has("Installing does not allow it to run: Xuan asks for that the first time it starts.")
+    );
     assert!(!target.exists());
     ui.click("Cancel");
     assert_eq!(ui.app().dialog, None);
@@ -1990,10 +2180,942 @@ fn the_install_review_shows_the_plugin_before_anything_is_copied() {
     ui.drop_files(&[&folder]);
     assert!(ui.has("• Replaces the installed version 1.2.3"));
     assert!(ui.has(
-        "• It stays allowed: you allowed it before with the same folder, command and permissions."
+        "It stays allowed: you allowed it before with the same folder, command and permissions."
     ));
     ui.click("Update");
     assert!(ui.app().plugin_granted("inst"));
+}
+
+#[test]
+fn new_edit_ops_need_edit_access_and_make_one_undo_step() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_read_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("fill_fg");
+    let edits = json!({"name": "Agent edit", "edits": [
+        {"op": "add_shape_layer", "shape": "Rectangle", "x": 2, "y": 2, "width": 8, "height": 6, "color": "#ff0000"},
+        {"op": "add_adjustment_layer", "adjustment": "Invert"},
+        {"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10},
+    ]});
+    // A read-only plugin can't, even for the selection.
+    let refused = plugin_request(&mut app, "document/edit", edits.clone()).unwrap_err();
+    assert!(refused.message.contains("edit"), "{}", refused.message);
+    let select = json!({"edits": [{"op": "select_rect", "x": 0, "y": 0, "width": 4, "height": 4}]});
+    assert!(plugin_request(&mut app, "document/edit", select).is_err());
+    assert!(app.session().unwrap().document.selection.is_none());
+
+    install_mock(&mut app, dir.path());
+    let before = app.session().unwrap().document.clone();
+    let steps = app.session().unwrap().history.names().count();
+    let answer = plugin_request(&mut app, "document/edit", edits).unwrap();
+    let added: Vec<uuid::Uuid> = serde_json::from_value(answer["layers"].clone()).unwrap();
+    assert_eq!(added.len(), 2);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    assert_eq!(session.history.undo_name(), Some("Agent edit"));
+    assert!(session.document.selection.is_some());
+    assert!(
+        added
+            .iter()
+            .all(|id| session.document.layers.iter().any(|l| l.id == *id))
+    );
+    app.command("undo");
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), before.layers.len());
+    assert!(document.selection.is_none());
+
+    // A failing batch changes nothing and adds no step.
+    let failing = json!({"edits": [
+        {"op": "add_empty_layer"},
+        {"op": "apply_filter", "filter": {"GaussianBlur": {"radius": 1000}}},
+    ]});
+    assert!(plugin_request(&mut app, "document/edit", failing).is_err());
+    assert_eq!(
+        app.session().unwrap().document.layers.len(),
+        before.layers.len()
+    );
+    assert_eq!(
+        app.session().unwrap().history.redo_name(),
+        Some("Agent edit")
+    );
+}
+
+#[test]
+fn a_gradient_edit_is_one_undo_step() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    let before = app.session().unwrap().document.layers[0].pixels.clone();
+    let steps = app.session().unwrap().history.names().count();
+    let edits = json!({"name": "Gradient", "edits": [
+        {"op": "select_rect", "x": 0, "y": 0, "width": 16, "height": 24},
+        {"op": "gradient", "start": [0, 0], "end": [32, 0], "stops": [
+            {"position": 0, "color": "#ff0000"},
+            {"position": 0.5, "color": "#00ff00"},
+            {"position": 1, "color": "#0000ff"},
+        ]},
+    ]});
+    plugin_request(&mut app, "document/edit", edits).unwrap();
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    assert_eq!(session.history.undo_name(), Some("Gradient"));
+    let pixels = session.document.layers[0].pixels.clone().unwrap();
+    assert_ne!(pixels.get_pixel(2, 2).0, pixels.get_pixel(30, 2).0);
+    app.command("undo");
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+    assert_eq!(app.session().unwrap().document.layers[0].pixels, before);
+}
+
+#[test]
+fn edits_name_layers_the_request_added_and_fail_as_a_whole() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    let before = app.session().unwrap().document.clone();
+    let steps = app.session().unwrap().history.names().count();
+    // A text layer, then its opacity and placement through `$1`, and two
+    // dabs on a new layer `$2`: one request, one undo step.
+    let edits = json!({"name": "Batch", "edits": [
+        {"op": "add_text_layer", "text": "A", "x": 2, "y": 2, "size": 12},
+        {"op": "set", "layer": "$1", "opacity": 0.5, "name": "Letter"},
+        {"op": "transform", "layer": "$1", "rotation": 15},
+        {"op": "add_empty_layer", "name": "Stars", "above": "$1"},
+        {"op": "stroke", "layer": "$2", "points": [[8, 8]], "size": 4, "hardness": 1, "color": "#ffffff"},
+        {"op": "stroke", "layer": "$2", "points": [[24, 16]], "size": 4, "hardness": 1, "color": "#ffffff"},
+    ]});
+    let answer = plugin_request(&mut app, "document/edit", edits).unwrap();
+    let added: Vec<uuid::Uuid> = serde_json::from_value(answer["layers"].clone()).unwrap();
+    assert_eq!(added.len(), 2);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    let layer = |id| session.document.layers.iter().find(|l| l.id == id).unwrap();
+    assert_eq!(layer(added[0]).name, "Letter");
+    assert_eq!(layer(added[0]).opacity, 0.5);
+    assert_eq!(layer(added[0]).transform.rotation, 15.0);
+    let stars = layer(added[1]).pixels.clone().unwrap();
+    assert_eq!(stars.get_pixel(8, 8).0[3], 255);
+    assert_eq!(stars.get_pixel(24, 16).0[3], 255);
+    assert_eq!(stars.get_pixel(16, 12).0[3], 0, "no line between the dabs");
+
+    // A step naming a layer the request has not added fails the request,
+    // saying which edit; nothing is applied and no step is added.
+    let failing = json!({"edits": [
+        {"op": "add_empty_layer"},
+        {"op": "set", "layer": "$2", "opacity": 0.5},
+    ]});
+    let error = plugin_request(&mut app, "document/edit", failing).unwrap_err();
+    assert!(
+        error.message.contains("Edit 2 (set)") && error.message.contains("`$2`"),
+        "{}",
+        error.message
+    );
+    let bad = json!({"edits": [{"op": "set", "layer": "$0", "opacity": 0.5}]});
+    let error = plugin_request(&mut app, "document/edit", bad).unwrap_err();
+    assert!(error.message.contains("`$0`"), "{}", error.message);
+    let session = app.session().unwrap();
+    assert_eq!(session.history.names().count(), steps + 1);
+    assert_eq!(session.document.layers.len(), before.layers.len() + 2);
+}
+
+#[test]
+fn move_layer_is_one_undo_step() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    app.new_document();
+    let answer = plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"edits": [{"op": "add_empty_layer"}, {"op": "add_empty_layer"}]}),
+    )
+    .unwrap();
+    let added: Vec<uuid::Uuid> = serde_json::from_value(answer["layers"].clone()).unwrap();
+    let order = |app: &EditorApp| -> Vec<uuid::Uuid> {
+        app.session()
+            .unwrap()
+            .document
+            .layers
+            .iter()
+            .map(|l| l.id)
+            .collect()
+    };
+    let before = order(&app);
+    let steps = app.session().unwrap().history.names().count();
+    plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"name": "Move", "edits": [{"op": "move_layer", "layer": added[1], "below": before[0]}]}),
+    )
+    .unwrap();
+    assert_eq!(order(&app), [added[1], before[0], added[0]]);
+    assert_eq!(app.session().unwrap().history.names().count(), steps + 1);
+    app.command("undo");
+    assert_eq!(order(&app), before);
+}
+
+#[test]
+fn canvas_ops_are_refused_in_results_but_selection_ops_are_proposed() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    app.new_document();
+    let job = mock_job(&app);
+    for op in [
+        json!({"op": "crop", "x": 0, "y": 0, "width": 4, "height": 4}),
+        json!({"op": "resize_canvas", "width": 4, "height": 4}),
+        json!({"op": "resize_image", "width": 4, "height": 4}),
+    ] {
+        let result = json!({"outputs": [{"kind": "edit", "edits": [op.clone()]}]});
+        let error = format!("{:#}", app.apply_job_result(&job, result).unwrap_err());
+        assert!(error.contains("document/edit"), "{op}: {error}");
+    }
+    assert_eq!(app.session().unwrap().document.width, 16);
+    assert!(app.plugins.proposal.is_none());
+
+    // A read-only plugin may propose a selection made with the new ops.
+    install_read_mock(&mut app, dir.path());
+    let result = json!({"outputs": [{"kind": "edit", "edits": [
+        {"op": "select_rect", "x": 0, "y": 0, "width": 8, "height": 8, "ellipse": true},
+        {"op": "feather_selection", "radius": 1},
+    ]}]});
+    app.apply_job_result(&job, result).unwrap();
+    assert!(app.plugins.proposal.is_some());
+    assert!(app.session().unwrap().document.selection.is_some());
+    app.resolve_proposal(false);
+    assert!(app.session().unwrap().document.selection.is_none());
+    let result =
+        json!({"outputs": [{"kind": "edit", "edits": [{"op": "fill", "color": "#000000"}]}]});
+    let error = format!("{:#}", app.apply_job_result(&job, result).unwrap_err());
+    assert!(error.contains("document = \"edit\""), "{error}");
+}
+
+#[test]
+fn plugins_list_and_switch_documents_and_greyed_out_commands_are_refused() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_read_mock(&mut app, dir.path());
+    assert_eq!(
+        plugin_request(&mut app, "document/list", json!({})).unwrap()["documents"],
+        json!([])
+    );
+    app.dimensions = [10, 8];
+    app.new_document();
+    app.dimensions = [20, 16];
+    app.new_document();
+    let first = app.sessions[0].document.id;
+    let listed = plugin_request(&mut app, "document/list", json!({})).unwrap();
+    let documents = listed["documents"].as_array().unwrap();
+    assert_eq!(documents.len(), 2);
+    assert_eq!(documents[0]["width"], 10);
+    assert_eq!(documents[1]["current"], true);
+    assert!(documents[0].get("path").is_none(), "paths stay private");
+    // Switching tabs is a view change: a read-only plugin may.
+    plugin_request(&mut app, "document/activate", json!({"document": first})).unwrap();
+    assert_eq!(app.current, 0);
+    for bad in [json!({}), json!({"document": uuid::Uuid::new_v4()})] {
+        assert!(plugin_request(&mut app, "document/activate", bad).is_err());
+    }
+    // One switch a second: a client cannot make the tabs flicker.
+    let second = app.sessions[1].document.id;
+    let error =
+        plugin_request(&mut app, "document/activate", json!({"document": second})).unwrap_err();
+    assert_eq!(error.code, xuan::plugins::protocol::RATE_LIMITED);
+    assert!(error.data["retry_after"].as_f64().unwrap() > 0.0);
+    assert_eq!(app.current, 0, "not switched");
+    // Asking for the current document is free.
+    plugin_request(&mut app, "document/activate", json!({"document": first})).unwrap();
+    let past = std::time::Instant::now() - crate::app::plugins::ACTIVATE_INTERVAL;
+    app.plugins.activated_at.insert("mock".into(), past);
+    plugin_request(&mut app, "document/activate", json!({"document": second})).unwrap();
+    assert_eq!(app.current, 1);
+    // A command greyed out in its menu is refused rather than ignored.
+    install_mock(&mut app, dir.path());
+    let request = |action: &str| xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(1),
+        method: "host/run".into(),
+        params: json!({"action": action}),
+    };
+    let error = app
+        .service_request("mock", &request("select_mask_black"))
+        .unwrap_err();
+    assert!(error.message.contains("not available"), "{}", error.message);
+    assert!(app.service_request("mock", &request("select_all")).is_ok());
+    assert!(app.service_request("mock", &request("feather")).is_ok());
+    // File requests never run straight from `service_request`.
+    let error = (app.service_request(
+        "mock",
+        &xuan::plugins::protocol::Request {
+            method: "file/save_as".into(),
+            ..request("x")
+        },
+    ))
+    .unwrap_err();
+    assert!(error.message.contains("user"), "{}", error.message);
+}
+
+/// The mock plugin with `document = "edit"` and `edit_prompt = "session"`.
+fn install_session_mock(app: &mut EditorApp, dir: &Path) {
+    install_mock(app, dir);
+    let mut manifest = app.plugins.manifest("mock").unwrap().clone();
+    manifest.permissions.edit_prompt = xuan::plugins::manifest::EditPrompt::Session;
+    app.install_plugins(vec![manifest], vec![]);
+    app.grant_plugin("mock", true);
+}
+
+fn session_request(method: &str, params: serde_json::Value) -> xuan::plugins::protocol::Request {
+    xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(1),
+        method: method.into(),
+        params,
+    }
+}
+
+#[test]
+fn edit_sessions_gate_direct_edits_until_the_user_allows_them() {
+    use crate::app::plugin_sessions::{EditAnswer, EditSessionRequest};
+    use serde_json::json;
+    use xuan::plugins::protocol::CANCELLED;
+    let dir = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = Some(config.path().join("config.toml"));
+    // Without the manifest's edit_prompt, nothing changes.
+    install_mock(&mut app, dir.path());
+    app.dimensions = [16, 16];
+    app.new_document();
+    let edit = |session: &str| {
+        session_request(
+            "document/edit",
+            json!({"name": "Agent", "session": session, "edits": [{"op": "add_empty_layer"}]}),
+        )
+    };
+    assert!(app.service_request("mock", &edit("")).is_ok());
+    assert!(!app.gated_edit("mock", &edit("")));
+
+    install_session_mock(&mut app, dir.path());
+    let layers = |app: &EditorApp| app.session().unwrap().document.layers.len();
+    let before = layers(&app);
+    // Direct edits are refused until the session is answered; reading and
+    // moving the view are not held.
+    for request in [
+        edit(""),
+        session_request("host/run", json!({"action": "new_layer"})),
+        session_request("host/run", json!({"action": "undo"})),
+    ] {
+        assert!(app.gated_edit("mock", &request), "{}", request.method);
+        assert_eq!(
+            app.service_request("mock", &request).unwrap_err().code,
+            CANCELLED
+        );
+    }
+    assert_eq!(layers(&app), before);
+    for request in [
+        session_request("document/get", json!({})),
+        session_request("host/run", json!({"action": "zoom_in"})),
+        session_request("document/list", json!({})),
+    ] {
+        assert!(!app.gated_edit("mock", &request));
+        assert!(app.service_request("mock", &request).is_ok());
+    }
+    assert_eq!(
+        app.service_request("mock", &session_request("session/status", json!({})))
+            .unwrap(),
+        json!({"edit_prompt": "session", "edits": "ask", "auto": false, "save_auto": false, "run_actions": false, "run_auto": false})
+    );
+
+    // Allow holds for its session only; Deny refuses the session.
+    let prompt = |session: &str| EditSessionRequest {
+        plugin: "mock".into(),
+        session: session.into(),
+        edit: "Agent".into(),
+        deny_all: false,
+    };
+    app.plugins.edit_prompt = Some(prompt("a"));
+    app.answer_edit_session(EditAnswer::Allow);
+    assert!(app.service_request("mock", &edit("a")).is_ok());
+    assert_eq!(layers(&app), before + 1);
+    assert!(app.service_request("mock", &edit("b")).is_err());
+    app.plugins.edit_prompt = Some(prompt("b"));
+    app.answer_edit_session(EditAnswer::Deny);
+    assert_eq!(
+        app.service_request("mock", &edit("b")).unwrap_err().code,
+        CANCELLED
+    );
+    assert_eq!(
+        app.service_request(
+            "mock",
+            &session_request("session/status", json!({"session": "b"}))
+        )
+        .unwrap()["edits"],
+        "denied"
+    );
+    // The answers last until the process stops.
+    app.stop_plugin("mock");
+    assert!(app.service_request("mock", &edit("a")).is_err());
+
+    // Always Allow is auto mode, stored in the grant and saved.
+    app.plugins.edit_prompt = Some(prompt("c"));
+    app.answer_edit_session(EditAnswer::Always);
+    assert!(app.stored_grant("mock").unwrap().edit_without_asking);
+    let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(saved.contains("edit_without_asking = true"), "{saved}");
+    for session in ["", "c", "d"] {
+        assert!(
+            app.service_request("mock", &edit(session)).is_ok(),
+            "{session}"
+        );
+    }
+    assert_eq!(
+        app.service_request("mock", &session_request("session/status", json!({})))
+            .unwrap(),
+        json!({"edit_prompt": "session", "edits": "allowed", "auto": true, "save_auto": false, "run_actions": false, "run_auto": false})
+    );
+    // Turning it off in Manage Plugins asks again, even in allowed sessions.
+    app.set_edit_auto_mode("mock", false);
+    assert!(!app.stored_grant("mock").unwrap().edit_without_asking);
+    assert!(app.service_request("mock", &edit("c")).is_err());
+    app.set_edit_auto_mode("mock", true);
+    assert!(app.service_request("mock", &edit("c")).is_ok());
+    // Reviewed again with other permissions, the grant starts without it.
+    let mut changed = app.plugins.manifest("mock").unwrap().clone();
+    changed.permissions.secrets = vec!["token".into()];
+    app.install_plugins(vec![changed], vec![]);
+    assert!(!app.plugin_granted("mock"));
+    app.grant_plugin("mock", true);
+    assert!(!app.stored_grant("mock").unwrap().edit_without_asking);
+    assert!(app.service_request("mock", &edit("c")).is_err());
+    // Unchanged permissions keep it.
+    app.set_edit_auto_mode("mock", true);
+    app.grant_plugin("mock", true);
+    assert!(app.stored_grant("mock").unwrap().edit_without_asking);
+}
+
+#[test]
+fn host_run_picks_its_layers_and_reports_what_it_added_and_started() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("fill_fg");
+    let base = app.session().unwrap().document.layers[0].id;
+    let ids = |answer: &serde_json::Value| -> Vec<uuid::Uuid> {
+        serde_json::from_value(answer["layers"].clone()).unwrap()
+    };
+    let describe = |app: &mut EditorApp, id: uuid::Uuid| {
+        let document = plugin_request(app, "document/get", json!({})).unwrap();
+        (document["layers"].as_array().unwrap().iter())
+            .find(|layer| layer["id"] == json!(id))
+            .cloned()
+            .unwrap()
+    };
+
+    // New layers come back with their ids.
+    let answer = plugin_request(&mut app, "host/run", json!({"action": "new_layer"})).unwrap();
+    let new = ids(&answer);
+    assert_eq!(new.len(), 1);
+    assert_eq!(app.session().unwrap().document.active, Some(new[0]));
+    assert_eq!(answer["running"], false);
+
+    // `layers` chooses what the command acts on.
+    let answer = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "duplicate", "layers": [base]}),
+    )
+    .unwrap();
+    let copies = ids(&answer);
+    assert_eq!(copies.len(), 1);
+    let document = &app.session().unwrap().document;
+    let copy = document.layers.iter().find(|l| l.id == copies[0]).unwrap();
+    assert_eq!(copy.pixels, document.layers[0].pixels, "a copy of the base");
+    plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "flip_h", "layers": [base]}),
+    )
+    .unwrap();
+    let flipped = describe(&mut app, base);
+    assert_eq!(
+        (&flipped["flip_x"], &flipped["flip_y"]),
+        (&json!(true), &json!(false))
+    );
+
+    // A mask attached to the image is reported on it and exported through it.
+    let answer = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "mask", "layers": [base]}),
+    )
+    .unwrap();
+    let mask = ids(&answer);
+    assert_eq!(mask.len(), 1);
+    let image = describe(&mut app, base);
+    assert_eq!(image["has_mask"], true);
+    assert_eq!(
+        image["masks"],
+        json!([{"layer": mask[0], "enabled": true, "linked": true}])
+    );
+    assert_eq!(describe(&mut app, mask[0])["attached_to"], json!(base));
+    plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "disable_mask", "layers": [mask[0]]}),
+    )
+    .unwrap();
+    assert_eq!(describe(&mut app, base)["masks"][0]["enabled"], false);
+    let export = plugin_request(
+        &mut app,
+        "layer/export",
+        json!({"layer": base, "what": "mask"}),
+    )
+    .unwrap();
+    assert_eq!(export["mask_layer"], json!(mask[0]));
+    let _ = std::fs::remove_file(export["path"].as_str().unwrap());
+
+    // Bad layers, or layers with a command that does not edit, change nothing.
+    let steps = app.session().unwrap().history.names().count();
+    let active = app.session().unwrap().document.active;
+    for params in [
+        json!({"action": "invert", "layers": [uuid::Uuid::new_v4()]}),
+        json!({"action": "invert", "layers": "nope"}),
+        json!({"action": "zoom_in", "layers": [base]}),
+        json!({"action": "mock/echo", "layers": [base]}),
+    ] {
+        assert!(plugin_request(&mut app, "host/run", params).is_err());
+    }
+    // A command greyed out for the chosen layer leaves the old one active.
+    let error = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "select_mask_black", "layers": [copies[0]]}),
+    )
+    .unwrap_err();
+    assert!(error.message.contains("not available"), "{}", error.message);
+    assert_eq!(app.session().unwrap().document.active, active);
+    assert_eq!(app.session().unwrap().history.names().count(), steps);
+
+    // A command that starts a job says it is still running.
+    let answer = plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "remove_flat_background", "layers": [base]}),
+    )
+    .unwrap();
+    assert_eq!(answer["running"], true);
+    assert!(app.job.is_some());
+}
+
+/// Actions the target plugin offers beside the mock's own: one whose result
+/// the caller chooses, with typed inputs and a file the user chooses.
+const TARGET_ACTIONS: &str = r#"
+[[actions]]
+id = "styled"
+label = "Styled Echo…"
+result = { into = "ask" }
+
+[[actions.inputs]]
+id = "style"
+type = "enum"
+values = ["soft", "hard"]
+
+[[actions.inputs]]
+id = "strength"
+type = "number"
+min = 0
+max = 1
+default = 0.5
+
+[[actions.inputs]]
+id = "reference"
+type = "path"
+"#;
+
+/// The mock plugin as `target` in `dir`, allowed to edit, with the actions
+/// above; `network` makes it declare a host.
+pub(super) fn target_manifest(dir: &Path, network: bool) -> Manifest {
+    let fixture = dir.join("fixture.png");
+    RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
+        .save(&fixture)
+        .unwrap();
+    std::fs::write(dir.join("plugin.sh"), script(&fixture)).unwrap();
+    let hosts = if network {
+        "network = [\"example.com\"]\n"
+    } else {
+        ""
+    };
+    let text = MANIFEST
+        .split("[[formats]]")
+        .next()
+        .unwrap()
+        .replace("id = \"mock\"", "id = \"target\"")
+        .replace("name = \"Mock\"", "name = \"Target\"")
+        .replace("shortcut = \"Ctrl+Shift+E\"\n", "")
+        .replace(
+            "[[actions]]",
+            &format!("[permissions]\ndocument = \"edit\"\n{hosts}\n[[actions]]"),
+        )
+        + TARGET_ACTIONS;
+    std::fs::write(dir.join("plugin.toml"), text).unwrap();
+    Manifest::load(dir).unwrap()
+}
+
+/// The session mock (`mock`, in `dir`) as the plugin that asks and the
+/// target (`target`, in `other`), both allowed, with a filled 16 × 16
+/// document.
+fn install_caller_and_target(app: &mut EditorApp, dir: &Path, other: &Path, network: bool) {
+    install_session_mock(app, dir);
+    let caller = app.plugins.manifest("mock").unwrap().clone();
+    app.install_plugins(vec![caller, target_manifest(other, network)], vec![]);
+    app.grant_plugin("target", true);
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+}
+
+/// `host/run` of `action` with more `params`.
+fn run_request(
+    id: i64,
+    action: &str,
+    mut params: serde_json::Value,
+) -> xuan::plugins::protocol::Request {
+    params["action"] = serde_json::json!(action);
+    xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(id),
+        method: "host/run".into(),
+        params,
+    }
+}
+
+/// What `plugin_run_request` refused a run of `action` with.
+fn refused_run(app: &mut EditorApp, action: &str, params: serde_json::Value) -> String {
+    match app.plugin_run_request("mock", &run_request(1, action, params)) {
+        Some(Err(error)) => error.message,
+        other => panic!("{action} was not refused: {other:?}"),
+    }
+}
+
+#[test]
+fn runs_of_other_plugins_actions_need_the_setting_and_are_checked_first() {
+    use crate::app::plugin_runs::RunAnswer;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = Some(config.path().join("config.toml"));
+    install_caller_and_target(&mut app, dir.path(), other.path(), false);
+
+    // Without the setting, listing and running are refused, naming it.
+    let message = refused_run(&mut app, "target/echo", json!({}));
+    assert!(
+        message.contains("turn on “Run other plugins' actions” for it"),
+        "{message}"
+    );
+    let error = plugin_request(&mut app, "plugins/actions", json!({})).unwrap_err();
+    assert!(
+        error.message.contains("Run other plugins' actions"),
+        "{}",
+        error.message
+    );
+    // The plugin's own actions and built-in commands are not such runs.
+    for action in ["mock/echo", "zoom_in"] {
+        let request = run_request(2, action, json!({}));
+        assert!(app.hold_plugin_run("mock", request).is_some(), "{action}");
+    }
+
+    app.set_run_other_actions("mock", true);
+    assert!(app.runs_other_actions("mock"));
+    let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(saved.contains("run_other_actions = true"), "{saved}");
+    // The other plugins' actions, with what a client needs to run them.
+    let listed = plugin_request(&mut app, "plugins/actions", json!({})).unwrap();
+    let actions = listed["actions"].as_array().unwrap();
+    assert!(actions.iter().all(|a| a["plugin"] == "target"), "{listed}");
+    let styled = (actions.iter())
+        .find(|a| a["action"] == "target/styled")
+        .unwrap();
+    for (key, value) in [
+        ("plugin_name", json!("Target")),
+        ("id", json!("styled")),
+        ("label", json!("Styled Echo…")),
+        ("result", json!("ask")),
+        ("network", json!(false)),
+        ("allowed", json!(true)),
+        ("available", json!(true)),
+    ] {
+        assert_eq!(styled[key], value, "{key}");
+    }
+    assert_eq!(styled["inputs"][0]["type"], "enum");
+    assert_eq!(
+        styled["inputs"][0]["values"],
+        json!([{"id": "soft", "label": "soft"}, {"id": "hard", "label": "hard"}])
+    );
+    assert_eq!(
+        (&styled["inputs"][1]["min"], &styled["inputs"][1]["max"]),
+        (&json!(0.0), &json!(1.0))
+    );
+    let echo = (actions.iter())
+        .find(|a| a["action"] == "target/echo")
+        .unwrap();
+    assert_eq!(
+        (&echo["kind"], &echo["source"], &echo["result"]),
+        (&json!("edit"), &json!("layer"), &json!("layer"))
+    );
+
+    // Mistakes fail before anything waits for the user.
+    for (action, params, says) in [
+        ("nobody/echo", json!({}), "No plugin `nobody` is installed"),
+        ("target/nope", json!({}), "has no action `nope`"),
+        ("target/styled", json!({}), "give `into` as \"layer\""),
+        (
+            "target/styled",
+            json!({"into": "replace"}),
+            "`into` must be \"layer\" or \"document\"",
+        ),
+        (
+            "target/echo",
+            json!({"into": "layer"}),
+            "“Echo Source” puts it in a new layer",
+        ),
+        (
+            "target/styled",
+            json!({"into": "layer", "inputs": {"style": "medium"}}),
+            "`style` must be one of soft, hard",
+        ),
+        (
+            "target/styled",
+            json!({"into": "layer", "inputs": {"strength": 2}}),
+            "`strength` must be between 0 and 1",
+        ),
+        (
+            "target/styled",
+            json!({"into": "layer", "inputs": {"reference": "/etc/passwd"}}),
+            "`reference` is a file the user chooses",
+        ),
+        (
+            "target/styled",
+            json!({"into": "layer", "inputs": {"size": 3}}),
+            "has no input `size`",
+        ),
+        (
+            "target/echo",
+            json!({"inputs": {"regions": [{"x": 0, "y": 0, "width": -1, "height": 1}]}}),
+            "width and height above 0",
+        ),
+        (
+            "target/echo",
+            json!({"layers": "base"}),
+            "`layers` must be a list of layer ids",
+        ),
+    ] {
+        let message = refused_run(&mut app, action, params);
+        assert!(message.contains(says), "{action}: {message}");
+    }
+    app.config
+        .plugins
+        .entry("target".into())
+        .or_default()
+        .enabled = false;
+    let message = refused_run(&mut app, "target/echo", json!({}));
+    assert!(
+        message.contains("Target (plugin target) is disabled"),
+        "{message}"
+    );
+    app.config
+        .plugins
+        .entry("target".into())
+        .or_default()
+        .enabled = true;
+    assert!(app.plugins.run_held.is_empty());
+    assert_eq!(app.dialog, None);
+
+    // A good run waits for the user, and no second run of the plugin may.
+    let run = run_request(
+        3,
+        "target/styled",
+        json!({"into": "document", "inputs": {"style": "hard", "strength": 0.25}, "session": "MCP client 1"}),
+    );
+    assert!(app.plugin_run_request("mock", &run).is_none());
+    assert_eq!(app.plugins.run_held.len(), 1);
+    let message = refused_run(&mut app, "target/echo", json!({}));
+    assert!(
+        message.contains("Another run of this plugin is waiting"),
+        "{message}"
+    );
+    assert!(app.plugins.jobs.is_empty());
+    // Cancel refuses it; for a while new runs are refused without a prompt.
+    app.plugins.run_prompt = Some(crate::app::plugin_runs::RunPrompt {
+        caller: "mock".into(),
+        session: "MCP client 1".into(),
+        request: run.id.clone(),
+        plugin: "target".into(),
+        label: "Styled Echo".into(),
+        details: Vec::new(),
+    });
+    app.answer_plugin_run(RunAnswer::Cancel);
+    assert!(app.plugins.run_held.is_empty() && app.plugins.run_prompt.is_none());
+    assert_eq!(app.dialog, None);
+    assert!(app.run_cooling_down("mock"));
+    let error = app.plugin_run_request("mock", &run).unwrap().unwrap_err();
+    assert_eq!(error.code, xuan::plugins::protocol::CANCELLED);
+    assert!(app.plugins.run_held.is_empty());
+    assert!(app.plugins.jobs.is_empty() && app.plugins.action.is_none());
+}
+
+#[test]
+fn runs_go_through_the_other_plugins_own_grant_and_checks() {
+    use crate::app::plugins::PendingStart;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_caller_and_target(&mut app, dir.path(), other.path(), true);
+    app.set_run_other_actions("mock", true);
+    app.set_run_without_asking("mock", true);
+    assert!(app.runs_without_asking("mock"));
+
+    // Offline mode holds a network plugin back, before any prompt.
+    app.config.disable_network_plugins = true;
+    let message = refused_run(&mut app, "target/echo", json!({}));
+    assert!(
+        message.contains("plugins that use the network are disabled"),
+        "{message}"
+    );
+    app.config.disable_network_plugins = false;
+
+    // A plugin the user has not allowed shows its own permission prompt,
+    // as its menu item would, and nothing runs, then or after.
+    app.grant_plugin("target", false);
+    let message = refused_run(&mut app, "target/echo", json!({}));
+    assert!(
+        message.contains("has not been allowed to run yet"),
+        "{message}"
+    );
+    assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+    assert_eq!(
+        app.plugins.permission_request,
+        Some(("target".into(), PendingStart::Action(String::new())))
+    );
+    assert!(app.plugins.action.is_none() && app.plugins.jobs.is_empty());
+    app.plugins.permission_request = None;
+    app.dialog = None;
+    app.grant_plugin("target", true);
+    assert!(app.plugins.action.is_none() && app.plugins.jobs.is_empty());
+
+    // The editor must be free.
+    app.dialog = Some(Dialog::About);
+    assert_eq!(
+        refused_run(&mut app, "target/echo", json!({})),
+        "The editor is busy"
+    );
+    app.dialog = None;
+
+    // An action its menu item would refuse is refused, and the layers the
+    // run selected are put back.
+    let base = app.session().unwrap().document.layers[0].id;
+    app.command("group");
+    let group = app.session().unwrap().document.active.unwrap();
+    assert_ne!(group, base);
+    let session = app.session_mut().unwrap();
+    xuan::plugins::edits::select_layers(&mut session.document, &[base]).unwrap();
+    let message = refused_run(&mut app, "target/echo", json!({"layers": [group]}));
+    assert_eq!(message, "Select an image layer first");
+    assert_eq!(app.session().unwrap().document.active, Some(base));
+    let message = refused_run(
+        &mut app,
+        "target/echo",
+        json!({"layers": [uuid::Uuid::new_v4()]}),
+    );
+    assert!(message.contains("No layer"), "{message}");
+    assert_eq!(app.session().unwrap().document.active, Some(base));
+    assert!(app.plugins.action.is_none() && app.plugins.jobs.is_empty());
+    assert_eq!(app.error, None, "failures go to the plugin that asked");
+}
+
+#[test]
+fn run_settings_belong_to_the_grant() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    app.config_path = Some(config.path().join("config.toml"));
+    install_caller_and_target(&mut app, dir.path(), other.path(), false);
+    // Always Allow needs the setting first.
+    app.set_run_without_asking("mock", true);
+    assert!(!app.runs_without_asking("mock"));
+    app.set_run_other_actions("mock", true);
+    app.set_run_without_asking("mock", true);
+    let session = |app: &mut EditorApp| plugin_request(app, "session/status", json!({})).unwrap();
+    let status = session(&mut app);
+    assert_eq!(
+        (&status["run_actions"], &status["run_auto"]),
+        (&json!(true), &json!(true))
+    );
+    let allowed = ("mock".to_owned(), "s".to_owned(), "target".to_owned());
+    app.plugins.run_answers.insert(allowed.clone());
+
+    // Allowed again unchanged, the plugin keeps them.
+    app.grant_plugin("mock", true);
+    assert!(app.runs_other_actions("mock") && app.runs_without_asking("mock"));
+    // The target reviewed again with other permissions: sessions that were
+    // allowed to run it allowed it as it was.
+    let caller = app.plugins.manifest("mock").unwrap().clone();
+    let mut target = app.plugins.manifest("target").unwrap().clone();
+    target.permissions.secrets = vec!["token".into()];
+    app.install_plugins(vec![caller.clone(), target.clone()], vec![]);
+    app.grant_plugin("target", true);
+    assert!(!app.plugins.run_answers.contains(&allowed));
+    assert!(app.runs_without_asking("mock"));
+    // The caller with other permissions starts without them.
+    let mut changed = caller;
+    changed.permissions.secrets = vec!["token".into()];
+    app.install_plugins(vec![changed, target], vec![]);
+    assert!(!app.runs_other_actions("mock"));
+    app.grant_plugin("mock", true);
+    let grant = app.stored_grant("mock").unwrap();
+    assert!(!grant.run_other_actions && !grant.run_without_asking);
+    let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+    assert!(!saved.contains("run_other_actions"), "{saved}");
+
+    // Turning the setting off turns off running without asking and forgets
+    // the sessions allowed.
+    app.set_run_other_actions("mock", true);
+    app.set_run_without_asking("mock", true);
+    app.plugins.run_answers.insert(allowed.clone());
+    app.set_run_other_actions("mock", false);
+    assert!(!app.stored_grant("mock").unwrap().run_without_asking);
+    assert!(app.plugins.run_answers.is_empty());
+    let status = session(&mut app);
+    assert_eq!(
+        (&status["run_actions"], &status["run_auto"]),
+        (&json!(false), &json!(false))
+    );
+    // Stopping the caller forgets its sessions too.
+    app.set_run_other_actions("mock", true);
+    app.plugins.run_answers.insert(allowed.clone());
+    app.stop_plugin("mock");
+    assert!(app.plugins.run_answers.is_empty());
+    assert!(app.runs_other_actions("mock"));
 }
 
 #[cfg(unix)]
@@ -2016,6 +3138,613 @@ mod unix {
             frame(context, app);
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Start the mock plugin, which first writes the Python SDK variables it
+    /// was started with to `env.log`, and return that file's lines.
+    fn sdk_environment(sdk: Option<&Path>) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        let script = std::fs::read_to_string(dir.path().join("plugin.sh")).unwrap();
+        std::fs::write(
+            dir.path().join("plugin.sh"),
+            format!(
+                "printf '%s\\n' \"${{XUAN_PLUGIN_SDK-unset}}\" \"${{PYTHONPATH-unset}}\" > env.log\n{script}"
+            ),
+        )
+        .unwrap();
+        app.plugins.sdk_dir = sdk.map(Path::to_path_buf);
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        app.stop_plugin("mock");
+        let log = std::fs::read_to_string(dir.path().join("env.log")).unwrap();
+        log.lines().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn plugins_start_with_the_python_sdk_first_on_their_import_path() {
+        let sdk = tempfile::tempdir().unwrap();
+        let sdk_text = sdk.path().to_str().unwrap().to_owned();
+        let lines = sdk_environment(Some(sdk.path()));
+        assert_eq!(lines[0], sdk_text);
+        // The SDK comes first, then whatever Xuan itself was started with.
+        let expected = match std::env::var("PYTHONPATH") {
+            Ok(rest) if !rest.is_empty() => format!("{sdk_text}:{rest}"),
+            _ => sdk_text.clone(),
+        };
+        assert_eq!(lines[1], expected);
+
+        // Without an SDK folder the plugin still starts, with neither set
+        // by Xuan: it sees only what Xuan itself was started with.
+        let lines = sdk_environment(None);
+        assert_eq!(
+            lines[0],
+            std::env::var("XUAN_PLUGIN_SDK").unwrap_or_else(|_| "unset".into())
+        );
+        assert_eq!(
+            lines[1],
+            std::env::var("PYTHONPATH").unwrap_or_else(|_| "unset".into())
+        );
+    }
+
+    #[test]
+    fn the_region_tool_is_offered_only_to_actions_with_regions() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        let manifest = format!(
+            "{MANIFEST}\n[[actions]]\nid = \"generate\"\nlabel = \"Generate…\"\nkind = \"generate\"\n\n[[actions.inputs]]\nid = \"prompt\"\ntype = \"text\"\n"
+        );
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        assert!(!app.region_tool_available());
+        app.start_plugin_action("mock", "generate");
+        assert!(app.plugins.action.is_some(), "{:?}", app.error);
+        assert!(!app.region_tool_available());
+        assert_ne!(app.tool, Tool::Region);
+        app.close_plugin_action();
+        app.start_plugin_action("mock", "echo");
+        assert!(app.plugins.action.is_some(), "{:?}", app.error);
+        assert!(app.region_tool_available());
+        assert_eq!(app.tool, Tool::Region);
+        app.close_plugin_action();
+        assert!(!app.region_tool_available());
+    }
+
+    #[test]
+    fn surface_runs_tell_the_plugin_where_they_came_from_and_the_target_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        let run = crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Region,
+            target: (20, 10),
+            exact: false,
+            resolution: 72.0,
+            boxes: Vec::new(),
+        };
+        let regions = vec![xuan::plugins::jobs::Region::rect(4.0, 4.0, 20.0, 10.0)];
+        let given = serde_json::Map::from_iter([("prompt".to_owned(), serde_json::json!("a hat"))]);
+        app.tool = Tool::Region;
+        assert_eq!(
+            app.run_from_surface("mock", "echo", &given, regions, run),
+            crate::app::surfaces::SurfaceStart::Started
+        );
+        assert_eq!(app.plugins.jobs.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let line = received
+            .lines()
+            .find(|l| l.contains("\"action/run\""))
+            .unwrap();
+        assert!(line.contains("\"surface\":\"region\""), "{line}");
+        assert!(
+            line.contains("\"target\":{\"height\":10,\"width\":20}")
+                || line.contains("\"target\":{\"width\":20,\"height\":10}"),
+            "{line}"
+        );
+        assert!(line.contains("\"prompt\":\"a hat\""), "{line}");
+        // The Region tool stays selected after a surface run.
+        assert_eq!(app.tool, Tool::Region);
+    }
+
+    #[test]
+    fn a_surface_run_waits_for_permission_and_never_runs_silently() {
+        // Review focus 1: not yet allowed → the permission prompt; disabled or offline → a status.
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        std::fs::write(dir.path().join("plugin.toml"), MANIFEST).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let run = crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Layer,
+            target: (16, 16),
+            exact: false,
+            resolution: 72.0,
+            boxes: Vec::new(),
+        };
+        assert_eq!(
+            app.run_from_surface(
+                "mock",
+                "echo",
+                &serde_json::Map::new(),
+                Vec::new(),
+                run.clone()
+            ),
+            crate::app::surfaces::SurfaceStart::Waiting
+        );
+        assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+        assert!(app.plugins.jobs.is_empty());
+        app.dialog = None;
+        app.config.plugins.entry("mock".into()).or_default().enabled = false;
+        assert_eq!(
+            app.run_from_surface("mock", "echo", &serde_json::Map::new(), Vec::new(), run),
+            crate::app::surfaces::SurfaceStart::NotStarted
+        );
+        assert!(app.plugins.jobs.is_empty());
+    }
+
+    #[test]
+    fn ai_region_boxes_run_grouped_or_one_by_one_and_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        // "echo" is a multi-box Edit; "one" takes one box (Add).
+        let manifest = MANIFEST.replace("[[actions]]\nid = \"echo\"", "[permissions]\ndocument = \"edit\"\n\n[[actions]]\nid = \"echo\"\nsurfaces = [\"region\"]\nverb = \"Edit\"")
+            + "\n[[actions]]\nid = \"one\"\nlabel = \"One…\"\nsurfaces = [\"region\"]\nverb = \"Add\"\nsource = { crop_to_regions = true }\n\n[[actions.inputs]]\nid = \"regions\"\ntype = \"regions\"\nmax = 1\nfields = [{ id = \"desc\", type = \"text\" }]\n";
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for (x, desc) in [(2.0, "hat"), (20.0, "scarf"), (40.0, "")] {
+            app.add_ai_box(Point::new(x, 2.0), Point::new(x + 10.0, 12.0));
+            let session = app.session_mut().unwrap();
+            session
+                .ai_boxes
+                .last_mut()
+                .unwrap()
+                .region
+                .fields
+                .insert("desc".into(), desc.into());
+        }
+        // The empty third box is not sent; the two Edit boxes go in one job.
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        // Switch the remaining box to Add and give it text: one job for it.
+        app.set_ai_box_action(0, "mock", "one");
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "a cat".into());
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        run_until(&context, &mut app, |app| {
+            app.plugins.jobs.is_empty() && app.dialog == Some(Dialog::PluginProposal)
+        });
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let runs: Vec<_> = received
+            .lines()
+            .filter(|l| l.contains("\"action/run\""))
+            .collect();
+        assert_eq!(runs.len(), 2);
+        assert!(
+            runs[0].contains("\"action\":\"echo\"")
+                && runs[0].contains("hat")
+                && runs[0].contains("scarf")
+        );
+        assert!(
+            runs[1].contains("\"action\":\"one\"") && runs[1].contains("\"surface\":\"region\"")
+        );
+    }
+
+    /// The mock plugin with surface actions: "echo" (Edit, several boxes,
+    /// with an enum field that has a default), "one" (Add, one box with a
+    /// text field), "plain" (a region action without any text) and "lay" (a
+    /// layer action with a prompt).
+    fn install_surface_mock(app: &mut EditorApp, dir: &Path, network: bool) {
+        let fixture = dir.join("fixture.png");
+        RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]))
+            .save(&fixture)
+            .unwrap();
+        std::fs::write(dir.join("plugin.sh"), script(&fixture)).unwrap();
+        let permissions = if network {
+            "[permissions]\ndocument = \"edit\"\nnetwork = [\"example.com\"]\n\n"
+        } else {
+            "[permissions]\ndocument = \"edit\"\n\n"
+        };
+        let manifest = MANIFEST
+            .replace(
+                "[[actions]]\nid = \"echo\"",
+                &format!("{permissions}[[actions]]\nid = \"echo\"\nsurfaces = [\"region\"]\nverb = \"Edit\""),
+            )
+            .replace(
+                "fields = [{ id = \"desc\", type = \"text\" }]",
+                "fields = [{ id = \"desc\", type = \"text\" }, { id = \"kind\", type = \"enum\", values = [\"obj\"], default = \"obj\" }]",
+            )
+            + "\n[[actions]]\nid = \"one\"\nlabel = \"One…\"\nsurfaces = [\"region\"]\nverb = \"Add\"\nsource = { crop_to_regions = true }\n\n[[actions.inputs]]\nid = \"regions\"\ntype = \"regions\"\nmax = 1\nfields = [{ id = \"desc\", type = \"text\" }]\n"
+            + "\n[[actions]]\nid = \"plain\"\nlabel = \"Plain…\"\nsurfaces = [\"region\"]\nverb = \"Plain\"\nsource = { crop_to_regions = true }\n\n[[actions.inputs]]\nid = \"regions\"\ntype = \"regions\"\nmax = 1\nfields = [{ id = \"kind\", type = \"enum\", values = [\"a\"] }]\n"
+            + "\n[[actions]]\nid = \"lay\"\nlabel = \"Lay…\"\nkind = \"generate\"\nsurfaces = [\"layer\"]\n\n[[actions.inputs]]\nid = \"prompt\"\ntype = \"text\"\n";
+        std::fs::write(dir.join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir).unwrap()], vec![]);
+    }
+
+    fn layer_run() -> crate::app::surfaces::SurfaceRun {
+        crate::app::surfaces::SurfaceRun {
+            surface: xuan::plugins::manifest::Surface::Layer,
+            target: (16, 16),
+            exact: false,
+            resolution: 72.0,
+            boxes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn ai_region_boxes_stay_until_their_job_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.add_ai_box(Point::new(2.0, 2.0), Point::new(20.0, 20.0));
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "hat".into());
+        // Not allowed yet: the prompt shows and the box and its text stay.
+        assert_eq!(app.generate_ai_boxes(0), 0);
+        assert_eq!(app.dialog, Some(Dialog::PluginPermissions));
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        app.dialog = None;
+        app.grant_plugin("mock", true);
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        assert_eq!(app.plugins.jobs.len(), 1);
+        // Plugins learn what this Xuan supports.
+        run_until(&context, &mut app, |app| app.plugins.jobs.is_empty());
+        let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+        let init = received
+            .lines()
+            .find(|l| l.contains("\"initialize\""))
+            .unwrap();
+        assert!(
+            init.contains("\"fit_cover\"") && init.contains("\"surfaces\""),
+            "{init}"
+        );
+    }
+
+    #[test]
+    fn ai_region_boxes_come_back_when_their_job_does_not_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        // A box dragged past the canvas is kept on it.
+        app.add_ai_box(Point::new(50.0, 40.0), Point::new(90.0, 70.0));
+        let region = app.session().unwrap().ai_boxes[0].region.clone();
+        assert_eq!(
+            (region.x, region.y, region.width, region.height),
+            (50.0, 40.0, 14.0, 8.0)
+        );
+        (app.session_mut().unwrap().ai_boxes[0].region.fields).insert("desc".into(), "hat".into());
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert!(app.session().unwrap().ai_boxes.is_empty());
+        // The plugin stops before answering: the box is back, prompt and all.
+        app.stop_plugin("mock");
+        let boxes = &app.session().unwrap().ai_boxes;
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].region.fields["desc"], serde_json::json!("hat"));
+    }
+
+    #[test]
+    fn grouped_ai_boxes_each_run_with_their_own_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for x in [2.0, 20.0, 40.0] {
+            app.add_ai_box(Point::new(x, 2.0), Point::new(x + 10.0, 12.0));
+        }
+        let session = app.session_mut().unwrap();
+        for ai_box in &mut session.ai_boxes {
+            ai_box.region.fields.insert("desc".into(), "hat".into());
+        }
+        // The second box asks for something else than the other two.
+        (session.ai_boxes[1].values).insert("prompt".into(), "other".into());
+        assert_eq!(app.generate_ai_boxes(0), 2);
+        let jobs = &app.plugins.jobs;
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].regions.len(), 2);
+        assert_eq!(jobs[1].regions.len(), 1);
+        assert_eq!(jobs[1].inputs["prompt"], serde_json::json!("other"));
+        assert_ne!(jobs[0].inputs["prompt"], serde_json::json!("other"));
+    }
+
+    #[test]
+    fn a_second_job_does_not_replace_a_layer_another_is_replacing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        let manifest = MANIFEST.replace(
+            "[[actions]]\nid = \"echo\"",
+            "[permissions]\ndocument = \"edit\"\n\n[[actions]]\nid = \"swap\"\nlabel = \"Swap…\"\nresult = { into = \"replace\" }\n\n[[actions]]\nid = \"echo\"",
+        );
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        app.dimensions = [8, 8];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 1);
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert!(app.error.take().unwrap().contains("already replacing"));
+        // Another layer may be replaced meanwhile.
+        app.command("new_layer");
+        app.command("fill_fg");
+        app.start_plugin_action("mock", "swap");
+        assert_eq!(app.plugins.jobs.len(), 2);
+    }
+
+    #[test]
+    fn a_surface_run_waits_for_consent_without_the_full_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), true);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        let given =
+            serde_json::Map::from_iter([("prompt".to_owned(), serde_json::json!("a kite"))]);
+        let started = app.run_from_surface("mock", "lay", &given, Vec::new(), layer_run());
+        assert_eq!(started, crate::app::surfaces::SurfaceStart::Waiting);
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        assert!(!app.plugin_action_dialog_shown());
+        frame(&context, &mut app);
+        let window = egui::Id::new(("plugin_action", "mock", "lay"));
+        assert!(
+            !context.memory(|m| m.areas().visible_layer_ids().iter().any(|l| l.id == window)),
+            "the action's full dialog was drawn behind the consent prompt"
+        );
+        // Cancel: nothing is sent and no dialog is left behind.
+        app.answer_consent(false);
+        assert!(app.plugins.action.is_none());
+        assert!(app.plugins.jobs.is_empty());
+    }
+
+    #[test]
+    fn a_surface_run_checks_like_the_menu_and_leaves_an_open_dialog_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_context, mut app) = app();
+        // A plugin that asks before sending: a run that cannot start says
+        // why at once, without asking first.
+        install_surface_mock(&mut app, dir.path(), true);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        // The blank layer has no pixels: Edit needs an image layer.
+        app.add_ai_box(Point::new(2.0, 2.0), Point::new(12.0, 12.0));
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "hat".into());
+        assert_eq!(app.generate_ai_boxes(0), 0);
+        assert!(
+            app.error
+                .as_deref()
+                .is_some_and(|e| e.contains("image layer")),
+            "{:?}",
+            app.error
+        );
+        assert!(app.plugins.action.is_none());
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        app.error = None;
+        app.command("fill_fg");
+        app.start_plugin_action("mock", "echo");
+        assert!(app.plugins.action.is_some());
+        let started = app.run_from_surface(
+            "mock",
+            "lay",
+            &serde_json::Map::new(),
+            Vec::new(),
+            layer_run(),
+        );
+        assert_eq!(started, crate::app::surfaces::SurfaceStart::NotStarted);
+        assert_eq!(
+            app.plugins.action.as_ref().map(|e| e.action.as_str()),
+            Some("echo")
+        );
+    }
+
+    #[test]
+    fn only_boxes_with_a_prompt_are_sent_and_a_verb_change_keeps_only_the_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        app.add_ai_box(Point::new(2.0, 2.0), Point::new(12.0, 12.0));
+        app.add_ai_box(Point::new(30.0, 2.0), Point::new(40.0, 12.0));
+        app.session_mut().unwrap().ai_boxes[0]
+            .region
+            .fields
+            .insert("desc".into(), "hat".into());
+        // The second box has only its enum's default: it is not sent.
+        assert_eq!(app.generate_ai_boxes(0), 1);
+        assert_eq!(app.plugins.jobs[0].regions.len(), 1);
+        assert_eq!(app.session().unwrap().ai_boxes.len(), 1);
+        // Switching it to Add does not make "obj" its prompt.
+        app.set_ai_box_action(0, "mock", "one");
+        assert_eq!(
+            app.session().unwrap().ai_boxes[0].region.fields["desc"],
+            serde_json::json!("")
+        );
+        assert_eq!(app.generate_ai_boxes(0), 0);
+        // An action without any text runs as it is.
+        app.set_ai_box_action(0, "mock", "plain");
+        assert_eq!(app.generate_ai_boxes(0), 1);
+    }
+
+    #[test]
+    fn surface_popovers_show_the_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), false);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.open_surface_popup(crate::app::surfaces::SurfacePopup::Layer {
+            plugin: "mock".into(),
+            action: "lay".into(),
+            anchor: egui::Pos2::ZERO,
+        });
+        run_until(&context, &mut app, |app| {
+            app.plugins
+                .surface_estimates
+                .get(&("mock".to_owned(), "lay".to_owned()))
+                .is_some_and(|e| e == "free")
+        });
+    }
+
+    #[test]
+    fn a_surface_estimate_withholds_typed_text_until_the_user_agrees_to_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_surface_mock(&mut app, dir.path(), true);
+        app.grant_plugin("mock", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        let key = ("mock".to_owned(), "lay".to_owned());
+        (app.surface_values("mock", "lay")).insert("prompt".into(), "a secret castle".into());
+        app.open_surface_popup(crate::app::surfaces::SurfacePopup::Layer {
+            plugin: "mock".into(),
+            action: "lay".into(),
+            anchor: egui::Pos2::ZERO,
+        });
+        run_until(&context, &mut app, |app| {
+            app.plugins.surface_estimates.contains_key(&key)
+        });
+        let log = received(dir.path());
+        let estimate = log.lines().find(|l| l.contains("action/estimate")).unwrap();
+        assert!(estimate.contains("\"action\":\"lay\""), "{estimate}");
+        assert!(!estimate.contains("secret castle"), "{estimate}");
+
+        // Once the user chose to send without asking, the estimate gets it.
+        let grant = app.config.plugins.get_mut("mock").unwrap().grant.as_mut();
+        grant.unwrap().send_without_asking = true;
+        app.plugins.surface_estimates.clear();
+        app.request_surface_estimate("mock", "lay");
+        run_until(&context, &mut app, |app| {
+            app.plugins.surface_estimates.contains_key(&key)
+        });
+        assert!(received(dir.path()).contains("secret castle"));
+    }
+
+    #[test]
+    fn a_settings_pane_is_drawn_in_manage_plugins_not_the_sidebar() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let fixture = dir.path().join("fixture.png");
+        RgbaImage::new(2, 2).save(&fixture).unwrap();
+        std::fs::write(dir.path().join("plugin.sh"), script(&fixture)).unwrap();
+        let manifest = MANIFEST.replace("refresh = \"document\"", "placement = \"settings\"");
+        std::fs::write(dir.path().join("plugin.toml"), manifest).unwrap();
+        app.install_plugins(vec![Manifest::load(dir.path()).unwrap()], vec![]);
+        app.grant_plugin("mock", true);
+        let key = "plugin:mock/info";
+        assert!(app.config.panes.get(key).is_none());
+        assert!(app.pane_title(key).is_none());
+        assert!(!app.pane_entries().iter().any(|(id, _, _)| id == key));
+        app.command("reset_panels");
+        assert!(app.config.panes.get(key).is_none());
+        // Its plugin's page in Manage Plugins opens it.
+        app.plugins.manager_selected = Some("mock".into());
+        app.dialog = Some(Dialog::Plugins);
+        run_until(&context, &mut app, |app| {
+            app.plugins
+                .panes
+                .get(key)
+                .is_some_and(|state| state.tree.is_some())
+        });
+    }
+
+    #[test]
+    fn several_jobs_run_on_one_document_and_their_results_wait_their_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.command("fill_fg");
+        frame(&context, &mut app);
+        for _ in 0..2 {
+            app.start_plugin_action("mock", "echo");
+            app.add_region(Point::new(2.0, 2.0), Point::new(10.0, 10.0));
+            app.run_plugin_action();
+            assert!(app.error.is_none(), "{:?}", app.error);
+        }
+        assert_eq!(app.plugins.jobs.len(), 2);
+        assert_eq!(app.running_jobs().len(), 2);
+        let echoed = |app: &EditorApp| {
+            (app.session().unwrap().document.layers.iter())
+                .filter(|l| l.name == "Echoed")
+                .count()
+        };
+        // Both finish; the second result waits while the first is proposed.
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal) && app.plugins.jobs.is_empty()
+        });
+        assert_eq!(echoed(&app), 1);
+        assert_eq!(app.plugins.completed.len(), 1);
+        app.resolve_proposal(true);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        app.resolve_proposal(true);
+        assert_eq!(echoed(&app), 2);
+        assert!(app.plugins.completed.is_empty());
     }
 
     #[test]
@@ -2288,6 +4017,39 @@ done
         run_until(&context, &mut app, |app| text(app) == "changed");
         assert!(app.plugins.running("mock"));
         app.stop_plugin("mock");
+        assert!(!app.plugins.running("mock"));
+    }
+
+    #[test]
+    fn a_stopped_plugin_pane_drops_its_old_page_and_reopens_or_explains() {
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        frame(&context, &mut app);
+        let key = "plugin:mock/info";
+        run_until(&context, &mut app, |app| {
+            app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        assert!(app.plugins.running("mock"));
+        // A deliberate stop leaves no stale page behind.
+        app.stop_plugin("mock");
+        assert!(!app.plugins.running("mock"));
+        assert!(app.plugins.panes[key].tree.is_none());
+        // Drawing the pane again starts the plugin and shows a fresh page.
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock")
+                && app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        // While not granted, a stop leaves no page and drawing does not restart it.
+        app.stop_plugin("mock");
+        app.grant_plugin("mock", false);
+        for _ in 0..10 {
+            frame(&context, &mut app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.plugins.panes[key].tree.is_none());
         assert!(!app.plugins.running("mock"));
     }
 
@@ -2748,6 +4510,7 @@ done
             ids,
             [
                 xuan::panes::NAVIGATOR,
+                xuan::panes::CHANNELS,
                 xuan::panes::LAYERS,
                 "plugin:mock/info"
             ]
@@ -2938,11 +4701,20 @@ done
             error.contains("Ctrl+Shift+I") && error.contains("invert_selection"),
             "{error}"
         );
-        let items = app.plugin_menu_items();
-        assert_eq!(
-            items[&xuan::plugins::manifest::Menu::Filter][0].shortcut,
-            ""
-        );
+        // Its menu item shows no shortcut.
+        let bar = app.menu_bar(crate::app::menu_model::MenuLayout::InWindow);
+        let echo = bar
+            .items()
+            .into_iter()
+            .find(|item| {
+                matches!(
+                    &item.action,
+                    crate::app::menu_model::MenuAction::Plugin { plugin, action }
+                        if plugin == "mock" && action == "echo"
+                )
+            })
+            .expect("the plugin's menu item");
+        assert!(echo.chord.is_none());
 
         // The built-in keeps working and the plugin does not start.
         app.command("select_all");
@@ -3566,6 +5338,2103 @@ done
         assert!(ui.app().plugins.consent.is_none());
         assert!(!ui.app().plugins.running("mock"));
     }
+
+    /// The mock plugin's answers: the lines Xuan sent it with this id.
+    fn answer(dir: &Path, id: i64) -> Option<serde_json::Value> {
+        received(dir).lines().find_map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line).ok()?;
+            (value.get("id") == Some(&serde_json::json!(id)) && value.get("method").is_none())
+                .then_some(value)
+        })
+    }
+
+    fn file_request(
+        id: i64,
+        method: &str,
+        params: serde_json::Value,
+    ) -> xuan::plugins::protocol::Request {
+        xuan::plugins::protocol::Request {
+            jsonrpc: "2.0".into(),
+            id: xuan::plugins::protocol::Id::Number(id),
+            method: method.into(),
+            params,
+        }
+    }
+
+    #[test]
+    fn plugins_save_export_and_open_files_only_through_the_user() {
+        use crate::app::plugin_files::SaveDialog;
+        use serde_json::json;
+        use std::sync::{Arc, Mutex};
+        use xuan::plugins::protocol::{CANCELLED, INVALID_PARAMS, INVALID_REQUEST};
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        // Any plugin may ask: the user decides.
+        install_read_mock(&mut app, dir.path());
+        app.dimensions = [16, 12];
+        app.new_document();
+        app.command("fill_fg");
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        let shown: Arc<Mutex<Vec<SaveDialog>>> = Arc::default();
+        let choice: Arc<Mutex<Option<PathBuf>>> = Arc::default();
+        let (seen, chosen) = (shown.clone(), choice.clone());
+        app.plugins.save_dialog = Some(Arc::new(move |dialog: &SaveDialog| {
+            seen.lock().unwrap().push(dialog.clone());
+            chosen.lock().unwrap().clone()
+        }));
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+
+        // Cancelling the save dialog saves nothing.
+        app.queue_file_request(
+            "mock",
+            file_request(
+                101,
+                "file/save_as",
+                json!({"suggested_name": "../evil/Agent work.png"}),
+            ),
+        );
+        let cancelled = wait(&context, &mut app, 101);
+        assert_eq!(cancelled["error"]["code"], CANCELLED);
+        let dialog = shown.lock().unwrap()[0].clone();
+        assert_eq!(dialog.file_name, "Agent work.xuan");
+        assert!(
+            dialog.title.contains("Mock (plugin mock)"),
+            "{}",
+            dialog.title
+        );
+        assert!(app.session().unwrap().path.is_none());
+
+        // Right after a cancel, the plugin may not ask again.
+        app.queue_file_request("mock", file_request(110, "file/save_as", json!({})));
+        assert_eq!(wait(&context, &mut app, 110)["error"]["code"], CANCELLED);
+        assert_eq!(shown.lock().unwrap().len(), 1, "no second dialog");
+        let past = std::time::Instant::now() - crate::app::plugin_sessions::COOLDOWN;
+        app.plugins.file_refused_at.insert("mock".into(), past);
+
+        // Saving where the user chose: the project now lives there.
+        let project = out.path().join("agent.xuan");
+        *choice.lock().unwrap() = Some(project.clone());
+        app.queue_file_request("mock", file_request(102, "file/save_as", json!({})));
+        let saved = wait(&context, &mut app, 102);
+        assert_eq!(saved["result"], json!({"name": "agent.xuan"}), "no folder");
+        assert!(project.exists());
+        let session = app.session().unwrap();
+        assert_eq!(session.path.as_deref(), Some(project.as_path()));
+        assert_eq!(session.title, "agent");
+        assert!(!session.history.dirty());
+
+        // Exporting writes an image and leaves the project alone.
+        let image = out.path().join("export.jpg");
+        *choice.lock().unwrap() = Some(image.clone());
+        app.queue_file_request(
+            "mock",
+            file_request(
+                103,
+                "file/export",
+                json!({"format": "jpeg", "suggested_name": "Shot"}),
+            ),
+        );
+        let exported = wait(&context, &mut app, 103);
+        assert_eq!(exported["result"], json!({"name": "export.jpg"}));
+        assert_eq!(
+            xuan::io::import_image(&image).unwrap().dimensions(),
+            (16, 12)
+        );
+        let dialog = shown.lock().unwrap().last().unwrap().clone();
+        assert_eq!(
+            (dialog.file_name.as_str(), dialog.extensions.as_slice()),
+            ("Shot.jpg", ["jpg".to_owned()].as_slice())
+        );
+        assert_eq!(
+            app.session().unwrap().path.as_deref(),
+            Some(project.as_path())
+        );
+        app.queue_file_request(
+            "mock",
+            file_request(104, "file/export", json!({"format": "gif"})),
+        );
+        assert_eq!(
+            wait(&context, &mut app, 104)["error"]["code"],
+            INVALID_PARAMS
+        );
+
+        // Opening asks first, naming the file; Cancel opens nothing.
+        let sessions = app.sessions.len();
+        app.queue_file_request(
+            "mock",
+            file_request(105, "file/open", json!({"path": image})),
+        );
+        app.queue_file_request(
+            "mock",
+            file_request(106, "file/open", json!({"path": image})),
+        );
+        // One request at a time.
+        assert_eq!(
+            wait(&context, &mut app, 106)["error"]["code"],
+            INVALID_REQUEST
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        let canonical = std::fs::canonicalize(&image).unwrap();
+        assert!(matches!(
+            &app.plugins.file_prompt.as_ref().unwrap().action,
+            crate::app::plugin_files::FileAction::Open { path, .. } if *path == canonical
+        ));
+        app.answer_file(crate::app::plugin_files::FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 105)["error"]["code"], CANCELLED);
+        assert_eq!(app.sessions.len(), sessions);
+        app.plugins.file_refused_at.insert("mock".into(), past);
+        app.queue_file_request(
+            "mock",
+            file_request(107, "file/open", json!({"path": image})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
+        let opened = wait(&context, &mut app, 107);
+        assert_eq!(opened["result"]["ok"], true);
+        assert_eq!(app.sessions.len(), sessions + 1);
+        assert_eq!(
+            opened["result"]["document"],
+            json!(app.session().unwrap().document.id)
+        );
+        // A file swapped while the prompt is open is not opened.
+        let decoy = out.path().join("decoy.png");
+        std::fs::copy(&image, &decoy).unwrap();
+        let link = out.path().join("link.png");
+        std::os::unix::fs::symlink(&image, &link).unwrap();
+        app.plugins.file_refused_at.clear();
+        app.queue_file_request(
+            "mock",
+            file_request(111, "file/open", json!({"path": link})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&decoy, &link).unwrap();
+        let sessions = app.sessions.len();
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
+        let refused = wait(&context, &mut app, 111);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{refused}");
+        assert_eq!(app.sessions.len(), sessions);
+        // Missing and unsuitable paths get the same answer: no probing.
+        let mut messages = Vec::new();
+        for (id, path) in [
+            (112, out.path().join("missing.png")),
+            (113, "/dev/null".into()),
+        ] {
+            app.queue_file_request("mock", file_request(id, "file/open", json!({"path": path})));
+            messages.push(wait(&context, &mut app, id)["error"]["message"].clone());
+        }
+        assert_eq!(messages[0], messages[1]);
+        assert!(!messages[0].to_string().contains("missing.png"));
+        for (id, path) in [
+            (108, json!("relative.png")),
+            (109, json!(out.path().join("missing.png"))),
+        ] {
+            app.queue_file_request("mock", file_request(id, "file/open", json!({"path": path})));
+            assert_eq!(
+                wait(&context, &mut app, id)["error"]["code"],
+                INVALID_PARAMS
+            );
+        }
+        assert!(app.dialog.is_none());
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn plugin_saves_land_only_where_the_user_confirmed_and_errors_name_no_folders() {
+        use crate::app::plugin_files::SaveDialog;
+        use serde_json::json;
+        use std::sync::{Arc, Mutex};
+        use xuan::plugins::protocol::{CANCELLED, INTERNAL_ERROR, INVALID_PARAMS};
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_read_mock(&mut app, dir.path());
+        app.dimensions = [8, 6];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        // The dialog's answers, in turn.
+        let shown: Arc<Mutex<Vec<SaveDialog>>> = Arc::default();
+        let answers: Arc<Mutex<Vec<Option<PathBuf>>>> = Arc::default();
+        let (seen, queue) = (shown.clone(), answers.clone());
+        app.plugins.save_dialog = Some(Arc::new(move |dialog: &SaveDialog| {
+            seen.lock().unwrap().push(dialog.clone());
+            queue.lock().unwrap().remove(0)
+        }));
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        let ask = |app: &mut EditorApp, id: i64, method: &str, choices: Vec<Option<PathBuf>>| {
+            app.plugins.file_refused_at.clear();
+            shown.lock().unwrap().clear();
+            *answers.lock().unwrap() = choices;
+            app.queue_file_request("mock", file_request(id, method, json!({"format": "png"})));
+            let answer = wait(&context, app, id);
+            assert!(answers.lock().unwrap().is_empty(), "every answer used");
+            (answer, shown.lock().unwrap().clone())
+        };
+        let files = || {
+            let mut names: Vec<String> = std::fs::read_dir(out.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+
+        // A name without the extension is not changed silently: the dialog
+        // asks again, in the same folder, with the extension added, and the
+        // file is written where that answer says.
+        let (saved, dialogs) = ask(
+            &mut app,
+            301,
+            "file/save_as",
+            vec![
+                Some(out.path().join("agent")),
+                Some(out.path().join("agent.xuan")),
+            ],
+        );
+        assert_eq!(saved["result"], json!({"name": "agent.xuan"}), "{saved}");
+        assert_eq!(dialogs.len(), 2);
+        assert_eq!(dialogs[1].file_name, "agent.xuan");
+        assert_eq!(dialogs[1].directory.as_deref(), Some(out.path()));
+        assert_eq!(files(), ["agent.xuan"]);
+
+        // Choosing a name without it twice writes nothing.
+        let (refused, _) = ask(
+            &mut app,
+            302,
+            "file/save_as",
+            vec![
+                Some(out.path().join("plain")),
+                Some(out.path().join("plain")),
+            ],
+        );
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{refused}");
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(message.contains(".xuan"), "{message}");
+        assert!(!message.contains(out.path().to_str().unwrap()), "{message}");
+        assert_eq!(files(), ["agent.xuan"]);
+
+        // An export under an unknown extension asks again too; cancelling
+        // that writes nothing.
+        let (cancelled, dialogs) = ask(
+            &mut app,
+            303,
+            "file/export",
+            vec![Some(out.path().join("shot.bmp")), None],
+        );
+        assert_eq!(cancelled["error"]["code"], CANCELLED);
+        assert_eq!(dialogs[1].file_name, "shot.bmp.png");
+        assert_eq!(files(), ["agent.xuan"]);
+
+        // A known extension in any case is written exactly there.
+        let (exported, dialogs) = ask(
+            &mut app,
+            304,
+            "file/export",
+            vec![Some(out.path().join("shot.PNG"))],
+        );
+        assert_eq!(exported["result"], json!({"name": "shot.PNG"}));
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(files(), ["agent.xuan", "shot.PNG"]);
+
+        // Errors from writing name the file, never its folders.
+        let missing = out.path().join("private folder").join("deeper");
+        let (failed, _) = ask(
+            &mut app,
+            305,
+            "file/export",
+            vec![Some(missing.join("lost.png"))],
+        );
+        assert_eq!(failed["error"]["code"], INTERNAL_ERROR, "{failed}");
+        let message = failed["error"]["message"].as_str().unwrap();
+        assert!(!message.contains("private folder"), "{message}");
+        assert!(!message.contains(out.path().to_str().unwrap()), "{message}");
+
+        // Nor does an open that fails show where a link led.
+        let hidden = out.path().join("secret place");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("broken.png"), b"not a png").unwrap();
+        let link = dir.path().join("link.png");
+        std::os::unix::fs::symlink(hidden.join("broken.png"), &link).unwrap();
+        app.plugins.file_refused_at.clear();
+        app.queue_file_request(
+            "mock",
+            file_request(306, "file/open", json!({"path": link})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
+        let opened = wait(&context, &mut app, 306);
+        let message = opened["error"]["message"].as_str().unwrap();
+        assert!(message.contains("broken.png"), "{message}");
+        assert!(!message.contains("secret place"), "{message}");
+        app.error = None;
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn held_edits_wait_for_the_session_prompt_and_apply_in_order() {
+        use crate::app::plugin_sessions::EditAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_session_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        let steps = app.session().unwrap().history.names().count();
+        let edit = |id: i64, name: &str, session: &str| {
+            file_request(
+                id,
+                "document/edit",
+                json!({"name": name, "session": session, "edits": [{"op": "add_empty_layer", "name": name}]}),
+            )
+        };
+        // Two edits of one session wait behind a single prompt.
+        assert!(app.hold_edit("mock", edit(201, "First", "s1")).is_none());
+        assert!(app.hold_edit("mock", edit(202, "Second", "s1")).is_none());
+        // Reading is never held.
+        let read = file_request(203, "document/get", json!({"session": "s1"}));
+        assert!(app.hold_edit("mock", read).is_some());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        let prompt = app.plugins.edit_prompt.clone().unwrap();
+        assert_eq!(
+            (prompt.session.as_str(), prompt.edit.as_str()),
+            ("s1", "First")
+        );
+        assert_eq!(app.session().unwrap().history.names().count(), steps);
+        app.answer_edit_session(EditAnswer::Allow);
+        run_until(&context, &mut app, |_| answer(dir.path(), 202).is_some());
+        assert!(answer(dir.path(), 201).unwrap()["result"]["layers"].is_array());
+        let session = app.session().unwrap();
+        // Each edit is its own undo step, in order.
+        assert_eq!(session.history.names().count(), steps + 2);
+        assert_eq!(session.history.undo_name(), Some("Second"));
+        // A new session asks again; Deny refuses it.
+        assert!(app.hold_edit("mock", edit(204, "Third", "s2")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.answer_edit_session(EditAnswer::Deny);
+        run_until(&context, &mut app, |_| answer(dir.path(), 204).is_some());
+        assert_eq!(answer(dir.path(), 204).unwrap()["error"]["code"], CANCELLED);
+        // The allowed session goes on without asking.
+        assert!(app.hold_edit("mock", edit(205, "Fourth", "s1")).is_some());
+        // Right after Deny, a new session is refused without a prompt.
+        assert!(app.hold_edit("mock", edit(207, "Sneaky", "s9")).is_none());
+        run_until(&context, &mut app, |_| answer(dir.path(), 207).is_some());
+        assert_eq!(answer(dir.path(), 207).unwrap()["error"]["code"], CANCELLED);
+        assert!(app.plugins.edit_prompt.is_none() && app.plugins.edit_held.is_empty());
+        // Later it may ask again; "refuse every session" then holds until
+        // the plugin stops.
+        let past = std::time::Instant::now() - crate::app::plugin_sessions::COOLDOWN;
+        app.plugins.edit_refused_at.insert("mock".into(), past);
+        assert!(app.hold_edit("mock", edit(208, "Again", "s8")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.plugins.edit_prompt.as_mut().unwrap().deny_all = true;
+        app.answer_edit_session(EditAnswer::Deny);
+        run_until(&context, &mut app, |_| answer(dir.path(), 208).is_some());
+        app.plugins.edit_refused_at.insert("mock".into(), past);
+        assert!(
+            app.hold_edit("mock", edit(209, "More", "s7")).is_some(),
+            "answered: refused"
+        );
+        assert_eq!(app.edit_answer("mock", "s7"), Some(false));
+        // The allowed session is refused too.
+        assert_eq!(app.edit_answer("mock", "s1"), Some(false));
+        app.plugins.edits_refused.clear();
+        // Stopping the plugin drops what waits and closes its prompt.
+        assert!(app.hold_edit("mock", edit(206, "Fifth", "s3")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.stop_plugin("mock");
+        frame(&context, &mut app);
+        assert!(app.plugins.edit_held.is_empty());
+        assert!(app.plugins.edit_prompt.is_none());
+        assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn the_session_prompt_names_the_plugin_and_always_allow_turns_on_auto_mode() {
+        use crate::app::tests::ui::UiTest;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_session_mock(ui.app_mut(), dir.path());
+        ui.app_mut().render_pane("plugin:mock/info", "open", None);
+        for _ in 0..200 {
+            ui.settle();
+            if ui.app().plugins.running("mock") && !ui.app().plugins.starting("mock") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let request = file_request(
+            301,
+            "document/edit",
+            json!({"name": "Agent paint", "edits": [{"op": "add_empty_layer"}]}),
+        );
+        assert!(ui.app_mut().hold_edit("mock", request).is_none());
+        ui.settle();
+        assert!(ui.has("Allow Mock (plugin mock) to edit your documents for this session?"));
+        assert!(ui.has("“Agent paint”"));
+        ui.click("Always Allow");
+        assert!(ui.app().edits_without_asking("mock"));
+        assert!(ui.app().plugins.edit_prompt.is_none());
+        assert_eq!(
+            ui.app().session().unwrap().history.undo_name(),
+            Some("Agent paint")
+        );
+        // Manage Plugins shows the switch, which turns auto mode off.
+        ui.app_mut().command("plugins");
+        ui.app_mut().plugins.manager_selected = Some("mock".into());
+        ui.settle();
+        ui.click_role(
+            egui::accesskit::Role::CheckBox,
+            "Edit without asking (auto mode)",
+        );
+        assert!(!ui.app().edits_without_asking("mock"));
+        ui.app_mut().stop_plugin("mock");
+    }
+
+    /// Start the installed mock plugin and wait until it runs.
+    fn start_mock(ui: &mut crate::app::tests::ui::UiTest) {
+        ui.app_mut().render_pane("plugin:mock/info", "open", None);
+        for _ in 0..200 {
+            ui.settle();
+            if ui.app().plugins.running("mock") && !ui.app().plugins.starting("mock") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the mock plugin did not start");
+    }
+
+    /// Help → About replaces the open dialog; then About is closed.
+    fn open_and_close_about(ui: &mut crate::app::tests::ui::UiTest) {
+        ui.app_mut().command("about");
+        ui.settle();
+        assert_eq!(ui.app().dialog, Some(Dialog::About));
+        ui.app_mut().dialog = None;
+        ui.settle();
+    }
+
+    #[test]
+    fn the_session_prompt_comes_back_after_another_dialog_replaced_it() {
+        use crate::app::tests::ui::UiTest;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_session_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let request = file_request(
+            401,
+            "document/edit",
+            json!({"name": "Agent paint", "edits": [{"op": "add_empty_layer"}]}),
+        );
+        assert!(ui.app_mut().hold_edit("mock", request).is_none());
+        ui.settle();
+        let title = "Allow Mock (plugin mock) to edit your documents for this session?";
+        assert!(ui.has(title));
+        open_and_close_about(&mut ui);
+        // The held edit still waits for an answer, so its prompt shows again.
+        assert!(!ui.app().plugins.edit_held.is_empty());
+        assert!(ui.has(title), "the held edit's prompt never came back");
+        // Opening a document clears the dialog too.
+        ui.app_mut().new_document();
+        ui.settle();
+        assert!(ui.has(title), "the prompt did not come back after New");
+        ui.click_role(egui::accesskit::Role::Button, "Allow");
+        assert!(ui.app().plugins.edit_held.is_empty());
+        assert!(ui.app().plugins.edit_prompt.is_none());
+        assert_eq!(ui.app().dialog, None);
+        ui.app_mut().stop_plugin("mock");
+    }
+
+    #[test]
+    fn the_send_prompt_comes_back_after_another_dialog_replaced_it() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_network_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let title = "Send to Mock (plugin mock)?";
+
+        // An export the plugin asks for outside an action waits for the user.
+        let request = file_request(402, "document/export", json!({}));
+        ui.app_mut().plugins.held.push(("mock".into(), request));
+        ui.settle();
+        assert!(ui.has(title));
+        open_and_close_about(&mut ui);
+        assert_eq!(ui.app().plugins.held.len(), 1);
+        assert!(ui.has(title), "the held export's prompt never came back");
+        ui.click_role(Role::Button, "Cancel");
+        assert!(ui.app().plugins.held.is_empty());
+        assert!(ui.app().plugins.consent.is_none());
+        for _ in 0..200 {
+            if answer(dir.path(), 402).is_some() {
+                break;
+            }
+            ui.settle();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let answered = answer(dir.path(), 402).expect("the export was never answered");
+        assert_eq!(
+            answered["error"]["code"],
+            xuan::plugins::protocol::CANCELLED
+        );
+
+        // An action's prompt comes back while its action is still open…
+        ui.app_mut().command("fill_fg");
+        ui.open_menu("Plugins");
+        ui.click("Send Layer · Mock");
+        assert_eq!(ui.app().dialog, Some(Dialog::PluginConsent));
+        open_and_close_about(&mut ui);
+        assert_eq!(ui.app().dialog, Some(Dialog::PluginConsent));
+        assert!(ui.has(title), "the action's prompt never came back");
+        // …and is dropped once the action was closed.
+        ui.app_mut().command("about");
+        ui.settle();
+        ui.app_mut().close_plugin_action();
+        ui.app_mut().dialog = None;
+        ui.settle();
+        assert!(ui.app().plugins.consent.is_none());
+        assert_eq!(ui.app().dialog, None);
+        ui.app_mut().stop_plugin("mock");
+    }
+
+    #[test]
+    fn the_file_prompt_comes_back_after_another_dialog_replaced_it() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_read_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let image = out.path().join("asked.png");
+        RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 200, 255]))
+            .save(&image)
+            .unwrap();
+        ui.app_mut().queue_file_request(
+            "mock",
+            file_request(403, "file/open", json!({"path": image})),
+        );
+        ui.settle();
+        let title = "Open a file?";
+        assert!(ui.has(title));
+        open_and_close_about(&mut ui);
+        assert!(ui.app().plugins.file_prompt.is_some());
+        assert!(ui.has(title), "the file request's prompt never came back");
+        let sessions = ui.app().sessions.len();
+        ui.click_role(Role::Button, "Open");
+        assert!(ui.app().plugins.file_prompt.is_none());
+        assert_eq!(ui.app().sessions.len(), sessions + 1);
+        for _ in 0..200 {
+            if answer(dir.path(), 403).is_some() {
+                break;
+            }
+            ui.settle();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let answered = answer(dir.path(), 403).expect("the file request was never answered");
+        assert_eq!(answered["result"]["ok"], true);
+        ui.app_mut().stop_plugin("mock");
+    }
+
+    /// The plugin's `request/cancel` for request `id`.
+    fn withdraw(app: &mut EditorApp, id: i64) {
+        app.handle_notification(
+            "mock",
+            xuan::plugins::protocol::Notification {
+                jsonrpc: "2.0".into(),
+                method: "request/cancel".into(),
+                params: serde_json::json!({"id": id}),
+            },
+        );
+    }
+
+    #[test]
+    fn a_withdrawn_request_closes_its_prompt_and_a_late_answer_does_nothing() {
+        use crate::app::plugin_sessions::EditAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_session_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        let steps = app.session().unwrap().history.names().count();
+        let edit = |id: i64, name: &str, session: &str| {
+            file_request(
+                id,
+                "document/edit",
+                json!({"name": name, "session": session, "edits": [{"op": "add_empty_layer", "name": name}]}),
+            )
+        };
+
+        // A held edit whose client gave up: its prompt closes, and Allow
+        // clicked late applies nothing.
+        assert!(app.hold_edit("mock", edit(501, "Late", "s1")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        withdraw(&mut app, 501);
+        assert!(app.plugins.edit_held.is_empty());
+        assert!(app.plugins.edit_prompt.is_none());
+        assert_eq!(app.dialog, None);
+        run_until(&context, &mut app, |_| answer(dir.path(), 501).is_some());
+        assert_eq!(answer(dir.path(), 501).unwrap()["error"]["code"], CANCELLED);
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the prompt came back");
+        app.answer_edit_session(EditAnswer::Allow);
+        assert_eq!(app.session().unwrap().history.names().count(), steps);
+        // Nothing was answered for the session: its next edit asks again.
+        assert_eq!(app.edit_answer("mock", "s1"), None);
+        // Withdrawing is not a refusal: there is no cooldown.
+        assert!(!app.edit_cooling_down("mock"));
+
+        // While another edit of the session waits, the prompt asks about it.
+        assert!(app.hold_edit("mock", edit(502, "One", "s2")).is_none());
+        assert!(app.hold_edit("mock", edit(503, "Two", "s2")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        withdraw(&mut app, 502);
+        assert_eq!(app.plugins.edit_held.len(), 1);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        assert_eq!(app.plugins.edit_prompt.as_ref().unwrap().edit, "Two");
+        app.answer_edit_session(EditAnswer::Allow);
+        run_until(&context, &mut app, |_| answer(dir.path(), 503).is_some());
+        assert!(answer(dir.path(), 503).unwrap()["result"]["layers"].is_array());
+        let session = app.session().unwrap();
+        assert_eq!(session.history.names().count(), steps + 1);
+        assert_eq!(session.history.undo_name(), Some("Two"));
+
+        // A prompt that another dialog replaced does not come back once its
+        // request was withdrawn.
+        assert!(app.hold_edit("mock", edit(504, "Hidden", "s3")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginEditSession)
+        });
+        app.dialog = Some(Dialog::About);
+        withdraw(&mut app, 504);
+        assert_eq!(app.dialog, Some(Dialog::About));
+        app.dialog = None;
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the withdrawn prompt came back");
+        assert!(app.plugins.edit_prompt.is_none());
+
+        // The same for "Open a file?": Open clicked late opens nothing, and
+        // the plugin may ask again at once.
+        let image = out.path().join("asked.png");
+        RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 200, 255]))
+            .save(&image)
+            .unwrap();
+        let sessions = app.sessions.len();
+        app.queue_file_request(
+            "mock",
+            file_request(505, "file/open", json!({"path": image})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        withdraw(&mut app, 505);
+        assert!(app.plugins.file_prompt.is_none());
+        assert_eq!(app.dialog, None);
+        run_until(&context, &mut app, |_| answer(dir.path(), 505).is_some());
+        assert_eq!(answer(dir.path(), 505).unwrap()["error"]["code"], CANCELLED);
+        app.answer_file(crate::app::plugin_files::FileAnswer::Accept);
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.sessions.len(), sessions);
+        assert_eq!(app.dialog, None);
+        assert!(!app.plugins.file_refused_at.contains_key("mock"));
+        // A queued one is dropped before its prompt shows.
+        app.dialog = Some(Dialog::About);
+        app.queue_file_request(
+            "mock",
+            file_request(506, "file/open", json!({"path": image})),
+        );
+        assert_eq!(app.plugins.file_requests.len(), 1);
+        withdraw(&mut app, 506);
+        assert!(app.plugins.file_requests.is_empty());
+        app.dialog = None;
+        run_until(&context, &mut app, |_| answer(dir.path(), 506).is_some());
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.sessions.len(), sessions);
+
+        // A withdrawn request that was answered already is left alone, and
+        // an unknown id does nothing.
+        withdraw(&mut app, 503);
+        withdraw(&mut app, 9999);
+        let answers = received(dir.path())
+            .lines()
+            .filter(|line| line.contains("\"id\":503"))
+            .count();
+        assert_eq!(answers, 1);
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn a_withdrawn_export_closes_the_send_prompt() {
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_network_mock(&mut app, dir.path());
+        app.dimensions = [16, 16];
+        app.new_document();
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        for id in [601, 602] {
+            let request = file_request(id, "document/export", json!({}));
+            app.plugins.held.push(("mock".into(), request));
+        }
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginConsent)
+        });
+        // The prompt comes back while another export waits on it.
+        withdraw(&mut app, 601);
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginConsent)
+        });
+        assert_eq!(app.plugins.held.len(), 1);
+        withdraw(&mut app, 602);
+        assert!(app.plugins.held.is_empty() && app.plugins.consent.is_none());
+        assert_eq!(app.dialog, None);
+        for id in [601, 602] {
+            run_until(&context, &mut app, |_| answer(dir.path(), id).is_some());
+            assert_eq!(answer(dir.path(), id).unwrap()["error"]["code"], CANCELLED);
+        }
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the withdrawn prompt came back");
+        // Send clicked late sends nothing and records no answer.
+        app.answer_consent(true);
+        assert_eq!(app.export_answer("mock"), None);
+        app.stop_plugin("mock");
+    }
+
+    /// The mock started, with a document and a save dialog that must not
+    /// show: a write to a path never opens the system dialog.
+    fn path_save_mock(
+        dir: &Path,
+        config: &Path,
+    ) -> (
+        egui::Context,
+        EditorApp,
+        std::sync::Arc<std::sync::Mutex<usize>>,
+    ) {
+        use crate::app::plugin_files::SaveDialog;
+        use std::sync::{Arc, Mutex};
+        let (context, mut app) = app();
+        app.config_path = Some(config.join("config.toml"));
+        install_read_mock(&mut app, dir);
+        app.dimensions = [16, 12];
+        app.new_document();
+        app.command("fill_fg");
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(&context, &mut app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+        let dialogs: Arc<Mutex<usize>> = Arc::default();
+        let count = dialogs.clone();
+        app.plugins.save_dialog = Some(Arc::new(move |_: &SaveDialog| {
+            *count.lock().unwrap() += 1;
+            None
+        }));
+        (context, app, dialogs)
+    }
+
+    /// The write the open file prompt asks about.
+    fn prompted_write(app: &EditorApp) -> Option<crate::app::plugin_files::Write> {
+        match &app.plugins.file_prompt.as_ref()?.action {
+            crate::app::plugin_files::FileAction::Write(write) => Some(write.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_layer_a_region_or_a_smaller_copy_is_exported_to_a_path_as_a_png() {
+        use crate::app::plugin_files::FileAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::INVALID_PARAMS;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, _dialogs) = path_save_mock(dir.path(), config.path());
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        let layer = app.session().unwrap().document.layers[0].id;
+        let ask = |context: &egui::Context, app: &mut EditorApp, id: i64, params| {
+            app.queue_file_request("mock", file_request(id, "file/export", params));
+            run_until(context, app, |app| {
+                app.dialog == Some(Dialog::PluginFile) || answer(dir.path(), id).is_some()
+            });
+        };
+
+        // The same prompt as a whole export; the answer says where the pixels sit.
+        let region = out.path().join("region.png");
+        ask(
+            &context,
+            &mut app,
+            801,
+            json!({"path": region, "region": [4, 2, 8, 6]}),
+        );
+        let write = prompted_write(&app).expect("the export prompt is open");
+        assert!(write.part.is_some());
+        app.answer_file(FileAnswer::Always);
+        let exported = wait(&context, &mut app, 801);
+        assert_eq!(
+            exported["result"],
+            json!({"name": "region.png", "asked": true, "width": 8, "height": 6, "x": 4, "y": 2, "scale": 1.0})
+        );
+        assert_eq!(
+            xuan::io::import_image(&region).unwrap().dimensions(),
+            (8, 6)
+        );
+
+        let small = out.path().join("small.png");
+        ask(
+            &context,
+            &mut app,
+            802,
+            json!({"path": small, "max_side": 16, "region": [0, 0, 16, 12], "layer": layer}),
+        );
+        assert_eq!(wait(&context, &mut app, 802)["result"]["asked"], false);
+        assert_eq!(
+            xuan::io::import_image(&small).unwrap().dimensions(),
+            (16, 12)
+        );
+
+        for (id, params, says) in [
+            (
+                803,
+                json!({"path": out.path().join("part.jpg"), "region": [0, 0, 4, 4]}),
+                ".png",
+            ),
+            (804, json!({"max_side": 64}), "needs `path`"),
+            (
+                805,
+                json!({"path": out.path().join("off.png"), "region": [40, 0, 4, 4]}),
+                "outside",
+            ),
+            (
+                806,
+                json!({"path": out.path().join("none.png"), "layer": uuid::Uuid::new_v4()}),
+                "No layer",
+            ),
+        ] {
+            app.queue_file_request("mock", file_request(id, "file/export", params));
+            let refused = wait(&context, &mut app, id);
+            assert_eq!(refused["error"]["code"], INVALID_PARAMS, "{id}");
+            let message = refused["error"]["message"].as_str().unwrap();
+            assert!(message.contains(says), "{id}: {message}");
+        }
+        app.queue_file_request(
+            "mock",
+            file_request(
+                807,
+                "file/save_as",
+                json!({"path": out.path().join("p.xuan"), "max_side": 64}),
+            ),
+        );
+        let refused = wait(&context, &mut app, 807);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS);
+    }
+
+    #[test]
+    fn saving_to_a_named_path_asks_in_xuans_prompt_and_always_allow_stops_asking() {
+        use crate::app::plugin_files::FileAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::{CANCELLED, INVALID_PARAMS};
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(out.path()).unwrap();
+        let (context, mut app, dialogs) = path_save_mock(dir.path(), config.path());
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        let ask = |context: &egui::Context, app: &mut EditorApp, id: i64, method: &str, params| {
+            app.queue_file_request("mock", file_request(id, method, params));
+            run_until(context, app, |app| {
+                app.dialog == Some(Dialog::PluginFile) || answer(dir.path(), id).is_some()
+            });
+        };
+        let project = out.path().join("agent.xuan");
+
+        // Xuan's prompt, not the system dialog, names the file and folder;
+        // Cancel writes nothing.
+        ask(
+            &context,
+            &mut app,
+            701,
+            "file/save_as",
+            json!({"path": project}),
+        );
+        let write = prompted_write(&app).expect("the save prompt is open");
+        assert_eq!(write.path, folder.join("agent.xuan"));
+        assert!(!write.replaces && !write.in_place && write.export.is_none());
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 701)["error"]["code"], CANCELLED);
+        assert!(!project.exists());
+        assert_eq!(app.dialog, None);
+        // Cancelling starts the usual cooldown.
+        app.queue_file_request(
+            "mock",
+            file_request(702, "file/save_as", json!({"path": project})),
+        );
+        assert_eq!(wait(&context, &mut app, 702)["error"]["code"], CANCELLED);
+        app.plugins.file_refused_at.clear();
+
+        // Save writes the project there, which then lives there.
+        ask(
+            &context,
+            &mut app,
+            703,
+            "file/save_as",
+            json!({"path": project}),
+        );
+        assert!(prompted_write(&app).is_some());
+        app.answer_file(FileAnswer::Accept);
+        let saved = wait(&context, &mut app, 703);
+        assert_eq!(
+            saved["result"],
+            json!({"name": "agent.xuan", "asked": true}),
+            "{saved}"
+        );
+        assert!(project.is_file());
+        let session = app.session().unwrap();
+        assert_eq!(
+            session.path.as_deref(),
+            Some(folder.join("agent.xuan").as_path())
+        );
+        assert!(!session.history.dirty());
+        assert!(!app.saves_without_asking("mock"));
+
+        // Always Allow saves, and turns on saving without asking in the grant.
+        let shot = out.path().join("shot.png");
+        ask(
+            &context,
+            &mut app,
+            704,
+            "file/export",
+            json!({"path": shot}),
+        );
+        assert_eq!(prompted_write(&app).unwrap().export.as_deref(), Some("png"));
+        app.answer_file(FileAnswer::Always);
+        let exported = wait(&context, &mut app, 704);
+        assert_eq!(
+            exported["result"],
+            json!({"name": "shot.png", "asked": true})
+        );
+        assert!(shot.is_file());
+        assert!(app.saves_without_asking("mock"));
+        let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+        assert!(saved.contains("save_without_asking = true"), "{saved}");
+
+        // The next write needs no prompt, and the status bar names the file.
+        let second = out.path().join("second.JPEG");
+        ask(
+            &context,
+            &mut app,
+            705,
+            "file/export",
+            json!({"path": second}),
+        );
+        let quiet = wait(&context, &mut app, 705);
+        assert_eq!(
+            quiet["result"],
+            json!({"name": "second.JPEG", "asked": false})
+        );
+        assert_eq!(app.dialog, None, "no prompt with Always Allow");
+        assert_eq!(
+            xuan::io::import_image(&second).unwrap().dimensions(),
+            (16, 12)
+        );
+        assert!(
+            app.status.contains("without asking") && app.status.contains("second.JPEG"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.plugins
+                .log("mock")
+                .iter()
+                .any(|line| line.contains("second.JPEG")),
+            "the plugin's log shows the write"
+        );
+
+        // Replacing needs `overwrite`, asked or not, and the error names no
+        // folder.
+        app.queue_file_request(
+            "mock",
+            file_request(706, "file/export", json!({"path": shot})),
+        );
+        let refused = wait(&context, &mut app, 706);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS);
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(message.contains("overwrite"), "{message}");
+        assert!(!message.contains(out.path().to_str().unwrap()), "{message}");
+        // A file Xuan wrote in this run is replaced without asking.
+        let before = std::fs::metadata(&shot).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        ask(
+            &context,
+            &mut app,
+            707,
+            "file/export",
+            json!({"path": shot, "overwrite": true}),
+        );
+        assert_eq!(wait(&context, &mut app, 707)["result"]["asked"], false);
+        assert_ne!(
+            std::fs::metadata(&shot).unwrap().modified().unwrap(),
+            before
+        );
+        // Another file is not, even with Always Allow: the prompt asks and
+        // says it replaces the file.
+        let theirs = out.path().join("theirs.png");
+        std::fs::write(&theirs, b"the user's own file").unwrap();
+        ask(
+            &context,
+            &mut app,
+            708,
+            "file/export",
+            json!({"path": theirs, "overwrite": true}),
+        );
+        assert!(prompted_write(&app).expect("asked again").replaces);
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 708)["error"]["code"], CANCELLED);
+        assert_eq!(std::fs::read(&theirs).unwrap(), b"the user's own file");
+        app.plugins.file_refused_at.clear();
+        // With the user's Save it is replaced, and is then Xuan's.
+        ask(
+            &context,
+            &mut app,
+            709,
+            "file/export",
+            json!({"path": theirs, "overwrite": true}),
+        );
+        app.answer_file(FileAnswer::Accept);
+        assert_eq!(wait(&context, &mut app, 709)["result"]["asked"], true);
+        assert!(xuan::io::import_image(&theirs).is_ok());
+
+        // A project the user saved with Save is theirs, even in this run:
+        // replacing it with another document asks, and Cancel keeps it.
+        let users = out.path().join("B.xuan");
+        app.new_document();
+        app.session_mut().unwrap().path = Some(users.clone());
+        assert!(app.save_current(false));
+        let kept = std::fs::read(&users).unwrap();
+        app.current = 0;
+        ask(
+            &context,
+            &mut app,
+            720,
+            "file/save_as",
+            json!({"path": users, "overwrite": true}),
+        );
+        assert!(
+            prompted_write(&app)
+                .expect("asked about the user's project")
+                .replaces
+        );
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 720)["error"]["code"], CANCELLED);
+        assert_eq!(std::fs::read(&users).unwrap(), kept);
+        app.plugins.file_refused_at.clear();
+        app.sessions.pop();
+        app.current = 0;
+        // So does a file written for another plugin.
+        let others = out.path().join("other.png");
+        std::fs::write(&others, b"another plugin's export").unwrap();
+        app.plugins.remember_written("other", &others);
+        ask(
+            &context,
+            &mut app,
+            721,
+            "file/export",
+            json!({"path": others, "overwrite": true}),
+        );
+        assert!(
+            prompted_write(&app)
+                .expect("asked about another plugin's file")
+                .replaces
+        );
+        app.answer_file(FileAnswer::Cancel);
+        assert_eq!(wait(&context, &mut app, 721)["error"]["code"], CANCELLED);
+        assert_eq!(std::fs::read(&others).unwrap(), b"another plugin's export");
+        app.plugins.file_refused_at.clear();
+
+        // `file/save` writes the document back to its own project.
+        app.command("fill_fg");
+        assert!(app.session().unwrap().history.dirty());
+        ask(&context, &mut app, 710, "file/save", json!({}));
+        assert_eq!(
+            wait(&context, &mut app, 710)["result"],
+            json!({"name": "agent.xuan", "asked": false})
+        );
+        assert!(!app.session().unwrap().history.dirty());
+        app.queue_file_request(
+            "mock",
+            file_request(711, "file/save", json!({"path": project})),
+        );
+        assert_eq!(
+            wait(&context, &mut app, 711)["error"]["code"],
+            INVALID_PARAMS
+        );
+        // A document without a project file has nothing to save in place.
+        app.new_document();
+        app.queue_file_request("mock", file_request(712, "file/save", json!({})));
+        let refused = wait(&context, &mut app, 712);
+        assert_eq!(refused["error"]["code"], INVALID_PARAMS);
+        assert!(app.session().unwrap().path.is_none());
+
+        // Without `path`, the system dialog is used as before, even with
+        // Always Allow.
+        app.queue_file_request("mock", file_request(713, "file/save_as", json!({})));
+        assert_eq!(wait(&context, &mut app, 713)["error"]["code"], CANCELLED);
+        assert_eq!(*dialogs.lock().unwrap(), 1, "only this request showed it");
+        app.plugins.file_refused_at.clear();
+
+        // Turned off in Manage Plugins, the prompt asks again.
+        app.set_save_without_asking("mock", false);
+        assert!(!app.saves_without_asking("mock"));
+        ask(
+            &context,
+            &mut app,
+            714,
+            "file/export",
+            json!({"path": out.path().join("third.webp")}),
+        );
+        assert!(prompted_write(&app).is_some());
+        app.answer_file(FileAnswer::Always);
+        assert_eq!(wait(&context, &mut app, 714)["result"]["asked"], true);
+        assert!(app.saves_without_asking("mock"));
+
+        // Reviewed again with other permissions, the grant starts without
+        // it; unchanged permissions keep it.
+        app.grant_plugin("mock", true);
+        assert!(app.saves_without_asking("mock"));
+        let mut changed = app.plugins.manifest("mock").unwrap().clone();
+        changed.permissions.secrets = vec!["token".into()];
+        app.install_plugins(vec![changed], vec![]);
+        assert!(!app.plugin_granted("mock"));
+        app.grant_plugin("mock", true);
+        assert!(!app.stored_grant("mock").unwrap().save_without_asking);
+        assert!(!app.saves_without_asking("mock"));
+        // The files it wrote are forgotten with the grant.
+        assert!(!app.plugins.written_files.contains_key("mock"));
+        assert!(app.plugins.written_files.contains_key("other"));
+        app.stop_plugin("mock");
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
+
+    #[test]
+    fn plugin_exports_take_quality_and_lossless_or_follow_the_dialog() {
+        use crate::app::plugin_files::{Encoding, FileAnswer};
+        use serde_json::json;
+        use xuan::plugins::protocol::INVALID_PARAMS;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, dialogs) = path_save_mock(dir.path(), config.path());
+        let wait = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |_| answer(dir.path(), id).is_some());
+            answer(dir.path(), id).unwrap()
+        };
+        // Lossy WebP holds a `VP8 ` chunk, lossless a `VP8L` one.
+        let chunk = |name: &str| {
+            let bytes = std::fs::read(out.path().join(name)).unwrap();
+            assert_eq!(&bytes[..4], b"RIFF", "{name}");
+            String::from_utf8_lossy(&bytes[12..16]).into_owned()
+        };
+        let export = |app: &mut EditorApp, id: i64, params: serde_json::Value| {
+            app.queue_file_request("mock", file_request(id, "file/export", params));
+            run_until(&context, app, |app| {
+                app.dialog == Some(Dialog::PluginFile) || answer(dir.path(), id).is_some()
+            });
+            let encoding = prompted_write(app).map(|write| write.encoding);
+            app.answer_file(FileAnswer::Accept);
+            let answer = wait(&context, app, id);
+            assert!(answer.get("result").is_some(), "{answer}");
+            encoding
+        };
+
+        // A quality alone means lossy WebP; the dialog keeps its own choices.
+        let before = app.export_options;
+        let encoding = export(
+            &mut app,
+            801,
+            json!({"path": out.path().join("lossy.webp"), "quality": 80}),
+        );
+        assert_eq!(
+            encoding,
+            Some(Encoding {
+                quality: Some(80),
+                lossless: None
+            })
+        );
+        assert_eq!(chunk("lossy.webp"), "VP8 ");
+        assert_eq!(app.export_options, before);
+        // Left out, the dialog decides: lossless until the user turns it off.
+        export(
+            &mut app,
+            802,
+            json!({"path": out.path().join("plain.webp")}),
+        );
+        assert_eq!(chunk("plain.webp"), "VP8L");
+        app.export_options.webp_lossless = false;
+        export(
+            &mut app,
+            803,
+            json!({"path": out.path().join("dialog.webp")}),
+        );
+        assert_eq!(chunk("dialog.webp"), "VP8 ");
+        export(
+            &mut app,
+            804,
+            json!({"path": out.path().join("exact.webp"), "quality": 50, "lossless": true}),
+        );
+        assert_eq!(chunk("exact.webp"), "VP8L");
+        let image = xuan::io::import_image(&out.path().join("lossy.webp")).unwrap();
+        assert_eq!(image.dimensions(), (16, 12));
+
+        // Bad values, and options on a project save, fail before any prompt.
+        for (id, method, params, message) in [
+            (
+                811,
+                "file/export",
+                json!({"path": out.path().join("a.jpg"), "quality": 0}),
+                "1 to 100",
+            ),
+            (812, "file/export", json!({"quality": "high"}), "1 to 100"),
+            (
+                813,
+                "file/export",
+                json!({"lossless": "yes"}),
+                "true or false",
+            ),
+            (
+                814,
+                "file/save_as",
+                json!({"path": out.path().join("a.xuan"), "quality": 80}),
+                "`quality`",
+            ),
+            (815, "file/save", json!({"lossless": true}), "`lossless`"),
+        ] {
+            app.queue_file_request("mock", file_request(id, method, params));
+            let error = &wait(&context, &mut app, id)["error"];
+            assert_eq!(error["code"], INVALID_PARAMS, "{id}: {error}");
+            let text = error["message"].as_str().unwrap();
+            assert!(text.contains(message), "{id}: {text}");
+            assert_eq!(app.dialog, None);
+        }
+        assert!(!out.path().join("a.jpg").exists());
+        assert_eq!(*dialogs.lock().unwrap(), 0, "no system dialog");
+    }
+
+    #[test]
+    fn bad_save_paths_are_refused_before_any_prompt_and_name_no_folders() {
+        use serde_json::json;
+        use xuan::plugins::protocol::INVALID_PARAMS;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, dialogs) = path_save_mock(dir.path(), config.path());
+        let private = out.path().join("private folder");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::create_dir(private.join("taken.png")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("fixture.png"), private.join("link.png"))
+            .unwrap();
+        let cases = [
+            ("file/export", json!({"path": "relative.png"}), "absolute"),
+            (
+                "file/export",
+                json!({"path": private.join("missing").join("x.png")}),
+                "does not exist",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("x.bmp")}),
+                "x.bmp",
+            ),
+            (
+                "file/save_as",
+                json!({"path": private.join("x.png")}),
+                ".xuan",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("x.png"), "format": "jpg"}),
+                "format",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("photo\u{202E}gnp.exe.png")}),
+                "plain name",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("CON.png")}),
+                "plain name",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join(".hidden.png")}),
+                "plain name",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("x.png.")}),
+                "plain name",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("taken.png"), "overwrite": true}),
+                "not a file",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("link.png"), "overwrite": true}),
+                "not a file",
+            ),
+            (
+                "file/export",
+                json!({"path": private.join("x.png"), "overwrite": "yes"}),
+                "overwrite",
+            ),
+            ("file/save_as", json!({"path": 7}), "string"),
+        ];
+        for (index, (method, params, expected)) in cases.into_iter().enumerate() {
+            let id = 800 + index as i64;
+            app.queue_file_request("mock", file_request(id, method, params.clone()));
+            run_until(&context, &mut app, |_| answer(dir.path(), id).is_some());
+            let refused = answer(dir.path(), id).unwrap();
+            assert_eq!(
+                refused["error"]["code"], INVALID_PARAMS,
+                "{params}: {refused}"
+            );
+            let message = refused["error"]["message"].as_str().unwrap();
+            assert!(message.contains(expected), "{params}: {message}");
+            assert!(!message.contains("private folder"), "{params}: {message}");
+            assert!(
+                !message.contains(out.path().to_str().unwrap()),
+                "{params}: {message}"
+            );
+            assert_eq!(app.dialog, None, "{params}: no prompt");
+        }
+        assert_eq!(*dialogs.lock().unwrap(), 0);
+        let mut left: Vec<_> = std::fs::read_dir(&private)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["link.png", "taken.png"], "nothing was written");
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn a_withdrawn_save_closes_its_prompt_and_a_late_save_writes_nothing() {
+        use crate::app::plugin_files::FileAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let (context, mut app, _) = path_save_mock(dir.path(), config.path());
+        let shot = out.path().join("late.png");
+        app.queue_file_request(
+            "mock",
+            file_request(901, "file/export", json!({"path": shot})),
+        );
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginFile)
+        });
+        withdraw(&mut app, 901);
+        assert!(app.plugins.file_prompt.is_none());
+        assert_eq!(app.dialog, None);
+        run_until(&context, &mut app, |_| answer(dir.path(), 901).is_some());
+        assert_eq!(answer(dir.path(), 901).unwrap()["error"]["code"], CANCELLED);
+        // Always Allow clicked late writes nothing and grants nothing.
+        app.answer_file(FileAnswer::Always);
+        for _ in 0..5 {
+            frame(&context, &mut app);
+        }
+        assert_eq!(app.dialog, None, "the withdrawn prompt came back");
+        assert!(!shot.exists());
+        assert!(!app.saves_without_asking("mock"));
+        // Withdrawing is not a refusal: the plugin may ask again at once.
+        assert!(!app.plugins.file_refused_at.contains_key("mock"));
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn the_save_prompt_comes_back_after_another_dialog_and_manage_plugins_turns_it_off() {
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_read_mock(ui.app_mut(), dir.path());
+        start_mock(&mut ui);
+        let wait = |ui: &mut UiTest, id: i64| {
+            for _ in 0..200 {
+                if answer(dir.path(), id).is_some() {
+                    break;
+                }
+                ui.settle();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            answer(dir.path(), id).expect("the save was never answered")
+        };
+        let shot = out.path().join("asked.png");
+        ui.app_mut().queue_file_request(
+            "mock",
+            file_request(951, "file/export", json!({"path": shot})),
+        );
+        ui.settle();
+        let title = "Export an image?";
+        assert!(ui.has(title));
+        assert!(ui.has("asked.png"));
+        assert!(ui.has("This writes a new file."));
+        open_and_close_about(&mut ui);
+        assert!(ui.app().plugins.file_prompt.is_some());
+        assert!(ui.has(title), "the save prompt never came back");
+        ui.click_role(Role::Button, "Save");
+        assert_eq!(wait(&mut ui, 951)["result"]["asked"], true);
+        assert!(shot.is_file());
+
+        // Always Allow from the prompt, then the switch in Manage Plugins.
+        let project = out.path().join("asked.xuan");
+        ui.app_mut().queue_file_request(
+            "mock",
+            file_request(952, "file/save_as", json!({"path": project})),
+        );
+        ui.settle();
+        assert!(ui.has("Save a file?"));
+        ui.click_role(Role::Button, "Always Allow");
+        assert_eq!(wait(&mut ui, 952)["result"]["asked"], true);
+        assert!(project.is_file());
+        assert!(ui.app().saves_without_asking("mock"));
+        ui.app_mut().command("plugins");
+        ui.app_mut().plugins.manager_selected = Some("mock".into());
+        ui.settle();
+        ui.click_role(Role::CheckBox, "Save and export without asking");
+        assert!(!ui.app().saves_without_asking("mock"));
+        ui.app_mut().stop_plugin("mock");
+    }
+    /// Start the mock plugin, which asks for runs in these tests, and wait
+    /// until it runs.
+    fn start_caller(context: &egui::Context, app: &mut EditorApp) {
+        app.render_pane("plugin:mock/info", "open", None);
+        run_until(context, app, |app| {
+            app.plugins.running("mock") && !app.plugins.starting("mock")
+        });
+    }
+
+    #[test]
+    fn an_allowed_run_starts_the_other_plugins_action_and_answers_with_its_job() {
+        use crate::app::plugin_runs::RunAnswer;
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        app.config_path = Some(config.path().join("config.toml"));
+        install_caller_and_target(&mut app, dir.path(), other.path(), false);
+        start_caller(&context, &mut app);
+        app.set_run_other_actions("mock", true);
+        let run = |id: i64, session: &str| {
+            run_request(
+                id,
+                "target/echo",
+                json!({"inputs": {"prompt": "from a client"}, "session": session}),
+            )
+        };
+        let finish = |context: &egui::Context, app: &mut EditorApp, id: i64| {
+            run_until(context, app, |app| {
+                answer(dir.path(), id).is_some() && app.dialog == Some(Dialog::PluginProposal)
+            });
+            app.resolve_proposal(false);
+            answer(dir.path(), id).unwrap()
+        };
+
+        // The first run of a session asks, naming what it runs with.
+        assert!(app.hold_plugin_run("mock", run(701, "s1")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginRun)
+        });
+        let prompt = app.plugins.run_prompt.clone().unwrap();
+        assert_eq!(prompt.details[0], "prompt: “from a client”");
+        assert!(app.plugins.jobs.is_empty());
+        app.answer_plugin_run(RunAnswer::Allow);
+        // The job runs at once, in the status bar like any other, marked
+        // with the plugin that started it.
+        assert_eq!(app.plugins.jobs.len(), 1, "{:?}", app.error);
+        let job = app.plugins.jobs[0].id;
+        assert_eq!(app.plugins.jobs[0].caller.as_deref(), Some("mock"));
+        let shown = app.running_jobs();
+        assert_eq!(shown[0].started_by.as_deref(), Some("Mock (plugin mock)"));
+        let answered = finish(&context, &mut app, 701);
+        assert_eq!(
+            answered["result"],
+            json!({"ok": true, "running": true, "job": job, "plugin": "target",
+                   "plugin_name": "Target", "action": "echo", "label": "Echo Source…"})
+        );
+        // It ran in the other plugin, with the client's inputs, and its
+        // result was a proposal from that plugin.
+        let line = (received(other.path()).lines())
+            .find(|line| line.contains("\"action/run\""))
+            .map(str::to_owned)
+            .unwrap();
+        assert!(line.contains("\"prompt\":\"from a client\""), "{line}");
+        assert!(app.status.contains("discarded"), "{}", app.status);
+        // The plugin's log keeps what it started.
+        assert!(
+            (app.plugins.log("mock").iter())
+                .any(|line| line.contains("Started “Echo Source…” · Target (plugin target)")),
+            "{:?}",
+            app.plugins.log("mock")
+        );
+
+        // The session's next run does not ask.
+        assert!(app.hold_plugin_run("mock", run(702, "s1")).is_none());
+        assert!(app.plugins.run_prompt.is_none());
+        assert_eq!(app.plugins.jobs.len(), 1);
+        assert_eq!(finish(&context, &mut app, 702)["result"]["running"], true);
+
+        // A new session asks again; Always Allow stops asking.
+        assert!(app.hold_plugin_run("mock", run(703, "s2")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginRun)
+        });
+        app.answer_plugin_run(RunAnswer::Always);
+        assert!(app.runs_without_asking("mock"));
+        let saved = std::fs::read_to_string(config.path().join("config.toml")).unwrap();
+        assert!(saved.contains("run_without_asking = true"), "{saved}");
+        finish(&context, &mut app, 703);
+        assert!(app.hold_plugin_run("mock", run(704, "s3")).is_none());
+        assert_eq!(app.plugins.jobs.len(), 1);
+        finish(&context, &mut app, 704);
+
+        // Turned off, sessions ask again; Cancel answers that nothing ran.
+        app.set_run_without_asking("mock", false);
+        assert!(app.hold_plugin_run("mock", run(705, "s1")).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginRun)
+        });
+        app.answer_plugin_run(RunAnswer::Cancel);
+        run_until(&context, &mut app, |_| answer(dir.path(), 705).is_some());
+        let refused = answer(dir.path(), 705).unwrap();
+        assert_eq!(refused["error"]["code"], CANCELLED);
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("did not allow running “Echo Source” of Target (plugin target)"),
+            "{message}"
+        );
+        // Right after, a new session's run is refused without a prompt.
+        assert!(app.hold_plugin_run("mock", run(706, "s4")).is_none());
+        run_until(&context, &mut app, |_| answer(dir.path(), 706).is_some());
+        assert_eq!(answer(dir.path(), 706).unwrap()["error"]["code"], CANCELLED);
+        assert!(app.plugins.run_prompt.is_none() && app.plugins.run_held.is_empty());
+        assert!(app.plugins.jobs.is_empty());
+        app.stop_plugin("mock");
+        app.stop_plugin("target");
+    }
+
+    #[test]
+    fn a_run_waits_for_the_other_plugins_send_prompt() {
+        use serde_json::json;
+        use xuan::plugins::protocol::CANCELLED;
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_caller_and_target(&mut app, dir.path(), other.path(), true);
+        start_caller(&context, &mut app);
+        app.set_run_other_actions("mock", true);
+        app.set_run_without_asking("mock", true);
+        let run = |id: i64| run_request(id, "target/echo", json!({"inputs": {"prompt": "a kite"}}));
+        let error = |id: i64| {
+            let answered = answer(dir.path(), id).unwrap();
+            assert_eq!(answered["error"]["code"], CANCELLED, "{answered}");
+            answered["error"]["message"].as_str().unwrap().to_owned()
+        };
+
+        // A plugin that declares network hosts asks before anything is sent,
+        // as from its menu, and the request waits for the answer.
+        assert!(app.hold_plugin_run("mock", run(801)).is_none());
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        let consent = app.plugins.consent.clone().unwrap();
+        assert_eq!(consent.plugin, "target");
+        assert!(
+            consent.items.iter().any(|item| item == "prompt: “a kite”"),
+            "{:?}",
+            consent.items
+        );
+        assert!(app.plugins.run_waiting.is_some());
+        settle(&context, &mut app);
+        assert!(answer(dir.path(), 801).is_none());
+        assert!(!app.plugin_action_dialog_shown());
+        // Send starts it and answers with the job.
+        app.answer_consent(true);
+        assert_eq!(app.plugins.jobs.len(), 1, "{:?}", app.error);
+        assert!(app.plugins.run_waiting.is_none());
+        run_until(&context, &mut app, |app| {
+            answer(dir.path(), 801).is_some() && app.dialog == Some(Dialog::PluginProposal)
+        });
+        assert_eq!(answer(dir.path(), 801).unwrap()["result"]["running"], true);
+        app.resolve_proposal(false);
+
+        // Cancel sends nothing, closes the run and answers that.
+        assert!(app.hold_plugin_run("mock", run(802)).is_none());
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        app.answer_consent(false);
+        assert!(app.plugins.action.is_none() && app.plugins.jobs.is_empty());
+        run_until(&context, &mut app, |_| answer(dir.path(), 802).is_some());
+        assert!(
+            error(802).contains("did not allow sending document data to Target (plugin target)"),
+            "{}",
+            error(802)
+        );
+
+        // A withdrawn run closes the send prompt; Send clicked late runs nothing.
+        assert!(app.hold_plugin_run("mock", run(803)).is_none());
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        withdraw(&mut app, 803);
+        assert!(app.plugins.consent.is_none() && app.plugins.action.is_none());
+        assert_eq!(app.dialog, None);
+        run_until(&context, &mut app, |_| answer(dir.path(), 803).is_some());
+        assert!(error(803).contains("withdrew"), "{}", error(803));
+        app.answer_consent(true);
+        settle(&context, &mut app);
+        assert!(app.plugins.jobs.is_empty());
+
+        // A send prompt another dialog replaced comes back; when the run's
+        // own plugin stops, the prompt goes and nothing runs.
+        assert!(app.hold_plugin_run("mock", run(804)).is_none());
+        app.dialog = Some(Dialog::About);
+        app.dialog = None;
+        frame(&context, &mut app);
+        assert_eq!(app.dialog, Some(Dialog::PluginConsent));
+        app.stop_plugin("mock");
+        frame(&context, &mut app);
+        assert!(app.plugins.consent.is_none() && app.plugins.action.is_none());
+        assert!(app.plugins.run_waiting.is_none());
+        assert_eq!(app.dialog, None);
+        settle(&context, &mut app);
+        assert!(app.plugins.jobs.is_empty());
+        app.stop_plugin("target");
+    }
+
+    #[test]
+    fn the_run_prompt_comes_back_closes_when_withdrawn_and_manage_plugins_turns_it_off() {
+        use crate::app::plugin_runs::RunAnswer;
+        use crate::app::tests::ui::UiTest;
+        use egui::accesskit::Role;
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        install_caller_and_target(ui.app_mut(), dir.path(), other.path(), true);
+        start_mock(&mut ui);
+        ui.app_mut().set_run_other_actions("mock", true);
+        let run = |id: i64| {
+            run_request(
+                id,
+                "target/styled",
+                json!({"into": "layer", "inputs": {"style": "hard"}, "session": "MCP client 4"}),
+            )
+        };
+        assert!(ui.app_mut().hold_plugin_run("mock", run(901)).is_none());
+        ui.settle();
+        let title = "Run “Styled Echo” for Mock (plugin mock)?";
+        assert!(ui.has(title));
+        assert!(ui.has("“Styled Echo” · Target (plugin target)"));
+        assert!(ui.has("• style: hard, strength: 0.5"));
+        assert!(ui.has("• Result: a new layer"));
+        assert!(ui.has("Session: MCP client 4"));
+        assert!(ui.has(
+            "Target (plugin target) says it connects to: example.com. A run can send document data there and may use paid credits."
+        ));
+        // Another dialog does not lose it.
+        open_and_close_about(&mut ui);
+        assert!(ui.has(title), "the run prompt never came back");
+        // Withdrawn, it closes; Allow clicked late allows nothing.
+        withdraw(ui.app_mut(), 901);
+        ui.settle();
+        assert!(!ui.has(title));
+        assert!(ui.app().plugins.run_held.is_empty());
+        ui.app_mut().answer_plugin_run(RunAnswer::Allow);
+        assert!(ui.app().plugins.run_answers.is_empty());
+        assert!(!ui.app().run_cooling_down("mock"));
+        // Always Allow, then the switches in Manage Plugins.
+        assert!(ui.app_mut().hold_plugin_run("mock", run(902)).is_none());
+        ui.settle();
+        ui.click_role(Role::Button, "Always Allow");
+        assert!(ui.app().runs_without_asking("mock"));
+        // The send prompt of the network plugin follows, naming who asked.
+        ui.settle();
+        assert!(ui.has("Mock (plugin mock) started this run for its client."));
+        ui.click_role(Role::Button, "Cancel");
+        ui.app_mut().command("plugins");
+        ui.app_mut().plugins.manager_selected = Some("mock".into());
+        ui.settle();
+        ui.click_role(Role::CheckBox, "Run them without asking");
+        assert!(!ui.app().runs_without_asking("mock"));
+        ui.click_role(Role::CheckBox, "Run other plugins' actions");
+        assert!(!ui.app().runs_other_actions("mock"));
+        ui.app_mut().stop_plugin("mock");
+        ui.app_mut().stop_plugin("target");
+    }
+
+    #[test]
+    fn jobs_list_reports_the_status_bar_and_what_became_of_the_callers_runs() {
+        use crate::app::plugin_runs::{FinishedRun, RunOutcome};
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_caller_and_target(&mut app, dir.path(), other.path(), false);
+        start_caller(&context, &mut app);
+        let jobs = |app: &mut EditorApp| plugin_request(app, "jobs/list", json!({}));
+        // It needs the setting, like the runs it reports.
+        let error = jobs(&mut app).unwrap_err();
+        assert!(
+            error.message.contains("Run other plugins' actions"),
+            "{}",
+            error.message
+        );
+        app.set_run_other_actions("mock", true);
+        app.set_run_without_asking("mock", true);
+        assert_eq!(
+            jobs(&mut app).unwrap(),
+            json!({"running": [], "status_bar": null, "results_waiting": 0, "proposal": null, "finished": []})
+        );
+        // Another plugin's finished jobs are not reported.
+        app.plugins.finished_runs.push_back(FinishedRun {
+            job: uuid::Uuid::new_v4(),
+            caller: "someone".into(),
+            plugin: "target".into(),
+            action: "echo".into(),
+            label: "Echo Source".into(),
+            outcome: RunOutcome::Failed,
+            message: "private".into(),
+            at: std::time::Instant::now(),
+        });
+        let run = |id: i64| run_request(id, "target/echo", json!({}));
+
+        // A running job, as the status bar shows it.
+        assert!(app.hold_plugin_run("mock", run(1001)).is_none());
+        let id = app.plugins.jobs[0].id;
+        let listed = jobs(&mut app).unwrap();
+        let running = &listed["running"][0];
+        assert_eq!(
+            (&running["job"], &running["kind"], &running["label"]),
+            (&json!(id), &json!("action"), &json!("Echo Source · Target"))
+        );
+        assert_eq!(
+            (
+                &running["plugin"],
+                &running["action"],
+                &running["started_by"],
+                &running["shown"]
+            ),
+            (
+                &json!("target"),
+                &json!("echo"),
+                &json!("mock"),
+                &json!(true)
+            )
+        );
+        assert!(
+            listed["status_bar"]
+                .as_str()
+                .unwrap()
+                .starts_with("Echo Source · Target")
+        );
+        assert_eq!(listed["finished"], json!([]));
+        // Its result waits while a dialog is open, then is proposed.
+        app.dialog = Some(Dialog::About);
+        run_until(&context, &mut app, |app| app.plugins.jobs.is_empty());
+        let listed = jobs(&mut app).unwrap();
+        assert_eq!(listed["results_waiting"], 1);
+        assert_eq!(listed["finished"][0]["outcome"], "waiting");
+        app.dialog = None;
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        let listed = jobs(&mut app).unwrap();
+        assert_eq!(listed["finished"][0]["outcome"], "proposed");
+        assert_eq!(listed["finished"][0]["job"], json!(id));
+        assert_eq!(listed["proposal"]["job"], json!(id));
+        assert_eq!(listed["proposal"]["source"], "Target (plugin target)");
+        app.resolve_proposal(true);
+        let listed = jobs(&mut app).unwrap();
+        assert_eq!(listed["finished"][0]["outcome"], "accepted");
+        assert_eq!(listed["finished"].as_array().unwrap().len(), 1);
+
+        // Cancelled from the status bar, and stopped with its plugin.
+        assert!(app.hold_plugin_run("mock", run(1002)).is_none());
+        let cancelled = app.plugins.jobs[0].id;
+        app.cancel_running_job(cancelled);
+        run_until(&context, &mut app, |app| app.plugins.jobs.is_empty());
+        assert!(app.hold_plugin_run("mock", run(1003)).is_none());
+        let stopped = app.plugins.jobs[0].id;
+        app.stop_plugin("target");
+        let listed = jobs(&mut app).unwrap();
+        let finished = listed["finished"].as_array().unwrap();
+        assert_eq!(finished.len(), 3);
+        assert_eq!(
+            (
+                &finished[0]["job"],
+                &finished[0]["outcome"],
+                &finished[0]["message"]
+            ),
+            (
+                &json!(stopped),
+                &json!("cancelled"),
+                &json!("The plugin was stopped")
+            )
+        );
+        assert_eq!(
+            (&finished[1]["job"], &finished[1]["outcome"]),
+            (&json!(cancelled), &json!("cancelled"))
+        );
+        app.stop_plugin("mock");
+    }
+
+    #[test]
+    fn a_waiting_run_is_refused_once_the_setting_is_turned_off() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        install_caller_and_target(&mut app, dir.path(), other.path(), false);
+        start_caller(&context, &mut app);
+        app.set_run_other_actions("mock", true);
+        let run = run_request(1101, "target/echo", json!({}));
+        assert!(app.hold_plugin_run("mock", run).is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginRun)
+        });
+        app.set_run_other_actions("mock", false);
+        run_until(&context, &mut app, |_| answer(dir.path(), 1101).is_some());
+        let message = answer(dir.path(), 1101).unwrap()["error"]["message"].clone();
+        assert!(
+            message
+                .as_str()
+                .unwrap()
+                .contains("Run other plugins' actions"),
+            "{message}"
+        );
+        // Its prompt went with it: nothing is left to answer.
+        assert!(app.plugins.run_prompt.is_none() && app.plugins.run_held.is_empty());
+        assert_eq!(app.dialog, None);
+        assert!(app.plugins.jobs.is_empty());
+        app.stop_plugin("mock");
+    }
+}
+
+/// A document with one RAW layer whose camera file the decoder cannot read.
+fn raw_document(app: &mut EditorApp) -> uuid::Uuid {
+    let camera = image::Rgb32FImage::from_pixel(16, 12, image::Rgb([0.2; 3]));
+    let decoded = xuan::raw::DecodedRaw {
+        camera,
+        as_shot: [1.0; 3],
+        camera_to_rgb: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        xyz_to_camera: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        metadata: xuan::raw::RawMetadata {
+            width: 16,
+            height: 12,
+            ..Default::default()
+        },
+    };
+    let asset = xuan::raw::RawAsset {
+        filename: "broken.NEF".into(),
+        metadata: decoded.metadata.clone(),
+        settings: Default::default(),
+        bytes: Arc::new(vec![1, 2, 3]),
+    };
+    let pixels = xuan::raw::render(
+        &decoded,
+        &asset.settings,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    app.apply_developed(&super::develop::DevelopTarget::New, asset, pixels)
+        .unwrap();
+    app.session().unwrap().document.layers[0].id
+}
+
+fn request(method: &str, params: serde_json::Value) -> xuan::plugins::protocol::Request {
+    xuan::plugins::protocol::Request {
+        jsonrpc: "2.0".into(),
+        id: xuan::plugins::protocol::Id::Number(7),
+        method: method.into(),
+        params,
+    }
+}
+
+#[test]
+fn raw_develop_checks_its_settings_at_once_and_runs_as_a_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    let layer = raw_document(&mut app);
+    let described = xuan::plugins::edits::describe(&app.session().unwrap().document);
+    assert_eq!(described["layers"][0]["raw"]["filename"], "broken.NEF");
+
+    // A misspelt setting starts nothing.
+    app.serve_request(
+        "mock",
+        request(
+            "raw/develop",
+            serde_json::json!({"settings": {"exposre": 1}}),
+        ),
+    );
+    assert!(app.job.is_none());
+    // Only through its job, never answered on the spot.
+    assert!(plugin_request(&mut app, "raw/develop", serde_json::json!({})).is_err());
+
+    let before = app.session().unwrap().document.layers[0].pixels.clone();
+    app.serve_request(
+        "mock",
+        request(
+            "raw/develop",
+            serde_json::json!({"layer": layer.to_string(), "settings": {"exposure": 1}}),
+        ),
+    );
+    let job = app.job.as_ref().expect("a develop job");
+    assert_eq!(job.name, "Develop RAW");
+    assert_eq!(
+        job.reply
+            .as_ref()
+            .map(|(plugin, _, id)| (plugin.as_str(), *id)),
+        Some(("mock", layer))
+    );
+    // Other edits wait for it.
+    assert!(plugin_request(&mut app, "document/edit", serde_json::json!({"edits": []})).is_err());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while app.job.is_some() {
+        assert!(std::time::Instant::now() < deadline, "the job never ended");
+        app.poll_job();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // The camera file does not decode: the plugin hears why, the user gets no
+    // error dialog, and the layer is as it was.
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let session = app.session().unwrap();
+    assert_eq!(session.document.layers[0].pixels, before);
+    assert_eq!(
+        session.document.layers[0]
+            .raw
+            .as_ref()
+            .unwrap()
+            .settings
+            .exposure,
+        0.0
+    );
+}
+
+#[test]
+fn headless_file_requests_follow_allow_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    let image = dir.path().join("photo.png");
+    RgbaImage::new(2, 2).save(&image).unwrap();
+    let open = || request("file/open", serde_json::json!({"path": image}));
+    let save = || request("file/save_as", serde_json::json!({}));
+
+    app.headless = Some(super::headless::Headless { allow_files: false });
+    app.queue_file_request("mock", open());
+    app.queue_file_request("mock", save());
+    assert!(app.plugins.file_requests.is_empty(), "refused at once");
+
+    app.headless = Some(super::headless::Headless { allow_files: true });
+    app.queue_file_request("mock", save());
+    assert!(
+        app.plugins.file_requests.is_empty(),
+        "no save dialog headless"
+    );
+    app.queue_file_request("mock", open());
+    assert_eq!(app.plugins.file_requests.len(), 1);
+
+    // With a window, all of them wait for the user.
+    let (_context, mut app) = super::app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.queue_file_request("mock", save());
+    assert_eq!(app.plugins.file_requests.len(), 1);
 }
 
 /// A Python file-format plugin started in its AppContainer on Windows. It

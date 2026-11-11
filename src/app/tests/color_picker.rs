@@ -82,7 +82,7 @@ fn hue_marker(output: &FullOutput) -> Pos2 {
 fn hue_drag_persists_for_black_gray_white_and_transparent_colors() {
     for initial in [[0, 0, 0, 255], [128, 128, 128, 255], [255; 4], [0; 4]] {
         let context = Context::default();
-        theme::apply(&context);
+        theme::apply(&context, &theme::Palette::DARK);
         let mut color = initial;
         let (output, _) = frame(&context, "foreground", &mut color, vec![]);
         let hue = hue_rect(&output);
@@ -118,7 +118,7 @@ fn hue_drag_persists_for_black_gray_white_and_transparent_colors() {
 #[test]
 fn picker_state_is_independent_and_tracks_external_color_changes() {
     let context = Context::default();
-    theme::apply(&context);
+    theme::apply(&context, &theme::Palette::DARK);
     let mut foreground = [0, 0, 0, 255];
     let mut background = foreground;
     let (output, _) = frame(&context, "foreground", &mut foreground, vec![]);
@@ -150,7 +150,7 @@ fn picker_state_is_independent_and_tracks_external_color_changes() {
 fn map_marker_stays_small_without_changing_other_circles_or_map_width() {
     for scale in [1.0, 1.75] {
         let context = Context::default();
-        theme::apply(&context);
+        theme::apply(&context, &theme::Palette::DARK);
         context.set_pixels_per_point(scale);
         let mut color = [0, 0, 0, 255];
         let (output, _) = frame(&context, "foreground", &mut color, vec![]);

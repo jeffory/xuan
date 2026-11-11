@@ -22,6 +22,12 @@ VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["pack
 ]
 NAME = f"xuan-{VERSION}-linux-{platform.machine()}"
 SOURCE_NAME = f"xuan-{VERSION}-source"
+# The MCP server plugin ships in every package, in the bundled plugins folder
+# Xuan finds next to its executable (src/plugins/mod.rs, bundled_dir_for).
+PLUGIN_MANIFEST = ROOT / "plugins/mcp-server/plugin.toml"
+# The Python plugin SDK ships beside the bundled plugins, where Xuan finds it
+# to put it on every plugin's PYTHONPATH (src/plugins/mod.rs, sdk_dir_from).
+PLUGIN_SDK = ROOT / "sdk/python/xuan_plugin.py"
 
 
 def check_checksum(package):
@@ -37,6 +43,9 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
         "share/licenses/xuan/rawler-LGPL-2.1.txt",
         "share/licenses/xuan/heic-rs-MIT.txt",
         "share/licenses/xuan/seccompiler-BSD-3-Clause.txt",
+        "share/licenses/xuan/kurbo-MIT.txt",
+        "share/licenses/xuan/libwebp-BSD-3-Clause.txt",
+        "share/licenses/xuan/Hack-LICENSE.txt",
         "share/licenses/xuan/tabler-icons-MIT.txt",
         "share/licenses/xuan/Inter-LICENSE.txt",
         "share/licenses/xuan/DroidSansFallback-LICENSE.txt",
@@ -45,6 +54,13 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
     }
     executable = prefix / ("xuan.exe" if windows else "bin/xuan")
     expected.add(executable.relative_to(prefix).as_posix())
+    plugin = prefix / ("plugins" if windows else "lib/xuan/plugins") / "mcp-server"
+    plugin_executable = plugin / (
+        "target/release/xuan-mcp-server" + (".exe" if windows else "")
+    )
+    sdk = prefix / ("sdk/python" if windows else "lib/xuan/sdk/python")
+    for path in (plugin / "plugin.toml", plugin_executable, sdk / PLUGIN_SDK.name):
+        expected.add(path.relative_to(prefix).as_posix())
     if not windows:
         expected.update(
             {
@@ -113,14 +129,10 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
             assert path.stat().st_mode & required == required, (
                 f"Not publicly readable: {path}"
             )
+    check_plugin(plugin, plugin_executable, windows)
+    check_sdk(sdk)
     if windows:
-        data = executable.read_bytes()
-        assert data[:2] == b"MZ", "Not a Windows executable"
-        pe = int.from_bytes(data[0x3C:0x40], "little")
-        assert data[pe : pe + 6] == b"PE\0\0\x64\x86", "Not an x86_64 PE executable"
-        assert int.from_bytes(data[pe + 92 : pe + 94], "little") == 2, (
-            "Expected a GUI executable"
-        )
+        assert pe_subsystem(executable) == 2, "Expected a GUI executable"
     else:
         assert executable.stat().st_mode & 0o777 == 0o755
         if maximum := os.environ.get("XUAN_MAX_GLIBC"):
@@ -164,7 +176,83 @@ def check_files(prefix, portable=False, windows=False, appimage=False):
             text=True,
             timeout=30,
         ).strip()
-        assert actual_version == f"xuan {VERSION}", actual_version
+        check_version(actual_version)
+
+
+def pe_subsystem(executable):
+    """The subsystem of an x86_64 Windows executable: 2 GUI, 3 console."""
+    data = executable.read_bytes()
+    assert data[:2] == b"MZ", f"Not a Windows executable: {executable}"
+    pe = int.from_bytes(data[0x3C:0x40], "little")
+    assert data[pe : pe + 6] == b"PE\0\0\x64\x86", (
+        f"Not an x86_64 PE executable: {executable}"
+    )
+    return int.from_bytes(data[pe + 92 : pe + 94], "little")
+
+
+def check_plugin(plugin, executable, windows):
+    """The bundled MCP server plugin: its manifest as in the repository and
+    a release build of the command it names."""
+    assert (plugin / "plugin.toml").read_bytes() == PLUGIN_MANIFEST.read_bytes(), (
+        "The bundled MCP server manifest differs from plugins/mcp-server/plugin.toml"
+    )
+    manifest = tomllib.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+    command = manifest["plugin"]["command"][0] + (".exe" if windows else "")
+    assert plugin / command == executable, manifest["plugin"]["command"]
+    if windows:
+        assert pe_subsystem(executable) == 3, "Expected a console plugin executable"
+    else:
+        assert executable.stat().st_mode & 0o777 == 0o755, executable
+        assert executable.read_bytes()[:4] == b"\x7fELF", executable
+        # Plugins run with the host's loader and C library, also from the
+        # AppImage on systems older than the build host: no dependencies.
+        headers = subprocess.check_output(["readelf", "-lW", executable], text=True)
+        dynamic = subprocess.check_output(["readelf", "-dW", executable], text=True)
+        assert "INTERP" not in headers and "(NEEDED)" not in dynamic, (
+            f"The bundled plugin must be statically linked: {executable}"
+        )
+    if not windows or sys.platform == "win32":
+        # Without a host on stdin it starts and exits at once.
+        subprocess.run(
+            [executable], stdin=subprocess.DEVNULL, check=True, timeout=30
+        )
+
+
+def check_sdk(sdk):
+    """The Python plugin SDK: the repository's, and importable from its
+    folder on PYTHONPATH as Xuan starts plugins."""
+    assert (sdk / PLUGIN_SDK.name).read_bytes() == PLUGIN_SDK.read_bytes(), (
+        "The packaged Python plugin SDK differs from sdk/python/xuan_plugin.py"
+    )
+    found = (
+        "import os, sys, xuan_plugin\n"
+        "real = os.path.realpath\n"
+        "assert real(os.path.dirname(xuan_plugin.__file__)) == real(sys.argv[1])"
+    )
+    # -B: no __pycache__ in the package, which later checks compare file by file.
+    subprocess.run(
+        [sys.executable, "-B", "-s", "-c", found, sdk],
+        cwd=sdk.parent,
+        env={**os.environ, "PYTHONPATH": str(sdk)},
+        check=True,
+        timeout=30,
+    )
+
+
+def check_version(actual):
+    """Match `xuan --version` against the build channel (see src/buildinfo.rs).
+
+    Release builds print `xuan <version>`; dev builds print the commit
+    instead, e.g. `xuan build 1dfa61c (2026-10-05)`.
+    """
+    if os.environ.get("XUAN_BUILD_CHANNEL") == "release":
+        assert actual == f"xuan {VERSION}", actual
+        return
+    commit = os.environ.get("XUAN_BUILD_COMMIT", "")[:7]
+    if commit:
+        assert actual.startswith(f"xuan build {commit}"), actual
+    else:
+        assert actual.startswith("xuan build ") or actual == "xuan development build", actual
 
 
 def check_source(temporary):
@@ -183,6 +271,9 @@ def check_source(temporary):
         "src/io/fixtures/checker-grid.heic",
         "licenses/heic-rs-MIT.txt",
         "licenses/seccompiler-BSD-3-Clause.txt",
+        "licenses/kurbo-MIT.txt",
+        "licenses/libwebp-BSD-3-Clause.txt",
+        "licenses/Hack-LICENSE.txt",
         "licenses/tabler-icons-MIT.txt",
         "assets/svg/transform.svg",
         "scripts/package.sh",
@@ -195,16 +286,27 @@ def check_source(temporary):
         "packaging/AppRun",
         ".github/workflows/linux.yml",
         ".github/workflows/windows.yml",
+        ".github/workflows/macos.yml",
+        "plugins/mcp-server/Cargo.toml",
+        "plugins/mcp-server/Cargo.lock",
+        "plugins/mcp-server/plugin.toml",
+        "plugins/mcp-server/src/main.rs",
+        "sdk/xuan-plugin/Cargo.toml",
+        "sdk/python/xuan_plugin.py",
         "docs/DEVELOPMENT.md",
         "LICENSE",
         "THIRD_PARTY.md",
     ):
         assert (source / name).is_file(), f"Missing rebuild source: {name}"
-    for original in (ROOT / "src").rglob("*"):
-        if original.suffix in (".rs", ".wgsl"):
-            assert (
-                source / original.relative_to(ROOT)
-            ).read_bytes() == original.read_bytes(), original
+    for folder in ("src", "plugins/mcp-server/src", "sdk/xuan-plugin/src"):
+        for original in (ROOT / folder).rglob("*"):
+            if original.suffix in (".rs", ".wgsl"):
+                assert (
+                    source / original.relative_to(ROOT)
+                ).read_bytes() == original.read_bytes(), original
+    assert not (source / "plugins/mcp-server/target").exists(), (
+        "Build output in sources"
+    )
     manifest = tomllib.loads((source / "Cargo.toml").read_text(encoding="utf-8"))
     assert manifest["package"]["version"] == VERSION
     assert manifest["patch"]["crates-io"]["rawler"]["path"] == "vendor/rawler"
@@ -225,6 +327,23 @@ def check_source(temporary):
             host,
             "--manifest-path",
             source / "Cargo.toml",
+        ],
+        stdout=subprocess.DEVNULL,
+        check=True,
+    )
+    # The plugin rebuilds from the archive alone with its own lock file.
+    subprocess.run(
+        [
+            "cargo",
+            "metadata",
+            "--offline",
+            "--locked",
+            "--format-version",
+            "1",
+            "--filter-platform",
+            host,
+            "--manifest-path",
+            source / "plugins/mcp-server/Cargo.toml",
         ],
         stdout=subprocess.DEVNULL,
         check=True,
@@ -335,7 +454,7 @@ def check_appimage(temporary):
         actual_version = subprocess.check_output(
             [*command, "--version"], cwd=destination, text=True, timeout=60
         ).strip()
-        assert actual_version == f"xuan {VERSION}", actual_version
+        check_version(actual_version)
     print(
         f"Verified {package.name}: payload, bundled glibc/loader, static runtime, FUSE-free launch"
     )
@@ -381,11 +500,15 @@ def main():
                 check_files(stage, portable=True)
                 installed = temporary / "portable installation"
                 subprocess.run([stage / "scripts/install.sh", installed], check=True)
-                for path in (stage / "share").rglob("*"):
+                for path in (
+                    *(stage / "share").rglob("*"),
+                    *(stage / "lib").rglob("*"),
+                ):
                     if path.is_file():
-                        assert (
-                            installed / path.relative_to(stage)
-                        ).read_bytes() == path.read_bytes(), path
+                        copy = installed / path.relative_to(stage)
+                        assert copy.read_bytes() == path.read_bytes(), path
+                        mode = path.stat().st_mode & 0o777
+                        assert copy.stat().st_mode & 0o777 == mode, path
                 subprocess.run([installed / "bin/xuan", "--version"], check=True)
                 print(
                     f"Verified {package.name}: runtime files, documentation, portable installation"

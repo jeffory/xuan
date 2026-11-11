@@ -11,7 +11,7 @@ use rayon::prelude::*;
 
 pub(super) fn develop(raw: &RawImage) -> Result<Rgb32FImage> {
     let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else {
-        anyhow::bail!("Missing X-Trans color pattern");
+        anyhow::bail!("Missing X-Trans colour pattern");
     };
     let active = raw
         .active_area

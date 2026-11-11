@@ -1,0 +1,690 @@
+//! The MCP server: Streamable HTTP on 127.0.0.1, every request checked for
+//! the Host, the Origin and the token before rmcp sees it.
+use std::{
+    collections::VecDeque,
+    net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
+    sync::{Arc, Mutex, RwLock},
+};
+
+use axum::{
+    Router,
+    extract::{Request, State},
+    http::header,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+};
+use rmcp::{
+    ErrorData, RoleServer, ServerHandler,
+    model::{
+        CallToolRequestParams, CallToolResponse, Implementation, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
+        ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+        ResourceContents, ServerCapabilities, ServerConfig,
+    },
+    service::RequestContext,
+    transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    },
+};
+use serde_json::{Value, json};
+use tokio::net::TcpListener;
+use xuan_plugin::CancelToken;
+
+use crate::{auth, editor::Editor, tools};
+
+/// The port tried first unless the settings name another.
+pub const DEFAULT_PORT: u16 = 8765;
+/// How often a taken port is tried again.
+const RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+/// The MCP endpoint's path.
+pub const PATH: &str = "/mcp";
+/// Tool calls the pane lists.
+const ACTIVITY: usize = 8;
+/// Largest HTTP request body: room for the largest image
+/// `create_image_layer` takes (64 MiB of PNG, a third more as base64) and
+/// the JSON around it. Everything else a tool sends Xuan must fit in 16 MiB
+/// ([`tools::MAX_REQUEST_BYTES`]).
+pub const MAX_BODY_BYTES: usize = 96 * 1024 * 1024;
+/// The answer to a larger body, which says what the limits are.
+pub const TOO_LARGE: &str = "The request is larger than 96 MiB, the most this server accepts. An image for create_image_layer may be at most 64 MiB as PNG; other tool arguments at most 16 MiB.";
+
+/// How long a call waits for the user (an edit prompt, a file dialog, the
+/// prompt to send an image) before the server withdraws its request in
+/// Xuan, and how often it tells the client that it is still waiting.
+///
+/// A client that sent a `progressToken` gets `notifications/progress` while
+/// the call waits. That opens the HTTP answer at once (on the stateless
+/// protocol rmcp sends no headers before the first message, and Claude Code
+/// gives up on a request without headers after 60 s) and resets the idle
+/// timeouts of clients that reset them on progress, so such a call may wait
+/// for `with_progress`. Without a token nothing can keep the client
+/// waiting, so the server gives up after `without_progress`, before the
+/// common 60 s client timeout, with an error that says the user has not
+/// answered yet rather than leaving a prompt up after the client failed.
+#[derive(Clone, Copy, Debug)]
+pub struct Waits {
+    pub progress_every: std::time::Duration,
+    pub with_progress: std::time::Duration,
+    pub without_progress: std::time::Duration,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Self {
+            progress_every: std::time::Duration::from_secs(5),
+            with_progress: std::time::Duration::from_secs(600),
+            without_progress: std::time::Duration::from_secs(50),
+        }
+    }
+}
+
+/// What the server is doing, for the pane.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Status {
+    Starting,
+    Listening {
+        port: u16,
+    },
+    /// Another program listens on the configured port. Clients set up for
+    /// it would send it their requests, token included, so the server does
+    /// not move to another port until the user says so.
+    PortInUse {
+        port: u16,
+    },
+    Failed(String),
+}
+
+/// State shared by the server, the pane and the settings.
+pub struct Shared {
+    pub token: RwLock<String>,
+    pub status: Mutex<Status>,
+    /// The port the settings ask for (0: let the system choose).
+    pub port: Mutex<u16>,
+    /// The user chose, in the pane, to listen on any free port because the
+    /// configured one is taken. Cleared when the port setting changes.
+    pub any_port: std::sync::atomic::AtomicBool,
+    pub data_dir: Mutex<PathBuf>,
+    /// Recent tool calls, newest last.
+    pub activity: Mutex<VecDeque<String>>,
+    /// Woken to listen again, after the port changed.
+    pub restart: tokio::sync::Notify,
+    /// Called when the pane should be drawn again.
+    pub changed: Mutex<Option<Box<dyn Fn() + Send>>>,
+    /// MCP session ids this server issued, with the label Xuan shows.
+    sessions: Mutex<Sessions>,
+    /// How long calls wait for the user.
+    pub waits: Waits,
+}
+
+/// Session ids rmcp minted in answers to `initialize`, as this server saw
+/// them go out. Only these name an edit session; anything else a client
+/// sends in `Mcp-Session-Id` is ignored.
+#[derive(Default)]
+struct Sessions {
+    known: VecDeque<(String, u32)>,
+    next: u32,
+}
+
+/// Session ids remembered; the oldest are forgotten first.
+const SESSIONS: usize = 256;
+
+/// The edit session of every request that has no session this server
+/// issued: clients on the stateless protocol (2026-07-28 and later) or
+/// without a session header. They all share one answer, and Xuan's prompt
+/// says so.
+pub const STATELESS_SESSION: &str = "every MCP client without a session (they share this answer)";
+
+impl Shared {
+    pub fn new(token: String, data_dir: PathBuf) -> Self {
+        Self {
+            token: RwLock::new(token),
+            status: Mutex::new(Status::Starting),
+            port: Mutex::new(DEFAULT_PORT),
+            any_port: std::sync::atomic::AtomicBool::new(false),
+            data_dir: Mutex::new(data_dir),
+            activity: Mutex::new(VecDeque::new()),
+            restart: tokio::sync::Notify::new(),
+            changed: Mutex::new(None),
+            sessions: Mutex::default(),
+            waits: Waits::default(),
+        }
+    }
+
+    /// Remember a session id the server just issued.
+    fn remember(&self, id: &str) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            if sessions.known.iter().any(|(known, _)| known == id) {
+                return;
+            }
+            sessions.next += 1;
+            let label = sessions.next;
+            sessions.known.push_back((id.to_owned(), label));
+            while sessions.known.len() > SESSIONS {
+                sessions.known.pop_front();
+            }
+        }
+    }
+
+    /// The edit session for a client's `Mcp-Session-Id`: a label the server
+    /// made, never the client's own text.
+    pub fn edit_session(&self, header: Option<&str>) -> String {
+        let label = header.and_then(|id| {
+            let sessions = self.sessions.lock().ok()?;
+            sessions
+                .known
+                .iter()
+                .find(|(known, _)| known == id)
+                .map(|(_, label)| format!("MCP client {label}"))
+        });
+        label.unwrap_or_else(|| STATELESS_SESSION.to_owned())
+    }
+
+    /// Replace the token (**New Token**). The session ids issued so far are
+    /// forgotten, so an edit approval given to one of them cannot be used
+    /// by whoever holds the new token and knows an old id: such a request
+    /// counts as having no session. Labels are never reused.
+    pub fn replace_token(&self, token: String) {
+        if let Ok(mut current) = self.token.write() {
+            *current = token;
+        }
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.known.clear();
+        }
+    }
+
+    pub fn token(&self) -> String {
+        self.token.read().map(|t| t.clone()).unwrap_or_default()
+    }
+
+    pub fn status(&self) -> Status {
+        self.status
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(Status::Starting)
+    }
+
+    fn set_status(&self, status: Status) {
+        if let Ok(mut current) = self.status.lock() {
+            *current = status;
+        }
+        self.notify();
+    }
+
+    pub fn notify(&self) {
+        if let Ok(changed) = self.changed.lock()
+            && let Some(changed) = changed.as_ref()
+        {
+            changed();
+        }
+    }
+
+    fn record(&self, line: String) {
+        if let Ok(mut activity) = self.activity.lock() {
+            activity.push_back(line);
+            while activity.len() > ACTIVITY {
+                activity.pop_front();
+            }
+        }
+        self.notify();
+    }
+
+    pub fn url(port: u16) -> String {
+        format!("http://127.0.0.1:{port}{PATH}")
+    }
+}
+
+/// How the server explains itself to clients.
+const INSTRUCTIONS: &str = "Xuan is an image editor running on the user's computer. Start with get_document to see the layers and get_preview to see the image. Edits apply live as one undo step each; to make many edits one step, use paint_stroke with strokes or the batch tool. The first edit of a session asks the user in Xuan, who may refuse. Layer ids, coordinates and sizes are in document pixels with the origin at the top-left. Saving, exporting and opening files ask the user: saving or exporting to an absolute `path` asks in Xuan until the user chooses Always Allow, and without `path` the user picks the file in a save dialog. With the user's permission, run_plugin_action runs other installed plugins' actions (list_plugin_actions lists them), such as generating or editing images; they run in the background, so follow them with get_jobs. A call that waits for the user fails if they do not answer in time; then ask the user instead of retrying.";
+
+/// The MCP side: tools and resources over the editor.
+#[derive(Clone)]
+pub struct Xuan {
+    pub editor: Arc<dyn Editor>,
+    pub shared: Arc<Shared>,
+}
+
+/// The edit session of a request: the label of the MCP session this server
+/// issued to the client, or the one session every other client shares.
+fn session_of(context: &RequestContext<RoleServer>, shared: &Shared) -> Option<String> {
+    let header = context
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .and_then(|parts| parts.headers.get(SESSION_HEADER))
+        .and_then(|value| value.to_str().ok());
+    Some(shared.edit_session(header))
+}
+
+const SESSION_HEADER: &str = "mcp-session-id";
+
+impl Xuan {
+    fn incoming(&self) -> PathBuf {
+        self.shared
+            .data_dir
+            .lock()
+            .map(|dir| dir.join("incoming"))
+            .unwrap_or_default()
+    }
+
+    /// Run blocking editor requests off the async workers, for as long as
+    /// the client waits: see [`Waits`]. When the client cancels the request
+    /// (`notifications/cancelled`, or on the stateless protocol by closing
+    /// the HTTP request) or the wait runs out, `cancel` withdraws the
+    /// requests in Xuan, so the prompt they wait on closes and a late answer
+    /// does nothing; the work then ends with their error.
+    async fn waiting<T: Send + 'static>(
+        &self,
+        context: &RequestContext<RoleServer>,
+        message: &'static str,
+        work: impl FnOnce(&Self, &CancelToken) -> T + Send + 'static,
+    ) -> Result<T, ErrorData> {
+        let this = self.clone();
+        let cancel = CancelToken::new();
+        let token = cancel.clone();
+        let mut task = tokio::task::spawn_blocking(move || work(&this, &token));
+        let waits = self.shared.waits;
+        let progress = context.meta.get_progress_token();
+        let limit = match progress {
+            Some(_) => waits.with_progress,
+            None => waits.without_progress,
+        };
+        let deadline = tokio::time::sleep(limit);
+        tokio::pin!(deadline);
+        let start = tokio::time::Instant::now() + waits.progress_every;
+        let mut ticks = tokio::time::interval_at(start, waits.progress_every);
+        let mut sent = 0u32;
+        loop {
+            let tick = tokio::select! {
+                done = &mut task => {
+                    return done.map_err(|error| ErrorData::internal_error(error.to_string(), None));
+                }
+                () = context.ct.cancelled() => false,
+                () = &mut deadline => false,
+                _ = ticks.tick(), if progress.is_some() => true,
+            };
+            match (tick, &progress) {
+                (true, Some(token)) => {
+                    sent += 1;
+                    let note = ProgressNotificationParam::new(token.clone(), f64::from(sent))
+                        .with_message(message);
+                    // A client that went away is noticed by rmcp.
+                    let _ = context.peer.notify_progress(note).await;
+                }
+                _ => break,
+            }
+        }
+        // Cancelled or out of time: withdraw, then the work ends at once.
+        cancel.cancel();
+        task.await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))
+    }
+}
+
+impl ServerHandler for Xuan {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(
+            Implementation::new("xuan", env!("CARGO_PKG_VERSION")).with_title("Xuan image editor"),
+        )
+        .with_instructions(INSTRUCTIONS)
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(ListToolsResult::with_all_items(tools::list()))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let session = session_of(&context, &self.shared);
+        let name = request.name.to_string();
+        let arguments = request.arguments.unwrap_or_default();
+        let message = tools::waiting_message(&name);
+        let result = self
+            .waiting(&context, message, move |this, cancel| {
+                let incoming = this.incoming();
+                let cx = tools::Context {
+                    editor: this.editor.as_ref(),
+                    session: session.as_deref(),
+                    incoming: &incoming,
+                    cancel,
+                };
+                let result = tools::call(&cx, &name, arguments);
+                let outcome = if result.is_error == Some(true) {
+                    "failed"
+                } else {
+                    "done"
+                };
+                // Only names of real tools reach the pane, never client text.
+                let known = tools::list().iter().any(|tool| tool.name == name);
+                let shown = if known {
+                    name.as_str()
+                } else {
+                    "an unknown tool"
+                };
+                // A save or export names the file it wrote: the pane is the
+                // user's, and writes made without asking must be visible.
+                // A run of another plugin's action names it, for the same reason.
+                let outcome = (tools::written(&name, &result))
+                    .or_else(|| tools::started(&name, &result))
+                    .unwrap_or_else(|| outcome.into());
+                this.shared.record(format!("{shown}: {outcome}"));
+                result
+            })
+            .await?;
+        Ok(result.into())
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let session = None::<String>;
+        let resources = self
+            .waiting(&context, "Waiting for Xuan", move |this, cancel| {
+                resources(this.editor.as_ref(), session.as_deref(), cancel)
+            })
+            .await?;
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let session = session_of(&context, &self.shared);
+        let uri = request.uri;
+        let contents = self
+            .waiting(&context, "Waiting for Xuan", move |this, cancel| {
+                read(this.editor.as_ref(), session.as_deref(), &uri, cancel)
+            })
+            .await??;
+        Ok(ReadResourceResult::new(contents).into())
+    }
+}
+
+/// The resources: the document manifest, the flattened preview, the
+/// selection mask and a thumbnail for each layer of the current document.
+pub fn resources(
+    editor: &dyn Editor,
+    session: Option<&str>,
+    cancel: &CancelToken,
+) -> Vec<Resource> {
+    let mut list = vec![
+        Resource::new("xuan://document", "document")
+            .with_title("Current document")
+            .with_description("Size, selection and layers of the current document, as JSON")
+            .with_mime_type("application/json"),
+        Resource::new("xuan://document/preview.png", "preview")
+            .with_title("Flattened preview")
+            .with_description("The current document flattened, longest side 1024 pixels")
+            .with_mime_type("image/png"),
+        Resource::new("xuan://document/selection.png", "selection")
+            .with_title("Selection mask")
+            .with_description("The selection cropped to its bounds; white is selected")
+            .with_mime_type("image/png"),
+    ];
+    if let Ok(document) = editor.request(session, "document/get", json!({}), cancel) {
+        for layer in document["layers"].as_array().into_iter().flatten() {
+            let (Some(id), Some(name)) = (layer["id"].as_str(), layer["name"].as_str()) else {
+                continue;
+            };
+            list.push(
+                Resource::new(
+                    format!("xuan://layers/{id}/thumbnail.png"),
+                    format!("layer {id}"),
+                )
+                .with_title(format!("Layer “{name}”"))
+                .with_description("The layer's pixels, longest side 256 pixels")
+                .with_mime_type("image/png"),
+            );
+        }
+    }
+    list
+}
+
+/// Read one resource.
+pub fn read(
+    editor: &dyn Editor,
+    session: Option<&str>,
+    uri: &str,
+    cancel: &CancelToken,
+) -> Result<Vec<ResourceContents>, ErrorData> {
+    let failed = |message: String| ErrorData::internal_error(tools::redact_paths(&message), None);
+    let request = |method: &str, params: Value| {
+        editor
+            .request(session, method, params, cancel)
+            .map_err(|error| match error.code {
+                crate::editor::WITHDRAWN | crate::editor::TIMED_OUT => {
+                    failed(tools::not_answered(method))
+                }
+                _ => failed(error.message),
+            })
+    };
+    let png = |export: Value| -> Result<Vec<ResourceContents>, ErrorData> {
+        let (data, _) = tools::read_export(&export).map_err(failed)?;
+        Ok(vec![
+            ResourceContents::blob(data, uri).with_mime_type("image/png"),
+        ])
+    };
+    match uri {
+        "xuan://document" => {
+            let document = request("document/get", json!({}))?;
+            Ok(vec![
+                ResourceContents::text(
+                    serde_json::to_string_pretty(&document).unwrap_or_default(),
+                    uri,
+                )
+                .with_mime_type("application/json"),
+            ])
+        }
+        "xuan://document/preview.png" => png(request(
+            "document/export",
+            json!({"max_side": tools::DEFAULT_PREVIEW}),
+        )?),
+        "xuan://document/selection.png" => {
+            let export = request("selection/export", json!({}))?;
+            if export.is_null() {
+                return Err(ErrorData::resource_not_found("Nothing is selected", None));
+            }
+            png(export)
+        }
+        _ => {
+            let layer = uri
+                .strip_prefix("xuan://layers/")
+                .and_then(|rest| rest.strip_suffix("/thumbnail.png"))
+                .ok_or_else(|| ErrorData::resource_not_found(format!("No resource {uri}"), None))?;
+            png(request(
+                "layer/export",
+                json!({"layer": layer, "what": "pixels", "max_side": 256}),
+            )?)
+        }
+    }
+}
+
+/// The HTTP application: `/mcp`, behind the checks.
+pub fn router(xuan: Xuan, port: u16) -> Router {
+    let shared = xuan.shared.clone();
+    let config = StreamableHttpServerConfig::default()
+        .with_allowed_hosts(["127.0.0.1", "localhost"])
+        .enforce_origin_validation()
+        .with_max_request_body_bytes(MAX_BODY_BYTES);
+    let service = StreamableHttpService::new(
+        move || Ok(xuan.clone()),
+        Arc::new(LocalSessionManager::default()),
+        config,
+    );
+    Router::new()
+        .nest_service(PATH, service)
+        .layer(middleware::from_fn_with_state((shared, port), guard))
+}
+
+async fn guard(
+    State((shared, port)): State<(Arc<Shared>, u16)>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Err(rejection) = auth::check(request.headers(), &shared.token(), port) {
+        let mut response = (rejection.status(), rejection.message()).into_response();
+        if rejection == auth::Rejection::Token {
+            response.headers_mut().insert(
+                header::WWW_AUTHENTICATE,
+                "Bearer".parse().expect("valid header"),
+            );
+        }
+        return response;
+    }
+    // Said before the body is read, when its length is known; rmcp cuts
+    // off a longer body without a length at the same limit.
+    let length = (request.headers().get(header::CONTENT_LENGTH))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if length.is_some_and(|length| length > MAX_BODY_BYTES as u64) {
+        return (axum::http::StatusCode::PAYLOAD_TOO_LARGE, TOO_LARGE).into_response();
+    }
+    // A session id in the answer to a request that had none was issued by
+    // rmcp just now (to `initialize`): that is the only way one is trusted.
+    let issued_here = !request.headers().contains_key(SESSION_HEADER);
+    let response = next.run(request).await;
+    if issued_here
+        && let Some(id) = response
+            .headers()
+            .get(SESSION_HEADER)
+            .and_then(|value| value.to_str().ok())
+    {
+        shared.remember(id);
+    }
+    response
+}
+
+/// Listen on 127.0.0.1 only, on exactly this port (0: any free one). A taken
+/// port is an error, never a reason to move silently.
+pub async fn bind(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await
+}
+
+/// Serve until the plugin stops, listening again when the port changes.
+pub fn run(xuan: Xuan) {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            xuan.shared
+                .set_status(Status::Failed(format!("Cannot start: {error}")));
+            return;
+        }
+    };
+    runtime.block_on(async move {
+        loop {
+            let configured = xuan.shared.port.lock().map(|p| *p).unwrap_or(DEFAULT_PORT);
+            let any = (xuan.shared.any_port).load(std::sync::atomic::Ordering::Relaxed);
+            let wanted = if any { 0 } else { configured };
+            match bind(wanted).await {
+                Ok(listener) => {
+                    let port = listener.local_addr().map(|a| a.port()).unwrap_or(wanted);
+                    write_connection(&xuan.shared, port);
+                    xuan.shared.set_status(Status::Listening { port });
+                    let app = router(xuan.clone(), port);
+                    let shared = xuan.shared.clone();
+                    serve(listener, app, Limits::default(), async move {
+                        shared.restart.notified().await
+                    })
+                    .await;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    xuan.shared.set_status(Status::PortInUse { port: wanted });
+                    // Try again now and then, or when the user decides.
+                    let _ = tokio::time::timeout(RETRY, xuan.shared.restart.notified()).await;
+                }
+                Err(error) => {
+                    xuan.shared.set_status(Status::Failed(format!(
+                        "Cannot listen on 127.0.0.1:{wanted}: {error}"
+                    )));
+                    xuan.shared.restart.notified().await;
+                }
+            }
+        }
+    });
+}
+
+/// How many connections are served at once, and how long a client may take
+/// to send a request's headers.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub connections: usize,
+    pub header_timeout: std::time::Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            connections: 32,
+            header_timeout: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
+/// Serve HTTP/1 on the listener until `shutdown`: at most
+/// `limits.connections` at a time (more are closed at once), and a
+/// connection that does not send its headers in time is closed, so a local
+/// program cannot tie the server up by opening idle connections.
+pub async fn serve(
+    listener: TcpListener,
+    app: Router,
+    limits: Limits,
+    shutdown: impl std::future::Future<Output = ()>,
+) {
+    let permits = Arc::new(tokio::sync::Semaphore::new(limits.connections));
+    tokio::pin!(shutdown);
+    loop {
+        let stream = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => stream,
+                Err(_) => {
+                    // Out of file descriptors, say: wait a moment.
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    continue;
+                }
+            },
+            () = &mut shutdown => break,
+        };
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
+        let service = hyper_util::service::TowerToHyperService::new(app.clone());
+        tokio::spawn(async move {
+            let _permit = permit;
+            let connection = hyper::server::conn::http1::Builder::new()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(limits.header_timeout)
+                .serve_connection(hyper_util::rt::TokioIo::new(stream), service);
+            let _ = connection.await;
+        });
+    }
+}
+
+/// `connection.json` in the data folder: where the server listens (the
+/// token is in its own file), for scripts and tests.
+fn write_connection(shared: &Shared, port: u16) {
+    if let Ok(dir) = shared.data_dir.lock() {
+        let text = json!({"url": Shared::url(port), "port": port}).to_string();
+        let _ = auth::write_private(&dir.join("connection.json"), text.as_bytes());
+    }
+}

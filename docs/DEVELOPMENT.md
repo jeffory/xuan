@@ -4,7 +4,7 @@ Run the commands below from the repository root. For installation and editing, s
 
 ## Prerequisites
 
-Requires Rust **1.89+** and a C toolchain.
+Requires Rust **1.89+** (**1.90+** on macOS) and a C toolchain.
 
 ### Linux
 
@@ -17,11 +17,15 @@ sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
     libvulkan1 mesa-vulkan-drivers xdg-desktop-portal
 ```
 
-HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
+HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import. SVG and SVGZ import (`src/io/svg.rs`) draws files with the `resvg` crate the title bar already uses, built without text shaping, bitmap decoding or file access; `cargo test --locked svg` covers sizing, sharpness, transparency, limits and that linked files and URLs are never loaded.
 
 ### Windows
 
 Install the x86_64 MSVC Rust toolchain (`stable-x86_64-pc-windows-msvc`) and Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK. Use Windows 10/11 with a DirectX 12 or Vulkan driver. Native file dialogs and the clipboard use Windows APIs. Packaging also requires Python **3.11+** on `PATH`.
+
+### macOS
+
+Install the Xcode Command Line Tools (`xcode-select --install`) and Rust with rustup. Use an Apple Silicon Mac with macOS 11 or later; the editor renders with Metal. macOS support is in progress (see [MACOS.md](MACOS.md)): there is no app bundle, installer or signature yet, so run it with `cargo run` or from the unsigned build the [macOS workflow](../.github/workflows/macos.yml) uploads, and pens work as a mouse, without pressure.
 
 ## Build and run
 
@@ -70,7 +74,9 @@ AppImage packaging additionally requires [linuxdeploy](https://github.com/linuxd
 
 The AppImage includes the shared application payload, an `AppRun` launcher, and X11/Wayland libraries (including libraries loaded through `dlopen`) with their license notices. The image also bundles glibc and its matching loader, plus their license notices, using `scripts/linuxdeploy-plugin-xuan`. This input plugin runs after linuxdeploy rewrites ELF files so it does not modify glibc or the loader. The Vulkan loader, GPU drivers, and desktop portals come from the host. `AppRun` uses the bundled libc on older hosts and the matching system libc/loader on newer hosts, whose graphics drivers may require newer glibc symbols. It passes the library search path to the loader without exporting a private glibc path to child processes. `AppRun` preserves the calling directory and arguments, so opening relative file paths works. Package verification extracts the image without FUSE, checks its contents and checksum, rejects a dynamically linked AppImage runtime, verifies that the bundled loader resolves the executable's linked libraries inside the image, and runs both the extracted launcher and the AppImage's extract-and-run mode. AppImages are named `xuan-<version>-<architecture>.AppImage`.
 
-A portable Linux archive includes `bin/xuan`, `scripts/install.sh`, and a `share/` directory for desktop integration, icons, licenses, and user guides. It can run directly after extraction. Debian and RPM packages install the same application files under `/usr`. Binary packages omit source code, CI workflows, original artwork, development guides, and screenshots. Their `share/doc/xuan/SOURCES.md` notice points to the exact source download; links to development documentation point to the release's repository tag.
+Every package bundles the MCP server plugin (`plugins/mcp-server`, its own Cargo workspace), built with `cargo build --release --locked` into its own `plugins/mcp-server/target`. It goes to `lib/xuan/plugins/mcp-server/` under the Linux prefix (`/usr` for deb and rpm, the archive's folder, the AppImage's `usr`) and to `plugins\mcp-server\` beside `xuan.exe`, with the repository's `plugin.toml` and the binary at `target/release/xuan-mcp-server` (`.exe` on Windows), the command the manifest names. On Linux it is built for `<arch>-unknown-linux-musl` and linked statically, since the AppImage starts plugins with the host's C library; run `rustup target add x86_64-unknown-linux-musl` once (CI does). `XUAN_PLUGIN_TARGET` picks another target for a local build, and `XUAN_PLUGIN_TARGET_DIR` another target directory, but `check-packages.py` rejects a dynamically linked plugin. linuxdeploy never sees the plugin: `package-native.py` holds it back and the glibc input plugin puts it in place. `AppRun` exports `XUAN_BUNDLED_PLUGINS`, because inside the AppImage Xuan's executable path is the loader's. The checks fail a package without the plugin binary and manifest, or whose manifest differs from the repository's, and start the plugin once with no input. See "Bundled plugins" in [PLUGINS.md](PLUGINS.md#bundled-plugins).
+
+A portable Linux archive includes `bin/xuan`, `lib/xuan/plugins/`, `scripts/install.sh`, and a `share/` directory for desktop integration, icons, licenses, and user guides. It can run directly after extraction. Debian and RPM packages install the same application files under `/usr`. Binary packages omit source code, CI workflows, original artwork, development guides, and screenshots. Their `share/doc/xuan/SOURCES.md` notice points to the exact source download; links to development documentation point to the release's repository tag.
 
 The separate source archive contains the application and build assets, the patched egui-winit sources, and the exact Rawler sources. Its manifest and lockfile use the bundled Rawler directory so `cargo build --release --locked` works after extraction. Other dependencies are downloaded from the Cargo registry. See [third-party notices](../THIRD_PARTY.md).
 
@@ -99,6 +105,8 @@ npx --yes changelogithub@15.0.5 --dry --to HEAD --github silverling/xuan
 
 The first release uses the available commit history; subsequent notes start after the preceding release tag. To retry a failed release, rerun its workflow in GitHub Actions.
 
+Help → Check for Updates… and the daily update check (`src/update.rs`, `src/app/updates.rs`) read the latest release of `jeffory/xuan`, the repository these builds are published from: its tag must be the version (`v0.6.0`), and its notes are shown in the update dialog. A fork that publishes its own builds sets `XUAN_UPDATE_REPOSITORY=owner/name` when building so they check its releases instead. The update tests use a fake GitHub (`src/app/tests/update_check.rs`) and never reach the network; tests that do not set one get a transport that always fails.
+
 ## Application icons
 
 Application and desktop icons are generated from [`assets/Xuan.png`](../assets/Xuan.png). After changing the logo, run:
@@ -118,12 +126,57 @@ image at the display's pixel scale.
 Monochrome SVGs use `color="white"` with `stroke="currentColor"` so the icon can be
 tinted with the toolbar's text color. Rebuild the app after editing an embedded SVG.
 
+## Interface colours
+
+Every colour the interface paints comes from `theme::Palette` in
+[`src/app/theme.rs`](../src/app/theme.rs): semantic roles such as `panel`, `text`,
+`muted`, `accent`, `control`, `hover` and `tab_selected`, with a `DARK` and a `LIGHT`
+instance. Widgets read the installed palette with `ui.palette()` (or `ctx.palette()`); do
+not write colour literals in interface code, and do not assume a dark background for
+`from_white_alpha` overlays. Add a role to both palettes instead. Colours painted over the
+document (selection outlines, handles, guides) are the exception and stay fixed.
+`src/app/theme/tests.rs` checks that the dark palette matches the original look and that
+key text and control pairs meet WCAG AA in both palettes.
+
+### Platform theme backends
+
+`src/app/system_theme.rs` reads the desktop's light/dark preference and accent colour into
+a plain `SystemTheme { dark, accent }`. Each platform has one backend, chosen in
+`system_theme::detect()`, the only place with `cfg(target_os = …)`:
+
+- Linux (`system_theme/linux.rs`): the xdg-desktop-portal
+  `org.freedesktop.appearance` `color-scheme` and `accent-color` over D-Bus (`zbus`,
+  300 ms timeout), then KDE's `kdeglobals`, GNOME's `gsettings` `color-scheme` and
+  `accent-color`, then the GTK theme name. Parsing reuses `window_theme.rs`.
+- Windows (`system_theme/windows.rs`): `AppsUseLightTheme` and the DWM `AccentColor`
+  (ABGR) or `ColorizationColor` (ARGB) from the registry.
+- macOS: a stub that answers nothing.
+
+To add a platform (macOS next):
+
+1. Add `src/app/system_theme/<platform>.rs` with a `read() -> SystemTheme` (or a type
+   implementing `system_theme::Source` if it keeps state, like the Linux D-Bus
+   connection). Keep the parsing of what the OS returns in pure functions and test them
+   in `system_theme/tests.rs`; compile those functions for `any(<platform>, test)` so they
+   are tested on Linux too, as `windows.rs` does.
+2. Return it from the platform's branch of `detect()`. For macOS, read
+   `NSApp.effectiveAppearance` (DarkAqua or Aqua) and `NSColor.controlAccentColor`.
+3. Nothing else changes: `system_theme::Watcher` polls the backend on its own thread every
+   three seconds, and `EditorApp::sync_palette` turns the answer into a palette.
+
+A backend must never block for long: the first answer is awaited for at most 300 ms at
+startup, and later ones arrive in the background. Return `None` for anything that cannot
+be read; Xuan then keeps its dark palette and blue accent. Tests never call `detect()`:
+they inject a `Source` with `EditorApp::watch_system_theme`.
+
 ## Checks
 
 ```sh
 scripts/check.sh          # formatting, Clippy, engine and UI tests
 scripts/check.sh --gpu    # also compares wgpu output against the CPU reference
 ```
+
+The same script runs on macOS, where `--gpu` uses Metal.
 
 On Windows, run the equivalent checks in PowerShell:
 
@@ -134,7 +187,7 @@ cargo test --locked --all-targets
 cargo test --locked --package egui-winit --lib clipboard_paste
 ```
 
-The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
+The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb on Linux and in the runner's own desktop session on macOS. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
 
 ## Writing UI tests
 
@@ -187,9 +240,9 @@ cargo test --locked --lib gpu::goldens -- --ignored # the same scenes on the GPU
 
 The CPU output is the source of truth: the update command only rewrites goldens from the CPU renderer, and only files whose pixels changed. Review the PNG changes like any other diff before committing them. Fetch the RAW fixtures first, or the three RAW scenes are skipped and their goldens left untouched.
 
-A scene passes when at most a small fraction of its pixels differ from the golden by more than a per-channel tolerance. The CPU allows 2 levels on 0.2% of the pixels (3 levels on 0.5% for RAW Develop), which absorbs one-ulp differences between the Linux and Windows maths libraries while failing on any visible change. The GPU test, run by `scripts/check.sh --gpu`, compares against the same goldens with looser limits (4 levels on 0.5% of the pixels, 6 levels on 1% for RAW Develop), because GPU arithmetic, shader maths and mipmapped downscaling differ from the CPU reference. On Mesa lavapipe every scene is within one level. Text uses only the bundled font, never system fonts, so it renders identically on every platform.
+A scene passes when at most a small fraction of its pixels differ from the golden by more than a per-channel tolerance. The CPU allows 2 levels on 0.2% of the pixels (3 levels on 0.5% for RAW Develop), which absorbs one-ulp differences between the Linux, Windows and macOS maths libraries while failing on any visible change. The GPU test, run by `scripts/check.sh --gpu`, compares against the same goldens with looser limits (4 levels on 0.5% of the pixels, 6 levels on 1% for RAW Develop), because GPU arithmetic, shader maths and mipmapped downscaling differ from the CPU reference. On Mesa lavapipe every scene is within one level. Text uses only the bundled font, never system fonts, so it renders identically on every platform.
 
-On a mismatch the test writes `expected.png`, `actual.png` and `diff.png` (red: over the tolerance, yellow: within it) to `target/golden-failures/<cpu|gpu>/<scene>/`; set `XUAN_GOLDEN_FAILURES` to use another directory. CI uploads that directory as the `golden-failures-linux` or `golden-failures-windows` artifact when the job fails.
+On a mismatch the test writes `expected.png`, `actual.png` and `diff.png` (red: over the tolerance, yellow: within it) to `target/golden-failures/<cpu|gpu>/<scene>/`; set `XUAN_GOLDEN_FAILURES` to use another directory. CI uploads that directory as the `golden-failures-linux`, `golden-failures-windows` or `golden-failures-macos` artifact when the job fails.
 
 ## Tablet input checks
 
@@ -318,11 +371,13 @@ audit](GPU_PROCESSING.md) for sample measurements and the remaining decode costs
 
 ### Localization and negative conversion checks
 
-UI text uses `xuan::i18n::tr` with the English text as its key. Simplified Chinese
-translations are UTF-8 tab-separated pairs in `assets/locales/zh-CN.tsv`. Keep UI
-IDs, command identifiers and user document content independent of translated labels.
-The UI test checks the settings shortcut, live language changes and bundled glyph
-coverage. Configuration tests use temporary directories.
+UI text uses `xuan::i18n::tr` (or `tr_args` and `tr_plural`) with the English text as its
+key. Every `assets/locales/<tag>.tsv` is built in as a language; `en.tsv` lists the English
+keys. [Translating Xuan](TRANSLATING.md) covers the file format, adding a language, adding new
+strings, `scripts/check-locales.sh` and font coverage. Keep UI IDs, command identifiers and
+user document content independent of translated labels. The tests check every locale file
+against the source and the bundled fonts, the language picker, the settings shortcut and live
+language changes. Configuration tests use temporary directories.
 
 ```sh
 cargo test --locked negative

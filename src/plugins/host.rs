@@ -165,6 +165,8 @@ pub struct Process {
     /// including [`Incoming::Closed`], handed out by the next [`Process::poll`].
     held: Vec<Incoming>,
     log: Arc<Mutex<VecDeque<String>>>,
+    /// Set once everything the plugin wrote to stderr is in `log`.
+    log_complete: Arc<AtomicBool>,
     closed: Arc<AtomicBool>,
     /// False between `initialize` and its answer. Requests and notifications
     /// sent meanwhile wait in `outbox`, so the plugin sees nothing before
@@ -213,6 +215,7 @@ impl Process {
         let (send, incoming) = mpsc::channel();
         let closed = Arc::new(AtomicBool::new(false));
         let log = Arc::new(Mutex::new(VecDeque::new()));
+        let log_complete = Arc::new(AtomicBool::new(false));
         if block_network {
             push_log(&log, super::sandbox::LOG_NOTE.into());
         }
@@ -281,6 +284,7 @@ impl Process {
         }
         {
             let log = log.clone();
+            let log_complete = log_complete.clone();
             std::thread::Builder::new()
                 .name(format!("plugin {} stderr", manifest.plugin.id))
                 .spawn(move || {
@@ -294,6 +298,7 @@ impl Process {
                         }
                         push_log(&log, line);
                     }
+                    log_complete.store(true, Ordering::Release);
                 })
                 .context("plugin log thread")?;
         }
@@ -305,6 +310,7 @@ impl Process {
             budget,
             held: Vec::new(),
             log,
+            log_complete,
             closed,
             ready: true,
             outbox: Vec::new(),
@@ -448,6 +454,20 @@ impl Process {
             .unwrap_or_default()
     }
 
+    /// Once the plugin has exited, wait up to `limit` for the last of its stderr to reach the
+    /// log: the exit can be noticed (a closed pipe) before the log thread has read why.
+    pub fn settle_log(&mut self, limit: Duration) {
+        let exited =
+            self.closed.load(Ordering::Relaxed) || (self.child.as_mut()).is_some_and(Child::exited);
+        let deadline = std::time::Instant::now() + limit;
+        while exited
+            && !self.log_complete.load(Ordering::Acquire)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     /// Add a host note to the log, cut to [`MAX_NOTE`] bytes.
     pub fn note(&self, line: String) {
         push_log(&self.log, clip(&line, MAX_NOTE));
@@ -523,6 +543,15 @@ impl Child {
             Self::Std(child) => matches!(child.try_wait(), Ok(None)),
             #[cfg(windows)]
             Self::Contained(child) => matches!(child.exited(), Ok(false)),
+        }
+    }
+
+    /// Whether the process is known to have exited.
+    fn exited(&mut self) -> bool {
+        match self {
+            Self::Std(child) => matches!(child.try_wait(), Ok(Some(_))),
+            #[cfg(windows)]
+            Self::Contained(child) => matches!(child.exited(), Ok(true)),
         }
     }
 
@@ -1545,5 +1574,29 @@ for line in sys.stdin:
             format!("{error:#}").contains("with its network blocked"),
             "{error:#}"
         );
+    }
+
+    /// A manifest command without `.exe`, such as the MCP server's
+    /// `target/release/xuan-mcp-server` in the Windows package, starts the
+    /// `.exe`: the standard library adds the extension to a program path
+    /// that has none.
+    #[test]
+    fn a_command_without_exe_starts_the_exe() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let bin = dir.path().join("target").join("release");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::copy(
+            Path::new(&system).join("System32").join("whoami.exe"),
+            bin.join("tool.exe"),
+        )
+        .unwrap();
+        let program = resolve("target/release/tool", dir.path());
+        assert_eq!(program, dir.path().join("target/release/tool"));
+        let status = Command::new(&program)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 }

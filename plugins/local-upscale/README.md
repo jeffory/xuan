@@ -18,6 +18,12 @@ real super-resolution backend without touching the manifest or the host.
 XUAN_PLUGIN_PATH=$PWD/plugins xuan
 ```
 
+To install it instead, copy this folder into Xuan's plugins directory or use
+**Plugins → Install from Folder or Zip…**. It needs nothing else: Xuan puts
+the Python SDK it ships (`xuan_plugin`) on the plugin's `PYTHONPATH` (see
+"The Python SDK" in `docs/PLUGINS.md`). With a Xuan from before that, copy
+`sdk/python/xuan_plugin.py` from the same release next to `main.py`.
+
 Then allow it in **Plugins → Manage Plugins…**, open an image (at most 4
 megapixels; select a smaller area first for bigger ones) and run **Image →
 Upscale…**. Pure Python takes about 4 seconds per output megapixel. Tests:

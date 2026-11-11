@@ -1,22 +1,156 @@
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use uuid::Uuid;
 use xuan::i18n::tr;
 use xuan::{
     document::{Layer, Point},
     render,
-    text::{self, TextRenderer, TextStyle},
+    text::{self, PathAlign, PathSide, RunStyle, TextPath, TextRenderer, TextStyle},
 };
 
-use super::{Dialog, EditorApp, Tool, font_picker::FontPicker, theme, widgets};
+/// The Text window's path section: attach one of the document's paths for the text to
+/// follow, or detach it, and how the text follows it. Text on a path is edited here; the
+/// canvas shows it along the path. Returns the document path picked from the menu, or
+/// `Some(None)` when "none" was picked.
+fn path_options(ui: &mut egui::Ui, edit: &mut TextEdit, paths: &[String]) -> Option<Option<usize>> {
+    const DETACH: usize = usize::MAX;
+    let mut pick = None;
+    ui.horizontal(|ui| {
+        ui.label(tr("Path"));
+        let selected = if edit.style.path.is_some() {
+            tr("Text on a path")
+        } else {
+            tr("None (text box)")
+        };
+        widgets::PopUp::from_id_salt("text_path")
+            .selected_text(selected)
+            .width(220.0)
+            .show_ui(ui, |ui| {
+                widgets::menu_choice(ui, &mut pick, Some(DETACH), tr("None (text box)"));
+                for (index, name) in paths.iter().enumerate() {
+                    widgets::menu_choice(ui, &mut pick, Some(index), name);
+                }
+            });
+    });
+    let pick = pick.map(|index| (index != DETACH).then_some(index));
+    let Some(path) = &mut edit.style.path else {
+        if paths.is_empty() {
+            ui.label(
+                RichText::new(tr("Save a path with Select → Paths… to set text along it."))
+                    .small()
+                    .color(ui.palette().muted),
+            );
+        }
+        return pick;
+    };
+    let options = &mut path.options;
+    ui.horizontal(|ui| {
+        ui.label(tr("Start"));
+        ui.add(
+            widgets::Number::new(&mut options.start_offset)
+                .range(-100.0..=100.0)
+                .suffix(" %")
+                .max_decimals(1),
+        );
+        ui.add_space(12.0);
+        widgets::segmented(
+            ui,
+            &mut options.align,
+            &[
+                (PathAlign::Start, tr("Start")),
+                (PathAlign::Center, tr("Center")),
+                (PathAlign::End, tr("End")),
+            ],
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label(tr("Letter spacing"));
+        ui.add(
+            widgets::Number::new(&mut options.letter_spacing)
+                .range(-1000.0..=1000.0)
+                .suffix(" px")
+                .max_decimals(1),
+        );
+        ui.add_space(12.0);
+        ui.label(tr("Baseline shift"));
+        ui.add(
+            widgets::Number::new(&mut options.baseline_shift)
+                .range(-10_000.0..=10_000.0)
+                .suffix(" px")
+                .max_decimals(1),
+        );
+    });
+    ui.horizontal(|ui| {
+        let mut flip = options.side == PathSide::Right;
+        if widgets::checkbox(ui, &mut flip, tr("Flip to the other side")).changed() {
+            options.side = if flip {
+                PathSide::Right
+            } else {
+                PathSide::Left
+            };
+        }
+        widgets::checkbox(ui, &mut options.rotate, tr("Turn letters with the path"));
+    });
+    ui.horizontal(|ui| {
+        let mut ramp = options.size_end.is_some();
+        if widgets::checkbox(ui, &mut ramp, tr("End size")).changed() {
+            options.size_end = ramp.then_some(edit.style.size);
+        }
+        if let Some(size) = &mut options.size_end {
+            ui.add(
+                widgets::Number::new(size)
+                    .range(1.0..=1024.0)
+                    .suffix(" px")
+                    .max_decimals(1),
+            );
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(tr("Opacity"));
+        for (index, value) in [&mut options.opacity_start, &mut options.opacity_end]
+            .into_iter()
+            .enumerate()
+        {
+            if index > 0 {
+                ui.label("→");
+            }
+            let mut percent = *value * 100.0;
+            if ui
+                .add(
+                    widgets::Number::new(&mut percent)
+                        .range(0.0..=100.0)
+                        .suffix(" %")
+                        .max_decimals(0),
+                )
+                .changed()
+            {
+                *value = (percent / 100.0).clamp(0.0, 1.0);
+            }
+        }
+    });
+    ui.label(
+        RichText::new(tr(
+            "Letters past the end of an open path are hidden; on a closed path the text wraps around.",
+        ))
+        .small()
+        .color(ui.palette().muted),
+    );
+    pick
+}
+
+use super::{Dialog, EditorApp, Tool, font_picker::FontPicker, widgets};
 
 pub(super) struct TextEdit {
-    target: Uuid,
+    pub(super) target: Uuid,
     original: Layer,
     pub(super) style: TextStyle,
     fonts: FontPicker,
+    /// The letters selected in the text field (`char` indices), kept while the font and
+    /// colour controls have focus: those controls change just these letters.
+    pub(super) selection: Option<std::ops::Range<usize>>,
     focus: bool,
     changed: bool,
-    error: Option<String>,
+    pub(super) error: Option<String>,
 }
 
 impl EditorApp {
@@ -46,7 +180,7 @@ impl EditorApp {
             );
             self.start_text(None, point);
         }
-        ui.label(RichText::new(tr("Click the canvas to place text")).color(theme::MUTED));
+        ui.label(RichText::new(tr("Click the canvas to place text")).color(ui.palette().muted));
     }
 
     pub(super) fn text_click(&mut self, point: Point) {
@@ -106,6 +240,7 @@ impl EditorApp {
         } else {
             let mut style = self.text_style.clone();
             style.content = tr("Text").into();
+            style.runs.clear();
             style.color = self.brush.color;
             let renderer = self.text_renderer.get_or_insert_with(TextRenderer::default);
             let pixels = match renderer.render(&style) {
@@ -123,7 +258,7 @@ impl EditorApp {
         };
         self.text_renderer.get_or_insert_with(TextRenderer::default);
         let session = self.session_mut().unwrap();
-        session.history.commit();
+        session.commit();
         session.history.begin(
             if is_new {
                 tr("Add Text")
@@ -149,6 +284,7 @@ impl EditorApp {
             style: layer.text.clone().unwrap(),
             original: layer,
             fonts: FontPicker::default(),
+            selection: None,
             focus: true,
             changed: is_new,
             error: None,
@@ -162,12 +298,7 @@ impl EditorApp {
         let Some(edit) = &self.text_edit else { return };
         let mut layer = edit.original.clone();
         let style = edit.style.clone();
-        let result = self
-            .text_renderer
-            .as_mut()
-            .unwrap()
-            .render(&style)
-            .and_then(|pixels| text::update_layer(&mut layer, style, pixels));
+        let result = text::restyle_layer(self.text_renderer.as_mut().unwrap(), &mut layer, style);
         let result = result.and_then(|()| {
             let session = self.session_mut().unwrap();
             let index = session
@@ -203,10 +334,14 @@ impl EditorApp {
         };
         if apply && edit.changed {
             self.text_style = edit.style;
+            // New text starts in a box in one style; a path and the letters' own fonts and
+            // colours belong to their own layer.
+            self.text_style.path = None;
+            self.text_style.runs.clear();
             self.brush.color = self.text_style.color;
             let session = self.session_mut().unwrap();
             session.document.select(edit.target, false);
-            session.history.commit();
+            session.commit();
             self.status = tr("Text applied").into();
         } else if let Some(session) = self.session_mut() {
             session.history.cancel(&mut session.document);
@@ -216,109 +351,206 @@ impl EditorApp {
     }
 
     pub(super) fn text_dialog(&mut self, ctx: &egui::Context) {
-        let apply_shortcut =
-            ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter));
+        let apply_shortcut = ctx.input_mut(|input| {
+            // Ctrl+Enter, or ⌘Return on macOS.
+            input.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+                || input.consume_key(egui::Modifiers::MAC_CMD, egui::Key::Enter)
+        });
+        let paths: Vec<String> = self
+            .session()
+            .map(|s| s.document.paths.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
         let Some(edit) = &mut self.text_edit else {
             return;
         };
         let renderer = self.text_renderer.as_mut().unwrap();
         let before = edit.style.clone();
+        // With letters selected, font, colour, bold and italic show and change theirs (the
+        // first selected letter's); otherwise the layer's.
+        let selection = edit.selection.clone().filter(|range| !range.is_empty());
+        let shown = match &selection {
+            Some(range) => edit.style.letter_style(range.start),
+            None => edit.style.resolve(&RunStyle::default()),
+        };
+        let mut letters = shown.clone();
         edit.fonts
-            .handle_keys(ctx, renderer.families(), &mut edit.style.family);
+            .handle_keys(ctx, renderer.families(), &mut letters.family);
         let mut open = true;
         let mut apply = false;
+        let mut picked = None;
         let mut cancel = false;
         widgets::Window::new(tr("Text"))
             .default_width(440.0)
             .open(&mut open)
-            .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 10.0;
-                let response = egui::ScrollArea::vertical()
-                    .id_salt("text_content_scroll")
-                    .max_height(140.0)
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut edit.style.content)
+            .show_with_footer(
+                ctx,
+                |ui| {
+                    ui.spacing_mut().item_spacing.y = 10.0;
+                    let mut content = edit.style.content.clone();
+                    let output = egui::ScrollArea::vertical()
+                        .id_salt("text_content_scroll")
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            egui::TextEdit::multiline(&mut content)
                                 .id_salt("text_content")
                                 .desired_width(f32::INFINITY)
                                 .desired_rows(4)
-                                .char_limit(text::MAX_TEXT_BYTES),
-                        )
-                    })
-                    .inner;
-                if edit.focus {
-                    response.request_focus();
-                    if let Some(mut state) = egui::TextEdit::load_state(ctx, response.id) {
-                        state
-                            .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::two(
-                                egui::text::CCursor::new(0),
-                                egui::text::CCursor::new(edit.style.content.chars().count()),
-                            )));
-                        state.store(ctx, response.id);
+                                .char_limit(text::MAX_TEXT_BYTES)
+                                .show(ui)
+                        })
+                        .inner;
+                    let response = output.response;
+                    if content != edit.style.content {
+                        // Letters keep their styles; typed ones take their neighbour's.
+                        edit.style.replace_content(content);
                     }
-                    edit.focus = false;
-                }
-                ui.horizontal(|ui| {
-                    ui.label(tr("Font"));
-                    edit.fonts.show(ui, renderer, &mut edit.style.family);
-                });
-                if !renderer.has_family(&edit.style.family) {
-                    ui.label(
-                        RichText::new(tr(
-                            "This font is unavailable. Editing uses a fallback font.",
-                        ))
-                        .color(theme::MUTED)
-                        .small(),
-                    );
-                }
-                ui.horizontal(|ui| {
-                    ui.label(tr("Size"));
-                    ui.add(
-                        widgets::Number::new(&mut edit.style.size)
-                            .range(1.0..=1024.0)
-                            .suffix(" px")
-                            .max_decimals(1),
-                    );
-                    ui.add_space(12.0);
-                    ui.label(tr("Color"));
-                    widgets::color_well(ui, &mut edit.style.color);
-                });
-                ui.horizontal(|ui| {
-                    widgets::checkbox(ui, &mut edit.style.bold, tr("Bold"));
-                    widgets::checkbox(ui, &mut edit.style.italic, tr("Italic"));
-                    widgets::checkbox(ui, &mut edit.style.underline, tr("Underline"));
-                    widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
-                });
-                if let Some(error) = &edit.error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(tr("Live preview · Ctrl+Enter to apply"))
-                            .small()
-                            .color(theme::MUTED),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        apply = ui
-                            .add_enabled(
-                                edit.error.is_none(),
-                                widgets::Button::new(tr("Apply")).primary(),
+                    if response.has_focus()
+                        && let Some(range) = output.cursor_range
+                    {
+                        let (a, b) = (range.primary.index, range.secondary.index);
+                        edit.selection = Some(a.min(b)..a.max(b));
+                    }
+                    if edit.focus {
+                        response.request_focus();
+                        if let Some(mut state) = egui::TextEdit::load_state(ctx, response.id) {
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(0),
+                                    egui::text::CCursor::new(edit.style.content.chars().count()),
+                                )));
+                            state.store(ctx, response.id);
+                        }
+                        edit.focus = false;
+                    }
+                    let count = edit.style.content.chars().count();
+                    if let Some(range) = selection.as_ref().filter(|r| r.len() < count) {
+                        ui.label(
+                            RichText::new(
+                                tr("Font, colour, bold and italic change the {} selected letters")
+                                    .replace("{}", &range.len().to_string()),
                             )
-                            .clicked();
-                        cancel = widgets::button(ui, tr("Cancel")).clicked();
+                            .small()
+                            .color(ui.palette().muted),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Font"));
+                        edit.fonts.show(ui, renderer, &mut letters.family);
                     });
-                });
-            });
+                    if !renderer.has_family(&letters.family) {
+                        ui.label(
+                            RichText::new(tr(
+                                "This font is unavailable. Editing uses a fallback font.",
+                            ))
+                            .color(ui.palette().muted)
+                            .small(),
+                        );
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(tr("Size"));
+                        ui.add(
+                            widgets::Number::new(&mut edit.style.size)
+                                .range(1.0..=1024.0)
+                                .suffix(" px")
+                                .max_decimals(1),
+                        );
+                        ui.add_space(12.0);
+                        ui.label(tr("Colour"));
+                        widgets::color_well(ui, &mut letters.color);
+                    });
+                    ui.horizontal(|ui| {
+                        widgets::checkbox(ui, &mut letters.bold, tr("Bold"));
+                        widgets::checkbox(ui, &mut letters.italic, tr("Italic"));
+                        widgets::checkbox(ui, &mut edit.style.underline, tr("Underline"));
+                        widgets::checkbox(ui, &mut edit.style.strikethrough, tr("Strikethrough"));
+                    });
+                    ui.separator();
+                    picked = path_options(ui, edit, &paths);
+                    if let Some(error) = &edit.error {
+                        ui.colored_label(ui.palette().error, error);
+                    }
+                    edit.error.is_none()
+                },
+                |ui, valid| {
+                    let response = widgets::dialog_footer(
+                        ui,
+                        widgets::FooterButtons::commit(tr("Apply")).enabled(valid),
+                        |ui| {
+                            ui.label(
+                                RichText::new(tr("Live preview · Ctrl+Enter to apply"))
+                                    .small()
+                                    .color(ui.palette().muted),
+                            );
+                        },
+                    );
+                    apply = response.commit;
+                    cancel = response.cancel;
+                },
+            );
         if cancel || !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.finish_text(false);
             return;
         }
-        if edit.style != before {
+        if let Some(edit) = &mut self.text_edit {
+            let change = RunStyle {
+                family: (letters.family != shown.family).then_some(letters.family),
+                color: (letters.color != shown.color).then_some(letters.color),
+                bold: (letters.bold != shown.bold).then_some(letters.bold),
+                italic: (letters.italic != shown.italic).then_some(letters.italic),
+            };
+            if !change.is_empty() {
+                match selection {
+                    Some(range) => edit.style.set_run_style(range, &change),
+                    None => edit.style.set_style_all(&change),
+                }
+            }
+        }
+        if let Some(pick) = picked {
+            self.attach_text_path(pick);
+        }
+        if self
+            .text_edit
+            .as_ref()
+            .is_some_and(|edit| edit.style != before)
+        {
             self.preview_text();
         }
         if apply || apply_shortcut {
             self.finish_text(true);
+        }
+    }
+
+    /// Set the edited text along the document path `index`, keeping its path options, or
+    /// with `None` back in a box. The path is kept in the layer's own box, so it moves with
+    /// the layer from now on.
+    pub(super) fn attach_text_path(&mut self, index: Option<usize>) {
+        let path = index.and_then(|index| {
+            self.session()
+                .and_then(|s| s.document.paths.get(index))
+                .map(|p| p.d.clone())
+        });
+        let Some(edit) = &mut self.text_edit else {
+            return;
+        };
+        let Some(path) = path else {
+            edit.style.path = None;
+            return;
+        };
+        let options = edit
+            .style
+            .path
+            .as_ref()
+            .map(|p| p.options.clone())
+            .unwrap_or_default();
+        let size = edit
+            .original
+            .pixels
+            .as_ref()
+            .map_or((1, 1), |p| p.dimensions());
+        match TextPath::from_document(&path, edit.original.transform, size, options) {
+            Ok(path) => edit.style.path = Some(path),
+            Err(error) => edit.error = Some(error.to_string()),
         }
     }
 }

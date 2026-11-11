@@ -6,9 +6,15 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+/// The `--version` text (see `xuan::buildinfo`); clap wants it for the program's lifetime.
+fn version_text() -> &'static str {
+    static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TEXT.get_or_init(|| xuan::buildinfo::current().cli_version())
+}
+
 #[derive(Debug, Parser)]
 #[command(
-    version,
+    version = version_text(),
     about,
     after_help = "Projects use .xuan; original .comp directory packages and Photoshop .psd/.psb files can also be opened."
 )]
@@ -32,6 +38,20 @@ struct Args {
         value_parser = ["levels", "hue", "curves", "export", "brush", "selection", "gradient", "shape", "text", "new", "settings"]
     )]
     screenshot_panel: Option<String>,
+
+    /// Run without a window and serve the MCP Server plugin for agents: no display, GPU or
+    /// EGL is used. Runs until Ctrl+C
+    #[arg(long, conflicts_with_all = ["screenshot", "screenshot_panel"])]
+    headless: bool,
+
+    /// With --headless: open the files clients ask for and write files to the paths they
+    /// name, without asking
+    #[arg(long, requires = "headless")]
+    allow_files: bool,
+
+    /// With --headless: the MCP server's port on 127.0.0.1 (0: any free port)
+    #[arg(long, value_name = "PORT", requires = "headless")]
+    mcp_port: Option<u16>,
 }
 
 fn main() -> eframe::Result {
@@ -40,7 +60,23 @@ fn main() -> eframe::Result {
         demo,
         screenshot,
         screenshot_panel,
+        headless,
+        allow_files,
+        mcp_port,
     } = Args::parse();
+    if headless {
+        // Before anything that opens a window or a GPU device.
+        let options = app::headless::Options {
+            allow_files,
+            port: mcp_port,
+            demo,
+        };
+        if let Err(error) = app::headless::run(paths, options) {
+            eprintln!("Xuan: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let icon = image::load_from_memory(include_bytes!(
         "../assets/icons/hicolor/256x256/apps/me.silverl.xuan.png"
     ))
@@ -51,14 +87,14 @@ fn main() -> eframe::Result {
         height: icon.height(),
         rgba: icon.into_raw(),
     };
-    // Transparency is fixed when the window and its surface are created, so a
-    // client-side title bar (rounded corners) needs it from the start. A load
-    // error falls back to the default here; the app reports it once running.
+    // Transparency (for the rounded corners of a client-side title bar) and macOS's
+    // full-size content view are fixed when the window is created, so the style is
+    // needed from the start. A load error falls back to the default here; the app
+    // reports it once running.
     let title_bar = xuan::config::Config::path()
         .and_then(|path| xuan::config::Config::load(&path))
         .map(|config| config.title_bar)
         .unwrap_or_default();
-    let client_side = title_bar.client_side();
     let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::default();
     let default_descriptor = setup.device_descriptor.clone();
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
@@ -75,14 +111,15 @@ fn main() -> eframe::Result {
         descriptor
     });
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Xuan")
-            .with_decorations(!client_side)
-            .with_transparent(client_side)
-            .with_icon(icon)
-            .with_app_id("me.silverl.xuan")
-            .with_inner_size([1280.0, 860.0])
-            .with_min_inner_size([850.0, 560.0]),
+        viewport: app::native_window(
+            egui::ViewportBuilder::default()
+                .with_title("Xuan")
+                .with_icon(icon)
+                .with_app_id("me.silverl.xuan")
+                .with_inner_size([1280.0, 860.0])
+                .with_min_inner_size([850.0, 560.0]),
+            title_bar,
+        ),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(setup),
@@ -182,6 +219,43 @@ mod cli_tests {
             (
                 vec!["xuan", "--screenshot", "--demo"],
                 ErrorKind::InvalidValue,
+            ),
+        ] {
+            let error = Args::try_parse_from(&args).unwrap_err();
+            assert_eq!(error.kind(), kind, "arguments: {args:?}");
+        }
+    }
+
+    #[test]
+    fn headless_options_go_with_headless() {
+        let args = Args::try_parse_from([
+            "xuan",
+            "--headless",
+            "--allow-files",
+            "--mcp-port",
+            "0",
+            "photo.NEF",
+        ])
+        .unwrap();
+        assert!(args.headless && args.allow_files);
+        assert_eq!(args.mcp_port, Some(0));
+        assert_eq!(args.paths, [PathBuf::from("photo.NEF")]);
+        for (args, kind) in [
+            (
+                vec!["xuan", "--allow-files"],
+                ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                vec!["xuan", "--mcp-port", "9000"],
+                ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                vec!["xuan", "--headless", "--screenshot", "out.png"],
+                ErrorKind::ArgumentConflict,
+            ),
+            (
+                vec!["xuan", "--headless", "--mcp-port", "70000"],
+                ErrorKind::ValueValidation,
             ),
         ] {
             let error = Args::try_parse_from(&args).unwrap_err();

@@ -1,6 +1,6 @@
 use std::fs;
 
-use crate::{document::MAX_PIXELS, io};
+use crate::{document::MAX_SIDE, io, limits};
 
 const STRIPS: &[u8] = include_bytes!("fixtures/rgb-strips.heic");
 const GRID: &[u8] = include_bytes!("fixtures/checker-grid.heic");
@@ -64,7 +64,7 @@ fn applies_heif_container_rotation_once() {
 #[test]
 fn rejects_oversized_heif_before_decoding() {
     let size = STRIPS.windows(4).position(|b| b == b"ispe").unwrap();
-    for (width, height) in [(30_001u32, 32u32), (20_000, 20_000)] {
+    for (width, height) in [(MAX_SIDE + 1, 32u32), (20_000, 20_000)] {
         let mut bytes = STRIPS.to_vec();
         bytes[size + 8..size + 12].copy_from_slice(&width.to_be_bytes());
         bytes[size + 12..size + 16].copy_from_slice(&height.to_be_bytes());
@@ -74,22 +74,23 @@ fn rejects_oversized_heif_before_decoding() {
             "{error}"
         );
     }
-    let mut used = MAX_PIXELS - 1;
+    let budget = limits::get().project_pixels;
+    let mut used = budget - 1;
     let error = io::decode_image(STRIPS.to_vec(), &mut used).unwrap_err();
     assert!(error.to_string().contains("Project exceeds 100 megapixels"));
-    assert_eq!(used, MAX_PIXELS - 1);
+    assert_eq!(used, budget - 1);
 
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("oversized.heic");
     fs::File::create(&path)
         .unwrap()
-        .set_len(io::MAX_ASSET + 1)
+        .set_len(io::max_asset() + 1)
         .unwrap();
     assert!(
         io::import_image(&path)
             .unwrap_err()
             .to_string()
-            .contains("512 MiB")
+            .contains(&limits::size(io::max_asset()))
     );
 }
 

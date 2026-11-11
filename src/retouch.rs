@@ -454,13 +454,8 @@ fn unpremultiply(value: u8, alpha: u8) -> u8 {
     ((u32::from(value) * 255 + u32::from(alpha) / 2) / u32::from(alpha)).min(255) as u8
 }
 
-/// A portable edge-color matte. The seed color follows each edge region, retaining
-/// foreground edges where the color distance crosses the threshold.
-pub fn remove_background(
-    document: &mut Document,
-    tolerance: u8,
-    cancel: &AtomicBool,
-) -> Result<()> {
+/// The active layer, when Remove Background can mask it.
+fn background_layer(document: &mut Document) -> Result<&mut Layer> {
     let layer = document
         .active_mut()
         .ok_or_else(|| anyhow::anyhow!("Select an image layer"))?;
@@ -468,10 +463,63 @@ pub fn remove_background(
         !layer.locked && !layer.group,
         "Select an unlocked image layer"
     );
-    let image = layer
-        .pixels
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("The selected layer is empty"))?;
+    ensure!(layer.pixels.is_some(), "The selected layer is empty");
+    Ok(layer)
+}
+
+/// Filter → Remove Background: the classical subject segmentation of
+/// [`crate::segment`] on the active layer's own pixels, as a layer mask that hides the
+/// background (kept together with any mask the layer already has).
+pub fn remove_background(
+    document: &mut Document,
+    progress: &(dyn Fn(f32) + Sync),
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let layer = background_layer(document)?;
+    let image = layer.pixels.clone().unwrap();
+    let Some(result) =
+        crate::segment::segment(&image, &crate::segment::Seeds::subject(), progress, cancel)
+    else {
+        bail!("Cancelled");
+    };
+    apply_layer_matte(layer, result.mask);
+    Ok(())
+}
+
+/// Masks `layer` with `matte` (white keeps, in the layer's own pixels), together with
+/// the mask it already has: what either hides stays hidden.
+pub fn apply_layer_matte(layer: &mut Layer, matte: GrayImage) {
+    let mut matte = matte;
+    let (width, height) = matte.dimensions();
+    if let Some(result) = crate::gpu::bake_mask(layer, &matte) {
+        matte = result;
+    } else {
+        for (x, y, pixel) in matte.enumerate_pixels_mut() {
+            let point = layer.transform.point(Point::new(
+                (x as f32 + 0.5) / width as f32,
+                (y as f32 + 0.5) / height as f32,
+            ));
+            pixel[0] = (pixel[0] as f32 * render::own_mask(layer, point)).round() as u8;
+        }
+    }
+    layer.mask = Some(Mask {
+        pixels: Arc::new(matte),
+        ..Mask::white()
+    });
+}
+
+/// Filter → Remove Flat Background: a portable edge-color matte. The seed color follows
+/// each edge region, retaining foreground edges where the color distance crosses the
+/// threshold. Exact at full resolution, so it keeps hairline detail on a flat
+/// background (logos, line art, product shots on white) that the downscaled graph cut
+/// of [`remove_background`] can lose.
+pub fn remove_flat_background(
+    document: &mut Document,
+    tolerance: u8,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let layer = background_layer(document)?;
+    let image = layer.pixels.as_ref().unwrap();
     let (width, height) = image.dimensions();
     let mut matte = GrayImage::from_pixel(width, height, Luma([255]));
     let mut visited = vec![false; width as usize * height as usize];
@@ -509,22 +557,8 @@ pub fn remove_background(
             }
         }
     }
-    let mut matte = crate::gpu::blur_gray(&matte, 0.65);
-    if let Some(result) = crate::gpu::bake_mask(layer, &matte) {
-        matte = result;
-    } else {
-        for (x, y, pixel) in matte.enumerate_pixels_mut() {
-            let point = layer.transform.point(Point::new(
-                (x as f32 + 0.5) / width as f32,
-                (y as f32 + 0.5) / height as f32,
-            ));
-            pixel[0] = (pixel[0] as f32 * render::own_mask(layer, point)).round() as u8;
-        }
-    }
-    layer.mask = Some(Mask {
-        pixels: Arc::new(matte),
-        ..Mask::white()
-    });
+    let matte = crate::gpu::blur_gray(&matte, 0.65);
+    apply_layer_matte(layer, matte);
     Ok(())
 }
 
@@ -792,6 +826,75 @@ mod tests {
         }
     }
 
+    /// A long thin stroke takes its texture from alongside itself, not from a box-width
+    /// away. Everything outside the strip around the stroke is a loud stripe pattern,
+    /// which the box-based overlap test used to pick as the only candidate.
+    #[test]
+    fn long_thin_stroke_heals_from_alongside() {
+        let (a, b) = (Point::new(200.0, 330.0), Point::new(440.0, 150.0));
+        let distance_to_stroke = |x: u32, y: u32| {
+            let p = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            p.distance(Point::new(a.x + t * dx, a.y + t * dy))
+        };
+        let skin = |x: u32, y: u32| {
+            let grain = noise(x / 2, y / 2, 11, 6) + noise(x, y, 12, 2);
+            Rgba([
+                (200 + grain) as u8,
+                (150 + grain) as u8,
+                (130 + grain) as u8,
+                255,
+            ])
+        };
+        let near = |x: u32, y: u32| (100..540).contains(&x) && (60..420).contains(&y);
+        let clean = RgbaImage::from_fn(640, 480, |x, y| {
+            if near(x, y) {
+                skin(x, y)
+            } else if (x / 6).is_multiple_of(2) {
+                Rgba([40, 40, 40, 255])
+            } else {
+                Rgba([220, 220, 220, 255])
+            }
+        });
+        let mut blemished = clean.clone();
+        for (x, y, pixel) in blemished.enumerate_pixels_mut() {
+            if distance_to_stroke(x, y) <= 2.0 {
+                *pixel = Rgba([90, 40, 40, 255]);
+            }
+        }
+        for mode in [HealMode::ContentAware, HealMode::ProximityMatch] {
+            let mut document = document_with(Layer::image("Skin", blemished.clone()), 640, 480);
+            heal(&mut document, &[a, b], 14.0, mode);
+            let healed = pixels(&document);
+            let (mut worst, mut sum, mut count) = (0u32, 0u64, 0u64);
+            for (x, y, pixel) in healed.enumerate_pixels() {
+                if distance_to_stroke(x, y) <= 7.0 {
+                    let error = (luminance(*pixel) - luminance(*clean.get_pixel(x, y)))
+                        .abs()
+                        .round() as u32;
+                    worst = worst.max(error);
+                    sum += u64::from(error);
+                    count += 1;
+                }
+            }
+            let mean = sum as f64 / count as f64;
+            assert!(
+                worst < 40 && mean < 8.0,
+                "{mode:?}: healed stroke is off by up to {worst} (mean {mean:.1}) from the skin"
+            );
+            for (x, y, pixel) in healed.enumerate_pixels() {
+                if distance_to_stroke(x, y) > 8.0 {
+                    assert_eq!(
+                        pixel,
+                        blemished.get_pixel(x, y),
+                        "{mode:?}: ({x}, {y}) changed outside the stroke"
+                    );
+                }
+            }
+        }
+    }
+
     fn checker_with_blemish(width: u32, height: u32, cell: u32) -> RgbaImage {
         RgbaImage::from_fn(width, height, |x, y| {
             let (dx, dy) = (
@@ -998,7 +1101,8 @@ mod tests {
             }
         });
         doc.layers[0].pixels = Some(Arc::new(image));
-        remove_background(&mut doc, 20, &AtomicBool::new(false)).unwrap();
+        let original = doc.clone();
+        remove_flat_background(&mut doc, 20, &AtomicBool::new(false)).unwrap();
         let mask = &doc.layers[0].mask.as_ref().unwrap().pixels;
         assert_eq!(mask.get_pixel(0, 0)[0], 0);
         assert_eq!(mask.get_pixel(10, 10)[0], 255);
@@ -1006,5 +1110,19 @@ mod tests {
             doc.layers[0].pixels.as_ref().unwrap().get_pixel(0, 0)[3],
             255
         );
+        // The graph cut finds the same square, and keeps an existing mask's holes.
+        let mut doc = original;
+        let mut hole = GrayImage::from_pixel(20, 20, Luma([255]));
+        hole.put_pixel(9, 9, Luma([0]));
+        doc.layers[0].mask = Some(Mask {
+            pixels: Arc::new(hole),
+            ..Mask::white()
+        });
+        remove_background(&mut doc, &|_| {}, &AtomicBool::new(false)).unwrap();
+        let mask = &doc.layers[0].mask.as_ref().unwrap().pixels;
+        assert_eq!(mask.get_pixel(0, 0)[0], 0);
+        assert_eq!(mask.get_pixel(10, 10)[0], 255);
+        assert_eq!(mask.get_pixel(9, 9)[0], 0);
+        assert!(remove_background(&mut doc, &|_| {}, &AtomicBool::new(true)).is_err());
     }
 }

@@ -1,0 +1,194 @@
+{
+ "template": "api_ideogram_v4_5_precise_image_edit",
+ "template_sha256": "170cc8b1fb2c82cf49dbdefacb785adf14a7bdda5e204633a314cb22761cdb83",
+ "template_date": "2026-09-30",
+ "converted_at": "2026-10-07T03:37:47+00:00",
+ "output": "7",
+ "api": {
+  "7": {
+   "class_type": "SaveImageAdvanced",
+   "inputs": {
+    "images": [
+     "20",
+     0
+    ],
+    "filename_prefix": "ideogram4.5_image_edit",
+    "format": "png",
+    "format.bit_depth": "8-bit",
+    "format.input_color_space": "sRGB"
+   },
+   "_meta": {
+    "title": "Save Image (Advanced)"
+   }
+  },
+  "20": {
+   "class_type": "IdeogramPreciseEditApi",
+   "inputs": {
+    "model": "ideogram-4.5",
+    "model.images.image_1": [
+     "2",
+     0
+    ],
+    "model.prompt": [
+     "5",
+     0
+    ],
+    "model.quality": "medium",
+    "model.seed": 564797084
+   },
+   "_meta": {
+    "title": "Ideogram 4.5 Precise Edit"
+   }
+  },
+  "5": {
+   "class_type": "PreviewAny",
+   "inputs": {
+    "source": [
+     "3",
+     0
+    ]
+   },
+   "_meta": {
+    "title": "Preview as Text"
+   }
+  },
+  "3": {
+   "class_type": "BuildJsonPromptIdeogram",
+   "inputs": {
+    "element": [
+     "4",
+     2
+    ],
+    "high_level_description": "",
+    "background": "",
+    "style": "none",
+    "aesthetics": "",
+    "lighting": "",
+    "medium": "",
+    "color_palette": {
+     "__value__": []
+    }
+   },
+   "_meta": {
+    "title": "Build JSON Prompt (Ideogram)"
+   }
+  },
+  "4": {
+   "class_type": "CreateBoundingBoxes",
+   "inputs": {
+    "width": 896,
+    "height": 1152,
+    "editor_state": {
+     "__value__": [
+      {
+       "x": 448,
+       "y": 384,
+       "width": 128,
+       "height": 128,
+       "metadata": {
+        "type": "obj",
+        "text": "",
+        "desc": "Change the earring to pearl earring",
+        "palette": []
+       }
+      }
+     ]
+    },
+    "background": [
+     "2",
+     0
+    ],
+    "last_incoming": {
+     "__value__": []
+    }
+   },
+   "_meta": {
+    "title": "Create Bounding Boxes"
+   }
+  },
+  "2": {
+   "class_type": "LoadImage",
+   "inputs": {
+    "image": "redhair_girl_portrait.png"
+   },
+   "_meta": {
+    "title": "Load Image"
+   }
+  }
+ },
+ "specs": {
+  "IdeogramPreciseEditApi.model.seed": [
+   "INT",
+   {
+    "tooltip": "Seed for generation. The same images, prompt, settings and seed give the same result.",
+    "default": 42,
+    "min": 0,
+    "max": 2147483647,
+    "step": 1,
+    "control_after_generate": true,
+    "display": "number"
+   }
+  ],
+  "IdeogramPreciseEditApi.model.images.image_1": [
+   "IMAGE",
+   {}
+  ],
+  "CreateBoundingBoxes.background": [
+   "IMAGE",
+   {
+    "tooltip": "Optional image used as background in the canvas and preview."
+   }
+  ],
+  "IdeogramPreciseEditApi.model.quality": [
+   "COMBO",
+   {
+    "tooltip": "Quality tier. Higher tiers cost more and take longer.",
+    "default": "medium",
+    "multiselect": false,
+    "options": [
+     "very_low",
+     "low",
+     "medium",
+     "high"
+    ]
+   }
+  ],
+  "BuildJsonPromptIdeogram.background": [
+   "STRING",
+   {
+    "tooltip": "Mandatory description of the image background or environment.",
+    "default": "",
+    "multiline": true
+   }
+  ],
+  "CreateBoundingBoxes.width": [
+   "INT",
+   {
+    "tooltip": "Width of the canvas and the pixel grid for the bounding boxes.",
+    "default": 1024,
+    "min": 64,
+    "max": 16384,
+    "step": 16
+   }
+  ],
+  "CreateBoundingBoxes.height": [
+   "INT",
+   {
+    "tooltip": "Height of the canvas and the pixel grid for the bounding boxes.",
+    "default": 1024,
+    "min": 64,
+    "max": 16384,
+    "step": 16
+   }
+  ],
+  "CreateBoundingBoxes.editor_state": [
+   "BOUNDING_BOXES",
+   {
+    "tooltip": "Draw bounding boxes and set each box type, text, description, color palette. Start with background element first and foreground last.",
+    "default": [],
+    "socketless": false
+   }
+  ]
+ },
+ "recipe_key": "1d29fd1f86dce178"
+}

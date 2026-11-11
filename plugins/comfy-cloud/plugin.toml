@@ -1,12 +1,12 @@
 [plugin]
 id = "comfy-cloud"
 name = "Comfy Cloud"
-version = "0.1.0"
-description = "Run ComfyUI workflows on Comfy Cloud (or a Comfy API deployment): edit the marked parts of an image, generate new images, or run any exported workflow."
+version = "0.2.0"
+description = "Generate and edit images with Seedream and Ideogram on Comfy Cloud, using Comfy's own workflow templates and keeping them up to date."
 command = ["python3", "main.py"]
 
 [permissions]
-network = ["cloud.comfy.org", "*.run.comfy.app"]
+network = ["cloud.comfy.org", "*.run.comfy.app", "storage.googleapis.com"]
 secrets = ["api_key"]
 document = "edit"
 
@@ -14,22 +14,14 @@ document = "edit"
 id = "api_key"
 type = "secret"
 label = "API key"
-help = "Create one at platform.comfy.org. Sent as the Bearer token and as extra_data.api_key_comfy_org for partner nodes."
+help = "Create one at platform.comfy.org. Sent to the server as the Bearer token, and with each job for the Seedream and Ideogram nodes."
 
 [[settings]]
 id = "base_url"
 type = "text"
 label = "Server"
 default = "https://cloud.comfy.org"
-help = "Comfy Cloud, a deployment (https://<name>.run.comfy.app) or a local API proxy (http://127.0.0.1:8189)."
-
-[[settings]]
-id = "max_side"
-type = "integer"
-label = "Longest side sent"
-default = 2048
-min = 256
-max = 8192
+help = "Comfy Cloud, or a Comfy API deployment (https://<name>.run.comfy.app). Templates always come from cloud.comfy.org."
 
 [[settings]]
 id = "timeout"
@@ -40,11 +32,101 @@ min = 30
 max = 3600
 
 [[actions]]
+id = "generate"
+label = "Generate Image…"
+menu = "Plugins"
+kind = "generate"
+description = "Generate an image from a description with Seedream 5.0 or Ideogram 4.5."
+result = { into = "ask" }
+surfaces = ["document"]
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Prompt"
+placeholder = "A lighthouse on a cliff at dusk, painted in gouache"
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+values = [
+  { id = "seedream-pro", label = "Seedream 5.0 Pro" },
+  { id = "seedream-flash", label = "Seedream 5.0 Flash (faster, cheaper)" },
+  { id = "ideogram", label = "Ideogram 4.5 (good with lettering)" },
+]
+default = "seedream-pro"
+advanced = true
+
+[[actions.inputs]]
+id = "aspect"
+type = "enum"
+label = "Shape"
+surfaces = ["menu"]
+values = [
+  { id = "1:1", label = "Square 1:1" },
+  { id = "4:3", label = "Landscape 4:3" },
+  { id = "3:2", label = "Landscape 3:2" },
+  { id = "16:9", label = "Wide 16:9" },
+  { id = "3:4", label = "Portrait 3:4" },
+  { id = "2:3", label = "Portrait 2:3" },
+  { id = "9:16", label = "Tall 9:16" },
+]
+default = "1:1"
+
+[[actions.inputs]]
+id = "resolution"
+type = "enum"
+label = "Size"
+surfaces = ["menu"]
+values = [{ id = "1K", label = "About 1 megapixel" }, { id = "2K", label = "About 4 megapixels" }]
+default = "2K"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+
+[[actions]]
+id = "edit"
+label = "Edit Image…"
+menu = "Filter"
+kind = "edit"
+description = "Describe a change and Ideogram 4.5 or Seedream 5.0 repaints the layer with it, as a new layer."
+source = { from = "layer", max_side = 2048 }
+result = { into = "layer" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Change"
+placeholder = "Make it night, with the windows lit"
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+values = [
+  { id = "ideogram-edit", label = "Ideogram 4.5" },
+  { id = "seedream-pro-edit", label = "Seedream 5.0 Pro" },
+]
+default = "ideogram-edit"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+
+[[actions]]
 id = "precise-edit"
 label = "Precise Edit…"
 menu = "Filter"
 kind = "edit"
-description = "Draw boxes over the parts to change and describe each one. Runs workflows/precise-edit.json with the boxes as an Ideogram-style JSON prompt."
+description = "Draw boxes over the parts to change, or turn the selection into one, and describe each change. Ideogram 4.5 changes only what you ask for."
+surfaces = ["region"]
+verb = "Edit"
 source = { from = "layer", max_side = 2048, crop_to_regions = true, padding = 0.25 }
 result = { into = "layer", mask_to_regions = true }
 
@@ -55,106 +137,222 @@ label = "Edits"
 min = 1
 fields = [
   { id = "desc", type = "text", label = "Instruction", placeholder = "Add sunglasses" },
-  { id = "type", type = "enum", label = "Kind", values = [{ id = "obj", label = "Object" }, { id = "text", label = "Text" }], default = "obj" },
+  { id = "type", type = "enum", label = "Kind", values = [{ id = "obj", label = "Object" }, { id = "text", label = "Text" }], default = "obj", advanced = true },
+  { id = "text", type = "text", label = "Text to write", placeholder = "Only for Text boxes", advanced = true },
 ]
 
 [[actions.inputs]]
 id = "background"
 type = "text"
 label = "Background"
+advanced = true
 placeholder = "Leave empty to keep it"
 
 [[actions.inputs]]
 id = "quality"
 type = "enum"
 label = "Quality"
-values = ["low", "medium", "high"]
+values = [
+  { id = "very_low", label = "Draft" },
+  { id = "low", label = "Low" },
+  { id = "medium", label = "Medium" },
+  { id = "high", label = "High" },
+]
+default = "medium"
+advanced = true
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+
+[[actions]]
+id = "split-layers"
+label = "Split into Layers…"
+menu = "Layer"
+kind = "edit"
+description = "Seedream 5.0 separates the flattened image into a background and layers you can move, each as a new layer."
+source = { from = "composite", max_side = 2048 }
+result = { into = "layer" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "text"
+label = "What to separate"
+placeholder = "Leave empty to find the main elements"
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+values = [
+  { id = "split-pro", label = "Seedream 5.0 Pro" },
+  { id = "split-flash", label = "Seedream 5.0 Flash (faster, cheaper)" },
+]
+default = "split-pro"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+
+[[actions]]
+id = "generate-layer"
+label = "Generate Layer…"
+menu = "Layer"
+kind = "edit"
+description = "Generate an object on a transparent background with GPT Image 2.5 and add it as a new layer the size of the canvas. With Match the picture on, GPT draws it into the flattened image and Seedream lifts it back out, so it fits the picture (two Comfy steps)."
+source = { from = "composite", max_side = 1536 }
+result = { into = "layer" }
+surfaces = ["layer"]
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "What to add"
+placeholder = "A red kite with a long ribbon tail, flying above the lighthouse"
+
+[[actions.inputs]]
+id = "reference"
+type = "bool"
+label = "Match the picture"
+help = "Draw it into the flattened image, then lift it out with Seedream, so it fits the picture's colours, lighting and layout. Costs a second Comfy step."
+default = true
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+values = [
+  { id = "gpt-flare-layer", label = "GPT Image 2.5 Flare (faster)" },
+  { id = "gpt-sunburst-layer", label = "GPT Image 2.5 Sunburst (more detail)" },
+]
+default = "gpt-flare-layer"
+advanced = true
+
+[[actions.inputs]]
+id = "quality"
+type = "enum"
+label = "Quality"
+values = [{ id = "low", label = "Low" }, { id = "medium", label = "Medium" }, { id = "high", label = "High" }]
+default = "medium"
+advanced = true
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+
+[[actions]]
+id = "generate-in-region"
+label = "Generate in Region…"
+menu = "Layer"
+kind = "edit"
+surfaces = ["region"]
+verb = "Add"
+description = "Draw a box and describe what to add there: GPT Image 2.5 draws it into the picture and Seedream lifts it out as a layer that fits."
+source = { from = "composite", max_side = 2048, crop_to_regions = true, padding = 0.5 }
+result = { into = "layer", mask_to_regions = true }
+
+[[actions.inputs]]
+id = "regions"
+type = "regions"
+label = "Box"
+min = 1
+max = 1
+fields = [{ id = "desc", type = "text", label = "What to add", placeholder = "A hot air balloon" }]
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+advanced = true
+values = [
+  { id = "gpt-flare-layer", label = "GPT Image 2.5 Flare (faster)" },
+  { id = "gpt-sunburst-layer", label = "GPT Image 2.5 Sunburst (more detail)" },
+]
+default = "gpt-flare-layer"
+
+[[actions.inputs]]
+id = "quality"
+type = "enum"
+label = "Quality"
+advanced = true
+values = [{ id = "low", label = "Low" }, { id = "medium", label = "Medium" }, { id = "high", label = "High" }]
 default = "medium"
 
 [[actions.inputs]]
 id = "seed"
 type = "seed"
 label = "Seed"
+advanced = true
 
 [[actions]]
-id = "inpaint"
-label = "Inpaint Selection…"
+id = "fill-region"
+label = "Fill Region…"
 menu = "Filter"
 kind = "edit"
-description = "Select the area to change, describe what belongs there. Runs workflows/inpaint.json with the flattened image and the selection as a mask (grown a little and feathered, so the edit blends in)."
-source = { from = "composite", max_side = 2048, mask = "selection", mask_grow = 4, mask_feather = 6 }
-result = { into = "layer", mask_to_regions = false }
+surfaces = ["region"]
+verb = "Replace"
+description = "Draw a box (or use the selection) and describe what belongs there: GPT Image 2.5 repaints only that area."
+source = { from = "composite", max_side = 2048, crop_to_regions = true, padding = 0.25 }
+result = { into = "layer", mask_to_regions = true }
 
 [[actions.inputs]]
-id = "prompt"
-type = "multiline"
-label = "What to paint"
+id = "regions"
+type = "regions"
+label = "Box"
+min = 1
+max = 1
+fields = [{ id = "desc", type = "text", label = "What to paint here", placeholder = "A wooden bench" }]
 
 [[actions.inputs]]
-id = "seed"
-type = "seed"
-label = "Seed"
-
-[[actions]]
-id = "generate"
-label = "Generate Image…"
-menu = "Plugins"
-kind = "generate"
-description = "Runs workflows/text-to-image.json with your prompt."
-result = { into = "ask" }
+id = "model"
+type = "enum"
+label = "Model"
+advanced = true
+values = [
+  { id = "gpt-flare-fill", label = "GPT Image 2.5 Flare (faster)" },
+  { id = "gpt-sunburst-fill", label = "GPT Image 2.5 Sunburst (more detail)" },
+]
+default = "gpt-flare-fill"
 
 [[actions.inputs]]
-id = "prompt"
-type = "multiline"
-label = "Prompt"
-
-[[actions.inputs]]
-id = "width"
-type = "integer"
-label = "Width"
-default = 1024
-min = 64
-max = 4096
-
-[[actions.inputs]]
-id = "height"
-type = "integer"
-label = "Height"
-default = 1024
-min = 64
-max = 4096
+id = "quality"
+type = "enum"
+label = "Quality"
+advanced = true
+values = [{ id = "low", label = "Low" }, { id = "medium", label = "Medium" }, { id = "high", label = "High" }]
+default = "medium"
 
 [[actions.inputs]]
 id = "seed"
 type = "seed"
 label = "Seed"
+advanced = true
 
 [[actions]]
-id = "run-workflow"
-label = "Run Comfy Workflow…"
-menu = "Plugins"
+id = "remove-background"
+label = "Remove Background (Bria)"
+menu = "Filter"
 kind = "edit"
-description = "Runs any API-format workflow from the workflows folder on the flattened document. See README.md for how to mark its inputs."
-source = { from = "composite", max_side = 4096 }
-result = { into = "layer", mask_to_regions = false }
+description = "Bria RMBG 2.0 cuts the subject out of the active layer, as a new layer. Choose Comfy Cloud under Settings → Selection to use it for Filter → Remove Background (a layer mask) and Select → Subject."
+source = { from = "layer", max_side = 2048 }
+result = { into = "layer" }
 
-[[actions.inputs]]
-id = "workflow"
-type = "text"
-label = "Workflow file"
-default = "my-workflow.json"
+[[provides]]
+capability = "remove_background"
+action = "remove-background"
 
-[[actions.inputs]]
-id = "prompt"
-type = "multiline"
-label = "Prompt"
-
-[[actions.inputs]]
-id = "seed"
-type = "seed"
-label = "Seed"
+[[provides]]
+capability = "select_subject"
+action = "remove-background"
 
 [[panes]]
-id = "jobs"
-title = "Comfy jobs"
+id = "comfy"
+title = "Comfy Cloud"
 refresh = "manual"
+placement = "settings"

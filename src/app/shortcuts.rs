@@ -1,7 +1,10 @@
 //! Key dispatch. Commands and their bindings live in the registry (`commands.rs`); this runs the
 //! command a key press is bound to, then handles the keys the editor keeps for itself.
 
-use super::{EditorApp, Tool, commands::Chord};
+use super::{
+    EditorApp, Tool,
+    commands::{Chord, ctrl_or_cmd},
+};
 use egui::{Event, InputState, Key, Modifiers};
 use xuan::i18n::tr;
 
@@ -68,6 +71,30 @@ impl EditorApp {
             return;
         }
 
+        // With the AI Region tool, Delete and Backspace remove the selected box.
+        if self.tool == Tool::Region
+            && self.plugins.action.is_none()
+            && let Some(index) = self.session().and_then(|s| s.ai_selected)
+            && ctx.input_mut(|i| {
+                consume_exact(i, Modifiers::NONE, Key::Delete)
+                    || consume_exact(i, Modifiers::NONE, Key::Backspace)
+            })
+        {
+            self.delete_ai_box(index);
+        }
+
+        // With the Pen, Delete and Backspace remove an anchor rather than clear pixels.
+        if self.tool == Tool::Pen
+            && !developing
+            && (self.pen.draft.is_some() || self.pen.selected.is_some())
+            && ctx.input_mut(|i| {
+                consume_exact(i, Modifiers::NONE, Key::Delete)
+                    || consume_exact(i, Modifiers::NONE, Key::Backspace)
+            })
+        {
+            self.pen_delete();
+        }
+
         // Bound keys, in the order they were pressed. A command ends the frame's key handling;
         // tool keys and other quick actions let later keys through.
         let presses: Vec<(Modifiers, Key)> = ctx.input(|i| {
@@ -96,6 +123,12 @@ impl EditorApp {
                 continue;
             };
             ctx.input_mut(|i| consume_exact(i, mods, key));
+            if key == Key::Tab {
+                // egui moves keyboard focus on any Tab press, even with Ctrl held. A bound
+                // Tab chord (Ctrl+Tab) is a command, so keep the focus where it is; it could
+                // otherwise land in a text field and swallow the next shortcut.
+                ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            }
             if !self.command_enabled(&id) {
                 continue;
             }
@@ -113,22 +146,27 @@ impl EditorApp {
             }
             return;
         }
-        if modifiers.ctrl {
+        if ctrl_or_cmd(modifiers) {
             return;
         }
         if pressed(Key::Escape) {
             self.cancel_gesture();
-            self.crop_rect = None;
+            self.cancel_crop();
             self.polygon.clear();
+            if self.tool == Tool::Pen {
+                self.pen_escape();
+            }
         }
         if pressed(Key::Enter) {
-            if let Some((start, end)) = self.crop_rect.take() {
-                self.edit(tr("Crop"), |doc| xuan::operations::crop(doc, start, end));
-                if let Some(s) = self.session_mut() {
-                    s.fit = true;
-                }
+            self.forget_crop_of_other_documents();
+            if self.tool == Tool::Crop && self.crop.perspective && self.crop.quad.is_some() {
+                self.apply_perspective_crop();
+            } else if self.crop.rect.is_some() {
+                self.apply_crop();
             } else if self.polygon.len() >= 3 {
                 self.finish_polygon();
+            } else if self.pen.draft.is_some() {
+                self.pen_finish();
             }
         }
         for (index, key) in [
@@ -148,7 +186,11 @@ impl EditorApp {
         {
             if pressed(key) {
                 let opacity = (index + 1) as f32 / 10.0;
-                if self.tool.is_brush() || self.tool == Tool::Gradient {
+                if self.tool == Tool::Dodge {
+                    // As in Photoshop, the number keys set Dodge / Burn / Sponge's exposure.
+                    self.brush.tone.exposure = opacity;
+                } else if self.tool.is_brush() || matches!(self.tool, Tool::Gradient | Tool::Bucket)
+                {
                     self.brush.opacity = opacity;
                 } else {
                     self.edit(tr("Layer Opacity"), |doc| {
@@ -178,7 +220,7 @@ impl EditorApp {
         if pressed(Key::ArrowDown) {
             dy += step;
         }
-        if dx != 0.0 || dy != 0.0 {
+        if (dx != 0.0 || dy != 0.0) && !(self.tool == Tool::Crop && self.nudge_crop(dx, dy)) {
             let mask_target = self.transforming_mask();
             self.edit(tr("Nudge"), |doc| {
                 if let Some(mut transform) = xuan::operations::transform_box(doc, mask_target) {

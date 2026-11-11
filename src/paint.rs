@@ -7,6 +7,7 @@ use crate::{
     blend::{BlendMode, composite},
     document::{Document, Layer, Mask, Point, validate_size},
     render, selection,
+    vector::{FillRule, VectorPath},
 };
 
 #[cfg(test)]
@@ -21,10 +22,49 @@ mod stroke_tests;
 #[path = "paint/pencil_tests.rs"]
 mod pencil_tests;
 
+#[cfg(test)]
+#[path = "paint/dynamics_tests.rs"]
+mod dynamics_tests;
+
+#[cfg(test)]
+#[path = "paint/symmetry_tests.rs"]
+mod symmetry_tests;
+
+#[cfg(test)]
+#[path = "paint/bucket_tests.rs"]
+mod bucket_tests;
+
+#[cfg(test)]
+#[path = "paint/flow_tests.rs"]
+mod flow_tests;
+
+mod bucket;
+pub use bucket::{BucketOptions, bucket, bucket_coverage};
+
+#[cfg(test)]
+#[path = "paint/outline_tests.rs"]
+mod outline_tests;
+
+pub mod dynamics;
+pub use dynamics::Dynamics;
+pub mod outline;
 mod pencil;
 pub use pencil::tip_offsets;
 mod stroke;
 pub use stroke::Stroke;
+pub mod symmetry;
+pub use symmetry::{Symmetry, SymmetryMode};
+pub mod tone;
+pub use tone::{Tone, ToneRange};
+pub mod liquify;
+
+#[cfg(test)]
+#[path = "paint/liquify_tests.rs"]
+mod liquify_tests;
+
+#[cfg(test)]
+#[path = "paint/tone_tests.rs"]
+mod tone_tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintMode {
@@ -36,6 +76,14 @@ pub enum PaintMode {
     Smudge,
     /// Hard-edged, non-antialiased dabs on whole pixels.
     Pencil,
+    /// Dodge lightens, Burn darkens and Sponge (de)saturates the pixels
+    /// under the brush, by [`Brush::tone`]; see [`tone::apply`]. Not on masks.
+    Dodge,
+    Burn,
+    Sponge,
+    /// Forward warp: the pixels under the brush move with it, by the
+    /// brush's opacity as its strength; see [`liquify`]. Not on masks.
+    Liquify,
 }
 
 #[derive(Clone, Debug)]
@@ -43,11 +91,25 @@ pub struct Brush {
     pub diameter: f32,
     pub hardness: f32,
     pub opacity: f32,
+    /// How much paint one pass lays down, 0 to 1, building up to `opacity`
+    /// where the stroke goes over the same spot. The Brush and Eraser (on
+    /// pixels or a mask) use it through [`Stroke`]; 1 paints the whole
+    /// opacity at once, and other tools ignore it.
+    pub flow: f32,
     pub color: [u8; 4],
     /// Pen tilt in degrees; zero produces the usual circular brush.
     pub tilt: [f32; 2],
     /// Pencil tip: square instead of round. Other tools ignore this.
     pub square: bool,
+    /// Spacing, taper, scatter and jitter. The Brush, Pencil and Eraser use
+    /// them through [`Stroke`]; other tools and plain [`stroke`] calls ignore them.
+    pub dynamics: Dynamics,
+    /// Mirror or radial copies of the stroke, for the same tools as the
+    /// dynamics. Off by default.
+    pub symmetry: Symmetry,
+    /// Range, exposure and Sponge direction for Dodge, Burn and Sponge.
+    /// Other tools ignore it.
+    pub tone: Tone,
 }
 
 impl Default for Brush {
@@ -56,9 +118,13 @@ impl Default for Brush {
             diameter: 40.0,
             hardness: 0.8,
             opacity: 1.0,
+            flow: 1.0,
             color: [0, 0, 0, 255],
             tilt: [0.0; 2],
             square: false,
+            dynamics: Dynamics::default(),
+            symmetry: Symmetry::default(),
+            tone: Tone::default(),
         }
     }
 }
@@ -221,10 +287,33 @@ fn stroke_segment(
         source,
         clone_offset,
     } = options;
+    // Flow builds up dab by dab; swept segments take the strongest coverage.
+    let flow = if stroke::flows(mode) && from == to {
+        brush.flow
+    } else {
+        1.0
+    };
     let selection = document.selection.clone();
     let Some(layer) = document.active_mut() else {
         bail!("Select a layer first");
     };
+    if mask_target && tone::is_tone(mode) {
+        // As upstream: a mask has no tones or colours to change.
+        bail!("Dodge, Burn and Sponge work on layer pixels, not masks");
+    }
+    if mode == PaintMode::Liquify {
+        if mask_target {
+            bail!("Liquify works on layer pixels, not masks");
+        }
+        // At zero strength nothing moves: leave text and shapes live.
+        let dabs = liquify::dabs(from, to, from_brush, brush);
+        if dabs.is_empty() {
+            return Ok(());
+        }
+        ensure_pixels(layer)?;
+        liquify::segment(layer, selection.as_deref(), &dabs);
+        return Ok(());
+    }
     if mask_target {
         prepare_mask(layer)?;
     } else {
@@ -270,7 +359,8 @@ fn stroke_segment(
     let bottom = (local.iter().map(|p| p.y).fold(f32::MIN, f32::max) * height as f32)
         .ceil()
         .min(height as f32) as u32;
-    if right <= left || bottom <= top {
+    // Nothing to change: leave the pixels (and their buffer) alone.
+    if right <= left || bottom <= top || (tone::is_tone(mode) && brush.tone.exposure <= 0.0) {
         return Ok(());
     }
     if let Some(stroke) = &mut stroke {
@@ -307,6 +397,7 @@ fn stroke_segment(
             endpoints: [from, to],
             from_brush,
             brush,
+            flow,
             options: StrokeOptions {
                 mode,
                 mask_target,
@@ -354,15 +445,16 @@ fn stroke_segment(
             if amount <= 0.0 {
                 continue;
             }
-            let original = if let Some(stroke) = &mut stroke {
+            let (amount, original) = if let Some(stroke) = &mut stroke {
                 let sample = stroke.pixel_mut(x, y);
+                let amount = build_up(sample.amount, amount, flow);
                 if amount <= sample.amount {
                     continue;
                 }
                 sample.amount = amount;
-                Some(sample.original)
+                (amount, Some(sample.original))
             } else {
-                None
+                (amount, None)
             };
             if mask_target {
                 let pixels = Arc::make_mut(&mut layer.mask.as_mut().unwrap().pixels);
@@ -383,6 +475,11 @@ fn stroke_segment(
             let old = original.unwrap_or(pixel.0).map(|v| v as f32 / 255.0);
             let mut color = brush.color.map(|v| v as f32 / 255.0);
             match mode {
+                PaintMode::Dodge | PaintMode::Burn | PaintMode::Sponge => {
+                    pixel.0 = tone::apply(old, mode, brush.tone, amount)
+                        .map(|v| (v * 255.0).round() as u8);
+                    continue;
+                }
                 PaintMode::Erase => {
                     pixel[3] = (old[3] * (1.0 - amount) * 255.0).round() as u8;
                     continue;
@@ -446,6 +543,8 @@ fn stroke_segment(
                         continue;
                     }
                 }
+                // Warped above, before the brush's coverage is worked out.
+                PaintMode::Liquify => continue,
                 PaintMode::Paint | PaintMode::Pencil => {}
             }
             color[3] *= amount;
@@ -454,6 +553,18 @@ fn stroke_segment(
         }
     }
     Ok(())
+}
+
+/// A pixel's stroke coverage after a dab covers it with `amount` at `flow`.
+/// The dab moves the coverage `flow` of the way up to `amount`, so where
+/// dabs overlap the paint builds up, but never past the strongest of them
+/// (the opacity). Flow 1 takes the strongest coverage at once.
+pub(crate) fn build_up(previous: f32, amount: f32, flow: f32) -> f32 {
+    if flow >= 1.0 {
+        previous.max(amount)
+    } else {
+        previous + (amount - previous).max(0.0) * flow.max(0.0)
+    }
 }
 
 pub fn fill(document: &mut Document, color: [u8; 4], erase: bool, mask_target: bool) -> Result<()> {
@@ -543,6 +654,45 @@ pub fn gradient(
         opacity,
         mask_target,
     } = options;
+    gradient_stops(
+        document,
+        start,
+        end,
+        &[(0.0, foreground), (1.0, background)],
+        GradientShape {
+            radial,
+            opacity,
+            mask_target,
+        },
+    )
+}
+
+/// How a multi-stop gradient is laid out and where it is painted.
+pub struct GradientShape {
+    pub radial: bool,
+    pub opacity: f32,
+    pub mask_target: bool,
+}
+
+/// A gradient through colour `stops`, each a position from 0 (at `start`) to 1
+/// (at `end`) and a colour, sorted by position. Two stops at 0 and 1 are the
+/// Gradient tool's foreground-to-background fill.
+pub fn gradient_stops(
+    document: &mut Document,
+    start: Point,
+    end: Point,
+    stops: &[(f32, [u8; 4])],
+    shape: GradientShape,
+) -> Result<()> {
+    let GradientShape {
+        radial,
+        opacity,
+        mask_target,
+    } = shape;
+    anyhow::ensure!(
+        stops.len() >= 2,
+        "A gradient needs at least two colour stops"
+    );
     let selection = document.selection.clone();
     let layer = document
         .active_mut()
@@ -558,19 +708,36 @@ pub fn gradient(
         ensure_pixels(layer)?;
         (layer.transform, layer.pixels.as_ref().unwrap().dimensions())
     };
-    if crate::gpu::paint(
-        layer,
-        selection.as_deref(),
-        mask_target,
-        &crate::gpu::Paint {
-            mode: if radial { 3 } else { 2 },
-            opacity,
-            colors: [foreground, background],
-            points: [start, end],
-        },
-    ) {
+    // The GPU shader blends two colours; more stops take the CPU path.
+    if let [(a, foreground), (b, background)] = *stops
+        && a == 0.0
+        && b == 1.0
+        && crate::gpu::paint(
+            layer,
+            selection.as_deref(),
+            mask_target,
+            &crate::gpu::Paint {
+                mode: if radial { 3 } else { 2 },
+                opacity,
+                colors: [foreground, background],
+                points: [start, end],
+            },
+        )
+    {
         return Ok(());
     }
+    let stop_color = |t: f32| -> [f32; 4] {
+        let next = stops.partition_point(|(position, _)| *position <= t);
+        let (low, high) = match (next.checked_sub(1), stops.get(next)) {
+            (None, _) => return stops[0].1.map(|v| v as f32 / 255.0),
+            (Some(last), None) => return stops[last].1.map(|v| v as f32 / 255.0),
+            (Some(low), Some(high)) => (&stops[low], high),
+        };
+        let amount = (t - low.0) / (high.0 - low.0);
+        std::array::from_fn(|i| {
+            (low.1[i] as f32 * (1.0 - amount) + high.1[i] as f32 * amount) / 255.0
+        })
+    };
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let length_sq = (dx * dx + dy * dy).max(0.01);
@@ -585,9 +752,7 @@ pub fn gradient(
             ((point.x - start.x) * dx + (point.y - start.y) * dy) / length_sq
         };
         let t = t.clamp(0.0, 1.0);
-        let mut color: [f32; 4] = std::array::from_fn(|i| {
-            (foreground[i] as f32 * (1.0 - t) + background[i] as f32 * t) / 255.0
-        });
+        let mut color = stop_color(t);
         color[3] *= opacity * selection::coverage(selection.as_deref(), point);
         color
     };
@@ -617,6 +782,8 @@ pub enum ShapeKind {
     Rectangle,
     Ellipse,
     RoundedRectangle,
+    /// A Bézier outline, kept in the layer's [`crate::document::ShapePath`] (format 10).
+    Path,
 }
 
 pub fn shape(
@@ -650,6 +817,8 @@ pub fn shape(
                             let cy = py.clamp(radius, height as f32 - radius);
                             (px - cx).hypot(py - cy) <= radius
                         }
+                        // Drawn by `path_shape`; without an outline, nothing is inside.
+                        ShapeKind::Path => false,
                     };
                     if inside {
                         coverage += 0.25;
@@ -669,6 +838,7 @@ pub fn shape(
             ShapeKind::Rectangle => "Rectangle",
             ShapeKind::Ellipse => "Ellipse",
             ShapeKind::RoundedRectangle => "Rounded rectangle",
+            ShapeKind::Path => "Path",
         },
         image,
     );
@@ -676,10 +846,100 @@ pub fn shape(
         kind,
         color,
         corner_radius,
+        path: None,
     });
     layer.transform.x = start.x.min(end.x);
     layer.transform.y = start.y.min(end.y);
     Ok(layer)
+}
+
+/// The whole-pixel box a path shape layer covers: its curves' bounds rounded outwards.
+fn path_box(path: &VectorPath) -> Result<kurbo::Rect> {
+    let bounds = path
+        .bounds()
+        .filter(|b| b.width() > 0.0 && b.height() > 0.0)
+        .ok_or_else(|| anyhow::anyhow!("The path encloses no area"))?;
+    Ok(kurbo::Rect::new(
+        bounds.x0.floor(),
+        bounds.y0.floor(),
+        bounds.x1.ceil(),
+        bounds.y1.ceil(),
+    ))
+}
+
+/// The pixel size of the layer [`path_shape`] makes for `path`.
+pub fn path_shape_size(path: &VectorPath) -> Result<(u32, u32)> {
+    let area = path_box(path)?;
+    ensure!(
+        area.width() <= f64::from(crate::document::MAX_SIDE)
+            && area.height() <= f64::from(crate::document::MAX_SIDE),
+        "Dimensions must be between 1 and {} pixels",
+        crate::limits::grouped(crate::document::MAX_SIDE.into())
+    );
+    let size = (area.width() as u32, area.height() as u32);
+    validate_size(size.0, size.1)?;
+    Ok(size)
+}
+
+/// An editable, antialiased shape layer filled with `color` inside `path`, given in document
+/// coordinates. The layer covers the whole pixels the path touches.
+pub fn path_shape(path: &VectorPath, fill_rule: FillRule, color: [u8; 4]) -> Result<Layer> {
+    let (width, height) = path_shape_size(path)?;
+    let area = path_box(path)?;
+    let style = crate::document::ShapeStyle {
+        kind: ShapeKind::Path,
+        color,
+        corner_radius: 0.0,
+        path: Some(crate::document::ShapePath {
+            d: path.transformed(kurbo::Affine::translate((-area.x0, -area.y0))),
+            width: width as f32,
+            height: height as f32,
+            fill_rule,
+        }),
+    };
+    let mut layer = Layer::image("Path", path_pixels(&style, width, height));
+    layer.shape = Some(style);
+    layer.transform.x = area.x0 as f32;
+    layer.transform.y = area.y0 as f32;
+    Ok(layer)
+}
+
+/// A path shape's pixels at `width` × `height`, its box stretched over them.
+fn path_pixels(style: &crate::document::ShapeStyle, width: u32, height: u32) -> RgbaImage {
+    let Some(shape) = &style.path else {
+        return RgbaImage::new(width, height);
+    };
+    let to_pixels = kurbo::Affine::scale_non_uniform(
+        f64::from(width) / f64::from(shape.width),
+        f64::from(height) / f64::from(shape.height),
+    );
+    let coverage = shape.d.coverage(shape.fill_rule, to_pixels, width, height);
+    let [r, g, b, a] = style.color;
+    let mut image = RgbaImage::new(width, height);
+    for (pixel, value) in image.pixels_mut().zip(coverage) {
+        *pixel = Rgba([r, g, b, (f32::from(a) * value).round() as u8]);
+    }
+    image
+}
+
+/// Fill the inside of `path` (document coordinates) on the active layer with `color`, within
+/// the selection when there is one, with antialiased edges.
+pub fn fill_path(
+    document: &mut Document,
+    path: &VectorPath,
+    fill_rule: FillRule,
+    color: [u8; 4],
+) -> Result<()> {
+    let mut mask = path.mask(fill_rule, document.width, document.height);
+    if let Some(selection) = &document.selection {
+        for (value, limit) in mask.as_mut().iter_mut().zip(selection.as_raw()) {
+            *value = (u16::from(*value) * u16::from(*limit) / 255) as u8;
+        }
+    }
+    let selection = document.selection.replace(Arc::new(mask));
+    let result = fill(document, color, false, false);
+    document.selection = selection;
+    result
 }
 
 pub fn refresh_shapes(document: &mut Document) -> Result<()> {
@@ -696,6 +956,10 @@ pub fn refresh_shapes(document: &mut Document) -> Result<()> {
             continue;
         }
         validate_size(width, height)?;
+        if style.path.is_some() {
+            layer.pixels = Some(Arc::new(path_pixels(style, width, height)));
+            continue;
+        }
         let redrawn = shape(
             Point::default(),
             Point::new(width as f32, height as f32),

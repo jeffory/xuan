@@ -1,0 +1,145 @@
+{
+ "template": "api_openai_gpt_image_25_flare_t2i",
+ "template_sha256": "fa033bdf15c92a9d6f1d3aeab4cc3cf73b81d62956ca5d87868fd46b449a9752",
+ "template_date": "2026-09-09",
+ "converted_at": "2026-10-07T03:37:47+00:00",
+ "output": "269",
+ "api": {
+  "269": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "271",
+     0
+    ],
+    "filename_prefix": "GPT_image_2.5_flare_t2i"
+   },
+   "_meta": {
+    "title": "Save Image"
+   }
+  },
+  "271": {
+   "class_type": "OpenAIGPTImageNodeV2",
+   "inputs": {
+    "prompt": "1:1 square poster, an extreme close-up, high-contrast shot of a racing car front nose, aerodynamic wing and tire rim, cutting through darkness with bright red motion blur and glowing orange light. The words \u201cGPT IMAGE 2.5\u201d are projected directly onto the car body in brilliant neon orange, overlapping the front wing and tire rim. Intense red and black palette, cinematic low key, sharp reflections, dramatic low angle, shallow depth of field, high-speed motorsport aesthetic. No sidebar, no extra UI panels, no technical symbols, no barcode, no additional text except \u201cGPT IMAGE 2.5\u201d.",
+    "model": "gpt-image-2.5-flare",
+    "model.size": "auto",
+    "model.custom_width": 1024,
+    "model.custom_height": 1024,
+    "model.background": "auto",
+    "model.quality": "low",
+    "n": 1,
+    "seed": 122545540
+   },
+   "_meta": {
+    "title": "OpenAI GPT Image 2.5"
+   }
+  }
+ },
+ "specs": {
+  "OpenAIGPTImageNodeV2.prompt": [
+   "STRING",
+   {
+    "tooltip": "Text prompt for GPT Image",
+    "default": "",
+    "multiline": true
+   }
+  ],
+  "OpenAIGPTImageNodeV2.seed": [
+   "INT",
+   {
+    "tooltip": "not implemented yet in backend",
+    "default": 0,
+    "min": 0,
+    "max": 2147483647,
+    "step": 1,
+    "control_after_generate": true,
+    "display": "number"
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.images.image_1": [
+   "IMAGE",
+   {}
+  ],
+  "OpenAIGPTImageNodeV2.model.background": [
+   "COMBO",
+   {
+    "tooltip": "Return image with or without background.",
+    "default": "auto",
+    "multiselect": false,
+    "options": [
+     "auto",
+     "opaque",
+     "transparent"
+    ]
+   }
+  ],
+  "OpenAIGPTImageNodeV2.n": [
+   "INT",
+   {
+    "tooltip": "How many images to generate",
+    "default": 1,
+    "min": 1,
+    "max": 8,
+    "step": 1,
+    "display": "number"
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.quality": [
+   "COMBO",
+   {
+    "tooltip": "Image quality, affects cost and generation time.",
+    "default": "low",
+    "multiselect": false,
+    "options": [
+     "low",
+     "medium",
+     "high",
+     "xhigh",
+     "max"
+    ]
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.size": [
+   "COMBO",
+   {
+    "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+    "default": "auto",
+    "multiselect": false,
+    "options": [
+     "auto",
+     "1024x1024",
+     "1024x1536",
+     "1536x1024",
+     "2048x2048",
+     "2048x1152",
+     "1152x2048",
+     "3840x2160",
+     "2160x3840",
+     "Custom"
+    ]
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.custom_width": [
+   "INT",
+   {
+    "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+    "default": 1024,
+    "min": 480,
+    "max": 3840,
+    "step": 16
+   }
+  ],
+  "OpenAIGPTImageNodeV2.model.custom_height": [
+   "INT",
+   {
+    "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+    "default": 1024,
+    "min": 480,
+    "max": 3840,
+    "step": 16
+   }
+  ]
+ },
+ "recipe_key": "6d7749db9519b3a8"
+}

@@ -1,16 +1,22 @@
 //! The right sidebar: a stack of collapsible panes that the user can reorder
 //! by dragging their headers and resize with the splitters between them. The
 //! arrangement lives in the user configuration ([`xuan::panes`]).
-use egui::{Align2, Color32, CursorIcon, FontId, Rect, Sense, Stroke, pos2, vec2};
+use super::theme::PaletteExt as _;
+use egui::{Align2, CursorIcon, FontId, Rect, Sense, Stroke, pos2, vec2};
 use xuan::{
     i18n::tr,
     panes::{self, MIN_HEIGHT},
 };
 
-use super::{EditorApp, theme};
+use super::EditorApp;
 
 const HEADER_HEIGHT: f32 = 26.0;
 const SPLITTER_HEIGHT: f32 = 5.0;
+/// Least height the fill pane keeps, so the Layers list always has rows to show
+/// below its controls and above its footer.
+const FILL_MIN_HEIGHT: f32 = 240.0;
+/// Panes smaller than this keep their splitter and header usable.
+const MIN_DRAWN_HEIGHT: f32 = 24.0;
 
 /// A pane header being dragged to a new position.
 pub(super) struct PaneDrag {
@@ -25,7 +31,36 @@ struct Entry {
     detail: Option<String>,
     collapsed: bool,
     height: f32,
+    /// The user dragged the splitter, so `height` is kept even if the content is shorter.
+    sized: bool,
     fill: bool,
+}
+
+/// Where the height a pane's content drew last frame is remembered.
+fn drawn_id(id: &str) -> egui::Id {
+    egui::Id::new(("pane_drawn_height", id))
+}
+
+impl Entry {
+    /// Whether the body height follows what the content draws. Built-in panes
+    /// size their content to the room they get, so measuring them would
+    /// shrink them every frame.
+    fn measured(&self) -> bool {
+        !self.fill && self.id.starts_with("plugin:")
+    }
+
+    /// The body height to reserve: the pane's height, or for a plugin pane
+    /// less if its content drew shorter last frame and the user has not sized
+    /// it.
+    fn reserved(&self, ctx: &egui::Context) -> f32 {
+        if self.sized || !self.measured() {
+            return self.height;
+        }
+        let drawn = ctx.data(|data| data.get_temp::<f32>(drawn_id(&self.id)));
+        drawn.map_or(self.height, |drawn| {
+            drawn.ceil().clamp(MIN_DRAWN_HEIGHT, self.height)
+        })
+    }
 }
 
 impl EditorApp {
@@ -35,11 +70,12 @@ impl EditorApp {
         match id {
             panes::LAYERS => Some(tr("Layers").into()),
             panes::NAVIGATOR => Some(tr("Navigator").into()),
+            panes::CHANNELS => Some(tr("Channels").into()),
             _ => self.plugin_pane_title(id),
         }
     }
 
-    fn pane_detail(&self, id: &str) -> Option<String> {
+    pub(super) fn pane_detail(&self, id: &str) -> Option<String> {
         match id {
             panes::LAYERS => self
                 .session()
@@ -47,6 +83,12 @@ impl EditorApp {
             panes::NAVIGATOR => self
                 .session()
                 .map(|session| super::navigator::format_zoom_percent(session.zoom)),
+            // The targeted channels, when not all of them.
+            panes::CHANNELS => self
+                .session()
+                .map(|session| session.channel_targets)
+                .filter(|targets| *targets != xuan::channels::Channels::ALL)
+                .map(|targets| targets.letters()),
             _ => None,
         }
     }
@@ -73,7 +115,7 @@ impl EditorApp {
     }
 
     pub(super) fn sidebar(&mut self, ctx: &egui::Context) {
-        let enabled = self.dialog.is_none() && self.job.is_none();
+        let enabled = self.dialog.is_none() && self.job.is_none() && self.color_range.is_none();
         let known = |id: &str| self.pane_title(id).is_some();
         let fill = self.config.panes.fill_pane(&known).map(str::to_owned);
         let entries: Vec<Entry> = self
@@ -86,6 +128,7 @@ impl EditorApp {
                 detail: self.pane_detail(&pane.id),
                 collapsed: pane.collapsed,
                 height: pane.body_height(),
+                sized: pane.height > 0.0,
                 fill: fill.as_deref() == Some(pane.id.as_str()),
             })
             .collect();
@@ -97,7 +140,7 @@ impl EditorApp {
             .default_width(252.0)
             .width_range(206.0..=352.0)
             .resizable(true)
-            .frame(egui::Frame::new().fill(theme::PANEL))
+            .frame(egui::Frame::new().fill(ctx.palette().panel))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let panel = ui.max_rect();
@@ -112,7 +155,8 @@ impl EditorApp {
                             }
                     })
                     .sum();
-                let fill_height = (ui.available_height() - fixed).max(MIN_HEIGHT);
+                let fill_height =
+                    (ui.available_height() - fixed).max(MIN_HEIGHT.max(FILL_MIN_HEIGHT));
                 let mut rects = Vec::with_capacity(entries.len());
                 for entry in &entries {
                     let top = ui.cursor().top();
@@ -130,14 +174,27 @@ impl EditorApp {
                         let height = if entry.fill {
                             fill_height
                         } else {
-                            entry.height
+                            entry.reserved(ctx)
                         };
                         let (_, rect) = ui.allocate_space(vec2(ui.available_width(), height));
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        let body = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
                             ui.spacing_mut().item_spacing.y = 0.0;
                             self.pane_body(ui, &entry.id, enabled);
                         });
+                        // A scope leaves the cursor under what it drew; keep the full height.
+                        ui.advance_cursor_after_rect(rect);
+                        if entry.measured() {
+                            // Remember how much the content used, so a short pane gives
+                            // the rest of its height to the fill pane next frame.
+                            let drawn = body.response.rect.height();
+                            let key = drawn_id(&entry.id);
+                            let before = ctx.data(|data| data.get_temp::<f32>(key));
+                            ctx.data_mut(|data| data.insert_temp(key, drawn));
+                            if before.is_none_or(|before| (before - drawn).abs() > 0.5) {
+                                ctx.request_repaint();
+                            }
+                        }
                         if !entry.fill {
                             let splitter = ui.allocate_response(
                                 vec2(ui.available_width(), SPLITTER_HEIGHT),
@@ -154,17 +211,15 @@ impl EditorApp {
                                 Stroke::new(
                                     1.0_f32,
                                     if active {
-                                        theme::ACCENT
+                                        ui.palette().accent
                                     } else {
-                                        theme::DIVIDER
+                                        ui.palette().divider
                                     },
                                 ),
                             );
                             if splitter.dragged() {
-                                resized = Some((
-                                    entry.id.clone(),
-                                    entry.height + splitter.drag_delta().y,
-                                ));
+                                resized =
+                                    Some((entry.id.clone(), height + splitter.drag_delta().y));
                             }
                             resize_done |= splitter.drag_stopped();
                         }
@@ -188,7 +243,7 @@ impl EditorApp {
                         ui.painter().hline(
                             panel.x_range(),
                             y.clamp(panel.top() + 1.0, panel.bottom() - 1.0),
-                            Stroke::new(2.0_f32, theme::ACCENT),
+                            Stroke::new(2.0_f32, ui.palette().accent),
                         );
                         drag.insert = Some(slot);
                     }
@@ -233,7 +288,7 @@ impl EditorApp {
             .as_ref()
             .is_some_and(|drag| drag.id == entry.id);
         if response.hovered() || dragging {
-            painter.rect_filled(rect, 0.0, Color32::from_gray(44));
+            painter.rect_filled(rect, 0.0, ui.palette().pane_hover);
         }
         let center = rect.left_center() + vec2(13.0, 0.0);
         let offsets = if entry.collapsed {
@@ -243,9 +298,13 @@ impl EditorApp {
         };
         painter.add(egui::Shape::line(
             offsets.into_iter().map(|offset| center + offset).collect(),
-            Stroke::new(1.5_f32, theme::MUTED),
+            Stroke::new(1.5_f32, ui.palette().muted),
         ));
-        let text = if enabled { theme::TEXT } else { theme::MUTED };
+        let text = if enabled {
+            ui.palette().text
+        } else {
+            ui.palette().muted
+        };
         painter.text(
             pos2(rect.left() + 26.0, rect.center().y),
             Align2::LEFT_CENTER,
@@ -259,13 +318,13 @@ impl EditorApp {
                 Align2::RIGHT_CENTER,
                 detail,
                 FontId::proportional(11.0),
-                theme::MUTED,
+                ui.palette().muted,
             );
         }
         painter.hline(
             rect.x_range(),
             rect.bottom() - 0.5,
-            Stroke::new(1.0_f32, theme::DIVIDER),
+            Stroke::new(1.0_f32, ui.palette().divider),
         );
         response.widget_info(|| {
             egui::WidgetInfo::selected(
@@ -286,6 +345,7 @@ impl EditorApp {
         match id {
             panes::LAYERS => self.layers_pane(ui, enabled),
             panes::NAVIGATOR => self.navigator_pane(ui, enabled),
+            panes::CHANNELS => self.channels_pane(ui, enabled),
             _ => self.plugin_pane(ui, id, enabled),
         }
     }

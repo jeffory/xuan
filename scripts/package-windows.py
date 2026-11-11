@@ -52,10 +52,45 @@ def main():
         check=True,
     )
 
+    # The MCP server plugin ships in the package. It is its own Cargo
+    # workspace, so it gets its own target directory.
+    plugin_source = ROOT / "plugins/mcp-server"
+    plugin_target_directory = plugin_source / "target"
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "--target",
+            TARGET,
+            "--target-dir",
+            str(plugin_target_directory),
+        ],
+        cwd=plugin_source,
+        env=env,
+        check=True,
+    )
+
     with tempfile.TemporaryDirectory(prefix=".windows-", dir=destination) as directory:
         stage = Path(directory) / name
         stage.mkdir()
         shutil.copy2(target_directory / TARGET / "release/xuan.exe", stage / "xuan.exe")
+        # Bundled plugins sit in `plugins` next to xuan.exe, where Xuan looks
+        # for them. The manifest's command, target/release/xuan-mcp-server,
+        # starts the .exe: Windows adds the extension.
+        plugin = stage / "plugins/mcp-server"
+        (plugin / "target/release").mkdir(parents=True)
+        shutil.copy2(plugin_source / "plugin.toml", plugin / "plugin.toml")
+        shutil.copy2(
+            plugin_target_directory / TARGET / "release/xuan-mcp-server.exe",
+            plugin / "target/release/xuan-mcp-server.exe",
+        )
+        # The Python plugin SDK sits in sdk\python next to xuan.exe, beside
+        # the bundled plugins; Xuan puts it on every plugin's PYTHONPATH.
+        sdk = stage / "sdk/python"
+        sdk.mkdir(parents=True)
+        shutil.copy2(ROOT / "sdk/python/xuan_plugin.py", sdk / "xuan_plugin.py")
         licenses = stage / "share/licenses/xuan"
         licenses.mkdir(parents=True)
         for filename in (
@@ -63,6 +98,9 @@ def main():
             "licenses/rawler-LGPL-2.1.txt",
             "licenses/heic-rs-MIT.txt",
             "licenses/seccompiler-BSD-3-Clause.txt",
+            "licenses/kurbo-MIT.txt",
+            "licenses/libwebp-BSD-3-Clause.txt",
+            "licenses/Hack-LICENSE.txt",
             "licenses/tabler-icons-MIT.txt",
             "assets/fonts/Inter-LICENSE.txt",
             "assets/fonts/DroidSansFallback-LICENSE.txt",

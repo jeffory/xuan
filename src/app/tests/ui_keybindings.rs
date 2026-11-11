@@ -155,7 +155,8 @@ fn help_lists_the_bindings_in_effect_and_opens_the_settings_page() {
     ui.key(Key::F1);
     assert!(ui.app().dialog == Some(Dialog::Shortcuts));
     assert!(ui.has("Ctrl+Alt+Shift+M"));
-    assert!(ui.has("Ctrl+Shift+Z / Ctrl+Y"));
+    assert!(ui.has("Ctrl+Shift+Z"));
+    assert!(ui.has("Ctrl+Y"));
     ui.click("Customize…");
     assert!(ui.app().dialog == Some(Dialog::Settings));
     assert!(ui.has(&format!("{MERGE}: Ctrl+Alt+Shift+M")));

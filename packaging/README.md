@@ -10,6 +10,8 @@ Native Linux releases require glibc 2.35 or newer. The AppImage includes glibc a
 
 For an AppImage, make the downloaded file executable with `chmod +x xuan-*.AppImage`, then run `./xuan-*.AppImage --demo`. If FUSE is unavailable, add `--appimage-extract-and-run` before `--demo`.
 
+Every package includes the MCP Server plugin, which lets LLM clients such as Claude Code see and edit your open documents from this computer. It lives in the bundled plugins folder next to Xuan: `/usr/lib/xuan/plugins/` for the deb and rpm packages, `lib/xuan/plugins/` in the portable Linux archive (`scripts/install.sh` installs it to `~/.local/lib/xuan/plugins/`), `usr/lib/xuan/plugins/` inside the AppImage, and `plugins\` next to `xuan.exe` on Windows. It does not run until you allow it: open **Window → MCP Server** and press **Review Permissions…**. To use a build of your own instead, install it with **Plugins → Install from Folder or Zip…**; a plugin with the same id in your plugins folder replaces the bundled one, and asks for permission again.
+
 - [Installation and editing](../docs/USAGE.md)
 - [Keyboard shortcuts](../docs/SHORTCUTS.md)
 - [RAW workflow](../docs/RAW.md)

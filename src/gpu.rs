@@ -13,6 +13,7 @@ mod processor;
 mod raster;
 mod raw;
 mod raw_preview;
+mod tiles;
 pub(crate) use paint::{
     FilterSelection, Paint, Stroke, adjust_mask, filter_selection, match_colors, paint,
     project_selection, shape, stroke,
@@ -28,8 +29,10 @@ mod processing_tests;
 pub use motion_blur::GpuMotionBlur;
 pub(crate) use processor::cancelled;
 pub use processor::{Processor, cancellation, current, scope, spawn};
+#[cfg(test)]
+pub(crate) use raster::filter;
 pub(crate) use raster::resize_rgb_cancellable;
-pub(crate) use raster::{adjustment, filter, resize_rgba};
+pub(crate) use raster::{adjustment, filter_with, resize_rgba};
 pub use raster::{blur_gray, resize_gray, resize_rgb};
 
 use std::{
@@ -44,6 +47,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     document::{Adjustment, Document, Layer, Point},
+    lut::Lut,
     render,
 };
 
@@ -58,11 +62,31 @@ pub fn can_preview_motion_blur(document: &Document) -> bool {
                 && layer.adjustment.is_none()
                 && layer.raw.is_none()
                 && !document.layers.iter().any(|other| {
-                    other.clip_to == Some(layer.id)
+                    clips_through(document, other, layer.id)
                         || other.parent == Some(layer.id)
                         || other.filter.is_some()
                 })
         })
+}
+
+/// Whether `layer`'s clipping shape depends on `target`: `target` is a base in its clipping
+/// chain, or inside a folder that is.
+fn clips_through(document: &Document, layer: &Layer, target: uuid::Uuid) -> bool {
+    let mut base = layer.clip_to;
+    for _ in 0..257 {
+        let Some(id) = base else {
+            return false;
+        };
+        if id == target || document.descendants(id).contains(&target) {
+            return true;
+        }
+        base = document
+            .layers
+            .iter()
+            .find(|l| l.id == id)
+            .and_then(|l| l.clip_to);
+    }
+    false
 }
 
 #[repr(C)]
@@ -76,6 +100,8 @@ struct Parameters {
     first: [f32; 4],
     second: [f32; 4],
     points: [[f32; 4]; 128],
+    /// Where the output's first pixel is on the canvas, for noise; only tiles move it.
+    origin: [f32; 4],
 }
 
 struct Source {
@@ -84,12 +110,21 @@ struct Source {
     texture: wgpu::Texture,
 }
 
+/// A Color Lookup table uploaded for the compositor, kept while a layer still uses it.
+struct LutBuffer {
+    table: Weak<Lut>,
+    buffer: wgpu::Buffer,
+}
+
 pub struct GpuCompositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     mipmap_pipeline: wgpu::ComputePipeline,
     sources: HashMap<(usize, [u32; 2]), Source>,
+    luts: HashMap<usize, LutBuffer>,
+    /// Bound for every layer that is not a Color Lookup.
+    blank_lut: wgpu::Buffer,
     size: [u32; 2],
     buffers: [wgpu::Texture; 2],
     group_buffers: Vec<[wgpu::Texture; 2]>,
@@ -136,12 +171,19 @@ impl GpuCompositor {
         let display = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
         let blank = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
         let motion_blur = GpuMotionBlur::new(device.clone(), queue.clone());
+        let blank_lut = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("xuan no colour lookup"),
+            contents: &[0; 16],
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         Self {
             device,
             queue,
             pipeline,
             mipmap_pipeline,
             sources: HashMap::new(),
+            luts: HashMap::new(),
+            blank_lut,
             size: [1, 1],
             buffers,
             group_buffers: Vec::new(),
@@ -185,15 +227,18 @@ impl GpuCompositor {
         size: [u32; 2],
         motion_blur: Option<[f32; 2]>,
     ) {
-        self.render_internal(document, size, motion_blur, false);
+        self.render_internal(document, size, motion_blur, false, [0, 0]);
     }
 
+    /// `origin` is where `document` lies on a larger canvas, when it is one tile's window
+    /// (`tiles::window_document`): noise and Dissolve follow the canvas, not the window.
     fn render_internal(
         &mut self,
         document: &Document,
         size: [u32; 2],
         motion_blur: Option<[f32; 2]>,
         straight_output: bool,
+        origin: [u32; 2],
     ) {
         let prepared = render::prepare_attachments(document);
         let document = prepared.as_ref();
@@ -212,6 +257,7 @@ impl GpuCompositor {
             );
         }
         let mut retained = HashSet::new();
+        let mut retained_luts = HashSet::new();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -228,7 +274,15 @@ impl GpuCompositor {
         params.flags[1] = 102;
         // Clear through storage writes too: older Mesa drivers can retain stale
         // pixels when a render-pass clear follows compute writes to this texture.
-        self.dispatch(&mut encoder, &buffers, 1, &self.blank, &self.blank, &params);
+        self.dispatch(
+            &mut encoder,
+            &buffers,
+            1,
+            &self.blank,
+            &self.blank,
+            &self.blank_lut,
+            &params,
+        );
         let mut current = 0;
         let mut groups = Vec::new();
         let mut group_depth = 0;
@@ -309,6 +363,14 @@ impl GpuCompositor {
                 });
             }
             let mut params = parameters(document, layer, size);
+            params.origin = [origin[0] as f32, origin[1] as f32, 0.0, 0.0];
+            let lut = match &layer.adjustment {
+                Some(Adjustment::ColorLookup { table, .. }) => {
+                    retained_luts.insert(Arc::as_ptr(table) as usize);
+                    Some(self.lut(table).clone())
+                }
+                _ => None,
+            };
             if layer.standalone_mask {
                 params.flags[1] = 12;
                 params.flags[3] = u32::from(!groups.is_empty());
@@ -378,10 +440,18 @@ impl GpuCompositor {
             let filtered = layer.filter.as_ref().map(|filter| {
                 params.flags[1] = 13;
                 let filter = filter.scaled(size[0] as f32 / document.width as f32);
-                self.filter_layers
-                    .get_or_insert_with(|| filter_layers::FilterLayers::new(&self.device, size))
-                    .render(&self.device, &mut encoder, &buffers[current], &filter)
-                    .clone()
+                let layers = self
+                    .filter_layers
+                    .get_or_insert_with(|| filter_layers::FilterLayers::new(&self.device, size));
+                if filter_layers::FilterLayers::runs_on_gpu(&filter) {
+                    return layers
+                        .render(&self.device, &mut encoder, &buffers[current], &filter)
+                        .clone();
+                }
+                let backdrop =
+                    layers.read(&self.device, &self.queue, &mut encoder, &buffers[current]);
+                let result = crate::effects::filtered_backdrop(&backdrop, &filter);
+                layers.upload(&self.queue, &result).clone()
             });
             let source = filtered.as_ref().unwrap_or_else(|| {
                 layer
@@ -414,6 +484,12 @@ impl GpuCompositor {
                 params.appearance[1] = (distance * scale).ceil().clamp(1.0, 256.0);
                 params.appearance[2] = distance * cos / pixels.width() as f32;
                 params.appearance[3] = distance * sin / pixels.height() as f32;
+                // Raster layers leave `first` unused; it carries the repeated sides.
+                params.first = crate::effects::canvas_edges(
+                    layer.transform,
+                    [document.width, document.height],
+                )
+                .map(|repeat| if repeat { 1.0 } else { 0.0 });
             }
             self.dispatch(
                 &mut encoder,
@@ -421,6 +497,7 @@ impl GpuCompositor {
                 current,
                 source,
                 coverage.as_ref().unwrap_or(&self.blank),
+                lut.as_ref().unwrap_or(&self.blank_lut),
                 &params,
             );
             current = 1 - current;
@@ -432,6 +509,7 @@ impl GpuCompositor {
             current,
             &self.blank,
             &self.blank,
+            &self.blank_lut,
             &params,
         );
         if !straight_output {
@@ -441,6 +519,42 @@ impl GpuCompositor {
         self.group_buffers.truncate(group_depth);
         self.sources
             .retain(|key, source| retained.contains(key) && source.pixels.strong_count() > 0);
+        self.luts
+            .retain(|key, lut| retained_luts.contains(key) && lut.table.strong_count() > 0);
+    }
+
+    /// The storage buffer holding `table`, uploaded the first time a frame needs it: one
+    /// `vec4` per entry, in the table's order.
+    fn lut(&mut self, table: &Arc<Lut>) -> &wgpu::Buffer {
+        let key = Arc::as_ptr(table) as usize;
+        if self
+            .luts
+            .get(&key)
+            .is_some_and(|lut| lut.table.strong_count() == 0)
+        {
+            self.luts.remove(&key);
+        }
+        &self
+            .luts
+            .entry(key)
+            .or_insert_with(|| {
+                let entries: Vec<[f32; 4]> = table
+                    .table
+                    .iter()
+                    .map(|&[r, g, b]| [r, g, b, 0.0])
+                    .collect();
+                LutBuffer {
+                    table: Arc::downgrade(table),
+                    buffer: self
+                        .device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("xuan colour lookup table"),
+                            contents: bytemuck::cast_slice(&entries),
+                            usage: wgpu::BufferUsages::STORAGE,
+                        }),
+                }
+            })
+            .buffer
     }
 
     fn generate_mipmaps(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -480,6 +594,8 @@ impl GpuCompositor {
         }
     }
 
+    // One argument per binding of `composite.wgsl`.
+    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -487,6 +603,7 @@ impl GpuCompositor {
         current: usize,
         source: &wgpu::Texture,
         coverage: &wgpu::Texture,
+        lut: &wgpu::Buffer,
         params: &Parameters,
     ) {
         let uniform = self
@@ -536,6 +653,10 @@ impl GpuCompositor {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(&views[4]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: lut.as_entire_binding(),
                 },
             ],
         });
@@ -594,6 +715,8 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
     ];
     p.flags[0] = layer.blend.code();
     p.appearance[0] = layer.opacity;
+    // Pixel layers leave `second` unused; adjustments below take it over.
+    p.second[0] = layer.fill;
     if let Some(inverse) = t
         .warp
         .and_then(crate::geometry::Homography::from_quad)
@@ -743,6 +866,23 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
                 p.second = [midtones[0], midtones[1], midtones[2], 0.0];
                 p.points[0] = [highlights[0], highlights[1], highlights[2], 0.0];
             }
+            // The table itself is bound as a storage buffer; see `GpuCompositor::lut`.
+            Adjustment::ColorLookup {
+                interpolation,
+                table,
+                ..
+            } => {
+                p.flags[1] = 16;
+                let [r, g, b] = table.domain_min;
+                p.first = [r, g, b, table.size as f32];
+                let [r, g, b] = table.domain_max;
+                let mode = match (table.dimension, interpolation) {
+                    (crate::lut::Dimension::One, _) => 0.0,
+                    (_, crate::lut::Interpolation::Trilinear) => 1.0,
+                    (_, crate::lut::Interpolation::Tetrahedral) => 2.0,
+                };
+                p.second = [r, g, b, mode];
+            }
         }
     }
     p
@@ -757,28 +897,97 @@ pub(crate) fn compose(document: &Document, width: u32, height: u32) -> Option<Rg
 
 impl Processor {
     fn compose(&self, document: &Document, width: u32, height: u32) -> anyhow::Result<RgbaImage> {
-        let limits = self.device.limits();
+        let tiling = tiles::Tiling::for_limits(&self.device.limits());
+        self.compose_within(document, width, height, tiling)
+    }
+
+    /// `compose` within `tiling`'s limits: in one pass when the canvas and every layer fit,
+    /// otherwise in tiles (at the document's own size only).
+    fn compose_within(
+        &self,
+        document: &Document,
+        width: u32,
+        height: u32,
+        tiling: tiles::Tiling,
+    ) -> anyhow::Result<RgbaImage> {
+        anyhow::ensure!(width > 0 && height > 0, "Composition is empty");
+        let layers_fit = document
+            .layers
+            .iter()
+            .filter_map(|l| l.pixels.as_ref())
+            .all(|p| p.width().max(p.height()) <= tiling.texture);
+        if tiling.fits([width, height]) && layers_fit {
+            return self.compose_whole(document, width, height);
+        }
         anyhow::ensure!(
-            width > 0 && height > 0 && width.max(height) <= limits.max_texture_dimension_2d,
+            [width, height] == [document.width, document.height],
             "Composition exceeds GPU texture limits"
         );
-        anyhow::ensure!(
-            document
-                .layers
-                .iter()
-                .filter_map(|l| l.pixels.as_ref())
-                .all(|p| p.width().max(p.height()) <= limits.max_texture_dimension_2d),
-            "Layer exceeds GPU texture limits"
-        );
-        let stride = (u64::from(width) * 4).div_ceil(256) * 256;
-        anyhow::ensure!(
-            stride * u64::from(height) <= limits.max_buffer_size,
-            "Composition exceeds GPU readback limits"
-        );
+        self.compose_tiles(document, tiling)
+    }
+
+    fn compose_whole(
+        &self,
+        document: &Document,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<RgbaImage> {
         let mut compositor = self.compositor.lock().unwrap_or_else(|p| p.into_inner());
         let compositor = compositor
             .get_or_insert_with(|| GpuCompositor::new(self.device.clone(), self.queue.clone()));
-        compositor.render_internal(document, [width, height], None, true);
+        compositor.render_internal(document, [width, height], None, true, [0, 0]);
+        let (bytes, stride) = self.read_display(compositor, [width, height])?;
+        let mut image = RgbaImage::new(width, height);
+        for (source, target) in bytes
+            .chunks_exact(stride)
+            .zip(image.as_mut().chunks_exact_mut(width as usize * 4))
+        {
+            target.copy_from_slice(&source[..width as usize * 4]);
+        }
+        Ok(image)
+    }
+
+    /// Composites each tile's window on its own and keeps its core. Filter layers that read
+    /// the whole canvas, and devices that can't hold one tile with its margins, leave the
+    /// document to the CPU.
+    fn compose_tiles(
+        &self,
+        document: &Document,
+        tiling: tiles::Tiling,
+    ) -> anyhow::Result<RgbaImage> {
+        use anyhow::Context;
+        let prepared = render::prepare_attachments(document);
+        let document = prepared.as_ref();
+        let margin = tiles::margin(document).context("A filter layer needs the whole canvas")?;
+        let core = tiling
+            .core(margin)
+            .context("Not even one tile fits GPU texture limits")?;
+        let mut output = RgbaImage::new(document.width, document.height);
+        let mut compositor = self.compositor.lock().unwrap_or_else(|p| p.into_inner());
+        let compositor = compositor
+            .get_or_insert_with(|| GpuCompositor::new(self.device.clone(), self.queue.clone()));
+        for tile in tiles::grid([document.width, document.height], core, margin) {
+            anyhow::ensure!(!processor::cancelled(), "Processing cancelled");
+            let window = tiles::window_document(document, tile.window, tiling.texture)?;
+            let size = [tile.window.width, tile.window.height];
+            compositor.render_internal(&window, size, None, true, [tile.window.x, tile.window.y]);
+            let (bytes, stride) = self.read_display(compositor, size)?;
+            tiles::stitch(&mut output, &tile, &bytes, stride)?;
+        }
+        // The last window's cropped layers are gone; so are their textures.
+        compositor
+            .sources
+            .retain(|_, source| source.pixels.strong_count() > 0);
+        Ok(output)
+    }
+
+    /// The compositor's display texture, `size` of it, with rows the returned stride apart.
+    fn read_display(
+        &self,
+        compositor: &GpuCompositor,
+        [width, height]: [u32; 2],
+    ) -> anyhow::Result<(Vec<u8>, usize)> {
+        let stride = (u64::from(width) * 4).div_ceil(256) * 256;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("composition readback"),
             size: stride * u64::from(height),
@@ -803,15 +1012,7 @@ impl Processor {
             },
         );
         self.queue.submit([encoder.finish()]);
-        let bytes = self.map(&staging)?;
-        let mut image = RgbaImage::new(width, height);
-        for (source, target) in bytes
-            .chunks_exact(stride as usize)
-            .zip(image.as_mut().chunks_exact_mut(width as usize * 4))
-        {
-            target.copy_from_slice(&source[..width as usize * 4]);
-        }
-        Ok(image)
+        Ok((self.map(&staging)?, stride as usize))
     }
 }
 
@@ -1012,6 +1213,107 @@ mod tests {
         }
     }
 
+    /// A layer clipped to a folder (and one clipped through it) on the GPU coverage shader,
+    /// its CPU fallback and the CPU renderer. The scene is scaled up past the size where the
+    /// coverage shader takes over from the CPU.
+    #[test]
+    #[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]
+    fn folder_clipping_bases_match_cpu_in_preview_and_export() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let processor = Processor::new(device.clone(), queue.clone());
+        let mut compositor = GpuCompositor::new(device, queue);
+        // ×8 makes 384×320, past the 65 536 pixels below which coverage stays on the CPU.
+        const SCALE: u32 = 8;
+        let mut original = coverage::tests::folder_base();
+        original.width *= SCALE;
+        original.height *= SCALE;
+        assert!(original.width * original.height >= 65_536);
+        let s = SCALE as f32;
+        for layer in &mut original.layers {
+            let t = &mut layer.transform;
+            (t.x, t.y, t.width, t.height) = (t.x * s, t.y * s, t.width * s, t.height * s);
+        }
+        original.layers.insert(
+            0,
+            Layer::image(
+                "Backdrop",
+                RgbaImage::from_fn(original.width, original.height, |x, y| {
+                    Rgba([(x + 40) as u8, (y + 60) as u8, 150, 255])
+                }),
+            ),
+        );
+        original.validate().unwrap();
+        let size = [original.width, original.height];
+        let group = 10;
+        assert!(original.layers[group].group);
+        for variant in 0..4 {
+            let mut document = original.clone();
+            match variant {
+                1 => document.layers[group].mask = None,
+                2 => document.layers[group].opacity = 0.35,
+                // The clipped layers' own mask and opacity still apply.
+                3 => document.layers[group + 1].opacity = 0.5,
+                _ => {}
+            }
+            let expected = render::render(&document);
+            let close = |actual: &[u8], premultiplied: bool, context: &str| {
+                let mut differences = 0;
+                for (pixel, actual) in expected.pixels().zip(actual.as_chunks::<4>().0) {
+                    let scale = if premultiplied {
+                        pixel[3] as f32 / 255.0
+                    } else {
+                        1.0
+                    };
+                    let expected = [
+                        (pixel[0] as f32 * scale).round() as u8,
+                        (pixel[1] as f32 * scale).round() as u8,
+                        (pixel[2] as f32 * scale).round() as u8,
+                        pixel[3],
+                    ];
+                    if actual.iter().zip(expected).any(|(a, b)| a.abs_diff(b) > 2) {
+                        differences += 1;
+                    }
+                }
+                // Nearest-pixel mask lookups may round across a mask pixel edge.
+                assert!(
+                    differences <= expected.len() / 4 / 200,
+                    "{context} variant {variant}: {differences} pixels differ"
+                );
+            };
+            for accelerated in [false, true] {
+                scope(accelerated.then(|| processor.clone()), || {
+                    compositor.render(&document, size);
+                });
+                close(&readback(&compositor), true, "Folder clipping preview");
+                let actual = scope(accelerated.then(|| processor.clone()), || {
+                    processor.compose(&document, size[0], size[1]).unwrap()
+                });
+                close(actual.as_raw(), false, "Folder clipping export");
+            }
+            // The folder's own alpha, as merges and clipping bakes read it.
+            let base = document.layers[group].clone();
+            let alpha = scope(Some(processor.clone()), || {
+                coverage_image(&document, &base, size, CoverageMode::Alpha, None)
+            })
+            .unwrap();
+            let differences = alpha
+                .enumerate_pixels()
+                .filter(|(x, y, value)| {
+                    let point = Point::new(*x as f32 + 0.5, *y as f32 + 0.5);
+                    let cpu = render::layer_alpha(&document, &base, point, 0);
+                    (value[0] as f32 / 255.0 - cpu).abs() > 2.5 / 255.0
+                })
+                .count();
+            assert!(
+                differences <= alpha.len() / 200,
+                "Folder alpha variant {variant}: {differences} pixels differ"
+            );
+        }
+    }
+
     #[test]
     fn motion_blur_preview_rejects_edits_that_need_cpu_coverage() {
         let mut document = Document::new(8, 8).unwrap();
@@ -1109,6 +1411,36 @@ mod tests {
         }
         compositor.render(&document, [64, 48]);
         compare(&document, &readback(&compositor), "Preview off");
+        // Sides at the canvas edge repeat edge pixels in the preview as in Apply.
+        for (x, width) in [(0.0, 64), (-6.0, 40)] {
+            let mut document = Document::new(64, 48).unwrap();
+            let mut layer = Layer::image(
+                "Edges",
+                RgbaImage::from_fn(width, 48, |x, y| {
+                    Rgba([(x * 5) as u8, (y * 5) as u8, 160, 255])
+                }),
+            );
+            layer.transform.x = x;
+            document.insert(layer);
+            for angle in [0.0, 35.0, -90.0] {
+                compositor.render_with_motion_blur(&document, [64, 48], Some([15.0, angle]));
+                let mut expected = document.clone();
+                crate::effects::apply_filter(
+                    &mut expected,
+                    &crate::effects::Filter::MotionBlur {
+                        distance: 15.0,
+                        angle,
+                    },
+                    false,
+                )
+                .unwrap();
+                compare(
+                    &expected,
+                    &readback(&compositor),
+                    &format!("Motion Blur at canvas edges, x {x}, angle {angle}"),
+                );
+            }
+        }
     }
 
     pub(super) fn readback(compositor: &GpuCompositor) -> Vec<u8> {
@@ -1120,7 +1452,7 @@ mod tests {
         let stride = (width * 4).div_ceil(256) * 256;
         let buffer = compositor.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("compositor verification"),
-            size: (stride * height) as u64,
+            size: u64::from(stride) * u64::from(height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -1256,11 +1588,15 @@ mod tests {
             Point::new(0.0, 1.0),
         ]);
         document.layers[1].opacity = 0.73;
-        for mode in BlendMode::ALL {
-            document.layers[1].blend = mode;
-            compositor.render(&document, [12, 10]);
-            compare(&document, &readback(&compositor), mode.name());
+        for fill in [1.0, 0.4] {
+            document.layers[1].fill = fill;
+            for mode in BlendMode::ALL {
+                document.layers[1].blend = mode;
+                compositor.render(&document, [12, 10]);
+                compare(&document, &readback(&compositor), mode.name());
+            }
         }
+        document.layers[1].fill = 1.0;
         document.layers[1].mask = Some(crate::document::Mask {
             pixels: Arc::new(image::GrayImage::from_pixel(1, 1, image::Luma([137]))),
             ..crate::document::Mask::white()
@@ -1359,6 +1695,32 @@ mod tests {
             compositor.render(&document, [12, 10]);
             compare(&document, &readback(&compositor), name);
         }
+        // Color Lookup reads its table from a storage buffer, in every mode, with a domain.
+        use crate::lut::{Dimension, Interpolation, Lut};
+        let mut cube = Lut::identity(Dimension::Three, 5);
+        for entry in &mut cube.table {
+            let [r, g, b] = *entry;
+            *entry = [g * g, b.sqrt() * 1.2 - 0.1, 1.0 - r * g];
+        }
+        cube.domain_max = [1.0, 0.8, 1.0];
+        let mut curve = Lut::identity(Dimension::One, 7);
+        for entry in &mut curve.table {
+            *entry = [entry[0].powf(2.2), 1.0 - entry[1], entry[2].sqrt()];
+        }
+        for (table, interpolation, context) in [
+            (&cube, Interpolation::Trilinear, "trilinear lookup"),
+            (&cube, Interpolation::Tetrahedral, "tetrahedral lookup"),
+            (&curve, Interpolation::Tetrahedral, "1D lookup"),
+        ] {
+            document.layers[2].adjustment = Some(Adjustment::ColorLookup {
+                name: "test.cube".into(),
+                interpolation,
+                table: Arc::new(table.clone()),
+            });
+            compositor.render(&document, [12, 10]);
+            compare(&document, &readback(&compositor), context);
+        }
+        assert_eq!(compositor.luts.len(), 1, "unused tables are released");
     }
 
     pub(super) fn compare(document: &Document, gpu: &[u8], context: &str) {

@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 
-use super::{Manifest, manifest::MANIFEST_FILE};
+use super::{Manifest, folder_id, manifest::MANIFEST_FILE};
 
 /// How large a plugin may be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +79,10 @@ pub struct Installer {
     pub plugins_dir: PathBuf,
     /// Every directory plugins load from, to find the same id elsewhere.
     pub search_dirs: Vec<PathBuf>,
+    /// The plugins that come with Xuan (see [`super::bundled_dir`]). The
+    /// installer never writes there, and a plugin there with the same id is
+    /// no conflict: the installed copy replaces it.
+    pub bundled_dir: Option<PathBuf>,
     pub limits: Limits,
     /// Where the private staging folders go.
     pub temp_dir: PathBuf,
@@ -106,15 +110,30 @@ impl Installer {
         Self {
             plugins_dir,
             search_dirs,
+            bundled_dir: None,
             limits: Limits::DEFAULT,
             temp_dir: std::env::temp_dir(),
         }
+    }
+
+    /// Refuse a plugins directory in the bundled folder: those plugins come
+    /// with Xuan and are replaced only by updating Xuan.
+    fn check_plugins_dir(&self) -> Result<()> {
+        if let Some(bundled) = &self.bundled_dir {
+            ensure!(
+                !canonical(&self.plugins_dir).starts_with(canonical(bundled)),
+                "{} holds the plugins that come with Xuan; plugins are not installed there",
+                self.plugins_dir.display()
+            );
+        }
+        Ok(())
     }
 
     /// Copy or extract `source` (a folder or a `.zip`) into a private
     /// staging folder and check it: its layout, its manifest, its command and
     /// where it would go. Nothing is written to the plugins directory.
     pub fn prepare(&self, source: &Path) -> Result<Staged> {
+        self.check_plugins_dir()?;
         let staging = super::private_dir_in("xuan-plugin-", &self.temp_dir)
             .context("Cannot create a temporary folder")?;
         let content = staging.path().join("content");
@@ -149,6 +168,7 @@ impl Installer {
     /// only when it holds the same plugin. The copy is built in a hidden
     /// sibling folder and renamed into place.
     pub fn commit(&self, staged: Staged) -> Result<PathBuf> {
+        self.check_plugins_dir()?;
         let id = &staged.manifest.plugin.id;
         let target = &staged.target;
         let update = self.check_target(id, target)?.is_some();
@@ -206,10 +226,14 @@ impl Installer {
     /// Whether the plugin `id` may go to `target`: `None` when the folder is
     /// free, `Some(previous manifest)` when it holds the same plugin, which
     /// is then updated. Another folder with that id, on any search
-    /// directory, or a target holding something else, refuses the install.
+    /// directory but the bundled one, or a target holding something else,
+    /// refuses the install.
     fn check_target(&self, id: &str, target: &Path) -> Result<Option<Option<Manifest>>> {
         let own = canonical(target);
         for dir in &self.search_dirs {
+            if super::is_bundled(dir, self.bundled_dir.as_deref()) {
+                continue;
+            }
             for folder in super::plugin_folders(dir) {
                 if folder_id(&folder).as_deref() == Some(id) && canonical(&folder) != own {
                     bail!(
@@ -254,14 +278,6 @@ fn canonical(path: &Path) -> PathBuf {
             .unwrap_or_else(|_| path.to_path_buf()),
         _ => path.to_path_buf(),
     }
-}
-
-/// The `plugin.id` in a folder's manifest, read without validating the rest,
-/// so a broken or incompatible plugin still counts as that plugin.
-fn folder_id(folder: &Path) -> Option<String> {
-    let text = fs::read_to_string(folder.join(MANIFEST_FILE)).ok()?;
-    let table: toml::Table = toml::from_str(&text).ok()?;
-    table.get("plugin")?.get("id")?.as_str().map(str::to_owned)
 }
 
 /// The folder with `plugin.toml`: the top of the content or its only folder.
@@ -639,6 +655,7 @@ mod tests {
             let installer = Installer {
                 plugins_dir: plugins.clone(),
                 search_dirs: vec![plugins],
+                bundled_dir: None,
                 limits: Limits::DEFAULT,
                 temp_dir: dir.path().join("tmp"),
             };
@@ -948,7 +965,7 @@ mod tests {
             );
             assert!(target.join("lib/util.py").is_file());
             assert!(!target.join("__MACOSX").exists());
-            let (manifests, errors) = super::super::discover(&[home.plugins().to_path_buf()]);
+            let (manifests, errors) = super::super::discover(&[home.plugins().to_path_buf()], None);
             assert_eq!(manifests.len(), 1, "{errors:?}");
             assert_eq!(manifests[0].dir, target);
             home.assert_clean();
@@ -1126,6 +1143,62 @@ mod tests {
         home.refused(&v2, "does not hold the plugin `demo`");
     }
 
+    /// A plugin that comes with Xuan is no conflict: the user's copy is
+    /// installed beside it and replaces it. The installer never writes into
+    /// the bundled folder.
+    #[test]
+    fn a_copy_of_a_bundled_plugin_installs_and_the_bundled_folder_is_never_written() {
+        let mut home = Home::new();
+        let bundled = home.dir.path().join("bundled");
+        fs::create_dir_all(bundled.join("demo")).unwrap();
+        fs::write(bundled.join("demo/plugin.toml"), manifest("0.9.0", "")).unwrap();
+        home.installer.search_dirs.push(bundled.clone());
+
+        // Without knowing the folder is bundled, it is an ordinary conflict.
+        let v1 = home.folder("v1", &[("plugin.toml", &manifest("1.0.0", ""))]);
+        home.refused(&v1, &super::super::conflict_message("demo"));
+
+        home.installer.bundled_dir = Some(bundled.clone());
+        let staged = home.installer.prepare(&v1).unwrap();
+        assert!(!staged.update && staged.previous.is_none());
+        let target = home.installer.commit(staged).unwrap();
+        assert_eq!(target, home.plugins().join("demo"));
+        assert_eq!(
+            Manifest::load(&bundled.join("demo"))
+                .unwrap()
+                .plugin
+                .version,
+            "0.9.0",
+            "the bundled copy is untouched"
+        );
+        let (manifests, errors) =
+            super::super::discover(&home.installer.search_dirs, Some(&bundled));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].dir, target);
+        home.assert_clean();
+
+        // Neither the bundled folder nor a folder inside it is a plugins
+        // directory the installer writes to.
+        for plugins_dir in [bundled.clone(), bundled.join("more")] {
+            let installer = Installer {
+                plugins_dir: plugins_dir.clone(),
+                ..home.installer.clone()
+            };
+            let error = format!("{:#}", installer.prepare(&v1).unwrap_err());
+            assert!(error.contains("come with Xuan"), "{error}");
+            let staged = home.installer.prepare(&v1).unwrap();
+            let error = format!("{:#}", installer.commit(staged).unwrap_err());
+            assert!(error.contains("come with Xuan"), "{error}");
+        }
+        let names: Vec<_> = fs::read_dir(&bundled)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["demo"]);
+        home.assert_clean();
+    }
+
     /// Every bundled example plugin passes the install checks. Rust ones are
     /// checked without copying, as a local build makes them large.
     #[test]
@@ -1156,7 +1229,7 @@ mod tests {
         fs::create_dir_all(&hidden).unwrap();
         fs::write(hidden.join("plugin.toml"), MANIFEST).unwrap();
         assert!(super::super::plugin_folders(home.plugins()).is_empty());
-        let (manifests, errors) = super::super::discover(&[home.plugins().to_path_buf()]);
+        let (manifests, errors) = super::super::discover(&[home.plugins().to_path_buf()], None);
         assert!(manifests.is_empty() && errors.is_empty());
     }
 

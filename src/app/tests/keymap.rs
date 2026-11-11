@@ -18,12 +18,12 @@ fn overrides(pairs: &[(&str, &str)]) -> toml::Table {
         .collect()
 }
 
-/// Command ids in the menu source: `item(ui, &items, "id", …)`, `labelled(…, "id", …)`,
-/// `check_item(…, "id", …)` and the tab bar's `action = Some("id")`.
+/// Command ids in the menu list's source: `command("id")`, `labelled(…, "id")`,
+/// `check(…, "id")` and the ids of `for id in [ … ]` loops.
 pub(super) fn menu_commands() -> Vec<String> {
-    let source = include_str!("../menus.rs");
+    let source = include_str!("../menu_model.rs");
     let mut ids = Vec::new();
-    for start in ["item(", "labelled(", "check_item(", "action = Some("] {
+    for start in ["command(", "labelled(", "check(", "for id in ["] {
         for (index, _) in source.match_indices(start) {
             let call = &source[index + start.len()..];
             let call = &call[..call.find(";").unwrap_or(call.len())];
@@ -130,6 +130,17 @@ fn host_run_flags_keep_the_plugin_allow_lists() {
         "flip_v",
         "flip_canvas_h",
         "flip_canvas_v",
+        "rotate_canvas_cw",
+        "rotate_canvas_ccw",
+        "rotate_canvas_180",
+        "crop_to_selection",
+        "content_fill",
+        "select_layer_pixels",
+        "select_mask_black",
+        "select_subject",
+        "feather",
+        "remove_background",
+        "remove_flat_background",
     ];
     let with = |host: HostRun| {
         let mut ids: Vec<&str> = COMMANDS
@@ -177,6 +188,93 @@ fn chords_parse_print_and_label() {
     }
 }
 
+/// ⌘ as egui-winit reports it on macOS.
+const CMD: Modifiers = Modifiers {
+    mac_cmd: true,
+    command: true,
+    ..Modifiers::NONE
+};
+
+#[test]
+fn mac_labels_use_the_menu_symbols() {
+    for (text, label) in [
+        ("Ctrl+S", "⌘S"),
+        ("Ctrl+Alt+Shift+S", "⌥⇧⌘S"),
+        ("Ctrl+Plus", "⌘+"),
+        ("Ctrl+Minus", "⌘−"),
+        ("Ctrl+,", "⌘,"),
+        // ⌘Tab switches apps; tabs switch with Control+Tab.
+        ("Ctrl+Tab", "⌃Tab"),
+        ("Ctrl+Shift+Tab", "⌃⇧Tab"),
+        ("Alt+Backspace", "⌥Backspace"),
+        ("Shift+[", "⇧["),
+        ("F1", "F1"),
+    ] {
+        assert_eq!(chord(text).label_for(true), label, "{text}");
+        assert_eq!(chord(text).label_for(false), chord(text).label(), "{text}");
+    }
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    context.fonts_mut(|fonts| {
+        assert!(fonts.has_glyphs(&egui::FontId::proportional(12.0), "⌃⌥⇧⌘−"));
+    });
+}
+
+#[test]
+fn macos_leaves_out_the_defaults_the_system_keeps() {
+    let toggle = commands::find("toggle_controls").unwrap();
+    assert_eq!(commands::platform_defaults(toggle.keys, false), toggle.keys);
+    // ⌘H hides the app.
+    assert!(commands::platform_defaults(toggle.keys, true).is_empty());
+    for command in COMMANDS.iter().filter(|c| c.id != "toggle_controls") {
+        assert_eq!(
+            commands::platform_defaults(command.keys, true),
+            command.keys,
+            "{}",
+            command.id
+        );
+    }
+}
+
+#[test]
+fn command_key_presses_run_ctrl_shortcuts() {
+    let keymap = Keymap::default();
+    let id = |mods, key| keymap.lookup(mods, key, false).map(|e| e.id.as_str());
+    assert_eq!(id(CMD, Key::E), Some("merge"));
+    assert_eq!(id(CMD | Modifiers::SHIFT, Key::I), Some("invert_selection"));
+    assert_eq!(id(CMD | Modifiers::ALT, Key::E), None);
+    assert_eq!(id(Modifiers::MAC_CMD, Key::I), Some("invert"));
+    // Control also counts on macOS, so Control+Tab still switches tabs.
+    assert_eq!(id(Modifiers::CTRL, Key::Tab), Some("next_tab"));
+    assert_eq!(Chord::from_event(CMD, Key::S), chord("Ctrl+S"));
+    assert!(chord("Ctrl+S").matches(CMD, Key::S));
+    assert!(!chord("Ctrl+S").matches(CMD | Modifiers::ALT, Key::S));
+    assert!(!chord("S").matches(CMD, Key::S));
+
+    // Pressed in the editor, ⌘E merges and ⌘5 leaves the opacity alone.
+    let (context, mut app) = app_with_document();
+    app.command_trace = Some(Vec::new());
+    keyboard_frame(&context, &mut app, vec![text_key(Key::E, CMD)], CMD);
+    assert_eq!(
+        app.command_trace.as_deref(),
+        Some(&["merge".to_owned()][..])
+    );
+    let opacity = |app: &EditorApp| {
+        let document = &app.session().unwrap().document;
+        document.active().unwrap().opacity
+    };
+    let before = opacity(&app);
+    keyboard_frame(&context, &mut app, vec![text_key(Key::Num5, CMD)], CMD);
+    assert_eq!(opacity(&app), before);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(Key::Num5, Modifiers::NONE)],
+        Modifiers::NONE,
+    );
+    assert_eq!(opacity(&app), 0.5);
+}
+
 #[test]
 fn dispatch_matches_modifiers_exactly() {
     let keymap = Keymap::default();
@@ -188,6 +286,12 @@ fn dispatch_matches_modifiers_exactly() {
     assert_eq!(id(CTRL_SHIFT, Key::I), Some("invert_selection"));
     assert_eq!(id(Modifiers::NONE, Key::B), Some("tool_brush"));
     assert_eq!(id(Modifiers::SHIFT, Key::B), Some("switch_brush"));
+    assert_eq!(id(Modifiers::NONE, Key::G), Some("tool_gradient"));
+    assert_eq!(id(Modifiers::SHIFT, Key::G), Some("switch_gradient"));
+    assert_eq!(id(Modifiers::NONE, Key::O), Some("tool_dodge"));
+    assert_eq!(id(Modifiers::SHIFT, Key::O), Some("switch_tone"));
+    assert_eq!(id(Modifiers::NONE, Key::R), Some("tool_blur"));
+    assert_eq!(id(Modifiers::SHIFT, Key::R), Some("switch_blur"));
     // `+` and `'` need Shift on many layouts.
     assert_eq!(id(CTRL_SHIFT, Key::Plus), Some("zoom_in"));
     assert_eq!(id(CTRL_SHIFT, Key::Quote), Some("toggle_grid"));
@@ -232,9 +336,18 @@ fn an_override_changes_dispatch_menu_label_and_resets() {
     app.rebuild_keymap();
     assert_eq!(app.keymap.shortcut("merge"), "Ctrl+Shift+M");
     assert!(app.keymap.keys("invert_selection").is_empty());
-    let items = app.menu_items();
-    assert_eq!(items.get("merge"), (true, "Ctrl+Shift+M"));
-    assert_eq!(items.get("invert_selection").1, "");
+    let bar = app.menu_bar(crate::app::menu_model::MenuLayout::InWindow);
+    let merge = bar.find_command("merge").unwrap();
+    assert_eq!(
+        (merge.enabled, merge.chord.map(Chord::label).as_deref()),
+        (true, Some("Ctrl+Shift+M"))
+    );
+    assert!(
+        bar.find_command("invert_selection")
+            .unwrap()
+            .chord
+            .is_none()
+    );
 
     app.command_trace = Some(Vec::new());
     keyboard_frame(

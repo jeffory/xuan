@@ -6,6 +6,7 @@
 //! these rules cover what Xuan itself hands over: the source image of an
 //! action, its regions and text inputs, and the layer, composite and
 //! selection exports a plugin asks for. See "Network" in `docs/PLUGINS.md`.
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
@@ -17,11 +18,16 @@ use xuan::{
     },
 };
 
-use super::{Dialog, EditorApp, plugins::one_line, theme, widgets};
+use super::{Dialog, EditorApp, plugins::one_line, widgets};
 
 /// Requests that hand a plugin pixels outside the source of an action.
-pub(super) const EXPORT_METHODS: [&str; 3] =
-    ["layer/export", "document/export", "selection/export"];
+pub(super) const EXPORT_METHODS: [&str; 5] = [
+    "layer/export",
+    "document/export",
+    "selection/export",
+    "document/sample",
+    "document/histogram",
+];
 
 /// What offline mode means for the plugins it does not stop.
 pub(super) fn offline_mode_note(config: &xuan::config::Config) -> &'static str {
@@ -319,6 +325,8 @@ impl EditorApp {
                 format!("{what} “{name}”")
             }
             "document/export" => tr("The whole image, flattened").into(),
+            "document/sample" => tr("Colours measured in the image").into(),
+            "document/histogram" => tr("The image's histogram").into(),
             _ => tr("The shape of the selection").into(),
         }
     }
@@ -367,6 +375,23 @@ impl EditorApp {
             }
         }
         self.plugins.held = waiting;
+        // Another dialog may have replaced the open prompt (a menu command,
+        // opening a document): what it asks about still waits, so show it
+        // again, unless its plugin stopped or its action was closed.
+        if let Some(consent) = &self.plugins.consent
+            && self.dialog.is_none()
+        {
+            let waiting = self.plugins.running(&consent.plugin)
+                && consent.action.as_ref().is_none_or(|action| {
+                    (self.plugins.action.as_ref())
+                        .is_some_and(|edit| edit.plugin == consent.plugin && &edit.action == action)
+                });
+            if waiting {
+                self.dialog = Some(Dialog::PluginConsent);
+            } else {
+                self.plugins.consent = None;
+            }
+        }
         if self.plugins.consent.is_none()
             && self.dialog.is_none()
             && let Some((plugin, request)) = self.plugins.held.first()
@@ -406,6 +431,12 @@ impl EditorApp {
                 if !waiting {
                     return;
                 }
+                // A run another plugin asked for answers its request; see
+                // `plugin_runs.rs`.
+                if (self.plugins.action.as_ref()).is_some_and(|edit| edit.caller.is_some()) {
+                    self.answer_run_consent(send);
+                    return;
+                }
                 if send {
                     if let Some(edit) = &mut self.plugins.action {
                         edit.consented = true;
@@ -413,11 +444,14 @@ impl EditorApp {
                     self.run_plugin_action();
                 } else {
                     self.status = tr("Cancelled; nothing was sent").into();
-                    // Without inputs there is no dialog to go back to.
+                    // Without inputs, or from a surface, there is no dialog
+                    // to go back to.
                     let inputs = (self.plugins.manifest(&plugin))
                         .and_then(|m| m.action(&action))
                         .is_some_and(|spec| !spec.inputs.is_empty());
-                    if !inputs {
+                    let surface =
+                        (self.plugins.action.as_ref()).is_some_and(|e| e.surface.is_some());
+                    if !inputs || surface {
                         self.close_plugin_action();
                     }
                 }
@@ -443,6 +477,11 @@ impl EditorApp {
         let action = (request.action.as_deref())
             .and_then(|id| manifest.action(id))
             .map(|spec| one_line(spec.label.trim_end_matches('…'), 80));
+        // The plugin that started the run, when another plugin did.
+        let caller = (request.action.as_ref())
+            .and(self.plugins.action.as_ref())
+            .and_then(|edit| edit.caller.as_ref())
+            .map(|run| self.plugins.source(&run.plugin));
         let mut open = true;
         let mut answer = None;
         let mut dont_ask = request.dont_ask;
@@ -450,7 +489,7 @@ impl EditorApp {
             .id(("plugin_consent", &request.plugin))
             .default_width(440.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let hosts = (manifest.permissions.network.iter())
                     .map(|host| one_line(host, 120))
                     .collect::<Vec<_>>()
@@ -463,6 +502,15 @@ impl EditorApp {
                     .wrap(),
                 );
                 ui.add_space(8.0);
+                if let Some(caller) = &caller {
+                    ui.add(
+                        egui::Label::new(format!(
+                            "{caller} {}",
+                            tr("started this run for its client.")
+                        ))
+                        .wrap(),
+                    );
+                }
                 let lead = match &action {
                     Some(action) => format!("{} “{action}”, {}", tr("To run"), tr("Xuan sends it:")),
                     None => tr("It asks Xuan for this outside an action you started:").into(),
@@ -477,21 +525,17 @@ impl EditorApp {
                 } else {
                     tr("Your answer holds until the plugin stops. Xuan cannot check where the plugin sends what it receives.")
                 };
-                ui.add(egui::Label::new(RichText::new(note).small().color(theme::MUTED)).wrap());
+                ui.add(egui::Label::new(RichText::new(note).small().color(ui.palette().muted)).wrap());
                 ui.add_space(8.0);
                 widgets::checkbox(ui, &mut dont_ask, tr("Don't ask again for this plugin"));
-                ui.add_space(4.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Send")).clicked() {
-                            answer = Some(true);
-                        }
-                        if widgets::button(ui, tr("Cancel")).clicked() {
-                            answer = Some(false);
-                        }
-                    });
-                });
+            }, |ui, ()| {
+                let response =
+                    widgets::dialog_footer(ui, widgets::FooterButtons::commit(tr("Send")), |_| {});
+                if response.commit {
+                    answer = Some(true);
+                } else if response.cancel {
+                    answer = Some(false);
+                }
             });
         if let Some(consent) = &mut self.plugins.consent {
             consent.dont_ask = dont_ask;
@@ -507,7 +551,7 @@ impl EditorApp {
 
 /// A text-like input's value as the prompt shows it, or `None` when empty
 /// or not text. Secrets are not shown.
-fn text_value(kind: InputKind, value: Option<&Value>) -> Option<String> {
+pub(super) fn text_value(kind: InputKind, value: Option<&Value>) -> Option<String> {
     let text = value?.as_str().filter(|text| !text.trim().is_empty())?;
     match kind {
         InputKind::Text | InputKind::Multiline | InputKind::Path => {

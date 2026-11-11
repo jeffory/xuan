@@ -1,10 +1,11 @@
+use super::theme::PaletteExt as _;
 use std::collections::HashMap;
 use xuan::i18n::tr;
 
-use egui::{Color32, Context, Id, Key, Modifiers, Popup, Rect, Sense, TextureHandle, Ui, vec2};
+use egui::{Context, Id, Key, Modifiers, Popup, Rect, Sense, TextureHandle, Ui, vec2};
 use xuan::text::{TextRenderer, TextStyle};
 
-use super::{theme, widgets};
+use super::widgets;
 
 const ROW_HEIGHT: f32 = 28.0;
 const LIST_HEIGHT: f32 = 240.0;
@@ -174,9 +175,9 @@ impl FontPicker {
                                 rect,
                                 4.0,
                                 if is_selected {
-                                    theme::ACCENT
+                                    ui.palette().accent
                                 } else {
-                                    theme::DIVIDER
+                                    ui.palette().divider
                                 },
                             );
                         }
@@ -197,7 +198,7 @@ impl FontPicker {
                                     size,
                                 ),
                                 Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                                theme::TEXT,
+                                ui.palette().text,
                             );
                         } else {
                             painter.text(
@@ -205,7 +206,7 @@ impl FontPicker {
                                 egui::Align2::LEFT_CENTER,
                                 family,
                                 egui::FontId::proportional(15.0),
-                                Color32::LIGHT_RED,
+                                ui.palette().error,
                             );
                         }
                         if response.on_hover_text(family).clicked() {
@@ -226,7 +227,7 @@ mod tests {
     #[test]
     fn visible_options_use_font_rasters_and_cache_at_display_resolution() {
         let ctx = Context::default();
-        theme::apply(&ctx);
+        super::super::theme::apply(&ctx, &super::super::theme::Palette::DARK);
         let mut renderer = TextRenderer::default();
         let mut picker = FontPicker::default();
         let mut selected = TextStyle::default().family;

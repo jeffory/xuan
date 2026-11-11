@@ -21,6 +21,91 @@ mod keybindings;
 #[path = "ui_palette.rs"]
 mod palette;
 
+#[path = "ui_appearance.rs"]
+mod appearance;
+
+#[path = "ui_language.rs"]
+mod language;
+
+#[path = "ui_empty_state.rs"]
+mod empty_state;
+
+#[path = "ui_recent.rs"]
+mod recent;
+
+#[path = "ui_tabs.rs"]
+mod tabs;
+
+#[path = "ui_reload.rs"]
+mod reload;
+
+#[path = "ui_dialogs.rs"]
+mod dialogs;
+
+#[path = "ui_units.rs"]
+mod units;
+
+#[path = "ui_canvas_presets.rs"]
+mod canvas_presets;
+
+#[path = "ui_updates.rs"]
+mod updates;
+
+#[path = "ui_settings_shortcuts.rs"]
+mod settings_shortcuts;
+
+#[path = "ui_tool_rail.rs"]
+mod tool_rail;
+
+#[path = "ui_polish.rs"]
+mod polish;
+
+#[path = "ui_focus.rs"]
+mod focus;
+
+#[path = "ui_crop.rs"]
+mod crop;
+
+#[path = "ui_perspective_crop.rs"]
+mod perspective_crop;
+
+#[path = "ui_liquify.rs"]
+mod liquify;
+
+#[path = "ui_channels.rs"]
+mod channels;
+
+#[path = "ui_color_lookup.rs"]
+mod color_lookup;
+
+#[path = "ui_adjustment_presets.rs"]
+mod adjustment_presets;
+
+#[path = "ui_collage.rs"]
+mod collage;
+
+#[path = "ui_camera_raw.rs"]
+mod camera_raw;
+
+#[path = "ui_text_runs.rs"]
+mod text_runs;
+
+#[path = "ui_paths.rs"]
+mod paths;
+
+#[path = "ui_mac_keys.rs"]
+mod mac_keys;
+
+#[path = "ui_anchor.rs"]
+mod anchor;
+
+#[path = "ui_curves.rs"]
+mod curves;
+
+#[cfg(target_os = "linux")]
+#[path = "ui_window_buttons.rs"]
+mod window_buttons;
+
 /// An `EditorApp` running inside a kittest harness at the usual 1280x860 window size.
 pub(super) struct UiTest {
     harness: Harness<'static, Option<EditorApp>>,
@@ -29,16 +114,19 @@ pub(super) struct UiTest {
 impl UiTest {
     /// An empty editor: no documents open.
     pub(super) fn new() -> Self {
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(1280.0, 860.0))
-            .build_state(
-                |ctx, app: &mut Option<EditorApp>| {
-                    if let Some(app) = app {
-                        app.show(ctx);
-                    }
-                },
-                None,
-            );
+        Self::sized(Vec2::new(1280.0, 860.0))
+    }
+
+    /// An empty editor in a window of this size.
+    pub(super) fn sized(size: Vec2) -> Self {
+        let mut harness = Harness::builder().with_size(size).build_state(
+            |ctx, app: &mut Option<EditorApp>| {
+                if let Some(app) = app {
+                    app.show(ctx);
+                }
+            },
+            None,
+        );
         // The app installs fonts and the theme on the context it is built with, so it must be built
         // from the harness's own context rather than a throwaway one.
         *harness.state_mut() = Some(EditorApp::with_context(
@@ -310,6 +398,28 @@ fn file_menu_quit_with_unsaved_changes_prompts_instead_of_closing() {
     ui.click("Cancel");
     assert!(!ui.app().close_app);
     assert_eq!(ui.app().sessions.len(), 1);
+}
+
+/// Quitting with unsaved work names each project that has changes, and only those (issue 91).
+#[test]
+fn quitting_lists_the_unsaved_projects() {
+    let mut ui = dirty_document();
+    ui.app_mut().sessions[0].title = "Poster".into();
+    for (title, dirty) in [("Sketch", false), ("Banner", true)] {
+        ui.app_mut().new_document();
+        ui.app_mut().sessions.last_mut().unwrap().title = title.into();
+        if dirty {
+            ui.app_mut().command("fill_fg");
+        }
+    }
+    ui.settle();
+    ui.open_menu("File");
+    ui.click_and_stop(QUIT);
+    ui.settle();
+    assert!(ui.has("Save your changes?"));
+    assert!(ui.has("• Poster") && ui.has("• Banner"));
+    assert!(!ui.has("• Sketch"), "a saved project is not listed");
+    ui.click("Cancel");
 }
 
 #[test]
@@ -661,11 +771,11 @@ mod rulers_and_guides {
         ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 64;
         ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 10;
         ui.settle();
-        assert!(!ui.enabled("OK"));
+        assert!(!ui.enabled("Apply"));
         ui.app_mut().grid_edit.as_mut().unwrap().draft.subdivisions = 8;
         ui.app_mut().grid_edit.as_mut().unwrap().draft.spacing = 100;
         ui.settle();
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().dialog.is_none());
         let expected = GridSettings {
             spacing: 100,
@@ -689,15 +799,54 @@ mod layer_appearance {
 
     /// Focuses the layer panel's opacity slider (the slider level with the "Opacity" label).
     fn focus_opacity(ui: &mut UiTest) {
-        let label = ui.harness.get_by_label("Opacity").rect().center().y;
+        focus_slider(ui, "Opacity");
+    }
+
+    /// Focuses the layer panel's slider level with `label`, which must be enabled.
+    fn focus_slider(ui: &mut UiTest, label: &str) {
+        assert!(slider_enabled(ui, label), "{label} is disabled");
+        let y = ui.harness.get_by_label(label).rect().center().y;
         let slider = ui
             .harness
             .get_all_by_role(Role::Slider)
-            .find(|slider| (slider.rect().center().y - label).abs() < 12.0)
-            .expect("an opacity slider");
-        assert!(!slider.accesskit_node().is_disabled());
+            .find(|slider| (slider.rect().center().y - y).abs() < 12.0)
+            .unwrap();
         slider.focus();
         ui.settle();
+    }
+
+    fn slider_enabled(ui: &UiTest, label: &str) -> bool {
+        let y = ui.harness.get_by_label(label).rect().center().y;
+        let slider = ui
+            .harness
+            .get_all_by_role(Role::Slider)
+            .find(|slider| (slider.rect().center().y - y).abs() < 12.0)
+            .unwrap_or_else(|| panic!("a {label} slider"));
+        !slider.accesskit_node().is_disabled()
+    }
+
+    /// Fill sits under Opacity and changes only the fill, one undo step per change; folders
+    /// have none.
+    #[test]
+    fn fill_is_set_apart_from_opacity_on_pixel_layers() {
+        let mut ui = UiTest::with_document();
+        let opacity = ui.harness.get_by_label("Opacity").rect().center().y;
+        assert!(ui.harness.get_by_label("Fill").rect().center().y > opacity);
+        focus_slider(&mut ui, "Fill");
+        for _ in 0..10 {
+            ui.key(Key::ArrowLeft);
+        }
+        let fill = active(&ui).fill;
+        assert!(fill < 1.0, "{fill}");
+        assert_eq!(active(&ui).opacity, 1.0);
+        ui.app_mut().command("undo");
+        ui.settle();
+        assert!(active(&ui).fill > fill);
+        ui.app_mut().command("group");
+        ui.settle();
+        assert!(active(&ui).group);
+        assert!(!slider_enabled(&ui, "Fill"));
+        assert!(slider_enabled(&ui, "Opacity"));
     }
 
     fn active(ui: &UiTest) -> &xuan::document::Layer {
@@ -751,7 +900,7 @@ mod layer_appearance {
         }
         let y = |ui: &UiTest, name: &str| ui.harness.get_by_label(name).rect().top();
         assert!(y(&ui, "Dissolve") < y(&ui, "Darken"));
-        assert!(y(&ui, "Linear Burn") < y(&ui, "Darker Color"));
+        assert!(y(&ui, "Linear Burn") < y(&ui, "Darker Colour"));
         assert!(y(&ui, "Pin Light") < y(&ui, "Hard Mix"));
         assert!(y(&ui, "Divide") < y(&ui, "Hue"));
         // The menu opens where it fits the window.
@@ -783,7 +932,7 @@ mod layer_appearance {
         ui.click("Show Stroke");
         assert!(shows(&ui, "Outside") && shows(&ui, "Inside"));
         ui.click("Inside");
-        ui.click("OK");
+        ui.click("Apply");
         assert!(ui.app().dialog.is_none());
         let effects = active(&ui).effects.clone().unwrap();
         assert!(effects.is_enabled(EffectKind::DropShadow));
@@ -815,6 +964,47 @@ mod layer_appearance {
         ui.app_mut().command("undo");
         ui.settle();
         assert_eq!(active(&ui).effects, None);
+    }
+
+    #[test]
+    fn the_layer_effects_list_highlights_the_row_being_edited_without_a_check_glyph() {
+        use xuan::layer_effects::EffectKind;
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        ui.open_menu("Layer");
+        ui.click("Layer Effects…");
+        let selected = |ui: &UiTest, name: &str| {
+            ui.harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, name)
+                .accesskit_node()
+                .toggled()
+        };
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Drop Shadow"),
+            Some(egui::accesskit::Toggled::False)
+        );
+        // Clicking a name selects the row; it does not turn the effect on.
+        ui.click("Inner Glow");
+        assert_eq!(
+            selected(&ui, "Inner Glow"),
+            Some(egui::accesskit::Toggled::True)
+        );
+        assert_eq!(
+            selected(&ui, "Stroke"),
+            Some(egui::accesskit::Toggled::False)
+        );
+        let edit = ui.app().layer_effects.as_ref().unwrap();
+        assert_eq!(edit.selected, EffectKind::InnerGlow);
+        assert!(edit.effects.is_empty());
+        assert!(active(&ui).effects.is_none());
+        // The check mark is gone: nothing in the list is labelled with one.
+        assert!(ui.harness.query_all_by_label_contains("✓").next().is_none());
+        ui.click("Cancel");
     }
 
     #[test]
@@ -891,7 +1081,7 @@ mod layer_appearance {
 
         ui.open_menu("Layer");
         ui.click("New Adjustment Layer ⏵");
-        ui.click("Color Balance");
+        ui.click("Colour Balance");
         assert!(ui.has("Cyan – Red") && ui.has("Preserve Luminosity"));
         // Each tonal range has its own sliders.
         ui.click("Shadows");
@@ -911,7 +1101,7 @@ mod layer_appearance {
 
 mod window_menu {
     use super::*;
-    use xuan::panes::{LAYERS, NAVIGATOR};
+    use xuan::panes::{CHANNELS, LAYERS, NAVIGATOR};
 
     fn ids(ui: &UiTest) -> Vec<String> {
         ui.app()
@@ -928,7 +1118,7 @@ mod window_menu {
         let directory = tempfile::tempdir().unwrap();
         let mut ui = UiTest::with_document();
         ui.isolate_config(directory.path());
-        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        assert_eq!(ids(&ui), [NAVIGATOR, CHANNELS, LAYERS]);
         // Its header is the sidebar's, and its body draws the thumbnail.
         assert!(ui.has("Navigator"));
         assert_eq!(ui.app().session().unwrap().navigator.renders, 1);
@@ -949,13 +1139,93 @@ mod window_menu {
         assert!(saved.panes.get(NAVIGATOR).unwrap().hidden);
 
         // Reset Panel Layout brings it back above Layers.
-        ui.app_mut().config.panes.move_pane(0, 2);
-        assert_eq!(ids(&ui), [LAYERS, NAVIGATOR]);
+        ui.app_mut().config.panes.move_pane(0, 3);
+        assert_eq!(ids(&ui), [CHANNELS, LAYERS, NAVIGATOR]);
         ui.open_menu("Window");
         ui.click("Reset Panel Layout");
-        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        assert_eq!(ids(&ui), [NAVIGATOR, CHANNELS, LAYERS]);
         assert!(!ui.app().config.panes.get(NAVIGATOR).unwrap().hidden);
         assert!(ui.has("Navigator"));
+    }
+
+    /// A plugin with three panes that only say they need permission.
+    fn short_plugin_panes(ui: &mut UiTest, directory: &Path) {
+        let mut manifest = String::from(
+            "[plugin]\nid = \"short\"\nname = \"Short\"\nversion = \"1\"\ncommand = [\"sh\", \"x\"]\n",
+        );
+        for (id, title) in [("a", "Short A"), ("b", "Short B"), ("c", "Short C")] {
+            manifest.push_str(&format!(
+                "\n[[panes]]\nid = \"{id}\"\ntitle = \"{title}\"\n"
+            ));
+        }
+        std::fs::write(directory.join("plugin.toml"), manifest).unwrap();
+        let manifest = xuan::plugins::Manifest::load(directory).unwrap();
+        ui.app_mut().install_plugins(vec![manifest], vec![]);
+        ui.harness.run_steps(8);
+    }
+
+    #[test]
+    fn short_panes_below_layers_leave_it_room_for_rows() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        short_plugin_panes(&mut ui, plugin.path());
+        let header =
+            |ui: &UiTest, title: &str| ui.harness.get_by_role_and_label(Role::Button, title).rect();
+        let layers = header(&ui, "Layers");
+        let next = header(&ui, "Short A");
+        let row = ui.harness.get_by_label("Layer 1").rect();
+        assert!(
+            row.top() >= layers.bottom() && row.bottom() <= next.top(),
+            "the layer row {row:?} should sit between {layers:?} and {next:?}"
+        );
+        // The list has room for several rows, not just one.
+        assert!(
+            next.top() - layers.bottom() >= 200.0,
+            "Layers is too short: {layers:?} to {next:?}"
+        );
+        // The short panes give back what they do not draw: no big gap below.
+        let last = header(&ui, "Short C");
+        assert!(
+            last.bottom() + 150.0 > ui.harness.ctx.content_rect().bottom() - 40.0,
+            "gap under the last pane: {last:?}"
+        );
+        // Stable: more frames change nothing.
+        let before = header(&ui, "Short A");
+        ui.harness.run_steps(5);
+        assert_eq!(header(&ui, "Short A"), before);
+    }
+
+    #[test]
+    fn a_resized_pane_keeps_its_height_and_collapsing_gives_it_back() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        short_plugin_panes(&mut ui, plugin.path());
+        let gap = |ui: &UiTest| {
+            let a = ui
+                .harness
+                .get_by_role_and_label(Role::Button, "Short A")
+                .rect();
+            let b = ui
+                .harness
+                .get_by_role_and_label(Role::Button, "Short B")
+                .rect();
+            b.top() - a.bottom()
+        };
+        let short = gap(&ui);
+        assert!(short < 120.0, "{short}");
+        ui.app_mut()
+            .config
+            .panes
+            .set_height("plugin:short/a", 150.0);
+        ui.harness.run_steps(5);
+        assert!(gap(&ui) >= 150.0, "{}", gap(&ui));
+        ui.app_mut().config.panes.toggle_collapsed("plugin:short/a");
+        ui.harness.run_steps(5);
+        assert!(gap(&ui) < 40.0, "{}", gap(&ui));
     }
 
     #[test]
@@ -969,5 +1239,671 @@ mod window_menu {
         assert!(ui.app().navigator_view.is_none());
         assert_eq!(ui.app().session().unwrap().navigator.renders, renders);
         assert!(!ui.harness.ctx.has_requested_repaint());
+    }
+}
+
+mod about {
+    use super::*;
+
+    #[test]
+    fn about_shows_the_build_and_offers_to_copy_it() {
+        let mut ui = UiTest::new();
+        ui.app_mut().dialog = Some(Dialog::About);
+        ui.settle();
+        let build = xuan::buildinfo::current();
+        // Dev builds lead with "Build" (or "Development build"); releases with "Version".
+        let shown = build.display();
+        assert!(ui.has(&shown), "About should show {shown:?}");
+        if build.release {
+            assert!(shown.starts_with("Version"));
+        } else {
+            assert!(shown.starts_with("Build") || shown == "Development build");
+        }
+        assert!(ui.has("Copy version"));
+        ui.click("Copy version");
+    }
+
+    #[test]
+    fn about_links_open_the_project_licences_and_issue_tracker() {
+        let mut ui = UiTest::new();
+        ui.app_mut().dialog = Some(Dialog::About);
+        ui.settle();
+        assert!(ui.has("Xuan"));
+        let site = format!("https://github.com/{}", xuan::update::REPOSITORY);
+        for (label, url) in [
+            ("Project site", site.clone()),
+            (
+                "Licences and third-party notices",
+                crate::app::dialogs::about_links(
+                    xuan::update::REPOSITORY,
+                    &xuan::buildinfo::current(),
+                )[1]
+                .1
+                .clone(),
+            ),
+            ("Report a bug", format!("{site}/issues/new")),
+        ] {
+            ui.click_and_stop(label);
+            let opened = ui
+                .harness
+                .output()
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::OpenUrl(open) => Some(open.url.clone()),
+                    _ => None,
+                });
+            assert_eq!(opened, Some(url), "{label}");
+            ui.settle();
+        }
+    }
+
+    #[test]
+    fn about_links_the_notices_at_the_release_tag_or_main() {
+        use crate::app::dialogs::about_links;
+        let mut build = xuan::buildinfo::current();
+        build.release = true;
+        build.version = "1.2.3";
+        let links = about_links("jeffory/xuan", &build);
+        assert_eq!(links[0].1, "https://github.com/jeffory/xuan");
+        assert_eq!(
+            links[1].1,
+            "https://github.com/jeffory/xuan/blob/v1.2.3/THIRD_PARTY.md"
+        );
+        assert_eq!(links[2].1, "https://github.com/jeffory/xuan/issues/new");
+        build.release = false;
+        assert_eq!(
+            about_links("jeffory/xuan", &build)[1].1,
+            "https://github.com/jeffory/xuan/blob/main/THIRD_PARTY.md"
+        );
+    }
+}
+
+mod color_range {
+    use super::*;
+
+    fn halves() -> UiTest {
+        let mut ui = UiTest::with_document();
+        let pixels = RgbaImage::from_fn(20, 16, |x, _| {
+            image::Rgba(if x < 10 {
+                [220, 20, 20, 255]
+            } else {
+                [20, 20, 220, 255]
+            })
+        });
+        ui.app_mut()
+            .session_mut()
+            .unwrap()
+            .document
+            .insert(Layer::image("Halves", pixels));
+        ui.settle();
+        ui
+    }
+
+    fn at(ui: &UiTest, x: f32, y: f32) -> egui::Pos2 {
+        let session = ui.app().session().unwrap();
+        ui.app().canvas_rect.unwrap().min + Vec2::new(x, y) * session.zoom
+    }
+
+    fn selected(ui: &UiTest) -> Option<Vec<u8>> {
+        let session = ui.app().session().unwrap();
+        session
+            .document
+            .selection
+            .as_ref()
+            .map(|s| s.as_raw().clone())
+    }
+
+    #[test]
+    fn picking_a_colour_previews_the_selection_and_apply_keeps_it() {
+        let mut ui = halves();
+        let revision = ui.app().session().unwrap().history.revision;
+        ui.open_menu("Select");
+        ui.click("Colour Range…");
+        assert!(ui.app().color_range.is_some());
+        assert!(ui.has("Fuzziness"));
+        // The menus' commands wait while the dialog is open.
+        assert!(!(commands::find("select_all").unwrap().enabled)(ui.app()));
+        let pos = at(&ui, 3.5, 4.5);
+        ui.click_at(pos);
+        let left: Vec<u8> = (0..20 * 16)
+            .map(|i| if i % 20 < 10 { 255 } else { 0 })
+            .collect();
+        assert_eq!(selected(&ui), Some(left.clone()));
+        ui.click_role(Role::CheckBox, "Invert");
+        let right: Vec<u8> = left.iter().map(|v| 255 - v).collect();
+        assert_eq!(selected(&ui), Some(right.clone()));
+        ui.click("Apply");
+        assert!(ui.app().color_range.is_none());
+        assert_eq!(selected(&ui), Some(right));
+        assert_eq!(ui.app().session().unwrap().history.revision, revision + 1);
+        // The tool from before is back.
+        assert_ne!(ui.app().tool, Tool::Dropper);
+    }
+
+    #[test]
+    fn the_hint_sits_inside_the_empty_matte_until_a_pick() {
+        let mut ui = halves();
+        ui.open_menu("Select");
+        ui.click("Colour Range…");
+        let hint = "Click the image to pick the colour to select.";
+        let node = ui.harness.get_by_label(hint).rect();
+        // The hint is the matte preview itself, between the mode buttons and Fuzziness.
+        let fuzziness = ui.harness.get_by_label("Fuzziness").rect();
+        let pick = ui.harness.get_by_label("Pick").rect();
+        assert!(node.height() > 100.0, "{node:?}");
+        assert!(node.top() > pick.bottom() && node.bottom() < fuzziness.top());
+        let pos = at(&ui, 3.5, 4.5);
+        ui.click_at(pos);
+        assert!(!ui.has(hint));
+        assert!(ui.has("Shift-click adds a colour, Alt-click takes one away."));
+    }
+
+    #[test]
+    fn cancel_puts_back_the_old_selection() {
+        let mut ui = halves();
+        ui.open_menu("Select");
+        ui.click("Colour Range…");
+        let pos = at(&ui, 15.5, 4.5);
+        ui.click_at(pos);
+        assert!(selected(&ui).is_some());
+        ui.click("Cancel");
+        assert!(ui.app().color_range.is_none());
+        assert_eq!(selected(&ui), None);
+        assert_ne!(
+            ui.app().session().unwrap().history.undo_name(),
+            Some("Colour Range")
+        );
+    }
+}
+
+mod selection_providers {
+    use super::*;
+    use xuan::plugins::manifest::Capability;
+
+    #[test]
+    fn settings_choose_a_provider_and_remember_it() {
+        let config = tempfile::tempdir().unwrap();
+        let plugin = tempfile::tempdir().unwrap();
+        std::fs::write(
+            plugin.path().join("plugin.toml"),
+            "[plugin]\nid = \"seg\"\nname = \"Seg\"\nversion = \"1\"\ncommand = [\"sh\", \"x\"]\n\n\
+             [[provides]]\ncapability = \"select_subject\"\naction = \"segment\"\n\n\
+             [[actions]]\nid = \"segment\"\nlabel = \"Segment\"\nsource = { from = \"composite\" }\n",
+        )
+        .unwrap();
+        let mut ui = UiTest::with_document();
+        ui.isolate_config(config.path());
+        let manifest = xuan::plugins::Manifest::load(plugin.path()).unwrap();
+        ui.app_mut().install_plugins(vec![manifest], vec![]);
+        ui.app_mut().command("settings");
+        ui.settle();
+        ui.click("Selection");
+        assert!(ui.has("Select Subject provider"));
+        // The first of the three pop-ups is Select Subject's.
+        ui.harness
+            .query_all_by_label("Built-in")
+            .next()
+            .unwrap()
+            .click();
+        ui.settle();
+        ui.click("Seg (seg)");
+        assert_eq!(
+            ui.app().config.providers.get(Capability::SelectSubject),
+            Some("seg")
+        );
+        assert_eq!(
+            ui.app().config.providers.get(Capability::ObjectSelect),
+            None
+        );
+        ui.click("Done");
+        let saved = xuan::config::Config::load(&config.path().join("config.toml")).unwrap();
+        assert_eq!(saved.providers.get(Capability::SelectSubject), Some("seg"));
+    }
+}
+
+/// Background jobs and status messages share the right of the status bar.
+mod status_bar {
+    use super::*;
+
+    fn job(
+        app: &EditorApp,
+        label: &str,
+        progress: Option<f32>,
+        message: &str,
+    ) -> crate::app::plugins::PluginJob {
+        crate::app::plugins::PluginJob {
+            id: uuid::Uuid::new_v4(),
+            plugin: "mock".into(),
+            action: "echo".into(),
+            label: label.into(),
+            document: app.session().unwrap().document.id,
+            _work_dir: xuan::plugins::private_dir("xuan-job-").unwrap(),
+            prepared: xuan::plugins::jobs::Prepared::none(),
+            regions: Vec::new(),
+            inputs: serde_json::json!({}),
+            into: xuan::plugins::manifest::ResultInto::Layer,
+            mask_to_regions: false,
+            progress,
+            message: message.into(),
+            cancelled: false,
+            consented: false,
+            provider: None,
+            surface: None,
+            ai_boxes: Vec::new(),
+            caller: None,
+        }
+    }
+
+    #[test]
+    fn running_jobs_show_in_the_status_bar_with_a_count() {
+        let mut ui = UiTest::with_document();
+        let first = job(ui.app(), "Generate Image…", None, "Running on Comfy Cloud");
+        ui.app_mut().plugins.jobs.push(first);
+        ui.settle();
+        // No floating window: the job is a line in the status bar, naming the
+        // plugin (here only its id: it is not installed).
+        assert!(ui.has("Generate Image · mock · Running on Comfy Cloud"));
+        assert!(!ui.has("1 of 1"));
+        let second = job(ui.app(), "Edit Image…", Some(0.5), "");
+        ui.app_mut().plugins.jobs.push(second);
+        ui.settle();
+        assert!(ui.has("1 of 2"));
+        // The count lists every job, each with its own Cancel.
+        ui.click("1 of 2");
+        assert!(ui.has_role(Role::Label, "Generate Image · mock"));
+        assert!(ui.has_role(Role::Label, "Edit Image · mock"));
+        assert_eq!(ui.harness.query_all_by_label("Cancel").count(), 3);
+    }
+
+    #[test]
+    fn running_jobs_show_with_no_document_open() {
+        // New Image → Generate from the empty state runs with no document.
+        let mut ui = UiTest::with_document();
+        let mut running = job(ui.app(), "Generate Image…", None, "Queued");
+        running.document = uuid::Uuid::new_v4();
+        ui.app_mut().command("close");
+        ui.settle();
+        assert!(ui.app().session().is_none());
+        ui.app_mut().plugins.jobs.push(running);
+        ui.settle();
+        assert!(ui.has("Generate Image · mock · Queued"));
+        assert!(ui.enabled("Cancel"));
+    }
+
+    #[test]
+    fn status_messages_show_for_a_few_seconds_then_the_tool_hint_returns() {
+        let mut ui = UiTest::with_document();
+        let hint = ui.app().tool.hint().to_owned();
+        assert!(ui.has(&hint));
+        ui.app_mut().status = "Mock (plugin mock): Saved\nsecond line".into();
+        ui.settle();
+        assert!(ui.has("Mock (plugin mock): Saved"));
+        assert!(!ui.has(&hint));
+        // Once the message is old, the hint is back.
+        ui.app_mut().status_shown.1 = -100.0;
+        ui.settle();
+        assert!(!ui.has("Mock (plugin mock): Saved"));
+        assert!(ui.has(&hint));
+    }
+}
+
+/// Plugin actions in the Layers panel, the toolbox and New Image.
+mod surfaces {
+    use super::*;
+
+    /// A plugin with a layer action whose prompt is basic and seed advanced.
+    pub(super) fn install(ui: &mut UiTest, dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[permissions]
+document = "edit"
+
+[[actions]]
+id = "layer"
+label = "Generate Layer…"
+surfaces = ["layer"]
+source = { from = "composite" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "What to add"
+
+[[actions.inputs]]
+id = "seed"
+type = "seed"
+label = "Seed"
+advanced = true
+
+[[actions.inputs]]
+id = "model"
+type = "enum"
+label = "Model"
+values = [{ id = "a", label = "Model A" }, { id = "b", label = "Model B" }]
+advanced = true
+"#,
+        )
+        .unwrap();
+        let manifest = xuan::plugins::Manifest::load(dir).unwrap();
+        ui.app_mut().install_plugins(vec![manifest], vec![]);
+        ui.app_mut().grant_plugin("ai", true);
+    }
+
+    #[test]
+    fn the_ai_layer_button_opens_a_prompt_first_popover() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        assert!(!ui.has("New layer with AI"));
+        install(&mut ui, dir.path());
+        ui.settle();
+        ui.click("New layer with AI");
+        assert!(ui.has("What to add"));
+        assert!(ui.has("Advanced"));
+        assert!(!ui.has("Seed"), "advanced inputs start collapsed");
+        // Review focus 2: no prompt, no Generate.
+        assert!(!ui.enabled("Generate"));
+        // The prompt is multiline; the Layers pane has a single-line field.
+        ui.harness.get_by_role(Role::MultilineTextInput).click();
+        ui.harness.step();
+        ui.harness
+            .get_by_role(Role::MultilineTextInput)
+            .type_text("a red kite");
+        ui.settle();
+        assert!(ui.enabled("Generate"));
+        ui.click("Advanced");
+        assert!(ui.has("Seed"));
+        // Generate runs the action as a layer surface over the whole canvas.
+        ui.click("Generate");
+        assert!(ui.app().surface_popup.is_none());
+        let job = &ui.app().plugins.jobs[0];
+        let run = job.surface.clone().unwrap();
+        assert_eq!(run.surface, xuan::plugins::manifest::Surface::Layer);
+        assert_eq!(run.target, (20, 16));
+        assert_eq!(job.inputs["prompt"], serde_json::json!("a red kite"));
+    }
+
+    /// Adds a region action ("Edit") to the plugin from `install`.
+    fn install_region(ui: &mut UiTest, dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[permissions]
+document = "edit"
+
+[[actions]]
+id = "edit"
+label = "Precise Edit…"
+surfaces = ["region"]
+verb = "Edit"
+source = { crop_to_regions = true }
+
+[[actions.inputs]]
+id = "regions"
+type = "regions"
+fields = [{ id = "desc", type = "text", label = "Instruction" }]
+"#,
+        )
+        .unwrap();
+        ui.app_mut()
+            .install_plugins(vec![xuan::plugins::Manifest::load(dir).unwrap()], vec![]);
+        ui.app_mut().grant_plugin("ai", true);
+    }
+
+    #[test]
+    fn ai_region_boxes_belong_to_their_document_and_are_not_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        assert!(ui.app().region_tool_available());
+        let history = ui.app().session().unwrap().history.names().count();
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(0.5, 0.5),
+            xuan::document::Point::new(1.0, 1.0),
+        ); // too small: ignored
+        let session = ui.app().session().unwrap();
+        assert_eq!(session.ai_boxes.len(), 1);
+        assert_eq!(session.ai_boxes[0].action, "edit");
+        assert_eq!(
+            session.ai_boxes[0].region.fields["desc"],
+            serde_json::json!("")
+        );
+        // Review focus 4: no undo steps, not modified.
+        assert_eq!(session.history.names().count(), history);
+        assert!(!session.history.dirty());
+        // Review focus 3: another document has its own (no) boxes, and the popover closes.
+        ui.app_mut().surface_popup = Some(crate::app::surfaces::SurfacePopup::Region {
+            document: ui.app().session().unwrap().document.id,
+            index: 0,
+        });
+        ui.app_mut().dimensions = [10, 10];
+        ui.app_mut().new_document();
+        ui.settle();
+        assert!(ui.app().session().unwrap().ai_boxes.is_empty());
+        assert!(ui.app().surface_popup.is_none());
+        ui.app_mut().current = 0;
+        assert_eq!(ui.app().session().unwrap().ai_boxes.len(), 1);
+        ui.app_mut().delete_ai_box(0);
+        assert!(ui.app().session().unwrap().ai_boxes.is_empty());
+    }
+
+    #[test]
+    fn drawing_an_ai_box_opens_its_popover() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        ui.app_mut().set_tool(Tool::Region);
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        ui.settle();
+        assert!(ui.has("Instruction"));
+        assert!(!ui.enabled("Generate"));
+    }
+
+    #[test]
+    fn the_action_dialog_shows_only_inputs_shown_on_the_menu() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[[actions]]
+id = "new"
+label = "Generate Image…"
+kind = "generate"
+surfaces = ["document"]
+result = { into = "document" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Prompt"
+
+[[actions.inputs]]
+id = "style"
+type = "text"
+label = "Style for New Image"
+surfaces = ["document"]
+
+[[actions.inputs]]
+id = "shape"
+type = "text"
+label = "Shape"
+surfaces = ["menu"]
+"#,
+        )
+        .unwrap();
+        ui.app_mut().install_plugins(
+            vec![xuan::plugins::Manifest::load(dir.path()).unwrap()],
+            vec![],
+        );
+        ui.app_mut().grant_plugin("ai", true);
+        ui.app_mut().start_plugin_action("ai", "new");
+        ui.settle();
+        assert!(ui.has("Prompt"));
+        assert!(ui.harness.query_all_by_label("Shape").next().is_some());
+        assert!(!ui.has("Style for New Image"));
+    }
+
+    #[test]
+    fn new_image_offers_a_generate_tab_only_with_a_document_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::new();
+        ui.app_mut().command("new");
+        ui.settle();
+        assert!(!ui.has("Generate"));
+        std::fs::write(
+            dir.path().join("plugin.toml"),
+            r#"
+[plugin]
+id = "ai"
+name = "AI"
+version = "0.1.0"
+command = ["sh", "-c", "cat > /dev/null"]
+
+[[actions]]
+id = "new"
+label = "Generate Image…"
+kind = "generate"
+surfaces = ["document"]
+result = { into = "document" }
+
+[[actions.inputs]]
+id = "prompt"
+type = "multiline"
+label = "Prompt"
+"#,
+        )
+        .unwrap();
+        ui.app_mut().install_plugins(
+            vec![xuan::plugins::Manifest::load(dir.path()).unwrap()],
+            vec![],
+        );
+        ui.settle();
+        ui.click("Generate");
+        assert!(ui.has("Prompt"));
+        assert!(ui.has("Exact size"));
+        // Whose action it is, and the prompt takes typing straight away.
+        assert!(ui.has("Generate Image · AI"));
+        assert!(
+            ui.harness
+                .get_by_role(Role::MultilineTextInput)
+                .is_focused()
+        );
+        assert!(ui.harness.query_all_by_label("Width").next().is_some());
+        assert!(!ui.enabled("Generate image"));
+        ui.harness
+            .get_by_role(Role::MultilineTextInput)
+            .type_text("a fox");
+        ui.settle();
+        ui.app_mut().dimensions = [1600, 900];
+        ui.click("Exact size");
+        // Not allowed yet: the permission prompt shows, nothing runs.
+        ui.click("Generate image");
+        assert_eq!(ui.app().dialog, Some(Dialog::PluginPermissions));
+        assert!(ui.app().plugins.jobs.is_empty());
+        ui.app_mut().grant_plugin("ai", true);
+        ui.app_mut().dialog = Some(Dialog::New);
+        ui.settle();
+        ui.click("Generate image");
+        assert_eq!(ui.app().dialog, None);
+        let run = ui.app().plugins.jobs[0].surface.clone().unwrap();
+        assert_eq!(run.surface, xuan::plugins::manifest::Surface::Document);
+        assert_eq!((run.target, run.exact), ((1600, 900), true));
+    }
+
+    #[test]
+    fn choosing_an_advanced_option_keeps_the_popover_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install(&mut ui, dir.path());
+        ui.settle();
+        ui.click("New layer with AI");
+        ui.click("Advanced");
+        ui.click("Model A");
+        ui.click("Model B");
+        assert!(ui.app().surface_popup.is_some());
+        let values = &ui.app().plugins.surface_values[&("ai".to_owned(), "layer".to_owned())];
+        assert_eq!(values["model"], serde_json::json!("b"));
+    }
+
+    #[test]
+    fn both_popovers_show_their_actions_estimate() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install(&mut ui, dir.path());
+        ui.app_mut()
+            .open_surface_popup(crate::app::surfaces::SurfacePopup::Layer {
+                plugin: "ai".into(),
+                action: "layer".into(),
+                anchor: egui::pos2(200.0, 400.0),
+            });
+        (ui.app_mut().plugins.surface_estimates)
+            .insert(("ai".into(), "layer".into()), "About 4 credits".into());
+        ui.settle();
+        assert!(ui.has("About 4 credits"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        ui.app_mut().set_tool(Tool::Region);
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        (ui.app_mut().plugins.surface_estimates)
+            .insert(("ai".into(), "edit".into()), "About 9 credits".into());
+        ui.settle();
+        assert!(ui.has("About 9 credits"));
+    }
+
+    #[test]
+    fn a_new_box_takes_typing_and_its_popover_goes_with_the_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ui = UiTest::with_document();
+        install_region(&mut ui, dir.path());
+        ui.app_mut().set_tool(Tool::Region);
+        ui.app_mut().add_ai_box(
+            xuan::document::Point::new(2.0, 2.0),
+            xuan::document::Point::new(12.0, 10.0),
+        );
+        ui.settle();
+        // The instruction has focus: typing goes there, not to tool shortcuts.
+        ui.harness.event(egui::Event::Text("hat".into()));
+        ui.settle();
+        assert_eq!(ui.app().tool, Tool::Region);
+        assert_eq!(
+            ui.app().session().unwrap().ai_boxes[0].region.fields["desc"],
+            serde_json::json!("hat")
+        );
+        ui.app_mut().set_tool(Tool::Brush);
+        ui.settle();
+        assert!(ui.app().surface_popup.is_none());
     }
 }

@@ -18,6 +18,7 @@ use xuan::{document::Point, operations};
 use super::{
     EditorApp,
     canvas::near_transform_handle,
+    commands::ctrl_or_cmd,
     pixel_grid::align_to_pixel,
     rulers::RulerLayout,
     snap::{self, SnapOptions, SnapTargets},
@@ -120,7 +121,7 @@ impl EditorApp {
                 i.pointer.latest_pos(),
                 i.pointer.press_origin(),
                 i.pointer.primary_down(),
-                i.modifiers.ctrl,
+                ctrl_or_cmd(i.modifiers),
                 i.key_down(egui::Key::Space),
             )
         });
@@ -317,7 +318,7 @@ impl EditorApp {
             (false, Some(original)) if original == drag.position => return,
             (false, Some(_)) => tr("Move Guide"),
         };
-        session.history.commit();
+        session.commit();
         session.history.begin(name, &session.document);
         let guides = &mut session.document.guides;
         if delete {
@@ -333,7 +334,7 @@ impl EditorApp {
                 position: drag.position,
             });
         }
-        session.history.commit();
+        session.commit();
         self.status = name.into();
     }
 
@@ -352,10 +353,10 @@ impl EditorApp {
         if session.document.guides.is_empty() {
             return;
         }
-        session.history.commit();
+        session.commit();
         session.history.begin(tr("Clear Guides"), &session.document);
         session.document.guides.clear();
-        session.history.commit();
+        session.commit();
         self.status = tr("Clear Guides").into();
     }
 

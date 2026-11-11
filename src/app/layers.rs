@@ -6,10 +6,10 @@ use egui::{Color32, RichText, Sense, Stroke, StrokeKind, TextureOptions, vec2};
 use uuid::Uuid;
 use xuan::{
     blend::BlendMode,
-    document::{Adjustment, Document, Layer},
+    document::{Document, Layer},
 };
 
-use super::{EditorApp, LayerDrag, icons, menus, theme};
+use super::{EditorApp, LayerDrag, commands::ctrl_or_cmd, icons, menus, theme::PaletteExt};
 
 pub(super) struct LayerRename {
     project: Uuid,
@@ -53,7 +53,7 @@ impl LayerThumbnail {
 #[derive(Default)]
 struct Actions {
     command: Option<&'static str>,
-    adjustment: Option<Adjustment>,
+    adjustment: Option<menus::AdjustmentChoice>,
     filter: Option<xuan::effects::Filter>,
     visibility: Option<Uuid>,
     select: Option<(Uuid, bool)>,
@@ -61,13 +61,15 @@ struct Actions {
     collapse: Option<Uuid>,
     reorder: Option<(LayerDrag, Uuid, DropPosition, bool)>,
     drop_indicator: Option<egui::Shape>,
-    appearance: Option<(BlendMode, f32, bool)>,
+    appearance: Option<(BlendMode, f32, f32, bool)>,
     rename: Option<Uuid>,
     finish_rename: Option<bool>,
     edit_adjustment: Option<Uuid>,
     edit_filter: Option<Uuid>,
     edit_text: Option<Uuid>,
     edit_raw: Option<Uuid>,
+    /// New layer with AI: the plugin, action and where to anchor its popover.
+    ai_layer: Option<(String, String, egui::Pos2)>,
 }
 
 #[derive(Clone, Copy)]
@@ -101,9 +103,9 @@ fn generation_info(ui: &mut egui::Ui, layer: &Layer) {
     egui::CollapsingHeader::new(RichText::new(tr("Generation")).size(11.0))
         .id_salt("generation_info")
         .show(ui, |ui| {
-            let small = |text: String| {
-                egui::Label::new(RichText::new(text).size(11.0).color(theme::MUTED)).wrap()
-            };
+            let muted = ui.palette().muted;
+            let small =
+                |text: String| egui::Label::new(RichText::new(text).size(11.0).color(muted)).wrap();
             ui.add(small(format!(
                 "{}: {} ({})",
                 tr("Plugin"),
@@ -189,11 +191,11 @@ impl EditorApp {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.add_space((height * 0.5 - 48.0).max(10.0));
                         ui.vertical_centered(|ui| {
-                            ui.label(RichText::new(tr("No layers yet")).color(theme::MUTED));
+                            ui.label(RichText::new(tr("No layers yet")).color(ui.palette().muted));
                             ui.label(
                                 RichText::new(tr("Create a canvas or import an image."))
                                     .size(11.0)
-                                    .color(theme::MUTED),
+                                    .color(ui.palette().muted),
                             );
                         });
                     }
@@ -220,6 +222,7 @@ impl EditorApp {
                 ui.add_enabled_ui(active.is_some(), |ui| {
                     let mut blend = active.map_or(BlendMode::Normal, |l| l.blend);
                     let mut opacity = active.map_or(1.0, |l| l.opacity);
+                    let mut fill = active.map_or(1.0, |l| l.fill);
                     let mut locked = active.is_some_and(|l| l.locked);
                     let mut changed = false;
                     let folder = active.is_some_and(|l| l.group);
@@ -268,8 +271,27 @@ impl EditorApp {
                             )
                             .changed();
                     });
+                    // Photoshop's Fill: fades the layer's own pixels but not its effects. Only
+                    // pixel, text and shape layers have one.
+                    ui.add_enabled_ui(active.is_some_and(|l| l.can_attach_effects()), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(tr("Fill")).size(11.0))
+                                .on_hover_text(tr(
+                                    "Fades the layer's own pixels but not its layer effects",
+                                ));
+                            ui.spacing_mut().slider_width =
+                                (ui.available_width() - 50.0 - widgets::SLIDER_SPACING).max(40.0);
+                            changed |= ui
+                                .add(
+                                    widgets::Slider::new(&mut fill, 0.0..=1.0)
+                                        .value_width(50.0)
+                                        .percentage(),
+                                )
+                                .changed();
+                        });
+                    });
                     if changed {
-                        actions.appearance = Some((blend, opacity, locked));
+                        actions.appearance = Some((blend, opacity, fill, locked));
                     }
                 });
                 if let Some(active) = active.filter(|l| l.generated.is_some()) {
@@ -310,9 +332,9 @@ impl EditorApp {
                 ui.style_mut().interaction.selectable_labels = false;
                 egui::Frame::new()
                     .fill(if selected {
-                        Color32::from_gray(57)
+                        ui.palette().row_selected
                     } else {
-                        theme::PANEL
+                        ui.palette().panel
                     })
                     .inner_margin(egui::Margin::symmetric(8, 8))
                     .show(ui, |ui| {
@@ -339,13 +361,17 @@ impl EditorApp {
                                             }
                                         }
                                         if layer.group {
-                                            if icons::action_button(ui, "group").clicked() {
+                                            if icons::action_button(ui, "group", tr("Select group"))
+                                                .clicked()
+                                            {
                                                 actions.select = Some((layer.id, false));
                                             }
                                         } else if !layer.standalone_mask {
                                             if layer.clip_to.is_some() {
                                                 ui.label(
-                                                    RichText::new("↳").small().color(theme::MUTED),
+                                                    RichText::new("↳")
+                                                        .small()
+                                                        .color(ui.palette().muted),
                                                 );
                                             }
                                             self.layer_thumbnail(
@@ -358,9 +384,9 @@ impl EditorApp {
                                             );
                                         }
                                         let color = if layer.visible {
-                                            theme::TEXT
+                                            ui.palette().text
                                         } else {
-                                            theme::MUTED
+                                            ui.palette().muted
                                         };
                                         ui.vertical(|ui| {
                                             ui.spacing_mut().item_spacing.y = 3.0;
@@ -415,7 +441,7 @@ impl EditorApp {
                                                 egui::Label::new(
                                                     RichText::new(detail)
                                                         .size(10.0)
-                                                        .color(theme::MUTED),
+                                                        .color(ui.palette().muted),
                                                 )
                                                 .truncate(),
                                             );
@@ -455,7 +481,7 @@ impl EditorApp {
         }
         ui.painter().line_segment(
             [response.rect.left_bottom(), response.rect.right_bottom()],
-            Stroke::new(0.5_f32, Color32::from_white_alpha(14)),
+            Stroke::new(0.5_f32, ui.palette().row_rule),
         );
         response.context_menu(|ui| {
             if layer.raw.is_some() {
@@ -557,7 +583,7 @@ impl EditorApp {
             {
                 return;
             }
-            let stroke = Stroke::new(2.0_f32, theme::ACCENT);
+            let stroke = Stroke::new(2.0_f32, ui.palette().accent);
             actions.drop_indicator = Some(match position {
                 DropPosition::Above => egui::Shape::line_segment(
                     [response.rect.left_top(), response.rect.right_top()],
@@ -628,6 +654,7 @@ impl EditorApp {
                 let mut thumbnail_layer = layer.clone();
                 thumbnail_layer.visible = true;
                 thumbnail_layer.opacity = 1.0;
+                thumbnail_layer.fill = 1.0;
                 thumbnail_layer.blend = BlendMode::Normal;
                 thumbnail_layer.parent = None;
                 thumbnail_layer.clip_to = None;
@@ -643,7 +670,7 @@ impl EditorApp {
                     image.as_raw(),
                 )
             } else {
-                egui::ColorImage::filled([38, 30], Color32::from_gray(48))
+                egui::ColorImage::filled([38, 30], ui.palette().thumbnail_placeholder)
             };
             let texture = ui.ctx().load_texture(
                 format!("thumbnail-{}-{mask}", layer.id),
@@ -674,7 +701,7 @@ impl EditorApp {
         ui.painter().rect_stroke(
             rect,
             2.0,
-            Stroke::new(1.0_f32, Color32::from_white_alpha(75)),
+            Stroke::new(1.0_f32, ui.palette().thumbnail_edge),
             StrokeKind::Inside,
         );
         if response.clicked() {
@@ -687,24 +714,25 @@ impl EditorApp {
             ui.painter().rect_stroke(
                 rect.expand(2.0),
                 2.0,
-                Stroke::new(1.0_f32, theme::TEXT),
+                Stroke::new(1.0_f32, ui.palette().text),
                 StrokeKind::Outside,
             );
         }
+        widgets::focus_ring_at(ui, &response, rect, 2.0, widgets::FocusRing::Around);
         if mask && !layer.mask.as_ref().unwrap().enabled {
             ui.painter().line_segment(
                 [response.rect.left_top(), response.rect.right_bottom()],
-                Stroke::new(1.5_f32, Color32::LIGHT_RED),
+                Stroke::new(1.5_f32, ui.palette().error),
             );
         }
         if !mask && layer.pixels.is_none() && (layer.adjustment.is_some() || layer.filter.is_some())
         {
             let center = response.rect.center();
-            ui.painter().circle_filled(center, 7.0, theme::MUTED);
+            ui.painter().circle_filled(center, 7.0, ui.palette().muted);
             ui.painter().rect_filled(
                 egui::Rect::from_min_max(center - vec2(0.0, 7.0), center + vec2(7.0, 7.0)),
                 0.0,
-                Color32::from_gray(48),
+                ui.palette().thumbnail_placeholder,
             );
         }
     }
@@ -731,26 +759,22 @@ impl EditorApp {
                                 "mask",
                             ),
                         ] {
-                            if icons::action_button(ui, command)
-                                .on_hover_text(tip)
-                                .clicked()
-                            {
+                            if icons::action_button(ui, command, tip).clicked() {
                                 actions.command = Some(command);
                             }
                         }
-                        let adjustment = icons::action_button(ui, "adjustment")
-                            .on_hover_text(tr("New adjustment layer"));
+                        let adjustment =
+                            icons::action_button(ui, "adjustment", tr("New adjustment layer"));
                         egui::Popup::menu(&adjustment).show(|ui| {
                             actions.adjustment = menus::adjustment_menu(ui);
                         });
-                        let filter = icons::action_button(ui, "filter")
-                            .on_hover_text(tr("New filter layer"));
+                        let filter = icons::action_button(ui, "filter", tr("New filter layer"));
                         egui::Popup::menu(&filter).show(|ui| {
                             actions.filter = menus::filter_menu(ui);
                         });
+                        self.ai_layer_button(ui, actions);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if icons::action_button(ui, "delete_layer")
-                                .on_hover_text(tr("Delete layer"))
+                            if icons::action_button(ui, "delete_layer", tr("Delete layer"))
                                 .clicked()
                             {
                                 actions.command = Some("delete_layer");
@@ -761,7 +785,44 @@ impl EditorApp {
             });
     }
 
+    /// New layer with AI: one action opens its popover; several, a menu.
+    fn ai_layer_button(&self, ui: &mut egui::Ui, actions: &mut Actions) {
+        let layer_actions = self.surface_actions(xuan::plugins::manifest::Surface::Layer);
+        if layer_actions.is_empty() {
+            return;
+        }
+        // Disabled with the rest of the footer while no document is open.
+        let button = icons::action_button(ui, "ai_layer", tr("New layer with AI"));
+        let anchor = button.rect.left_top() - vec2(0.0, 6.0);
+        if let [offered] = layer_actions.as_slice() {
+            // The one action's plugin, on hover after the button's own name.
+            let button = button.on_hover_text(offered.attributed());
+            if button.clicked() {
+                actions.ai_layer = Some((offered.plugin.clone(), offered.action.clone(), anchor));
+            }
+            return;
+        }
+        egui::Popup::menu(&button).show(|ui| {
+            for offered in &layer_actions {
+                let item = super::menus::item_button(ui, true, &offered.attributed(), "")
+                    .on_hover_text(&offered.source);
+                if item.clicked() {
+                    actions.ai_layer =
+                        Some((offered.plugin.clone(), offered.action.clone(), anchor));
+                    ui.close();
+                }
+            }
+        });
+    }
+
     fn apply_layer_actions(&mut self, ctx: &egui::Context, actions: Actions) {
+        if let Some((plugin, action, anchor)) = actions.ai_layer.clone() {
+            self.open_surface_popup(super::surfaces::SurfacePopup::Layer {
+                plugin,
+                action,
+                anchor,
+            });
+        }
         if let Some(apply) = actions.finish_rename {
             self.finish_layer_rename(ctx, apply);
         }
@@ -781,7 +842,7 @@ impl EditorApp {
             });
         }
         if let Some((id, mask)) = actions.select {
-            let extend = ctx.input(|i| i.modifiers.shift || i.modifiers.ctrl);
+            let extend = ctx.input(|i| i.modifiers.shift || ctrl_or_cmd(i.modifiers));
             if let Some(session) = self.session_mut() {
                 session.document.select(id, extend);
             }
@@ -793,11 +854,14 @@ impl EditorApp {
         {
             session.collapsed.insert(id);
         }
-        if let Some((blend, opacity, locked)) = actions.appearance {
+        if let Some((blend, opacity, fill, locked)) = actions.appearance {
             self.edit_continuous(tr("Layer Appearance"), |doc| {
                 if let Some(layer) = doc.active_mut() {
                     layer.blend = blend;
                     layer.opacity = opacity;
+                    if layer.can_attach_effects() {
+                        layer.fill = fill;
+                    }
                     layer.locked = locked;
                 }
                 Ok(())
@@ -832,8 +896,8 @@ impl EditorApp {
         if let Some(command) = actions.command {
             self.command(command);
         }
-        if let Some(adjustment) = actions.adjustment {
-            self.start_adjustment(adjustment, true);
+        if let Some(choice) = actions.adjustment {
+            self.choose_adjustment(choice, true);
         }
         if let Some(filter) = actions.filter {
             self.start_filter_layer(filter);
@@ -946,9 +1010,6 @@ impl EditorApp {
             return;
         }
         self.edit(tr("Reorder Layer"), |doc| {
-            let Some(destination) = doc.layers.iter().find(|l| l.id == target).cloned() else {
-                return Ok(());
-            };
             if duplicate {
                 doc.select(source, false);
                 xuan::operations::duplicate(doc);
@@ -958,28 +1019,12 @@ impl EditorApp {
             } else {
                 source
             };
-            let Some(index) = doc.layers.iter().position(|l| l.id == source) else {
-                return Ok(());
+            let at = match position {
+                DropPosition::Above => xuan::operations::Placement::Above,
+                DropPosition::Below => xuan::operations::Placement::Below,
+                DropPosition::Inside => xuan::operations::Placement::Inside,
             };
-            let mut layer = doc.layers.remove(index);
-            layer.parent = if matches!(position, DropPosition::Inside) {
-                Some(target)
-            } else {
-                destination.parent
-            };
-            layer.clip_to = None;
-            // The panel lists siblings from top to bottom, opposite their paint order.
-            let target_index = doc.layers.iter().position(|l| l.id == target).unwrap();
-            let index = match position {
-                DropPosition::Above => target_index + 1,
-                DropPosition::Below => target_index,
-                DropPosition::Inside => doc
-                    .layers
-                    .iter()
-                    .rposition(|l| l.parent == Some(target))
-                    .map_or(target_index + 1, |i| i + 1),
-            };
-            doc.layers.insert(index, layer);
+            xuan::operations::move_layer(doc, source, target, at);
             doc.select(source, false);
             doc.validate()
         });

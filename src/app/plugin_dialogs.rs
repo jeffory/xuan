@@ -1,11 +1,12 @@
 //! Windows for plugins: the action dialog built from a manifest's inputs,
 //! permission prompts, the plugin manager, running jobs and proposals.
+use super::theme::PaletteExt as _;
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
-    i18n::tr,
+    i18n::{tr, tr_args, tr_plural},
     plugins::{
-        manifest::{Input, InputKind, Manifest, ResultInto},
+        manifest::{Input, InputKind, Manifest, ResultInto, Surface},
         sandbox,
         ui::Node,
     },
@@ -13,14 +14,43 @@ use xuan::{
 
 use super::{EditorApp, plugins::PendingStart, theme, widgets};
 
+/// A grant's folder in the permission prompt: `dir` itself, or for a plugin
+/// that comes with Xuan (whose grant stores only the folder's name, see
+/// `plugins::grant_dir`), the folder it is in now, `actual`.
+fn grant_folder_text(dir: &std::path::Path, actual: &std::path::Path) -> String {
+    if !xuan::plugins::is_bundled_grant_dir(dir) {
+        return dir.display().to_string();
+    }
+    if actual == dir {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        format!("{} ({name})", tr("the plugins that come with Xuan"))
+    } else {
+        format!("{} ({})", actual.display(), tr("comes with Xuan"))
+    }
+}
+
+/// The id `input_widget` gives an input's widget, for focusing it.
+pub(super) fn input_id(input: &Input, salt: impl std::hash::Hash) -> egui::Id {
+    egui::Id::new(("plugin_input", &input.id, salt))
+}
+
 /// Draw one input and update its JSON value. Returns whether it changed.
+/// The most whole numbers a slider offers: an integer input with a wider range, such as a port
+/// (0–65535), gets a number field, where a value can be typed rather than hunted for.
+pub(super) const SLIDER_MAX_STEPS: f64 = 10_000.0;
+
+/// Whether an input with this range is a slider rather than a number field.
+pub(super) fn slider_fits(integer: bool, min: f64, max: f64) -> bool {
+    !integer || max - min <= SLIDER_MAX_STEPS
+}
+
 pub(super) fn input_widget(
     ui: &mut egui::Ui,
     input: &Input,
     value: &mut Value,
     salt: impl std::hash::Hash,
 ) -> bool {
-    let id = egui::Id::new(("plugin_input", &input.id, salt));
+    let id = input_id(input, salt);
     let mut changed = false;
     let label = |ui: &mut egui::Ui| {
         let response = ui.label(input.label());
@@ -85,7 +115,9 @@ pub(super) fn input_widget(
                 let max = input
                     .max
                     .unwrap_or(if integer { i64::MAX as f64 } else { f64::MAX });
-                let response = if let (Some(min), Some(max)) = (input.min, input.max) {
+                let response = if let (Some(min), Some(max)) = (input.min, input.max)
+                    && slider_fits(integer, min, max)
+                {
                     ui.spacing_mut().slider_width = 140.0;
                     let mut slider = widgets::Slider::new(&mut number, min..=max);
                     if integer {
@@ -168,6 +200,10 @@ pub(super) fn input_widget(
 
 impl EditorApp {
     pub(super) fn plugin_action_dialog(&mut self, ctx: &egui::Context) {
+        // A surface run waiting on a prompt has no dialog.
+        if !self.plugin_action_dialog_shown() {
+            return;
+        }
         let Some((plugin, action)) = self
             .plugins
             .action
@@ -202,15 +238,16 @@ impl EditorApp {
             .id(("plugin_action", &plugin, &action))
             .default_width(380.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let Some(edit) = &mut self.plugins.action else {
-                    return;
+                    return None;
                 };
                 if !spec.description.is_empty() {
-                    ui.add(egui::Label::new(RichText::new(&spec.description).color(theme::MUTED)).wrap());
+                    ui.add(egui::Label::new(RichText::new(&spec.description).color(ui.palette().muted)).wrap());
                     ui.add_space(8.0);
                 }
-                for input in &spec.inputs {
+                // Inputs with `surfaces` show only where listed; "menu" is this dialog.
+                for input in spec.inputs.iter().filter(|i| i.shown_on(Surface::Menu)) {
                     if input.kind == InputKind::Regions {
                         ui.add_space(4.0);
                         ui.label(RichText::new(input.label()).strong());
@@ -220,7 +257,7 @@ impl EditorApp {
                                     "Drag on the canvas to add a box, or add the current selection.",
                                 ))
                                 .small()
-                                .color(theme::MUTED),
+                                .color(ui.palette().muted),
                             )
                             .wrap(),
                         );
@@ -248,7 +285,7 @@ impl EditorApp {
                             });
                             if selected {
                                 ui.indent(("region_fields", index), |ui| {
-                                    for field in &input.fields {
+                                    for field in input.fields.iter().filter(|f| f.shown_on(Surface::Menu)) {
                                         let value = edit.regions[index]
                                             .fields
                                             .entry(field.id.clone())
@@ -309,17 +346,19 @@ impl EditorApp {
                     });
                     ui.add_space(4.0);
                 }
-                ui.add_space(8.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if let Some(estimate) = &edit.estimate {
-                        ui.label(RichText::new(estimate).color(theme::MUTED));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        run = widgets::primary_button(ui, tr("Run")).clicked();
-                        cancel = widgets::button(ui, tr("Cancel")).clicked();
-                    });
-                });
+                Some(edit.estimate.clone())
+            }, |ui, estimate| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Run")),
+                    |ui| {
+                        if let Some(estimate) = estimate.flatten() {
+                            ui.label(RichText::new(estimate).color(ui.palette().muted));
+                        }
+                    },
+                );
+                run = response.commit;
+                cancel = response.cancel;
             });
         if use_selection {
             self.add_selection_region();
@@ -363,7 +402,7 @@ impl EditorApp {
             .id(("plugin_permissions", &plugin))
             .default_width(420.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 ui.add(
                     egui::Label::new(format!(
                         "{source} {} {}",
@@ -381,12 +420,12 @@ impl EditorApp {
                     RichText::new(format!(
                         "{} {}\n{} {}",
                         tr("Folder:"),
-                        grant.dir.display(),
+                        grant_folder_text(&grant.dir, &manifest.dir),
                         tr("Runs:"),
                         grant.command.join(" ")
                     ))
                     .small()
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
                 );
                 ui.add_space(8.0);
                 permissions_list(ui, &manifest, blocked);
@@ -397,7 +436,7 @@ impl EditorApp {
                         ui.label(format!(
                             "• {} {}",
                             tr("It was in"),
-                            previous.dir.display()
+                            grant_folder_text(&previous.dir, &previous.dir)
                         ));
                     }
                     if previous.command != grant.command {
@@ -411,18 +450,17 @@ impl EditorApp {
                         ui.label(format!("• {}", tr("Its permissions changed")));
                     }
                 }
-                ui.add_space(12.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Allow")).clicked() {
-                            decision = Some(true);
-                        }
-                        if widgets::button(ui, tr("Deny")).clicked() {
-                            decision = Some(false);
-                        }
-                    });
-                });
+            }, |ui, ()| {
+                let response = widgets::dialog_footer(
+                    ui,
+                    widgets::FooterButtons::commit(tr("Allow")).cancel_label(tr("Deny")),
+                    |_| {},
+                );
+                if response.commit {
+                    decision = Some(true);
+                } else if response.cancel {
+                    decision = Some(false);
+                }
             });
         match decision {
             Some(true) => {
@@ -430,8 +468,10 @@ impl EditorApp {
                 self.plugins.permission_request = None;
                 self.dialog = None;
                 match next {
+                    // Not `start_plugin_action`: a provider run waiting for this
+                    // grant continues as one.
                     PendingStart::Action(action) if !action.is_empty() => {
-                        self.start_plugin_action(&plugin, &action)
+                        self.start_plugin_action_with(&plugin, &action, None)
                     }
                     PendingStart::Pane(key) => self.render_pane(&key, "open", None),
                     PendingStart::Action(_) => {}
@@ -465,6 +505,10 @@ impl EditorApp {
         let mut enable: Option<(String, bool)> = None;
         let mut setting_changed: Option<(String, String, Value)> = None;
         let mut ask_again: Option<String> = None;
+        let mut auto_mode: Option<(String, bool)> = None;
+        let mut save_mode: Option<(String, bool)> = None;
+        let mut run_mode: Option<(String, bool)> = None;
+        let mut run_auto: Option<(String, bool)> = None;
         let mut offline = self.config.disable_network_plugins;
         let mut block = self.config.block_undeclared_network();
         let plugin_dir = self
@@ -476,7 +520,7 @@ impl EditorApp {
             .id("plugin_manager")
             .default_width(680.0)
             .open(&mut open)
-            .show(ctx, |ui| {
+            .show_with_footer(ctx, |ui| {
                 let mut separator = None;
                 let columns = ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
@@ -493,7 +537,7 @@ impl EditorApp {
                                         .get(&manifest.plugin.id)
                                         .is_none_or(|c| c.enabled);
                                     let text = RichText::new(&manifest.plugin.name);
-                                    let text = if enabled { text } else { text.color(theme::MUTED) };
+                                    let text = if enabled { text } else { text.color(ui.palette().muted) };
                                     if ui
                                         .selectable_label(selected.as_deref() == Some(&manifest.plugin.id), text)
                                         .clicked()
@@ -502,7 +546,7 @@ impl EditorApp {
                                     }
                                 }
                                 if manifests.is_empty() {
-                                    ui.label(RichText::new(tr("No plugins installed")).color(theme::MUTED));
+                                    ui.label(RichText::new(tr("No plugins installed")).color(ui.palette().muted));
                                 }
                             });
                         ui.add_space(8.0);
@@ -538,7 +582,7 @@ impl EditorApp {
                             );
                             if let Some(dir) = &plugin_dir {
                                 ui.add_space(8.0);
-                                ui.label(RichText::new(dir.display().to_string()).color(theme::MUTED));
+                                ui.label(RichText::new(dir.display().to_string()).color(ui.palette().muted));
                             }
                             return;
                         };
@@ -546,7 +590,7 @@ impl EditorApp {
                         let config = self.config.plugins.get(&id).cloned().unwrap_or_default();
                         ui.horizontal(|ui| {
                             ui.heading(&manifest.plugin.name);
-                            ui.label(RichText::new(&manifest.plugin.version).color(theme::MUTED));
+                            ui.label(RichText::new(&manifest.plugin.version).color(ui.palette().muted));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let mut enabled = config.enabled;
                                 if widgets::checkbox(ui, &mut enabled, tr("Enabled")).changed() {
@@ -558,22 +602,27 @@ impl EditorApp {
                             ui.add(egui::Label::new(&manifest.plugin.description).wrap());
                         }
                         ui.add_space(4.0);
-                        ui.label(RichText::new(manifest.dir.display().to_string()).small().color(theme::MUTED));
-                        let status = if self.plugin_offline(&id) {
-                            tr("Off: plugins that use the network are disabled")
+                        let folder = grant_folder_text(&super::plugins::grant_for(manifest).dir, &manifest.dir);
+                        ui.label(RichText::new(folder).small().color(ui.palette().muted));
+                        let (status, dot) = if self.plugin_offline(&id) {
+                            (tr("Off: plugins that use the network are disabled"), ui.palette().warning)
                         } else if self.plugins.running(&id) {
-                            tr("Running")
+                            (tr("Running"), ui.palette().accent)
                         } else {
-                            tr("Not running")
+                            (tr("Not running"), ui.palette().muted)
                         };
-                        ui.label(RichText::new(status).small().color(theme::MUTED));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            widgets::status_dot(ui, dot);
+                            ui.label(RichText::new(status).small().color(ui.palette().muted));
+                        });
                         ui.add_space(8.0);
                         {
-                            ui.label(RichText::new(tr("Permissions")).strong());
+                            widgets::subheading(ui, tr("Permissions"));
                             permissions_list(ui, manifest, self.plugin_network_blocked(&id));
                             ui.horizontal(|ui| {
                                 if self.plugin_granted(&id) {
-                                    ui.label(RichText::new(tr("Allowed")).color(theme::MUTED));
+                                    ui.label(RichText::new(tr("Allowed")).color(ui.palette().muted));
                                     if widgets::button(ui, tr("Revoke")).clicked() {
                                         grant = Some((id.clone(), false));
                                     }
@@ -587,17 +636,65 @@ impl EditorApp {
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         RichText::new(tr("Gets document data without asking"))
-                                            .color(theme::MUTED),
+                                            .color(ui.palette().muted),
                                     );
                                     if widgets::button(ui, tr("Ask Again")).clicked() {
                                         ask_again = Some(id.clone());
                                     }
                                 });
                             }
+                            if self.plugin_granted(&id) && self.asks_before_edits(&id) {
+                                let mut auto = self.edits_without_asking(&id);
+                                if widgets::checkbox(ui, &mut auto, tr("Edit without asking (auto mode)"))
+                                    .on_hover_text(tr("Off: the plugin asks before its first edit in each session. On: it edits your documents without asking; every edit is still one step you can undo."))
+                                    .changed()
+                                {
+                                    auto_mode = Some((id.clone(), auto));
+                                }
+                            }
+                            // Shown for plugins that drive the editor (the MCP
+                            // server), and for any plugin while it is on, so it
+                            // can be turned off.
+                            if self.plugin_granted(&id)
+                                && (self.asks_before_edits(&id) || self.saves_without_asking(&id))
+                            {
+                                let mut save = self.saves_without_asking(&id);
+                                if widgets::checkbox(ui, &mut save, tr("Save and export without asking"))
+                                    .on_hover_text(tr("Off: when the plugin names a file to save or export, Xuan asks first. On: it writes new files, and files it wrote since Xuan started, without asking; the status bar shows each one. Replacing any other file still asks."))
+                                    .changed()
+                                {
+                                    save_mode = Some((id.clone(), save));
+                                }
+                            }
+                            // Running other plugins' actions, offered like
+                            // saving without asking.
+                            if self.plugin_granted(&id)
+                                && (self.asks_before_edits(&id) || self.runs_other_actions(&id))
+                            {
+                                let mut run = self.runs_other_actions(&id);
+                                if widgets::checkbox(ui, &mut run, tr("Run other plugins' actions"))
+                                    .on_hover_text(tr("Off: the plugin cannot list or start other plugins' actions. On: it can, and Xuan asks you before its first run of each plugin in each session. The other plugin's own permission, send and model prompts still apply, and its result is a proposal you accept or discard."))
+                                    .changed()
+                                {
+                                    run_mode = Some((id.clone(), run));
+                                }
+                                if run {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(18.0);
+                                        let mut always = self.runs_without_asking(&id);
+                                        if widgets::checkbox(ui, &mut always, tr("Run them without asking"))
+                                            .on_hover_text(tr("On: no prompt before the plugin's runs of other plugins' actions. The other plugin's own prompts still apply."))
+                                            .changed()
+                                        {
+                                            run_auto = Some((id.clone(), always));
+                                        }
+                                    });
+                                }
+                            }
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
-                            ui.label(RichText::new(tr("Settings")).strong());
+                            widgets::subheading(ui, tr("Settings"));
                             for setting in &manifest.settings {
                                 let mut value = if setting.kind == InputKind::Secret {
                                     Value::String(
@@ -620,17 +717,21 @@ impl EditorApp {
                             }
                             ui.add_space(8.0);
                         }
+                        for pane in (manifest.panes.iter())
+                            .filter(|pane| pane.placement == xuan::plugins::manifest::PanePlacement::Settings)
+                        {
+                            widgets::subheading(ui, super::plugins::one_line(&pane.title, 80));
+                            self.plugin_settings_pane(ui, &super::plugins::pane_key(&id, &pane.id));
+                            ui.add_space(8.0);
+                        }
                         self.plugin_models_section(ui, manifest);
                         let summary = format!(
-                            "{} {} · {} {} · {} {}",
-                            manifest.actions.len(),
-                            tr("actions"),
-                            manifest.panes.len(),
-                            tr("panes"),
-                            manifest.formats.len(),
-                            tr("formats")
+                            "{} · {} · {}",
+                            tr_plural("{n} actions", manifest.actions.len() as u64),
+                            tr_plural("{n} panes", manifest.panes.len() as u64),
+                            tr_plural("{n} formats", manifest.formats.len() as u64)
                         );
-                        ui.label(RichText::new(summary).small().color(theme::MUTED));
+                        ui.label(RichText::new(summary).small().color(ui.palette().muted));
                         let log = self.plugins.log(&id);
                         if !log.is_empty() {
                             egui::CollapsingHeader::new(tr("Log"))
@@ -655,13 +756,13 @@ impl EditorApp {
                 }
                 if !errors.is_empty() {
                     ui.separator();
-                    ui.label(RichText::new(tr("Could not load")).strong());
+                    widgets::subheading(ui, tr("Could not load"));
                     for error in &errors {
                         ui.add(
                             egui::Label::new(
                                 RichText::new(format!("{}: {}", error.dir.display(), error.error))
                                     .small()
-                                    .color(theme::MUTED),
+                                    .color(ui.palette().muted),
                             )
                             .wrap(),
                         );
@@ -674,16 +775,20 @@ impl EditorApp {
                     widgets::checkbox(ui, &mut block, tr("Block network for plugins that don't declare it"))
                         .on_hover_text(tr("Plugins that declare no network hosts cannot connect to the network, not even to this computer (localhost). Running plugins restart to apply it. Plugins that declare hosts are not blocked."));
                 }
-                ui.horizontal(|ui| {
-                    if let Some(dir) = &plugin_dir {
-                        ui.label(RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display())).small().color(theme::MUTED));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, tr("Done")).clicked() {
-                            done = true;
-                        }
-                    });
-                });
+                if let Some(dir) = &plugin_dir {
+                    // A long path would widen the window: elide it, with the whole path on hover.
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{}: {}", tr("Plugins folder"), dir.display()))
+                                .small()
+                                .color(ui.palette().muted),
+                        )
+                        .truncate(),
+                    );
+                }
+            }, |ui, ()| {
+                done = widgets::dialog_footer(ui, widgets::FooterButtons::single(tr("Done")), |_| {})
+                    .commit;
             });
         self.plugins.manager_selected = selected;
         if let Some((id, granted)) = grant {
@@ -701,6 +806,18 @@ impl EditorApp {
         }
         if let Some(id) = ask_again {
             self.ask_before_sending_again(&id);
+        }
+        if let Some((id, on)) = auto_mode {
+            self.set_edit_auto_mode(&id, on);
+        }
+        if let Some((id, on)) = save_mode {
+            self.set_save_without_asking(&id, on);
+        }
+        if let Some((id, on)) = run_mode {
+            self.set_run_other_actions(&id, on);
+        }
+        if let Some((id, on)) = run_auto {
+            self.set_run_without_asking(&id, on);
         }
         if offline != self.config.disable_network_plugins {
             self.set_network_plugins_disabled(offline);
@@ -747,75 +864,137 @@ impl EditorApp {
         self.notify_settings(plugin);
     }
 
-    /// Floating status for running plugin jobs.
-    pub(super) fn plugin_job_windows(&mut self, ctx: &egui::Context) {
-        let jobs: Vec<(uuid::Uuid, String, Option<f32>, String)> = (self.plugins.jobs.iter())
-            .map(|job| (job.id, job.label.clone(), job.progress, job.message.clone()))
-            .chain(
-                (self.plugins.formats.iter())
-                    .map(|job| (job.id, job.label.clone(), None, String::new())),
-            )
-            .collect();
-        let jobs: Vec<_> = jobs
-            .into_iter()
-            .chain((self.plugins.model_jobs.iter()).map(|job| {
-                let message = format!(
-                    "{} / {}",
-                    super::plugin_models::format_size(job.progress.done()),
-                    super::plugin_models::format_size(job.size)
-                );
-                (job.id, job.label(), Some(job.fraction()), message)
-            }))
-            .collect();
+    /// Plugin actions, plugin imports and exports, and model downloads that
+    /// are still running, oldest first.
+    pub(super) fn running_jobs(&self) -> Vec<RunningJob> {
+        let actions = self.plugins.jobs.iter().map(|job| RunningJob {
+            id: job.id,
+            // The plugin's words, with the plugin they come from.
+            label: super::commands::plugin_action_label(
+                &super::plugins::one_line(job.label.trim_end_matches('…'), 80),
+                &super::plugins::one_line(
+                    (self.plugins.manifest(&job.plugin)).map_or(&job.plugin, |m| &m.plugin.name),
+                    80,
+                ),
+            ),
+            progress: job.progress,
+            message: job.message.clone(),
+            document: Some(job.document),
+            started_by: job
+                .caller
+                .as_ref()
+                .map(|caller| self.plugins.source(caller)),
+        });
+        let formats = self.plugins.formats.iter().map(|job| RunningJob {
+            id: job.id,
+            label: job.label.clone(),
+            progress: None,
+            message: String::new(),
+            document: None,
+            started_by: None,
+        });
+        let models = self.plugins.model_jobs.iter().map(|job| RunningJob {
+            id: job.id,
+            label: job.label(),
+            progress: Some(job.fraction()),
+            message: format!(
+                "{} / {}",
+                super::plugin_models::format_size(job.progress.done()),
+                super::plugin_models::format_size(job.size)
+            ),
+            document: None,
+            started_by: None,
+        });
+        actions.chain(formats).chain(models).collect()
+    }
+
+    pub(super) fn cancel_running_job(&mut self, id: uuid::Uuid) {
+        if self.plugins.model_jobs.iter().any(|job| job.id == id) {
+            self.cancel_model_job(id);
+        } else if self.plugins.formats.iter().any(|job| job.id == id) {
+            self.cancel_format_job(id);
+        } else {
+            self.cancel_plugin_job(id);
+        }
+    }
+
+    /// Which of the running jobs the status bar shows: the first one for
+    /// the current document, else the oldest.
+    pub(super) fn shown_job(&self, jobs: &[RunningJob]) -> usize {
+        let current = self.session().map(|s| s.document.id);
+        (jobs.iter())
+            .position(|job| current.is_some() && job.document == current)
+            .unwrap_or(0)
+    }
+
+    /// The running jobs at the right of the status bar, laid out right to
+    /// left: Cancel, progress, a count that lists every job when there are
+    /// several, then the job's name and message. The job shown is the first
+    /// one for the current document, else the oldest.
+    pub(super) fn job_status(&mut self, ui: &mut egui::Ui, jobs: &[RunningJob]) {
+        let index = self.shown_job(jobs);
+        let Some(job) = jobs.get(index) else {
+            return;
+        };
+        let muted = ui.palette().muted;
         let mut cancel = None;
-        for (index, (id, label, progress, message)) in jobs.iter().enumerate() {
-            egui::Window::new(label)
-                .id(egui::Id::new(("plugin_job", id)))
-                .anchor(
-                    egui::Align2::RIGHT_BOTTOM,
-                    egui::vec2(-16.0, -40.0 - 70.0 * index as f32),
-                )
-                .collapsible(false)
-                .resizable(false)
-                .title_bar(false)
-                .frame(theme::frame().inner_margin(egui::Margin::same(10)))
-                .show(ctx, |ui| {
-                    ui.set_width(240.0);
+        if widgets::button(ui, tr("Cancel")).clicked() {
+            cancel = Some(job.id);
+        }
+        progress_indicator(ui, job.progress, 120.0);
+        if jobs.len() > 1 {
+            let count = tr_args(
+                "{index} of {count}",
+                &[
+                    ("index", &(index + 1).to_string()),
+                    ("count", &jobs.len().to_string()),
+                ],
+            );
+            let button = widgets::button(ui, count).on_hover_text(tr("Show all running jobs"));
+            egui::Popup::menu(&button).show(|ui| {
+                ui.set_min_width(280.0);
+                for job in jobs {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(label).strong());
+                        ui.label(RichText::new(&job.label).strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button(tr("Cancel")).clicked() {
-                                cancel = Some(*id);
+                            if widgets::button(ui, tr("Cancel")).clicked() {
+                                cancel = Some(job.id);
                             }
                         });
                     });
-                    match progress {
-                        Some(fraction) => {
-                            ui.add(egui::ProgressBar::new(*fraction).desired_height(6.0));
-                        }
-                        None => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(RichText::new(tr("Working…")).color(theme::MUTED));
-                            });
-                        }
-                    }
-                    if !message.is_empty() {
+                    progress_indicator(ui, job.progress, 280.0);
+                    if let Some(started_by) = &job.started_by {
                         ui.add(
-                            egui::Label::new(RichText::new(message).small().color(theme::MUTED))
+                            egui::Label::new(
+                                RichText::new(format!("{} {started_by}", tr("Started by")))
+                                    .small()
+                                    .color(muted),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    if !job.message.is_empty() {
+                        ui.add(
+                            egui::Label::new(RichText::new(&job.message).small().color(muted))
                                 .wrap(),
                         );
                     }
-                });
+                    ui.add_space(4.0);
+                }
+            });
+        }
+        let text = if job.message.is_empty() {
+            job.label.clone()
+        } else {
+            format!("{} · {}", job.label, job.message)
+        };
+        let label = ui.add(egui::Label::new(RichText::new(text).size(11.0)).truncate());
+        // A job another plugin started says which, as the user did not.
+        if let Some(started_by) = &job.started_by {
+            label.on_hover_text(format!("{} {started_by}", tr("Started by")));
         }
         if let Some(id) = cancel {
-            if self.plugins.model_jobs.iter().any(|job| job.id == id) {
-                self.cancel_model_job(id);
-            } else if self.plugins.formats.iter().any(|job| job.id == id) {
-                self.cancel_format_job(id);
-            } else {
-                self.cancel_plugin_job(id);
-            }
+            self.cancel_running_job(id);
         }
     }
 
@@ -840,14 +1019,14 @@ impl EditorApp {
             .collapsible(false)
             .resizable(false)
             .title_bar(false)
-            .frame(theme::frame().inner_margin(egui::Margin::symmetric(14, 10)))
+            .frame(theme::frame(&ctx.palette()).inner_margin(egui::Margin::symmetric(14, 10)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&name).strong())
                         .on_hover_text(&source);
-                    ui.label(RichText::new(&source).small().color(theme::MUTED));
+                    ui.label(RichText::new(&source).small().color(ui.palette().muted));
                     if let Some(message) = &message {
-                        ui.label(RichText::new(message).color(theme::MUTED));
+                        ui.label(RichText::new(message).color(ui.palette().muted));
                     }
                     ui.add_space(12.0);
                     if ui
@@ -882,43 +1061,52 @@ impl EditorApp {
     }
 }
 
+/// Width of the bullet column, so wrapped lines hang under the first.
+const BULLET_INDENT: f32 = 12.0;
+
+/// A bulleted line whose wrapped lines hang under its first.
+pub(super) fn bullet(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_sized([BULLET_INDENT, 0.0], egui::Label::new("•"));
+        ui.add(egui::Label::new(text).wrap());
+    });
+}
+
+/// A small muted note under a bullet, indented to line up with the bullet's text.
+fn bullet_note(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(BULLET_INDENT);
+        ui.add(egui::Label::new(RichText::new(text).small().color(ui.palette().muted)).wrap());
+    });
+}
+
 /// The permissions a plugin declares. `blocked` says whether it starts with
 /// its network blocked ([`xuan::plugins::sandbox`]).
 pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: bool) {
     let permissions = &manifest.permissions;
     if blocked {
-        ui.label(format!("• {}", tr(sandbox::BLOCKED_LABEL)));
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "  {}",
-                    tr("It cannot connect to the network, not even to this computer.")
-                ))
-                .small()
-                .color(theme::MUTED),
-            )
-            .wrap(),
+        bullet(ui, tr(sandbox::BLOCKED_LABEL));
+        bullet_note(
+            ui,
+            tr("It cannot connect to the network, not even to this computer."),
         );
     }
     if !permissions.network.is_empty() {
-        ui.add(
-            egui::Label::new(format!(
-                "• {} {}",
+        bullet(
+            ui,
+            format!(
+                "{} {}",
                 tr("Says it connects to:"),
                 permissions.network.join(", ")
-            ))
-            .wrap(),
+            ),
         );
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "  {}",
-                    tr("Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.")
-                ))
-                .small()
-                .color(theme::MUTED),
-            )
-            .wrap(),
+        bullet_note(
+            ui,
+            tr(
+                "Not enforced: it can contact any server. Xuan asks before sending it your image, regions or text.",
+            ),
         );
     }
     if !manifest.models.is_empty() {
@@ -933,47 +1121,57 @@ pub(super) fn permissions_list(ui: &mut egui::Ui, manifest: &Manifest, blocked: 
             })
             .collect::<Vec<_>>()
             .join(", ");
-        ui.add(
-            egui::Label::new(format!(
-                "• {} {models}",
+        bullet(
+            ui,
+            format!(
+                "{} {models}",
                 tr("Uses models that Xuan downloads, after asking you:")
-            ))
-            .wrap(),
+            ),
         );
     }
     if !permissions.secrets.is_empty() {
-        ui.label(format!(
-            "• {} {}",
-            tr("Receives these secrets:"),
-            permissions.secrets.join(", ")
-        ));
+        bullet(
+            ui,
+            format!(
+                "{} {}",
+                tr("Receives these secrets:"),
+                permissions.secrets.join(", ")
+            ),
+        );
     }
     if permissions.document == xuan::plugins::manifest::DocumentAccess::Edit {
-        ui.label(format!(
-            "• {}",
-            tr("Edits documents directly (as undoable steps)")
-        ));
+        bullet(ui, tr("Edits documents directly (as undoable steps)"));
+        if permissions.edit_prompt == xuan::plugins::manifest::EditPrompt::Session {
+            bullet_note(
+                ui,
+                tr("Asks you before its first edit in each session, unless you turn on auto mode."),
+            );
+        }
     } else {
-        ui.label(format!(
-            "• {}",
-            tr("Can read the document and propose selections or new documents, but can't change your image")
-        ));
+        bullet(
+            ui,
+            tr(
+                "Can read the document and propose selections or new documents, but can't change your image",
+            ),
+        );
     }
     match permissions.filesystem {
         xuan::plugins::manifest::FilesystemAccess::None => {}
         xuan::plugins::manifest::FilesystemAccess::Read => {
-            ui.label(format!(
-                "• {}",
+            bullet(
+                ui,
                 tr(
-                    "Has Xuan read any file for it, not only those in its own and temporary folders"
-                )
-            ));
+                    "Has Xuan read any file for it, not only those in its own and temporary folders",
+                ),
+            );
         }
         xuan::plugins::manifest::FilesystemAccess::Write => {
-            ui.label(format!(
-                "• {}",
-                tr("Has Xuan read and write any file or folder for it, not only its own and temporary folders")
-            ));
+            bullet(
+                ui,
+                tr(
+                    "Has Xuan read and write any file or folder for it, not only its own and temporary folders",
+                ),
+            );
         }
     }
 }
@@ -998,9 +1196,50 @@ fn json_to_toml(value: Value) -> toml::Value {
     }
 }
 
+/// A background job as the status bar shows it.
+pub(super) struct RunningJob {
+    pub id: uuid::Uuid,
+    pub label: String,
+    pub progress: Option<f32>,
+    pub message: String,
+    /// The document a plugin action works on.
+    pub document: Option<uuid::Uuid>,
+    /// The plugin that started it with `host/run`, as the status bar names
+    /// it, or `None` when the user did.
+    pub started_by: Option<String>,
+}
+
+/// A progress bar once the job reports a fraction, a spinner until then.
+fn progress_indicator(ui: &mut egui::Ui, progress: Option<f32>, width: f32) {
+    match progress {
+        Some(fraction) => {
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .desired_width(width)
+                    .desired_height(6.0),
+            );
+        }
+        None => {
+            ui.spinner();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_integer_ranges_get_a_number_field() {
+        // Percentages, pixel padding and timeouts stay sliders.
+        assert!(slider_fits(true, 0.0, 100.0));
+        assert!(slider_fits(true, 30.0, 3600.0));
+        assert!(slider_fits(true, 0.0, SLIDER_MAX_STEPS));
+        // A port does not.
+        assert!(!slider_fits(true, 0.0, 65535.0));
+        // Fractional numbers slide smoothly whatever their range.
+        assert!(slider_fits(false, 0.0, 65535.0));
+    }
 
     #[test]
     fn settings_values_convert_to_toml() {

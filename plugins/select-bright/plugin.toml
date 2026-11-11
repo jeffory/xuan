@@ -12,6 +12,14 @@ protocol = 1
 document = "read"
 filesystem = "none"
 
+# Stand in for Select → Subject when the user picks this plugin in Settings →
+# Selection. The action runs without its dialog (inputs at their defaults) and
+# its mask becomes the proposed selection. A segmentation model (see README.md)
+# is what this slot is for; brightness is only a placeholder.
+[[provides]]
+capability = "select_subject"
+action = "select-bright"
+
 [[settings]]
 id = "backend"
 type = "text"

@@ -20,6 +20,7 @@ fn bundled_plugins_load_with_their_shortcuts() {
         "histogram",
         "invert-regions",
         "local-upscale",
+        "mcp-server",
         "select-bright",
     ]
     .map(example);
@@ -133,6 +134,51 @@ mod unix {
         assert!(app.error.is_none(), "{:?}", app.error);
     }
 
+    /// Issue 73: a Python example copied out of the repository, as a user
+    /// installs it, finds the SDK installed with Xuan. Here Xuan's prefix is
+    /// a temporary folder with the SDK in `lib/xuan/sdk/python`, and the
+    /// plugin's repository-relative path to the SDK leads nowhere.
+    #[test]
+    fn an_installed_python_plugin_imports_the_sdk_that_ships_with_xuan() {
+        if !python() {
+            eprintln!("python3 not available; skipping");
+            return;
+        }
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let prefix = tempfile::tempdir().unwrap();
+        let lib = prefix.path().join("lib").join("xuan");
+        let sdk = lib.join("sdk").join("python");
+        std::fs::create_dir_all(&sdk).unwrap();
+        std::fs::create_dir_all(lib.join("plugins")).unwrap();
+        std::fs::copy(
+            repo.join("sdk/python/xuan_plugin.py"),
+            sdk.join("xuan_plugin.py"),
+        )
+        .unwrap();
+        let user = tempfile::tempdir().unwrap();
+        let plugin = user.path().join("plugins").join("histogram");
+        std::fs::create_dir_all(&plugin).unwrap();
+        for name in ["plugin.toml", "main.py"] {
+            std::fs::copy(repo.join("plugins/histogram").join(name), plugin.join(name)).unwrap();
+        }
+        assert!(!user.path().join("sdk/python/xuan_plugin.py").exists());
+
+        let (context, mut app) = app();
+        app.plugins.sdk_dir = xuan::plugins::sdk_dir_from(None, Some(&lib.join("plugins")), None);
+        assert_eq!(app.plugins.sdk_dir.as_deref(), Some(sdk.as_path()));
+        app.install_plugins(vec![Manifest::load(&plugin).unwrap()], vec![]);
+        app.grant_plugin("histogram", true);
+        app.dimensions = [16, 16];
+        app.new_document();
+        let key = "plugin:histogram/histogram";
+        run_until(&context, &mut app, |app| {
+            app.plugins.panes.get(key).is_some_and(|p| p.tree.is_some())
+        });
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert!(app.plugins.running("histogram"));
+        app.stop_plugin("histogram");
+    }
+
     #[test]
     fn select_bright_areas_proposes_a_selection_through_the_python_sdk() {
         if !python() {
@@ -174,6 +220,24 @@ mod unix {
         assert_eq!(session.history.undo_name(), Some("Select Bright Areas"));
         assert_eq!(session.document.layers.len(), 1);
         assert_eq!(session.document.layers[0].pixels, pixels);
+
+        // As the Select Subject provider it runs at once, without its dialog.
+        app.config.providers.set(
+            xuan::plugins::manifest::Capability::SelectSubject,
+            Some("select-bright".into()),
+        );
+        app.command("deselect");
+        app.command("select_subject");
+        assert!(app.job.is_none() && app.plugins.action.is_none());
+        run_until(&context, &mut app, |app| {
+            app.dialog == Some(Dialog::PluginProposal)
+        });
+        app.resolve_proposal(true);
+        let session = app.session().unwrap();
+        assert_eq!(session.history.undo_name(), Some("Select Subject"));
+        let selection = session.document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(5, 15)[0], 255);
+        assert_eq!(selection.get_pixel(35, 15)[0], 0);
         app.stop_plugin("select-bright");
     }
 
@@ -239,6 +303,373 @@ mod unix {
         let document = &app.session().unwrap().document;
         assert_eq!((document.width, document.height), (40, 30));
         app.stop_plugin("extend-edges");
+    }
+
+    /// The MCP server plugin's binary: `$XUAN_MCP_SERVER`, or a release
+    /// build in its folder.
+    fn mcp_server_binary() -> Option<std::path::PathBuf> {
+        std::env::var_os("XUAN_MCP_SERVER")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                Some(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("plugins/mcp-server/target/release/xuan-mcp-server"),
+                )
+            })
+            .filter(|path| path.is_file())
+    }
+
+    /// One HTTP/1.1 POST to the MCP endpoint; returns the status, the
+    /// `mcp-session-id` header and the JSON-RPC messages in the body.
+    fn mcp_post(
+        port: u16,
+        token: &str,
+        session: Option<&str>,
+        body: &serde_json::Value,
+    ) -> (u16, Option<String>, Vec<serde_json::Value>) {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
+        let body = body.to_string();
+        let session = session
+            .map(|id| format!("mcp-session-id: {id}\r\n"))
+            .unwrap_or_default();
+        write!(
+            stream,
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\n\
+             Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n\
+             {session}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        let response = String::from_utf8_lossy(&response).into_owned();
+        let (head, mut rest) = response.split_once("\r\n\r\n").unwrap();
+        let status = head[9..12].parse().unwrap();
+        let header = |name: &str| {
+            head.lines().find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.eq_ignore_ascii_case(name)
+                    .then(|| value.trim().to_owned())
+            })
+        };
+        let mut body = String::new();
+        if header("transfer-encoding").is_some_and(|v| v.contains("chunked")) {
+            while let Some((size, after)) = rest.split_once("\r\n") {
+                let size = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
+                if size == 0 {
+                    break;
+                }
+                body.push_str(&after[..size]);
+                rest = after[size..].trim_start_matches("\r\n");
+            }
+        } else {
+            body = rest.to_owned();
+        }
+        let messages = if body.trim_start().starts_with('{') {
+            vec![serde_json::from_str(&body).unwrap()]
+        } else {
+            body.lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .filter_map(|data| serde_json::from_str(data.trim()).ok())
+                .collect()
+        };
+        (status, header("mcp-session-id"), messages)
+    }
+
+    /// An MCP client session over real HTTP, for the thread that plays the
+    /// LLM client.
+    struct McpClient {
+        port: u16,
+        token: String,
+        session: Option<String>,
+        next: i64,
+    }
+
+    impl McpClient {
+        fn connect(port: u16, token: &str) -> Self {
+            let mut client = Self {
+                port,
+                token: token.to_owned(),
+                session: None,
+                next: 1,
+            };
+            let info = client.call(
+                "initialize",
+                serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                                   "clientInfo": {"name": "e2e", "version": "1"}}),
+            );
+            assert_eq!(info["serverInfo"]["name"], "xuan", "{info}");
+            let note = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+            let (status, ..) = mcp_post(port, token, client.session.as_deref(), &note);
+            assert_eq!(status, 202);
+            client
+        }
+
+        fn call(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+            let id = self.next;
+            self.next += 1;
+            let body =
+                serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+            let (status, session, messages) =
+                mcp_post(self.port, &self.token, self.session.as_deref(), &body);
+            assert_eq!(status, 200, "{method}: {messages:?}");
+            if session.is_some() {
+                self.session = session;
+            }
+            let message = (messages.into_iter())
+                .find(|m| m["id"] == id)
+                .unwrap_or_else(|| panic!("no answer to {method}"));
+            message["result"].clone()
+        }
+
+        /// A tool's text, or panics when it failed.
+        fn tool(&mut self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+            let result = self.call(
+                "tools/call",
+                serde_json::json!({"name": name, "arguments": arguments}),
+            );
+            assert_ne!(result["isError"], true, "{name}: {result}");
+            result
+        }
+
+        fn layer(&mut self, id: &str) -> serde_json::Value {
+            let result = self.tool("get_layer", serde_json::json!({"layer": id}));
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
+        }
+    }
+
+    /// The mcp-server plugin against a real headless editor: a client lists
+    /// the layers, sets an opacity (one undo step, after the edit prompt),
+    /// reads the preview resource (after the send prompt), and a later
+    /// session runs in auto mode. Needs `cargo build --release` in
+    /// `plugins/mcp-server` first, or `XUAN_MCP_SERVER` naming the binary;
+    /// skipped otherwise.
+    #[test]
+    fn the_mcp_server_plugin_drives_the_editor_over_http() {
+        use crate::app::plugin_sessions::EditAnswer;
+        let Some(binary) = mcp_server_binary() else {
+            eprintln!("the mcp-server plugin is not built; skipping");
+            return;
+        };
+        let (context, mut app) = app();
+        let mut manifest = example("mcp-server");
+        manifest.plugin.command = vec![binary.display().to_string()];
+        // Let the system choose the port, so tests never collide.
+        (app.config.plugins.entry("mcp-server".into()).or_default())
+            .settings
+            .insert("port".into(), toml::Value::Integer(0));
+        app.install_plugins(vec![manifest], vec![]);
+        app.grant_plugin("mcp-server", true);
+        app.dimensions = [32, 24];
+        app.new_document();
+        app.command("fill_fg");
+        let base = app.session().unwrap().document.layers[0].id.to_string();
+        app.render_pane("plugin:mcp-server/status", "open", None);
+        let data = app.plugins.data_dir("mcp-server").unwrap();
+        run_until(&context, &mut app, |_| {
+            data.join("connection.json").is_file()
+        });
+        let connection: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(data.join("connection.json")).unwrap())
+                .unwrap();
+        let port = connection["port"].as_u64().unwrap() as u16;
+        let token = std::fs::read_to_string(data.join("token")).unwrap();
+        let steps = app.session().unwrap().history.names().count();
+
+        let client = std::thread::spawn({
+            let (base, token) = (base.clone(), token.trim().to_owned());
+            move || {
+                let mut first = McpClient::connect(port, &token);
+                let layers = first.tool("get_document", serde_json::json!({}));
+                assert!(layers.to_string().contains(&base), "{layers}");
+                // The first edit waits for the prompt.
+                first.tool(
+                    "set_layer",
+                    serde_json::json!({"layer": base, "opacity": 0.5}),
+                );
+                let opacity = first.layer(&base)["opacity"].as_f64().unwrap();
+                // The preview waits for the send prompt.
+                let preview = first.call(
+                    "resources/read",
+                    serde_json::json!({"uri": "xuan://document/preview.png"}),
+                );
+                let blob = preview["contents"][0]["blob"].as_str().unwrap().to_owned();
+                // One undo step brings the opacity back.
+                first.tool("undo", serde_json::json!({}));
+                let undone = first.layer(&base)["opacity"].as_f64().unwrap();
+                // A new session asks again: Always Allow turns on auto mode,
+                // and then a third session edits without asking.
+                let mut second = McpClient::connect(port, &token);
+                second.tool(
+                    "set_layer",
+                    serde_json::json!({"layer": base, "name": "Renamed"}),
+                );
+                let mut third = McpClient::connect(port, &token);
+                third.tool(
+                    "set_layer",
+                    serde_json::json!({"layer": base, "visible": false}),
+                );
+                let status = third.tool("get_edit_permission", serde_json::json!({}));
+                (opacity, blob, undone, status.to_string())
+            }
+        });
+        let mut prompts = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        while !client.is_finished() {
+            assert!(std::time::Instant::now() < deadline, "timed out");
+            frame(&context, &mut app);
+            match app.dialog {
+                Some(Dialog::PluginEditSession) => {
+                    let prompt = app.plugins.edit_prompt.clone().unwrap();
+                    prompts.push(prompt.clone());
+                    app.answer_edit_session(if prompts.len() == 1 {
+                        EditAnswer::Allow
+                    } else {
+                        EditAnswer::Always
+                    });
+                }
+                Some(Dialog::PluginConsent) => app.answer_consent(true),
+                _ => {}
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (opacity, blob, undone, status) = client.join().expect("the client's checks pass");
+        assert_eq!(opacity, 0.5);
+        assert_eq!(undone, 1.0);
+        let png = xuan::plugins::ui::decode_base64(&blob).unwrap();
+        use image::GenericImageView;
+        assert_eq!(
+            image::load_from_memory(&png).unwrap().dimensions(),
+            (32, 24)
+        );
+        // Two sessions asked, each naming its first edit; the third did not.
+        assert_eq!(prompts.len(), 2, "{prompts:?}");
+        assert_eq!(prompts[0].edit, "Set Layer");
+        assert!(!prompts[0].session.is_empty());
+        assert_ne!(prompts[0].session, prompts[1].session);
+        assert!(app.edits_without_asking("mcp-server"));
+        assert!(status.contains("\\\"auto\\\": true"), "{status}");
+        let session = app.session().unwrap();
+        let layer = &session.document.layers[0];
+        assert_eq!((layer.name.as_str(), layer.visible), ("Renamed", false));
+        // set, undone; rename; hide.
+        assert_eq!(session.history.names().count(), steps + 2);
+        app.stop_plugin("mcp-server");
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
+
+    /// The mcp-server plugin runs another plugin's action for its client:
+    /// the client lists the actions, runs one (after the user allows the
+    /// run in Xuan) and follows the job with get_jobs until the user
+    /// accepted its result. Built and skipped like the test above.
+    #[test]
+    fn the_mcp_server_runs_another_plugins_action_once_the_user_allows_it() {
+        use crate::app::plugin_runs::{RunAnswer, RunPrompt};
+        let Some(binary) = mcp_server_binary() else {
+            eprintln!("the mcp-server plugin is not built; skipping");
+            return;
+        };
+        let target = tempfile::tempdir().unwrap();
+        let (context, mut app) = app();
+        let mut manifest = example("mcp-server");
+        manifest.plugin.command = vec![binary.display().to_string()];
+        (app.config.plugins.entry("mcp-server".into()).or_default())
+            .settings
+            .insert("port".into(), toml::Value::Integer(0));
+        let other = super::super::plugins::target_manifest(target.path(), false);
+        app.install_plugins(vec![manifest, other], vec![]);
+        app.grant_plugin("mcp-server", true);
+        app.grant_plugin("target", true);
+        app.set_run_other_actions("mcp-server", true);
+        app.dimensions = [32, 24];
+        app.new_document();
+        app.command("fill_fg");
+        app.render_pane("plugin:mcp-server/status", "open", None);
+        let data = app.plugins.data_dir("mcp-server").unwrap();
+        run_until(&context, &mut app, |_| {
+            data.join("connection.json").is_file()
+        });
+        let connection: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(data.join("connection.json")).unwrap())
+                .unwrap();
+        let port = connection["port"].as_u64().unwrap() as u16;
+        let token = std::fs::read_to_string(data.join("token")).unwrap();
+
+        let client = std::thread::spawn({
+            let token = token.trim().to_owned();
+            move || {
+                let mut client = McpClient::connect(port, &token);
+                let text = |result: &serde_json::Value| -> serde_json::Value {
+                    serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
+                };
+                let listed = text(&client.tool("list_plugin_actions", serde_json::json!({})));
+                let echo = (listed["actions"].as_array().unwrap().iter())
+                    .find(|action| action["plugin"] == "target" && action["action"] == "echo")
+                    .cloned()
+                    .unwrap();
+                // The run waits for the user, then returns with its job.
+                let started = text(&client.tool(
+                    "run_plugin_action",
+                    serde_json::json!({"plugin": "target", "action": "echo", "inputs": {"prompt": "from e2e"}}),
+                ));
+                let job = started["job"].clone();
+                // The client follows it until the user answered its result.
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let outcome = loop {
+                    assert!(Instant::now() < deadline, "the job never ended");
+                    let jobs = text(&client.tool("get_jobs", serde_json::json!({})));
+                    let finished = (jobs["finished"].as_array().unwrap().iter())
+                        .find(|run| run["job"] == job)
+                        .map(|run| run["outcome"].clone());
+                    if finished
+                        .as_ref()
+                        .is_some_and(|outcome| outcome == "accepted")
+                    {
+                        break finished.unwrap();
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                };
+                (echo, started, outcome)
+            }
+        });
+        let mut prompts: Vec<RunPrompt> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while !client.is_finished() {
+            assert!(Instant::now() < deadline, "timed out");
+            frame(&context, &mut app);
+            match app.dialog {
+                Some(Dialog::PluginRun) => {
+                    prompts.push(app.plugins.run_prompt.clone().unwrap());
+                    app.answer_plugin_run(RunAnswer::Allow);
+                }
+                Some(Dialog::PluginProposal) => app.resolve_proposal(true),
+                _ => {}
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (echo, started, outcome) = client.join().expect("the client's checks pass");
+        assert_eq!(echo["inputs"]["properties"]["prompt"]["default"], "hello");
+        assert_eq!(started["running"], true);
+        assert_eq!(outcome, "accepted");
+        // One prompt, for the client's session, naming the action.
+        assert_eq!(prompts.len(), 1, "{prompts:?}");
+        assert_eq!(prompts[0].label, "Echo Source");
+        assert_eq!(prompts[0].session, "MCP client 1");
+        // The target ran it with the client's inputs, as a layer the user accepted.
+        let received = std::fs::read_to_string(target.path().join("received.log")).unwrap();
+        assert!(received.contains("\"prompt\":\"from e2e\""), "{received}");
+        let layers = &app.session().unwrap().document.layers;
+        assert!(
+            layers.iter().any(|layer| layer.name == "Echoed"),
+            "{layers:?}"
+        );
+        app.stop_plugin("mcp-server");
+        app.stop_plugin("target");
+        assert!(app.error.is_none(), "{:?}", app.error);
     }
 
     /// Needs `cargo build --release` in `plugins/invert-regions` first.

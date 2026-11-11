@@ -19,11 +19,23 @@ use xuan::{
 
 use super::{EditorApp, Tool};
 
-/// A key with exactly these modifiers. Only Ctrl, Alt and Shift are used.
+/// A key with exactly these modifiers. Only Ctrl, Alt and Shift are used: `ctrl` is the
+/// platform's primary modifier, Ctrl on Linux and Windows and ⌘ Command on macOS (see
+/// [`ctrl_or_cmd`]). The configuration file and the docs always write it `Ctrl`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct Chord {
     pub mods: Modifiers,
     pub key: Key,
+}
+
+/// Shortcuts look and behave the Mac way: ⌘ in labels, and no defaults that macOS keeps for
+/// itself. Tests see the Linux and Windows registry wherever they run.
+const MAC: bool = cfg!(all(target_os = "macos", not(test)));
+
+/// Whether the primary modifier is held: Ctrl, or on macOS ⌘ Command, where the Control key also
+/// counts (so Control+Tab still switches tabs). Shortcuts and Ctrl-click actions both use it.
+pub(super) fn ctrl_or_cmd(mods: Modifiers) -> bool {
+    mods.ctrl || mods.command || mods.mac_cmd
 }
 
 const NONE: Modifiers = Modifiers::NONE;
@@ -46,15 +58,18 @@ const fn shift(key: Key) -> Chord {
 const fn ctrl_shift(key: Key) -> Chord {
     chord(CTRL.plus(SHIFT), key)
 }
+const fn alt(key: Key) -> Chord {
+    chord(ALT, key)
+}
 const fn ctrl_alt(key: Key) -> Chord {
     chord(CTRL.plus(ALT), key)
 }
 
 impl Chord {
-    /// The chord for a key event, keeping only Ctrl, Alt and Shift.
+    /// The chord for a key event, keeping only Ctrl (or ⌘), Alt and Shift.
     pub fn from_event(mods: Modifiers, key: Key) -> Self {
         let mut chord = Modifiers::NONE;
-        chord.ctrl = mods.ctrl || (mods.command && !mods.mac_cmd);
+        chord.ctrl = ctrl_or_cmd(mods);
         chord.alt = mods.alt;
         chord.shift = mods.shift;
         Self { mods: chord, key }
@@ -68,6 +83,7 @@ impl Chord {
     /// Whether a key press with `pressed` modifiers is this chord. Modifiers must match
     /// exactly, so Ctrl+Shift+E is never Ctrl+E, except Shift for `+` and `'`.
     pub fn matches(self, pressed: Modifiers, key: Key) -> bool {
+        let pressed = Self::from_event(pressed, key).mods;
         key == self.key
             && if self.shift_insensitive() {
                 pressed.matches_logically(self.mods)
@@ -125,14 +141,41 @@ impl Chord {
         Some(Self { mods, key })
     }
 
-    /// The chord as shown in the interface: `Ctrl++`, `Ctrl+−`, `Ctrl+Alt+Shift+S`.
+    /// The chord as shown in the interface: `Ctrl++`, `Ctrl+−`, `Ctrl+Alt+Shift+S`, or on macOS
+    /// `⌘+`, `⌘−`, `⌥⇧⌘S`.
     pub fn label(self) -> String {
+        self.label_for(MAC)
+    }
+
+    pub fn label_for(self, mac: bool) -> String {
         let key = match self.key {
             Key::Plus => "+",
             Key::Minus => "−",
             key => key_text(key),
         };
-        format!("{}{key}", self.modifier_prefix())
+        if mac {
+            format!("{}{key}", self.mac_symbols())
+        } else {
+            format!("{}{key}", self.modifier_prefix())
+        }
+    }
+
+    /// Mac menus put ⌃⌥⇧⌘ before the key, in that order and without separators. With Tab the
+    /// primary modifier is shown as ⌃ Control, since ⌘Tab switches apps.
+    fn mac_symbols(self) -> String {
+        let control = self.mods.ctrl && self.key == Key::Tab;
+        let mut text = String::new();
+        for (on, symbol) in [
+            (control, "⌃"),
+            (self.mods.alt, "⌥"),
+            (self.mods.shift, "⇧"),
+            (self.mods.ctrl && !control, "⌘"),
+        ] {
+            if on {
+                text.push_str(symbol);
+            }
+        }
+        text
     }
 
     fn modifier_prefix(self) -> String {
@@ -352,13 +395,17 @@ fn not_developing(app: &EditorApp) -> bool {
 }
 /// A document is open in the editor.
 fn editing(app: &EditorApp) -> bool {
-    app.develop.is_none() && app.session().is_some()
+    app.develop.is_none() && app.session().is_some() && app.color_range.is_none()
 }
 fn develop_ready(app: &EditorApp) -> bool {
     app.develop.as_ref().is_some_and(|d| d.ready())
 }
 fn can_view(app: &EditorApp) -> bool {
     app.develop.as_ref().is_none_or(|d| d.ready())
+}
+/// The tab bar has a document or RAW tab.
+fn has_tabs(app: &EditorApp) -> bool {
+    !app.sessions.is_empty() || app.develop.is_some() || !app.inactive_develop.is_empty()
 }
 fn can_close(app: &EditorApp) -> bool {
     app.develop.is_some() || app.session().is_some()
@@ -382,6 +429,16 @@ fn raw_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|l| l.raw.is_some() && !l.locked)
 }
+/// Filter → Camera Raw Filter… needs an unlocked pixel layer whose pixels (not its mask) are
+/// being edited.
+fn camera_raw_target(app: &EditorApp) -> bool {
+    editing(app)
+        && !app.editing_mask()
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(xuan::raw::can_filter)
+}
 fn effects_layer(app: &EditorApp) -> bool {
     editing(app)
         && app
@@ -395,6 +452,53 @@ fn generated_layer(app: &EditorApp) -> bool {
             .session()
             .and_then(|s| s.document.active())
             .is_some_and(|layer| layer.generated.is_some())
+}
+fn image_layer(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|l| l.pixels.is_some() && !l.group)
+}
+/// Exactly one channel of the active layer is targeted.
+fn single_channel(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .is_some_and(|s| s.channel_targets.single().is_some())
+}
+fn masked_layer(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|l| l.mask.is_some())
+}
+/// The document was made as a collage.
+fn collage_document(app: &EditorApp) -> bool {
+    editing(app) && app.session().is_some_and(|s| s.document.collage.is_some())
+}
+fn has_selection(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .is_some_and(|s| s.document.selection.is_some())
+}
+/// Edit → Stroke… needs a selection and an unlocked pixel layer whose pixels (not its mask)
+/// are being edited: not a folder, adjustment, filter, mask, text, shape or RAW layer.
+fn stroke_target(app: &EditorApp) -> bool {
+    has_selection(app)
+        && !app.editing_mask()
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|l| {
+                l.can_attach_effects()
+                    && !l.locked
+                    && l.text.is_none()
+                    && l.shape.is_none()
+                    && l.raw.is_none()
+            })
 }
 fn has_guides(app: &EditorApp) -> bool {
     editing(app) && app.session().is_some_and(|s| !s.document.guides.is_empty())
@@ -410,6 +514,52 @@ fn switch_brush(app: &mut EditorApp) {
         Tool::Brush
     };
     app.set_tool(tool);
+}
+/// Shift+O: with the Dodge / Burn tool, the next of Dodge, Burn and Sponge;
+/// from another tool, the Dodge / Burn tool as it was last used.
+fn switch_tone(app: &mut EditorApp) {
+    use xuan::paint::PaintMode;
+    if app.tool == Tool::Dodge {
+        app.tone_mode = match app.tone_mode {
+            PaintMode::Dodge => PaintMode::Burn,
+            PaintMode::Burn => PaintMode::Sponge,
+            _ => PaintMode::Dodge,
+        };
+    }
+    app.set_tool(Tool::Dodge);
+}
+/// Shift+R: with the Blur / Smudge tool, the next of Blur, Smudge and Liquify;
+/// from another tool, the Blur / Smudge tool as it was last used.
+fn switch_blur(app: &mut EditorApp) {
+    use xuan::paint::PaintMode;
+    if app.tool == Tool::Blur {
+        app.blur_mode = match app.blur_mode {
+            PaintMode::Blur => PaintMode::Smudge,
+            PaintMode::Smudge => PaintMode::Liquify,
+            _ => PaintMode::Blur,
+        };
+    }
+    app.set_tool(Tool::Blur);
+}
+fn gradient_tool(app: &mut EditorApp) {
+    app.set_tool(app.gradient_variant);
+}
+fn switch_gradient(app: &mut EditorApp) {
+    let tool = if app.tool == Tool::Gradient {
+        Tool::Bucket
+    } else {
+        Tool::Gradient
+    };
+    app.set_tool(tool);
+}
+/// Shift+C: with the Crop tool, the other of its box and perspective modes; from another tool,
+/// the Crop tool in the mode used last.
+fn crop_mode(app: &mut EditorApp) {
+    if app.tool == Tool::Crop {
+        app.set_crop_mode(!app.crop.perspective);
+    } else {
+        app.set_tool(Tool::Crop);
+    }
 }
 fn marquee_shape(app: &mut EditorApp) {
     app.ellipse = !app.ellipse;
@@ -435,17 +585,39 @@ fn reset_colors(app: &mut EditorApp) {
     app.brush.color = [0, 0, 0, 255];
     app.background = [255; 4];
 }
+/// The next brush size down: 15% smaller, but never by less than one pixel,
+/// so small sizes step 3, 2, 1 instead of sticking at 3. Stops at 1 px.
+pub(super) fn smaller_diameter(diameter: f32) -> f32 {
+    let current = diameter.round().max(1.0);
+    (diameter / 1.15).round().min(current - 1.0).max(1.0)
+}
+/// The next brush size up: 15% larger, but never by less than one pixel.
+pub(super) fn larger_diameter(diameter: f32) -> f32 {
+    let current = diameter.round().max(1.0);
+    (diameter * 1.15).round().max(current + 1.0).min(2000.0)
+}
 fn brush_smaller(app: &mut EditorApp) {
-    app.brush.diameter = (app.brush.diameter / 1.15).round().max(1.0);
+    app.brush.diameter = smaller_diameter(app.brush.diameter);
 }
 fn brush_larger(app: &mut EditorApp) {
-    app.brush.diameter = (app.brush.diameter * 1.15).round().min(2000.0);
+    app.brush.diameter = larger_diameter(app.brush.diameter);
 }
 fn brush_softer(app: &mut EditorApp) {
     app.brush.hardness = (app.brush.hardness - 0.1).max(0.0);
 }
 fn brush_harder(app: &mut EditorApp) {
     app.brush.hardness = (app.brush.hardness + 0.1).min(1.0);
+}
+fn has_recent_files(app: &EditorApp) -> bool {
+    !app.config.recent_files.is_empty()
+}
+fn open_latest_recent(app: &mut EditorApp) {
+    if let Some(path) = app.config.recent_files.first().cloned() {
+        app.open_recent(&path);
+    }
+}
+fn clear_recent(app: &mut EditorApp) {
+    app.clear_recent_files();
 }
 fn toggle_controls(app: &mut EditorApp) {
     app.show_controls = !app.show_controls;
@@ -509,6 +681,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .when(always)
         .aliases(&["document", "create"]),
+    cmd("new_collage", "New Collage…", C::File)
+        .when(not_developing)
+        .aliases(&["photos", "grid", "layout", "montage"]),
     cmd("open", "Open…", C::File)
         .keys(&[ctrl(Key::O)])
         .both()
@@ -524,11 +699,19 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_shift(Key::O)])
         .when(not_developing)
         .aliases(&["place"]),
+    cmd("open_latest_recent", "Open Most Recent File", C::File)
+        .run(Run::App(open_latest_recent))
+        .aliases(&["recent", "reopen"])
+        .when(has_recent_files),
+    cmd("clear_recent", "Clear Recently Opened", C::File)
+        .run(Run::App(clear_recent))
+        .aliases(&["recent"])
+        .when(has_recent_files),
     cmd("save", "Save", C::File).keys(&[ctrl(Key::S)]),
     cmd("save_as", "Save As…", C::File).keys(&[ctrl_shift(Key::S)]),
     cmd("export", "Export Image…", C::File)
         .keys(&[chord(CTRL.plus(ALT).plus(SHIFT), Key::S)])
-        .aliases(&["png", "jpeg", "webp"]),
+        .aliases(&["png", "jpeg", "webp", "ora", "openraster"]),
     cmd("close", "Close Project", C::File)
         .keys(&[ctrl(Key::W)])
         .both()
@@ -571,8 +754,12 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[bare(Key::Delete), bare(Key::Backspace)])
         .host(Edit)
         .aliases(&["delete", "erase"]),
+    cmd("stroke", "Stroke…", C::Edit)
+        .when(stroke_target)
+        .aliases(&["outline", "border", "selection edge"]),
     cmd("content_fill", "Content-Aware Fill", C::Edit)
         .keys(&[shift(Key::F5)])
+        .host(Edit)
         .aliases(&["remove object", "heal"]),
     cmd("show_transform", "Free Transform", C::Edit)
         .keys(&[ctrl(Key::T)])
@@ -595,6 +782,27 @@ pub(super) const COMMANDS: &[Command] = &[
         .host(Edit)
         .aliases(&["mirror"]),
     cmd("flip_canvas_v", "Flip Canvas Vertical", C::Image).host(Edit),
+    cmd("rotate_canvas_cw", "Rotate Canvas 90° Clockwise", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd(
+        "rotate_canvas_ccw",
+        "Rotate Canvas 90° Counter-Clockwise",
+        C::Image,
+    )
+    .host(Edit)
+    .aliases(&["rotate image", "turn"]),
+    cmd("rotate_canvas_180", "Rotate Canvas 180°", C::Image)
+        .host(Edit)
+        .aliases(&["rotate image", "turn"]),
+    cmd("crop_to_selection", "Crop to Selection", C::Image)
+        .when(has_selection)
+        .host(Edit)
+        .aliases(&["crop"]),
+    cmd("collage_layout", "Collage Layout…", C::Image)
+        .when(collage_document)
+        .aliases(&["spacing", "borders", "grid"]),
+    cmd("trim", "Trim…", C::Image).aliases(&["crop", "remove margins", "borders"]),
     // Layer
     cmd("new_layer", "New Layer", C::Layer)
         .keys(&[ctrl_shift(Key::N)])
@@ -619,6 +827,8 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl(Key::E)])
         .host(Edit),
     cmd("flatten", "Flatten Image", C::Layer).host(Edit),
+    cmd("adjustment_presets", "Adjustment Presets…", C::Layer)
+        .aliases(&["preset", "look", "grade", "lut"]),
     cmd("new_mask_layer", "New Mask Layer", C::Layer).host(Edit),
     cmd("mask", "Add Mask from Selection", C::Layer).host(Edit),
     cmd("disable_mask", "Enable / Disable Mask", C::Layer).host(Edit),
@@ -641,14 +851,59 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl_shift(Key::I)])
         .host(Edit),
     cmd("load_selection", "Load Layer / Mask", C::Select),
-    cmd("feather", "Feather 3 px", C::Select),
-    // Filter
+    cmd("select_layer_pixels", "Select Layer's Pixels", C::Select)
+        .when(image_layer)
+        .host(Edit)
+        .aliases(&["alpha", "opacity", "transparency"]),
+    cmd("select_mask_black", "Select Mask's Black Areas", C::Select)
+        .when(masked_layer)
+        .host(Edit),
     cmd(
-        "remove_background",
-        "Remove Background (edge colors)",
+        "load_channel_selection",
+        "Load Channel as Selection",
+        C::Select,
+    )
+    .when(single_channel)
+    .aliases(&["channel", "mask map"]),
+    cmd("select_subject", "Select Subject", C::Select)
+        .keys(&[ctrl_alt(Key::A)])
+        .host(Edit)
+        .aliases(&["foreground", "cutout", "grabcut"]),
+    cmd("color_range", "Colour Range…", C::Select).aliases(&["colour", "similar", "green screen"]),
+    cmd("expand_selection", "Expand Selection…", C::Select)
+        .when(has_selection)
+        .aliases(&["grow", "dilate"]),
+    cmd("contract_selection", "Contract Selection…", C::Select)
+        .when(has_selection)
+        .aliases(&["shrink", "erode"]),
+    cmd("feather", "Feather 3 px", C::Select).host(Edit),
+    cmd("paths", "Paths…", C::Select)
+        .when(editing)
+        .aliases(&["pen", "bezier", "svg", "vector"]),
+    // Filter
+    cmd("remove_background", "Remove Background", C::Filter)
+        .when(image_layer)
+        .host(Edit)
+        .aliases(&["cutout", "transparent", "subject", "grabcut"]),
+    cmd(
+        "remove_flat_background",
+        "Remove Flat Background (edge colours)",
         C::Filter,
     )
-    .aliases(&["cutout", "transparent"]),
+    .when(image_layer)
+    .host(Edit)
+    .aliases(&["cutout", "transparent", "white background"]),
+    cmd("camera_raw_filter", "Camera Raw Filter…", C::Filter)
+        .keys(&[ctrl_shift(Key::A)])
+        .when(camera_raw_target)
+        .aliases(&[
+            "develop",
+            "acr",
+            "white balance",
+            "exposure",
+            "tone curve",
+            "hsl",
+        ]),
     // View
     cmd("fit", "Fit Canvas", C::View)
         .keys(&[ctrl(Key::Num0)])
@@ -671,6 +926,22 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .host(View)
         .when(can_view),
+    // Channel targets, as Photoshop's Ctrl+2…6.
+    cmd("channel_composite", "Edit All Channels", C::View)
+        .keys(&[ctrl(Key::Num2)])
+        .aliases(&["rgb", "rgba", "composite"]),
+    cmd("channel_red", "Edit Red Channel", C::View)
+        .keys(&[ctrl(Key::Num3)])
+        .aliases(&["channels"]),
+    cmd("channel_green", "Edit Green Channel", C::View)
+        .keys(&[ctrl(Key::Num4)])
+        .aliases(&["channels"]),
+    cmd("channel_blue", "Edit Blue Channel", C::View)
+        .keys(&[ctrl(Key::Num5)])
+        .aliases(&["channels"]),
+    cmd("channel_alpha", "Edit Alpha Channel", C::View)
+        .keys(&[ctrl(Key::Num6)])
+        .aliases(&["channels", "transparency"]),
     cmd("toggle_pixel_grid", "Pixel Grid", C::View)
         .both()
         .run(Run::App(toggle_pixel_grid))
@@ -689,6 +960,63 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("clear_guides", "Clear Guides", C::View).when(has_guides),
     // Window
     cmd("reset_panels", "Reset Panel Layout", C::Window).when(not_developing),
+    cmd("next_tab", "Next Tab", C::Window)
+        .keys(&[ctrl(Key::Tab), ctrl(Key::PageDown)])
+        .both()
+        .when(has_tabs)
+        .aliases(&["switch tab", "document"]),
+    cmd("previous_tab", "Previous Tab", C::Window)
+        .keys(&[ctrl_shift(Key::Tab), ctrl(Key::PageUp)])
+        .both()
+        .when(has_tabs),
+    // Alt+1…9 as in Firefox on Linux: Ctrl+1 is Actual Pixels.
+    cmd("tab_1", "Tab 1", C::Window)
+        .keys(&[alt(Key::Num1)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_2", "Tab 2", C::Window)
+        .keys(&[alt(Key::Num2)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_3", "Tab 3", C::Window)
+        .keys(&[alt(Key::Num3)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_4", "Tab 4", C::Window)
+        .keys(&[alt(Key::Num4)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_5", "Tab 5", C::Window)
+        .keys(&[alt(Key::Num5)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_6", "Tab 6", C::Window)
+        .keys(&[alt(Key::Num6)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_7", "Tab 7", C::Window)
+        .keys(&[alt(Key::Num7)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_8", "Tab 8", C::Window)
+        .keys(&[alt(Key::Num8)])
+        .both()
+        .when(has_tabs),
+    cmd("tab_9", "Last Tab", C::Window)
+        .keys(&[alt(Key::Num9)])
+        .both()
+        .when(has_tabs),
+    cmd("reopen_closed_tab", "Reopen Closed Tab", C::Window)
+        .keys(&[ctrl_shift(Key::T)])
+        .both()
+        .when(always)
+        .aliases(&["undo close", "recent"]),
+    cmd("close_other_tabs", "Close Other Tabs", C::Window)
+        .both()
+        .when(has_tabs),
+    cmd("close_tabs_to_right", "Close Tabs to the Right", C::Window)
+        .both()
+        .when(has_tabs),
     // Tools
     tool(
         "tool_move",
@@ -726,7 +1054,15 @@ pub(super) const COMMANDS: &[Command] = &[
         &[bare(Key::W)],
         Run::Tool(Tool::Wand),
     ),
+    // C selects the Crop tool in the mode used last.
     tool("tool_crop", "Crop", &[bare(Key::C)], Run::Tool(Tool::Crop)),
+    tool(
+        "crop_mode",
+        "Switch Crop Box / Perspective Crop",
+        &[shift(Key::C)],
+        Run::App(crop_mode),
+    )
+    .aliases(&["perspective crop", "straighten", "rectify", "keystone"]),
     // B selects whichever of Brush and Pencil was used last.
     tool("tool_brush", "Brush", &[bare(Key::B)], Run::App(brush_tool)),
     tool(
@@ -758,13 +1094,41 @@ pub(super) const COMMANDS: &[Command] = &[
         "Blur / Smudge",
         &[bare(Key::R)],
         Run::Tool(Tool::Blur),
+    )
+    .aliases(&["smudge", "liquify", "warp", "push"]),
+    tool(
+        "switch_blur",
+        "Switch Blur / Smudge / Liquify",
+        &[shift(Key::R)],
+        Run::App(switch_blur),
     ),
+    tool(
+        "tool_dodge",
+        "Dodge / Burn",
+        &[bare(Key::O)],
+        Run::Tool(Tool::Dodge),
+    )
+    .aliases(&["dodge", "burn", "sponge", "lighten", "darken", "saturate"]),
+    tool(
+        "switch_tone",
+        "Switch Dodge / Burn / Sponge",
+        &[shift(Key::O)],
+        Run::App(switch_tone),
+    ),
+    // G selects whichever of Gradient and Paint Bucket was used last.
     tool(
         "tool_gradient",
         "Gradient",
         &[bare(Key::G)],
-        Run::Tool(Tool::Gradient),
+        Run::App(gradient_tool),
     ),
+    tool(
+        "switch_gradient",
+        "Switch between Gradient and Paint Bucket",
+        &[shift(Key::G)],
+        Run::App(switch_gradient),
+    )
+    .aliases(&["paint bucket", "bucket", "flood fill"]),
     tool(
         "tool_shape",
         "Shape",
@@ -777,6 +1141,7 @@ pub(super) const COMMANDS: &[Command] = &[
         &[shift(Key::U)],
         Run::App(shape_kind),
     ),
+    tool("tool_pen", "Pen", &[bare(Key::P)], Run::Tool(Tool::Pen)).aliases(&["bezier", "path"]),
     tool("tool_text", "Text", &[bare(Key::T)], Run::Tool(Tool::Text)),
     tool(
         "tool_eyedropper",
@@ -789,13 +1154,13 @@ pub(super) const COMMANDS: &[Command] = &[
     tool("tool_zoom", "Zoom", &[bare(Key::Z)], Run::Tool(Tool::Zoom)),
     tool(
         "swap_colors",
-        "Swap Colors",
+        "Swap Colours",
         &[bare(Key::X)],
         Run::App(swap_colors),
     ),
     tool(
         "reset_colors",
-        "Reset Colors",
+        "Reset Colours",
         &[bare(Key::D)],
         Run::App(reset_colors),
     ),
@@ -867,6 +1232,10 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .when(always)
         .aliases(&["keys", "hotkeys"]),
+    cmd("check_updates", "Check for Updates…", C::Help)
+        .both()
+        .when(always)
+        .aliases(&["update", "upgrade", "new version", "release notes"]),
     cmd("about", "About Xuan", C::Help)
         .both()
         .when(always)
@@ -914,14 +1283,28 @@ pub(super) fn tool_command(tool: Tool) -> Option<&'static str> {
         Tool::Heal => "tool_heal",
         Tool::Clone => "tool_clone",
         Tool::Blur => "tool_blur",
+        Tool::Dodge => "tool_dodge",
         Tool::Gradient => "tool_gradient",
+        Tool::Bucket => "switch_gradient",
         Tool::Shape => "tool_shape",
+        Tool::Pen => "tool_pen",
         Tool::Text => "tool_text",
         Tool::Dropper => "tool_eyedropper",
         Tool::Hand => "tool_hand",
         Tool::Zoom => "tool_zoom",
         Tool::Region => return None,
     })
+}
+
+/// Default bindings macOS keeps for itself, so the app never receives them: ⌘H hides the app.
+const MAC_SYSTEM: &[Chord] = &[ctrl(Key::H)];
+
+/// A command's default bindings on this platform: on macOS, without [`MAC_SYSTEM`].
+pub(super) fn platform_defaults(keys: &[Chord], mac: bool) -> Vec<Chord> {
+    keys.iter()
+        .copied()
+        .filter(|key| !mac || !MAC_SYSTEM.iter().any(|system| system.same(*key)))
+        .collect()
 }
 
 /// Whether a number key or reserved key: never available for commands.
@@ -1038,11 +1421,14 @@ impl Keymap {
         let custom = |id: &str| overrides.get(id).and_then(override_keys);
         let mut entries: Vec<Entry> = COMMANDS
             .iter()
-            .map(|command| Entry {
-                id: command.id.to_owned(),
-                kind: Kind::Builtin(command),
-                defaults: command.keys.to_vec(),
-                keys: custom(command.id).unwrap_or_else(|| command.keys.to_vec()),
+            .map(|command| {
+                let defaults = platform_defaults(command.keys, MAC);
+                Entry {
+                    id: command.id.to_owned(),
+                    kind: Kind::Builtin(command),
+                    keys: custom(command.id).unwrap_or_else(|| defaults.clone()),
+                    defaults,
+                }
             })
             .collect();
         let builtins = entries.len();
@@ -1139,6 +1525,7 @@ impl Keymap {
 
     /// The command a key press runs. An exact match wins over one that ignores Shift.
     pub fn lookup(&self, pressed: Modifiers, key: Key, developing: bool) -> Option<&Entry> {
+        let pressed = Chord::from_event(pressed, key).mods;
         let active = self
             .entries
             .iter()

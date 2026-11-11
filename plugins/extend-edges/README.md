@@ -46,6 +46,12 @@ content, so the layer lands exactly on the new canvas at any `max_side`.
 XUAN_PLUGIN_PATH=$PWD/plugins xuan
 ```
 
+To install it instead, copy this folder into Xuan's plugins directory or use
+**Plugins → Install from Folder or Zip…**. It needs nothing else: Xuan puts
+the Python SDK it ships (`xuan_plugin`) on the plugin's `PYTHONPATH` (see
+"The Python SDK" in `docs/PLUGINS.md`). With a Xuan from before that, copy
+`sdk/python/xuan_plugin.py` from the same release next to `main.py`.
+
 Then allow it in **Plugins → Manage Plugins…**, open an image and run
 **Image → Outpaint (Fill Edges)…**. Tests:
 
@@ -69,5 +75,5 @@ return the whole image as the model painted it.
 3. A model on a server (ComfyUI, a hosted API) needs its host in
    `permissions.network`. Xuan then asks before it sends the image and says
    that it is "extended by" the chosen amounts. The `comfy-cloud` example
-   shows the network side: upload `source.png` with `extend.png` as the
-   inpainting mask.
+   shows the network side: uploading `source.png` and running a workflow on
+   the server. An outpainting workflow would upload `extend.png` as its mask.

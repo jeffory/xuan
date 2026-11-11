@@ -1,3 +1,4 @@
+use super::theme::PaletteExt as _;
 use super::widgets;
 use std::{ops::RangeInclusive, sync::Arc};
 use xuan::i18n::tr;
@@ -12,7 +13,198 @@ use xuan::{
     selection::{self, SelectionMode},
 };
 
-use super::{EditorApp, Gesture, Tool, TransformDrag, theme};
+use super::{EditorApp, Gesture, Tool, TransformDrag, commands::ctrl_or_cmd};
+
+/// Colour of the Clone Stamp source marker: dimmer than the pointer's outline.
+pub(super) const CLONE_SOURCE_COLOR: Color32 = Color32::from_rgba_premultiplied(190, 190, 190, 190);
+
+/// Where the Clone Stamp samples from, in document coordinates. Before an
+/// offset exists (and in unaligned mode between strokes) that is the stored
+/// source; otherwise it is the pointer shifted by the offset (`source - start`).
+pub(super) fn clone_sample_position(
+    source: Option<Point>,
+    offset: Option<Point>,
+    pointer: Option<Point>,
+    aligned: bool,
+    stroking: bool,
+) -> Option<Point> {
+    source?;
+    match (offset, pointer) {
+        (Some(offset), Some(pointer)) if aligned || stroking => {
+            Some(Point::new(pointer.x + offset.x, pointer.y + offset.y))
+        }
+        _ => source,
+    }
+}
+
+/// Screen-space outer edge of the pixels a pencil dab of `size` px covers when
+/// the pointer is at `pointer` (document coordinates): the square for a Square
+/// tip, the stair-stepped disc for a Round one. The dab anchors on the same
+/// lattice the stroke does (pixel centre for odd sizes, pixel corner for even
+/// ones), so every vertex lies on a pixel boundary.
+pub(super) fn pencil_outline(
+    size: u32,
+    square: bool,
+    pointer: Point,
+    origin: Pos2,
+    zoom: f32,
+) -> Vec<Pos2> {
+    let size = size.max(1);
+    let anchor = if size % 2 == 1 {
+        (pointer.x.floor() as i32, pointer.y.floor() as i32)
+    } else {
+        (pointer.x.round() as i32, pointer.y.round() as i32)
+    };
+    // Per row: the first and one-past-last covered column.
+    let mut rows = std::collections::BTreeMap::<i32, (i32, i32)>::new();
+    for (dx, dy) in paint::tip_offsets(size, square) {
+        let span = rows.entry(anchor.1 + dy).or_insert((i32::MAX, i32::MIN));
+        span.0 = span.0.min(anchor.0 + dx);
+        span.1 = span.1.max(anchor.0 + dx + 1);
+    }
+    let at = |x: i32, y: i32| origin + vec2(x as f32, y as f32) * zoom;
+    let mut outline: Vec<Pos2> = Vec::new();
+    let mut push = |point: Pos2| {
+        if outline.last() == Some(&point) {
+            return;
+        }
+        // Drop a vertex that sits in the middle of a straight run.
+        if let [.., a, b] = outline[..]
+            && ((a.x == b.x && b.x == point.x) || (a.y == b.y && b.y == point.y))
+        {
+            outline.pop();
+        }
+        outline.push(point);
+    };
+    // Down the right edge, then back up the left (tips are convex per row).
+    for (&y, &(_, right)) in &rows {
+        push(at(right, y));
+        push(at(right, y + 1));
+    }
+    for (&y, &(left, _)) in rows.iter().rev() {
+        push(at(left, y + 1));
+        push(at(left, y));
+    }
+    // Close the loop: the first vertex may also be mid-run.
+    if let [first, .., last] = outline[..]
+        && let [.., before] = outline[..outline.len() - 1]
+        && ((before.x == last.x && last.x == first.x) || (before.y == last.y && last.y == first.y))
+    {
+        outline.pop();
+    }
+    outline
+}
+
+/// Screen-space outline of the brush tip centred at `centre`; `shape` is the
+/// tilt axis, tilt aspect and pressure scale from `EditorApp::brush_shape`.
+fn brush_outline(
+    brush: &paint::Brush,
+    pencil: bool,
+    centre: Pos2,
+    origin: Pos2,
+    zoom: f32,
+    (axis, aspect, pressure): (Point, f32, f32),
+) -> Vec<Pos2> {
+    if pencil {
+        let size = (brush.diameter * pressure).round().max(1.0) as u32;
+        let doc = Point::new((centre.x - origin.x) / zoom, (centre.y - origin.y) / zoom);
+        pencil_outline(size, brush.square, doc, origin, zoom)
+    } else {
+        let radius = brush.diameter * zoom * pressure * 0.5;
+        (0..48)
+            .map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                let (sin, cos) = angle.sin_cos();
+                centre
+                    + vec2(
+                        axis.x * cos - axis.y * sin * aspect,
+                        axis.y * cos + axis.x * sin * aspect,
+                    ) * radius
+            })
+            .collect()
+    }
+}
+
+/// A contrasting double stroke: a dark halo under a light line.
+fn paint_brush_outline(painter: &egui::Painter, outline: Vec<Pos2>, light: Color32, halo: u8) {
+    painter.add(egui::Shape::closed_line(
+        outline.clone(),
+        Stroke::new(2.5_f32, Color32::from_black_alpha(halo)),
+    ));
+    painter.add(egui::Shape::closed_line(
+        outline,
+        Stroke::new(1.0_f32, light),
+    ));
+}
+
+/// The paint symmetry's axis, or its radial spokes, and its centre, in
+/// screen space over a `size` canvas, clipped to the canvas.
+fn symmetry_guides(
+    symmetry: &paint::Symmetry,
+    size: [u32; 2],
+    origin: Pos2,
+    zoom: f32,
+) -> Vec<[Pos2; 2]> {
+    let [width, height] = size;
+    let center = symmetry.center_in(width, height);
+    let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
+    let (w, h) = (width as f32, height as f32);
+    match symmetry.mode {
+        paint::SymmetryMode::Off => Vec::new(),
+        paint::SymmetryMode::Vertical => {
+            vec![[map(Point::new(center.x, 0.0)), map(Point::new(center.x, h))]]
+        }
+        paint::SymmetryMode::Horizontal => {
+            vec![[map(Point::new(0.0, center.y)), map(Point::new(w, center.y))]]
+        }
+        paint::SymmetryMode::Radial => {
+            // Long enough to reach the farthest corner; the canvas clips them.
+            let reach = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+                .into_iter()
+                .map(|(x, y)| center.distance(Point::new(x, y)))
+                .fold(1.0, f32::max);
+            let n = symmetry.count();
+            (0..n)
+                .map(|k| {
+                    let angle =
+                        std::f32::consts::TAU * k as f32 / n as f32 - std::f32::consts::FRAC_PI_2;
+                    let end = Point::new(
+                        center.x + angle.cos() * reach,
+                        center.y + angle.sin() * reach,
+                    );
+                    [map(center), map(end)]
+                })
+                .collect()
+        }
+    }
+}
+
+impl EditorApp {
+    /// Tilt axis, tilt aspect and pressure scale of the brush tip right now.
+    fn brush_shape(&self) -> (Point, f32, f32) {
+        let pen = self.tablet.as_ref().and_then(|tablet| tablet.sample());
+        let tilt = if self.tilt_shape {
+            pen.and_then(|sample| sample.tilt).unwrap_or([0.0; 2])
+        } else {
+            [0.0; 2]
+        };
+        let (axis, aspect) = paint::tilt_shape(tilt);
+        let pressure = if self.pressure_size {
+            pen.filter(|sample| {
+                matches!(
+                    sample.phase,
+                    super::tablet::Phase::Down | super::tablet::Phase::Move
+                )
+            })
+            .and_then(|sample| sample.pressure)
+            .unwrap_or(1.0)
+            .max(0.01)
+        } else {
+            1.0
+        };
+        (axis, aspect, pressure)
+    }
+}
 
 const HANDLES: [Point; 8] = [
     Point::new(0.0, 0.0),
@@ -178,7 +370,7 @@ fn drag_transform(
 impl EditorApp {
     pub(super) fn canvas(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::CANVAS))
+            .frame(egui::Frame::new().fill(ctx.palette().canvas))
             .show(ctx, |ui| {
                 let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
                 if self.sessions.is_empty() {
@@ -195,10 +387,24 @@ impl EditorApp {
                     ui.interact(viewport, ui.id().with("canvas"), Sense::click_and_drag());
                 let ruler_responses = rulers.map(|layout| {
                     (
-                        ui.interact(layout.top, ui.id().with("ruler_top"), Sense::drag()),
-                        ui.interact(layout.left, ui.id().with("ruler_left"), Sense::drag()),
+                        ui.interact(
+                            layout.top,
+                            ui.id().with("ruler_top"),
+                            Sense::click_and_drag(),
+                        ),
+                        ui.interact(
+                            layout.left,
+                            ui.id().with("ruler_left"),
+                            Sense::click_and_drag(),
+                        ),
                     )
                 });
+                // Right-click either ruler to choose what both measure in.
+                if let Some((top, left)) = &ruler_responses {
+                    for ruler in [top, left] {
+                        ruler.context_menu(|ui| self.ruler_unit_menu(ui));
+                    }
+                }
                 self.release_sample_caches();
                 let mask_target = self.transforming_mask();
                 let session = &mut self.sessions[self.current];
@@ -243,7 +449,8 @@ impl EditorApp {
                 let session = &self.sessions[self.current];
                 let visible = canvas.intersect(viewport);
                 let painter = ui.painter().with_clip_rect(viewport);
-                painter.rect_filled(canvas.expand(3.0), 0.0, Color32::from_black_alpha(60));
+                let palette = ui.palette();
+                painter.rect_filled(canvas.expand(3.0), 0.0, palette.canvas_shadow);
                 if visible.is_positive() {
                     let checker = 12.0;
                     let min_x = ((visible.left() - origin.x) / checker).floor() as i32;
@@ -259,7 +466,7 @@ impl EditorApp {
                                     Vec2::splat(checker),
                                 ),
                                 0.0,
-                                Color32::from_gray(if (x + y) % 2 == 0 { 66 } else { 80 }),
+                                palette.checker[usize::from((x + y) % 2 != 0)],
                             );
                         }
                     }
@@ -280,7 +487,7 @@ impl EditorApp {
                 painter.rect_stroke(
                     canvas,
                     0.0,
-                    Stroke::new(1.0_f32, Color32::from_gray(17)),
+                    Stroke::new(1.0_f32, palette.canvas_edge),
                     StrokeKind::Outside,
                 );
                 let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
@@ -398,8 +605,9 @@ impl EditorApp {
                     let top = map(t.point(Point::new(0.5, 0.0)));
                     let center = map(t.center());
                     let rotate = top + (top - center).normalized() * 23.0;
-                    painter.line_segment([top, rotate], Stroke::new(1.0_f32, theme::TEXT));
-                    painter.circle_filled(rotate, 3.5, theme::TEXT);
+                    painter
+                        .line_segment([top, rotate], Stroke::new(1.0_f32, super::theme::ON_CANVAS));
+                    painter.circle_filled(rotate, 3.5, super::theme::ON_CANVAS);
                     if response
                         .hover_pos()
                         .is_some_and(|p| p.distance(rotate) < 8.0)
@@ -423,37 +631,54 @@ impl EditorApp {
                     painter
                         .line_segment(line, Stroke::new(1.0_f32, Color32::from_rgb(219, 115, 213)));
                 }
-                if let Some(layout) = &rulers {
-                    super::rulers::paint(ui.painter(), layout, origin, zoom);
-                }
-                if let Some((start, end)) = self.crop_rect {
-                    let rect = Rect::from_two_pos(map(start), map(end));
-                    painter.rect_stroke(
-                        rect,
-                        0.0,
-                        Stroke::new(1.5_f32, Color32::WHITE),
-                        StrokeKind::Inside,
-                    );
-                    for f in [1.0 / 3.0, 2.0 / 3.0] {
-                        painter.line_segment(
-                            [
-                                pos2(rect.left() + rect.width() * f, rect.top()),
-                                pos2(rect.left() + rect.width() * f, rect.bottom()),
-                            ],
-                            Stroke::new(0.7_f32, Color32::from_white_alpha(140)),
+                // Paint symmetry: the mirror axis or radial spokes and their centre.
+                if matches!(self.tool, Tool::Brush | Tool::Pencil | Tool::Erase)
+                    && self.brush.symmetry.active()
+                {
+                    let size = [session.document.width, session.document.height];
+                    let guides = painter.with_clip_rect(visible);
+                    let accent = ui.palette().accent;
+                    for line in symmetry_guides(&self.brush.symmetry, size, origin, zoom) {
+                        guides.line_segment(
+                            line,
+                            Stroke::new(2.5_f32, Color32::from_black_alpha(70)),
                         );
-                        painter.line_segment(
-                            [
-                                pos2(rect.left(), rect.top() + rect.height() * f),
-                                pos2(rect.right(), rect.top() + rect.height() * f),
-                            ],
-                            Stroke::new(0.7_f32, Color32::from_white_alpha(140)),
-                        );
+                        guides.add(egui::Shape::dashed_line(
+                            &line,
+                            Stroke::new(1.0_f32, accent),
+                            6.0,
+                            4.0,
+                        ));
                     }
+                    let center = self.brush.symmetry.center_in(size[0], size[1]);
+                    let center = map(center);
+                    guides.circle(
+                        center,
+                        4.0,
+                        Color32::from_black_alpha(70),
+                        Stroke::new(1.5_f32, accent),
+                    );
                 }
+                if let Some(layout) = &rulers {
+                    let document = &self.sessions[self.current].document;
+                    let unit = self.config.units.rulers;
+                    let scales = [document.width, document.height].map(|side| {
+                        super::rulers::RulerScale::new(unit, document.resolution, side)
+                    });
+                    super::rulers::paint(ui.painter(), layout, origin, zoom, scales);
+                }
+                let crop_cursor = if self.tool == Tool::Crop {
+                    let hover = response
+                        .hover_pos()
+                        .map(|p| Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom));
+                    self.paint_crop(&painter, canvas, origin, zoom, hover)
+                } else {
+                    None
+                };
                 if let Some(gesture) = &self.gesture {
                     let rect = Rect::from_two_pos(map(gesture.start), map(gesture.last));
-                    if matches!(self.tool, Tool::Marquee | Tool::Shape)
+                    if (matches!(self.tool, Tool::Marquee | Tool::Shape)
+                        || (self.tool == Tool::Wand && self.wand_object))
                         && !matches!(gesture.kind, TransformDrag::Selection)
                     {
                         if (self.tool == Tool::Marquee && self.ellipse)
@@ -492,55 +717,20 @@ impl EditorApp {
                         painter.rect_stroke(
                             rect,
                             0.0,
-                            Stroke::new(1.5_f32, theme::ACCENT),
+                            Stroke::new(1.5_f32, ui.palette().accent),
                             StrokeKind::Inside,
                         );
                     }
                 }
+                let (accent, ink) = (ui.palette().accent, ui.palette().on_accent_text);
                 if let Some(edit) = &self.plugins.action {
-                    for (index, region) in edit.regions.iter().enumerate() {
-                        let rect = Rect::from_two_pos(
-                            map(Point::new(region.x, region.y)),
-                            map(Point::new(
-                                region.x + region.width,
-                                region.y + region.height,
-                            )),
-                        );
-                        let selected = edit.selected == Some(index);
-                        painter.rect_filled(
-                            rect,
-                            0.0,
-                            theme::ACCENT.gamma_multiply(if selected { 0.2 } else { 0.08 }),
-                        );
-                        painter.rect_stroke(
-                            rect,
-                            0.0,
-                            Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, theme::ACCENT),
-                            StrokeKind::Inside,
-                        );
-                        let badge = Rect::from_min_size(rect.min, vec2(22.0, 16.0));
-                        painter.rect_filled(badge, 0.0, theme::ACCENT);
-                        painter.text(
-                            badge.center(),
-                            egui::Align2::CENTER_CENTER,
-                            format!("{:02}", index + 1),
-                            egui::FontId::monospace(10.0),
-                            Color32::WHITE,
-                        );
-                        if let Some(text) = region
-                            .fields
-                            .values()
-                            .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
-                        {
-                            painter.text(
-                                rect.min + vec2(4.0, 20.0),
-                                egui::Align2::LEFT_TOP,
-                                text.chars().take(28).collect::<String>(),
-                                egui::FontId::proportional(11.0),
-                                Color32::WHITE,
-                            );
-                        }
-                    }
+                    let regions = edit.regions.iter();
+                    draw_region_boxes(&painter, &map, regions, edit.selected, accent, ink);
+                } else if self.tool == Tool::Region
+                    && let Some(session) = self.session()
+                {
+                    let boxes = session.ai_boxes.iter().map(|b| &b.region);
+                    draw_region_boxes(&painter, &map, boxes, session.ai_selected, accent, ink);
                 }
                 if !self.polygon.is_empty() {
                     let mut points: Vec<_> = self.polygon.iter().copied().map(map).collect();
@@ -552,16 +742,8 @@ impl EditorApp {
                         Stroke::new(1.0_f32, Color32::WHITE),
                     ));
                 }
-                if let Some(source) = self.clone_source {
-                    let p = map(source);
-                    painter.line_segment(
-                        [p - vec2(5.0, 0.0), p + vec2(5.0, 0.0)],
-                        Stroke::new(1.0_f32, Color32::WHITE),
-                    );
-                    painter.line_segment(
-                        [p - vec2(0.0, 5.0), p + vec2(0.0, 5.0)],
-                        Stroke::new(1.0_f32, Color32::WHITE),
-                    );
+                if self.tool == Tool::Pen || self.dialog == Some(super::Dialog::Paths) {
+                    self.pen_overlay(&painter, origin, zoom, response.hover_pos());
                 }
                 let blocked = self.job.is_some()
                     || self.develop.is_some()
@@ -582,6 +764,34 @@ impl EditorApp {
                     .or_else(|| ctx.input(|i| i.pointer.hover_pos()));
                 let doc_point =
                     pointer.map(|p| Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom));
+                if self.tool == Tool::Clone {
+                    let doc_pointer = pointer
+                        .map(|p| Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom));
+                    let stroking = self.gesture.is_some();
+                    if let Some(sample) = clone_sample_position(
+                        self.clone_source,
+                        self.clone_offset,
+                        doc_pointer,
+                        self.clone_aligned,
+                        stroking,
+                    ) {
+                        let centre = map(sample);
+                        let shape = self.brush_shape();
+                        let outline =
+                            brush_outline(&self.brush, false, centre, origin, zoom, shape);
+                        paint_brush_outline(&painter, outline, CLONE_SOURCE_COLOR, 90);
+                        for arm in [vec2(5.0, 0.0), vec2(0.0, 5.0)] {
+                            painter.line_segment(
+                                [centre - arm, centre + arm],
+                                Stroke::new(2.5_f32, Color32::from_black_alpha(90)),
+                            );
+                            painter.line_segment(
+                                [centre - arm, centre + arm],
+                                Stroke::new(1.0_f32, CLONE_SOURCE_COLOR),
+                            );
+                        }
+                    }
+                }
                 let modifiers = ctx.input(|i| i.modifiers);
                 let panning = self.tool == Tool::Hand
                     || ctx.input(|i| i.key_down(egui::Key::Space))
@@ -608,6 +818,8 @@ impl EditorApp {
                         cursor
                     } else if hover_handle.is_some() {
                         egui::CursorIcon::ResizeNwSe
+                    } else if let Some(cursor) = crop_cursor {
+                        cursor
                     } else if self.tool == Tool::Move {
                         egui::CursorIcon::Move
                     } else if self.tool == Tool::Text {
@@ -628,72 +840,16 @@ impl EditorApp {
                             .map_or(p, |gesture| {
                                 origin + vec2(gesture.last.x, gesture.last.y) * zoom
                             });
-                        let tilt = if self.tilt_shape {
-                            pen.and_then(|sample| sample.tilt).unwrap_or([0.0; 2])
-                        } else {
-                            [0.0; 2]
-                        };
-                        let (axis, aspect) = paint::tilt_shape(tilt);
-                        let pressure = if self.pressure_size {
-                            pen.filter(|sample| {
-                                matches!(
-                                    sample.phase,
-                                    super::tablet::Phase::Down | super::tablet::Phase::Move
-                                )
-                            })
-                            .and_then(|sample| sample.pressure)
-                            .unwrap_or(1.0)
-                            .max(0.01)
-                        } else {
-                            1.0
-                        };
-                        let radius = self.brush.diameter * zoom * pressure * 0.5;
-                        let outline: Vec<_> = if self.tool == Tool::Pencil {
-                            // Pixel-exact tip: whole-pixel size, snapped to the pixel grid.
-                            let size = (self.brush.diameter * pressure).round().max(1.0);
-                            let half = size * zoom * 0.5;
-                            let doc = Point::new((p.x - origin.x) / zoom, (p.y - origin.y) / zoom);
-                            let centre = if size % 2.0 == 1.0 {
-                                Point::new(doc.x.floor() + 0.5, doc.y.floor() + 0.5)
-                            } else {
-                                Point::new(doc.x.round(), doc.y.round())
-                            };
-                            let centre = origin + vec2(centre.x, centre.y) * zoom;
-                            if self.brush.square {
-                                vec![
-                                    centre + vec2(-half, -half),
-                                    centre + vec2(half, -half),
-                                    centre + vec2(half, half),
-                                    centre + vec2(-half, half),
-                                ]
-                            } else {
-                                (0..48)
-                                    .map(|i| {
-                                        let angle = i as f32 * std::f32::consts::TAU / 48.0;
-                                        centre + vec2(angle.cos(), angle.sin()) * half
-                                    })
-                                    .collect()
-                            }
-                        } else {
-                            (0..48)
-                                .map(|i| {
-                                    let angle = i as f32 * std::f32::consts::TAU / 48.0;
-                                    let (sin, cos) = angle.sin_cos();
-                                    p + vec2(
-                                        axis.x * cos - axis.y * sin * aspect,
-                                        axis.y * cos + axis.x * sin * aspect,
-                                    ) * radius
-                                })
-                                .collect()
-                        };
-                        painter.add(egui::Shape::closed_line(
-                            outline.clone(),
-                            Stroke::new(2.5_f32, Color32::from_black_alpha(130)),
-                        ));
-                        painter.add(egui::Shape::closed_line(
-                            outline,
-                            Stroke::new(1.0_f32, Color32::WHITE),
-                        ));
+                        let (axis, aspect, pressure) = self.brush_shape();
+                        let outline = brush_outline(
+                            &self.brush,
+                            self.tool == Tool::Pencil,
+                            p,
+                            origin,
+                            zoom,
+                            (axis, aspect, pressure),
+                        );
+                        paint_brush_outline(&painter, outline, Color32::WHITE, 130);
                     }
                 }
                 let pen_frames = std::mem::take(&mut self.pen_samples);
@@ -724,7 +880,15 @@ impl EditorApp {
                 } else if self.tool == Tool::Dropper && !panning && self.gesture.is_none() {
                     let (pressed, down) =
                         ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
-                    if pressed && response.hovered() {
+                    if self.color_range.is_some() {
+                        // Select → Color Range picks its colours instead of the brush's.
+                        if pressed
+                            && response.hovered()
+                            && let Some(point) = doc_point
+                        {
+                            self.sample_color_range(point, modifiers);
+                        }
+                    } else if pressed && response.hovered() {
                         if let Some(point) = doc_point {
                             self.dropper_press(point);
                         }
@@ -763,6 +927,12 @@ impl EditorApp {
                             super::eyedropper::paint_bubble(&painter, rect, new, current);
                         }
                     }
+                } else if self.tool == Tool::Pen
+                    && !panning
+                    && self.gesture.is_none()
+                    && self.guide_drag.is_none()
+                {
+                    self.pen_pointer(ctx, response.hovered(), doc_point, pointer, zoom);
                 } else if self.guide_drag.is_none() {
                     let started = response.drag_started()
                         || response.drag_started_by(egui::PointerButton::Middle);
@@ -814,7 +984,7 @@ impl EditorApp {
                     painter.rect_stroke(
                         viewport.shrink(5.0),
                         8.0,
-                        Stroke::new(2.0_f32, theme::ACCENT),
+                        Stroke::new(2.0_f32, ui.palette().accent),
                         StrokeKind::Inside,
                     );
                 }
@@ -841,7 +1011,7 @@ impl EditorApp {
             ui.label(
                 egui::RichText::new(tr("A blank space for your next composition."))
                     .size(14.0)
-                    .color(theme::MUTED),
+                    .color(ui.palette().muted),
             );
             ui.add_space(24.0);
             egui::Grid::new("welcome_dimensions")
@@ -857,20 +1027,25 @@ impl EditorApp {
                     ui.add(
                         widgets::Number::new(&mut self.dimensions[0])
                             .size(vec2(180.0, 36.0))
-                            .range(1..=30_000)
+                            .range(1..=xuan::document::MAX_SIDE)
                             .suffix(" px"),
                     );
                     ui.label("×");
                     ui.add(
                         widgets::Number::new(&mut self.dimensions[1])
                             .size(vec2(180.0, 36.0))
-                            .range(1..=30_000)
+                            .range(1..=xuan::document::MAX_SIDE)
                             .suffix(" px"),
                     );
                     ui.end_row();
                 });
             ui.add_space(15.0);
-            ui.label(egui::RichText::new(tr("Transparent canvas · sRGB")).color(theme::MUTED));
+            ui.label(
+                egui::RichText::new(super::dialogs::canvas_summary(
+                    self.config.new_canvas_background,
+                ))
+                .color(ui.palette().muted),
+            );
             ui.add_space(20.0);
             ui.horizontal(|ui| {
                 open = widgets::button(ui, tr("Open project")).clicked();
@@ -883,6 +1058,8 @@ impl EditorApp {
             });
         });
         if create {
+            // The background last chosen in File → New.
+            self.new_canvas_background = self.config.new_canvas_background;
             self.new_document();
         }
         if open {
@@ -1030,11 +1207,29 @@ impl EditorApp {
     fn canvas_click(&mut self, point: Point, modifiers: egui::Modifiers) {
         match self.tool {
             Tool::Text => self.text_click(point),
-            Tool::Region => self.select_region_at(point),
+            Tool::Region if self.plugins.action.is_some() => self.select_region_at(point),
+            Tool::Region => {
+                self.select_ai_box_at(point);
+            }
             Tool::Move => {
-                if self.auto_select || modifiers.ctrl {
+                if self.auto_select || ctrl_or_cmd(modifiers) {
                     self.select_canvas_layer(point, modifiers.shift, false);
                 }
+            }
+            // Without perspective corners, each click places one.
+            Tool::Crop if self.crop.perspective && self.crop.quad.is_none() => {
+                self.forget_crop_of_other_documents();
+                self.crop.place_corner(point);
+            }
+            Tool::Wand if self.wand_object => {
+                let mode = self.selection_mode(modifiers);
+                self.select_object(
+                    xuan::segment::Seeds {
+                        points: vec![(point.x, point.y)],
+                        rect: None,
+                    },
+                    mode,
+                );
             }
             Tool::Wand => {
                 let tolerance = self.tolerance;
@@ -1049,6 +1244,7 @@ impl EditorApp {
                     );
                 });
             }
+            Tool::Bucket => self.bucket_fill(point),
             Tool::Zoom => {
                 if let Some(s) = self.session_mut() {
                     s.zoom = (s.zoom * if modifiers.alt { 0.8 } else { 1.25 })
@@ -1140,6 +1336,38 @@ impl EditorApp {
         });
     }
 
+    /// A Paint Bucket click: one undo step, or none when nothing was filled.
+    fn bucket_fill(&mut self, point: Point) {
+        let options = paint::BucketOptions {
+            color: self.brush.color,
+            opacity: self.brush.opacity,
+            tolerance: self.bucket.tolerance,
+            contiguous: self.bucket.contiguous,
+            anti_alias: self.bucket.anti_alias,
+            all_layers: self.bucket.all_layers,
+            mask_target: self.editing_mask(),
+        };
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        session.history.begin(tr("Paint Bucket"), &session.document);
+        match paint::bucket(&mut session.document, point, options)
+            .and_then(|filled| paint::refresh_shapes(&mut session.document).map(|()| filled))
+        {
+            Ok(true) => {
+                session.commit();
+                session.invalidate();
+                self.status = tr("Paint Bucket").into();
+            }
+            Ok(false) => session.history.cancel(&mut session.document),
+            Err(error) => {
+                session.history.cancel(&mut session.document);
+                session.invalidate();
+                self.error = Some(error.to_string());
+            }
+        }
+    }
+
     fn begin_gesture(
         &mut self,
         point: Point,
@@ -1153,6 +1381,10 @@ impl EditorApp {
         } else {
             self.tool
         };
+        if !panning && self.gesture.is_none() && tool.is_brush() {
+            // Scatter and jitter differ from one stroke to the next.
+            self.brush.dynamics.seed = self.brush.dynamics.seed.wrapping_add(1);
+        }
         let brush = self.input_brush();
         if self.gesture.is_some() || self.sessions.is_empty() {
             return;
@@ -1181,12 +1413,14 @@ impl EditorApp {
             });
             return;
         }
-        if tool == Tool::Text {
+        // The Paint Bucket fills on a click; a drag does nothing.
+        if matches!(tool, Tool::Text | Tool::Bucket) {
             return;
         }
         if tool == Tool::Region {
-            // Regions belong to the open plugin action, not to the document.
-            if self.plugins.action.is_none() {
+            // Regions belong to the open plugin action, or (AI Region tool)
+            // are boxes kept beside the document, never edits of it.
+            if self.plugins.action.is_none() && !self.region_tool_available() {
                 return;
             }
             let session = &self.sessions[self.current];
@@ -1221,6 +1455,15 @@ impl EditorApp {
             self.status = tr("Spot Healing works on layer pixels, not masks").into();
             return;
         }
+        if tool == Tool::Dodge && self.editing_mask() {
+            // As upstream: a mask has no tones or colours to change.
+            self.status = tr("Dodge, Burn and Sponge work on layer pixels, not masks").into();
+            return;
+        }
+        if tool == Tool::Blur && self.blur_mode == PaintMode::Liquify && self.editing_mask() {
+            self.status = tr("Liquify works on layer pixels, not masks").into();
+            return;
+        }
         if tool == Tool::Clone && self.clone_source.is_none() {
             self.status = tr("Alt-click on the canvas to set a clone source").into();
             return;
@@ -1235,7 +1478,7 @@ impl EditorApp {
                     .iter()
                     .position(|unit| t.point(*unit).distance(point) * session.zoom < 9.0)
                 {
-                    handle = Some(if modifiers.ctrl && index % 2 == 0 {
+                    handle = Some(if ctrl_or_cmd(modifiers) && index % 2 == 0 {
                         TransformDrag::Distort(index / 2)
                     } else {
                         TransformDrag::Scale(index)
@@ -1256,36 +1499,53 @@ impl EditorApp {
         }
         let mut kind = handle.unwrap_or(TransformDrag::Move);
         if tool == Tool::Move
-            && (self.auto_select || modifiers.ctrl)
+            && (self.auto_select || ctrl_or_cmd(modifiers))
             && handle.is_none()
             && !self.select_canvas_layer(point, modifiers.shift, true)
         {
             return;
         }
         let mask_target = self.transforming_mask();
+        if tool == Tool::Crop {
+            self.forget_crop_of_other_documents();
+            let zoom = self.sessions[self.current].zoom;
+            self.crop.drag = if self.crop.perspective {
+                // Without corners, a drag does nothing; clicks place them.
+                self.crop.press_quad(point, zoom)
+            } else {
+                Some(self.crop.press(point, zoom))
+            };
+        }
+        let drawing_crop = self.crop.drag == Some(super::crop_tool::CropDrag::Draw);
         // A marquee, shape or crop starts on a nearby Snap To target; Ctrl starts it freely.
         let snapping = self
             .snap_options()
-            .filter(|_| !modifiers.ctrl && matches!(tool, Tool::Marquee | Tool::Shape | Tool::Crop))
+            .filter(|_| {
+                !ctrl_or_cmd(modifiers)
+                    && (matches!(tool, Tool::Marquee | Tool::Shape)
+                        || (tool == Tool::Crop && drawing_crop))
+            })
             .map(|options| (options, self.displayed_guides()));
         let session = &mut self.sessions[self.current];
         if tool == Tool::Move && session.document.active.is_none() {
             return;
         }
-        session.history.begin(tool.label(), &session.document);
+        let liquify = tool == Tool::Blur && self.blur_mode == PaintMode::Liquify;
+        let name = if liquify { tr("Liquify") } else { tool.label() };
+        session.history.begin(name, &session.document);
         if tool == Tool::Move && modifiers.alt {
             operations::duplicate(&mut session.document);
         }
         if tool.is_selection()
             && !modifiers.shift
-            && (!modifiers.alt || modifiers.ctrl)
+            && (!modifiers.alt || ctrl_or_cmd(modifiers))
             && session
                 .document
                 .selection
                 .as_ref()
                 .is_some_and(|m| selection::coverage(Some(m), point) > 0.0)
         {
-            if modifiers.ctrl {
+            if ctrl_or_cmd(modifiers) {
                 if let Some((pixels, origin)) = operations::copy_pixels(&session.document, false) {
                     if !modifiers.alt
                         && let Err(error) = paint::fill(&mut session.document, [0; 4], true, false)
@@ -1305,7 +1565,8 @@ impl EditorApp {
                 kind = TransformDrag::Selection;
             }
         }
-        let source = if matches!(tool, Tool::Clone | Tool::Blur) {
+        // Liquify warps the layer as it is, without a copy to sample.
+        let source = if matches!(tool, Tool::Clone | Tool::Blur) && !liquify {
             if tool == Tool::Clone && self.clone_all {
                 Some(Arc::new(render::render(&session.document)))
             } else {
@@ -1415,7 +1676,9 @@ impl EditorApp {
         if let Some(smoothing) = &mut gesture.smoothing {
             point = smoothing.update(point);
         }
-        let shaped = matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop)
+        // Moving or resizing a crop box follows the pointer without snapping.
+        let shaped = (matches!(tool, Tool::Shape | Tool::Marquee)
+            || (tool == Tool::Crop && self.crop.drag == Some(super::crop_tool::CropDrag::Draw)))
             && matches!(gesture.kind, TransformDrag::Move);
         let moving = tool == Tool::Move
             || matches!(
@@ -1426,7 +1689,7 @@ impl EditorApp {
         let snapping = if shaped || moving {
             self.snap_lines.clear();
             self.snap_options()
-                .filter(|_| !modifiers.ctrl)
+                .filter(|_| !ctrl_or_cmd(modifiers))
                 .map(|options| (options, self.displayed_guides()))
         } else {
             None
@@ -1442,7 +1705,8 @@ impl EditorApp {
             );
             (point, self.snap_lines) = targets.snap_point(point, tolerance);
         }
-        if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop) {
+        // The Crop tool keeps its own ratio (a square with Shift when Free).
+        if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee) {
             let dx = point.x - gesture.start.x;
             let dy = point.y - gesture.start.y;
             let size = dx.abs().max(dy.abs());
@@ -1491,14 +1755,7 @@ impl EditorApp {
                     Ok(())
                 }
                 tool if tool.is_brush() => {
-                    let mode = match tool {
-                        Tool::Erase => PaintMode::Erase,
-                        Tool::Pencil => PaintMode::Pencil,
-                        Tool::Clone => PaintMode::Clone,
-                        Tool::Heal => PaintMode::Heal,
-                        Tool::Blur => self.blur_mode,
-                        _ => PaintMode::Paint,
-                    };
+                    let mode = Self::paint_mode(tool, self.blur_mode, self.tone_mode);
                     let offset = if mode == PaintMode::Smudge {
                         Point::new(gesture.last.x - point.x, gesture.last.y - point.y)
                     } else {
@@ -1643,7 +1900,9 @@ impl EditorApp {
                     Ok(())
                 }
                 Tool::Crop => {
-                    self.crop_rect = Some((gesture.start, point));
+                    let canvas = [gesture.original.width, gesture.original.height];
+                    self.crop
+                        .drag_to(gesture.start, point, canvas, modifiers.shift);
                     Ok(())
                 }
                 _ => Ok(()),
@@ -1663,6 +1922,19 @@ impl EditorApp {
         self.gesture = Some(gesture);
     }
 
+    /// How a painting tool paints.
+    fn paint_mode(tool: Tool, blur_mode: PaintMode, tone_mode: PaintMode) -> PaintMode {
+        match tool {
+            Tool::Erase => PaintMode::Erase,
+            Tool::Pencil => PaintMode::Pencil,
+            Tool::Clone => PaintMode::Clone,
+            Tool::Heal => PaintMode::Heal,
+            Tool::Blur => blur_mode,
+            Tool::Dodge => tone_mode,
+            _ => PaintMode::Paint,
+        }
+    }
+
     fn end_gesture(&mut self, modifiers: egui::Modifiers) {
         let tail = self.gesture.as_mut().and_then(|gesture| {
             let smoothing = gesture.smoothing.take()?;
@@ -1674,7 +1946,7 @@ impl EditorApp {
             // and tilt. The tail belongs to the same history transaction.
             self.update_gesture_with_brush(point, Pos2::ZERO, modifiers, brush);
         }
-        let Some(gesture) = self.gesture.take() else {
+        let Some(mut gesture) = self.gesture.take() else {
             return;
         };
         self.snap_lines.clear();
@@ -1683,7 +1955,33 @@ impl EditorApp {
             return;
         }
         if tool == Tool::Region {
-            self.add_region(gesture.start, gesture.last);
+            if self.plugins.action.is_some() {
+                self.add_region(gesture.start, gesture.last);
+            } else {
+                self.add_ai_box(gesture.start, gesture.last);
+            }
+            return;
+        }
+        if tool == Tool::Wand
+            && self.wand_object
+            && !matches!(
+                gesture.kind,
+                TransformDrag::Selection | TransformDrag::Pixels
+            )
+        {
+            // Object mode: the dragged rectangle bounds the object.
+            let (a, b) = (gesture.start, gesture.last);
+            let rect = [a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)];
+            if rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0 {
+                let mode = self.selection_mode(modifiers);
+                self.select_object(
+                    xuan::segment::Seeds {
+                        points: Vec::new(),
+                        rect: Some(rect),
+                    },
+                    mode,
+                );
+            }
             return;
         }
         if tool == Tool::Heal {
@@ -1697,6 +1995,7 @@ impl EditorApp {
         }
         let mode = self.selection_mode(modifiers);
         let mask_target = self.editing_mask();
+        let paint_mode = Self::paint_mode(tool, self.blur_mode, self.tone_mode);
         let session = &mut self.sessions[self.current];
         let start = gesture.start;
         let end = gesture.last;
@@ -1764,18 +2063,42 @@ impl EditorApp {
                 }
                 Tool::Crop => {
                     session.history.cancel(&mut session.document);
+                    self.crop.release();
                     return;
                 }
+                // A brush that tapers at the end paints the stroke again now
+                // that its length is known.
+                tool if tool.is_brush() => gesture.stroke.finish(
+                    &mut session.document,
+                    paint::StrokeOptions {
+                        mode: paint_mode,
+                        mask_target,
+                        source: gesture.source.as_deref(),
+                        clone_offset: gesture.clone_offset,
+                    },
+                ),
                 _ => Ok(()),
             }
         };
         if !changes_composition && result.is_ok() {
-            session.history.commit();
+            session.commit();
+            return;
+        }
+        // A Dodge, Burn or Sponge stroke that changed no pixel (0% exposure,
+        // or only over transparent pixels), or a Blur, Smudge or Liquify
+        // stroke that moved nothing, leaves no undo step.
+        if matches!(tool, Tool::Dodge | Tool::Blur)
+            && result.is_ok()
+            && same_pixels(&gesture.original, &session.document)
+        {
+            session.history.cancel(&mut session.document);
+            session.invalidate();
+            self.last_brush = Some(end);
             return;
         }
         match result {
             Ok(()) => match paint::refresh_shapes(&mut session.document) {
-                Ok(()) => session.history.commit(),
+                Ok(()) => session.commit(),
                 Err(error) => {
                     session.history.cancel(&mut session.document);
                     self.error = Some(error.to_string());
@@ -1790,6 +2113,78 @@ impl EditorApp {
         self.snap_lines.clear();
         if tool.is_brush() {
             self.last_brush = Some(end);
+        }
+    }
+}
+
+/// Whether the active layer's pixels are as they were in `original`. A layer
+/// that only gained an empty pixel buffer counts as unchanged.
+fn same_pixels(original: &xuan::document::Document, document: &xuan::document::Document) -> bool {
+    let Some(layer) = document.active() else {
+        return true;
+    };
+    let before = original
+        .layers
+        .iter()
+        .find(|l| l.id == layer.id)
+        .and_then(|l| l.pixels.as_ref());
+    match (before, &layer.pixels) {
+        (Some(before), Some(after)) => Arc::ptr_eq(before, after) || before == after,
+        (None, Some(after)) => after.as_raw().iter().all(|v| *v == 0),
+        (_, None) => before.is_none(),
+    }
+}
+
+/// Numbered region boxes, with the start of each box's first text.
+fn draw_region_boxes<'a>(
+    painter: &egui::Painter,
+    map: &impl Fn(Point) -> Pos2,
+    regions: impl Iterator<Item = &'a xuan::plugins::jobs::Region>,
+    selected: Option<usize>,
+    accent: Color32,
+    ink: Color32,
+) {
+    for (index, region) in regions.enumerate() {
+        let rect = Rect::from_two_pos(
+            map(Point::new(region.x, region.y)),
+            map(Point::new(
+                region.x + region.width,
+                region.y + region.height,
+            )),
+        );
+        let selected = selected == Some(index);
+        painter.rect_filled(
+            rect,
+            0.0,
+            accent.gamma_multiply(if selected { 0.2 } else { 0.08 }),
+        );
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, accent),
+            StrokeKind::Inside,
+        );
+        let badge = Rect::from_min_size(rect.min, vec2(22.0, 16.0));
+        painter.rect_filled(badge, 0.0, accent);
+        painter.text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("{:02}", index + 1),
+            egui::FontId::monospace(10.0),
+            ink,
+        );
+        if let Some(text) = region
+            .fields
+            .values()
+            .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
+        {
+            painter.text(
+                rect.min + vec2(4.0, 20.0),
+                egui::Align2::LEFT_TOP,
+                text.chars().take(28).collect::<String>(),
+                egui::FontId::proportional(11.0),
+                ink,
+            );
         }
     }
 }

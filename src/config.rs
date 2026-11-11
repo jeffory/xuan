@@ -11,52 +11,69 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::{GridSettings, SnapSettings};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Language {
-    #[default]
-    #[serde(rename = "en")]
-    English,
-    #[serde(rename = "zh-CN")]
-    SimplifiedChinese,
+/// An interface language, saved as its tag (`en`, `zh-CN`): the name of its file in
+/// `assets/locales`. A tag this build has no locale for is kept, so the choice survives running
+/// an older or newer build, and the interface shows English.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub struct Language(String);
+
+impl Default for Language {
+    fn default() -> Self {
+        Self::english()
+    }
+}
+
+impl From<String> for Language {
+    /// Accepts any spelling of a tag (`zh_cn`); English for text that is not one.
+    fn from(tag: String) -> Self {
+        Self(crate::i18n::canonical_tag(&tag).unwrap_or_else(|| crate::i18n::ENGLISH.into()))
+    }
+}
+
+impl From<Language> for String {
+    fn from(language: Language) -> Self {
+        language.0
+    }
 }
 
 impl Language {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::English => "English",
-            Self::SimplifiedChinese => "简体中文",
-        }
+    pub fn new(tag: &str) -> Self {
+        tag.to_owned().into()
+    }
+
+    pub fn english() -> Self {
+        Self(crate::i18n::ENGLISH.into())
+    }
+
+    pub fn tag(&self) -> &str {
+        &self.0
+    }
+
+    /// The language's name for itself, or its tag when this build does not have it.
+    pub fn name(&self) -> &str {
+        crate::i18n::native_name(self).unwrap_or(&self.0)
     }
 }
 
 /// How the main window draws its title bar and window controls.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TitleBar {
     /// Native decorations from the window manager; the menu bar is a normal panel.
     #[serde(rename = "system")]
     System,
-    /// Client-side title bar holding the menus, with monochrome controls.
-    #[serde(rename = "compact")]
+    /// Client-side title bar holding the menus: with Xuan's own window buttons on Linux and
+    /// Windows, and under the system's on macOS. `macos` names the drawn macOS-style title bar
+    /// of earlier releases, which this replaces.
+    #[default]
+    #[serde(rename = "compact", alias = "macos")]
     Compact,
-    /// Client-side title bar with macOS traffic-light controls on the left.
-    #[serde(rename = "macos")]
-    MacOs,
-}
-
-impl Default for TitleBar {
-    fn default() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::MacOs
-        } else {
-            Self::Compact
-        }
-    }
 }
 
 impl TitleBar {
-    pub const ALL: [Self; 3] = [Self::System, Self::Compact, Self::MacOs];
+    pub const ALL: [Self; 2] = [Self::System, Self::Compact];
 
-    /// The app draws the title bar itself, with system decorations turned off.
+    /// The app draws the title bar itself.
     pub fn client_side(self) -> bool {
         self != Self::System
     }
@@ -66,7 +83,65 @@ impl TitleBar {
         match self {
             Self::System => "System",
             Self::Compact => "Compact",
-            Self::MacOs => "macOS",
+        }
+    }
+}
+
+/// Where a Compact title bar gets its minimize, maximize and close buttons from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowButtons {
+    /// The images of the desktop's own theme, when it has any (Linux).
+    #[serde(rename = "theme")]
+    Theme,
+    /// The glyphs drawn by Xuan.
+    #[serde(rename = "builtin")]
+    BuiltIn,
+}
+
+impl Default for WindowButtons {
+    fn default() -> Self {
+        if cfg!(target_os = "linux") {
+            Self::Theme
+        } else {
+            Self::BuiltIn
+        }
+    }
+}
+
+impl WindowButtons {
+    pub const ALL: [Self; 2] = [Self::Theme, Self::BuiltIn];
+
+    /// Untranslated display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Theme => "Match desktop theme",
+            Self::BuiltIn => "Built-in",
+        }
+    }
+}
+
+/// Light or dark interface colours.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Theme {
+    /// Follow the desktop's light or dark preference; dark when it states none.
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "light")]
+    Light,
+    #[serde(rename = "dark")]
+    Dark,
+}
+
+impl Theme {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    /// Untranslated display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light mode",
+            Self::Dark => "Dark mode",
         }
     }
 }
@@ -79,7 +154,14 @@ pub const DEFAULT_PIXEL_GRID_PERCENT: u32 = 500;
 #[serde(default)]
 pub struct Config {
     pub language: Language,
+    /// Settings → Appearance → Theme.
+    pub theme: Theme,
+    /// Settings → Appearance → "Use system accent colour": highlights take the desktop's
+    /// accent instead of Xuan's blue, when the desktop has one.
+    pub system_accent: bool,
     pub title_bar: TitleBar,
+    /// Where Compact's window buttons come from.
+    pub window_buttons: WindowButtons,
     /// View → Pixel Grid.
     pub pixel_grid: bool,
     /// Zoom, in percent, from which the pixel grid is drawn.
@@ -106,6 +188,22 @@ pub struct Config {
     pub keybindings: toml::Table,
     /// Command ids run from the command palette, most recent first.
     pub recent_commands: Vec<String>,
+    /// Files opened or saved, newest first: File → Open Recent. At most
+    /// [`MAX_RECENT_FILES`]; see [`push_recent_file`].
+    pub recent_files: Vec<PathBuf>,
+    /// File → New: the size of the last canvas created, in pixels. Absent until one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_canvas_size: Option<[u32; 2]>,
+    /// File → New: the background of the last canvas created. Transparent, as canvases were
+    /// before there was a choice, is not written.
+    #[serde(default, deserialize_with = "lenient_background")]
+    pub new_canvas_background: CanvasBackground,
+    /// Move tool options: Auto Select.
+    pub auto_select: bool,
+    /// Move tool options: Ignore Transparent Pixels.
+    pub ignore_transparent_pixels: bool,
+    /// Move tool options: Show Transform Controls.
+    pub show_controls: bool,
     /// "Disable plugins that use the network": plugins whose manifest declares
     /// network hosts do not start and their actions are unavailable.
     #[serde(default)]
@@ -118,6 +216,206 @@ pub struct Config {
     /// [`Config::block_undeclared_network`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_undeclared_network: Option<bool>,
+    /// Settings → Selection: which plugin, if any, stands in for Select Subject, Remove
+    /// Background and the Magic tool's Object mode. Built-in when absent.
+    #[serde(default, skip_serializing_if = "Providers::is_default")]
+    pub providers: Providers,
+    /// The units sizes and resolutions are shown in.
+    pub units: UnitSettings,
+    /// Checking for a newer release (issue 118).
+    pub updates: UpdateSettings,
+}
+
+/// Settings → General → Check for updates, and what the checks remember, in an `[updates]`
+/// table. See [`crate::update`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// Ask GitHub once a day whether a newer release is out. Off unless the user turns it on:
+    /// Xuan makes no network request of its own before then, except when Help → Check for
+    /// Updates… is chosen.
+    pub check: bool,
+    /// When the last check started, in seconds since 1970 (UTC). A value that is not one (a
+    /// negative number, text) reads as never, so the next check is due.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_time"
+    )]
+    pub last_check: Option<u64>,
+    /// The version Skip This Version was chosen for; the automatic check does not offer it again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
+/// The units sizes and resolutions are shown in (issue 94), in a `[units]` table.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UnitSettings {
+    /// File → New, Canvas Size and Image Size: the unit Width and Height were last shown in.
+    pub size: crate::units::Unit,
+    /// Pixels per inch or per centimetre.
+    pub resolution: crate::units::ResolutionUnit,
+    /// File → New: the resolution of the last canvas created, in pixels per inch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_canvas_resolution: Option<f32>,
+    /// What View → Rulers measure in.
+    pub rulers: crate::units::Unit,
+}
+
+impl UnitSettings {
+    /// File → New's resolution: the last one used, when it is one a document may have.
+    pub fn new_canvas_resolution(&self) -> f32 {
+        self.new_canvas_resolution
+            .filter(|ppi| crate::units::valid_resolution(f64::from(*ppi)))
+            .unwrap_or(crate::units::DEFAULT_RESOLUTION)
+    }
+}
+
+impl UpdateSettings {
+    /// The `[updates]` table. TOML integers are signed, so a time past the year 292 billion is
+    /// written as the largest one.
+    fn to_toml(&self) -> toml::Value {
+        let mut table = toml::Table::new();
+        table.insert("check".into(), toml::Value::Boolean(self.check));
+        if let Some(time) = self.last_check {
+            let time = i64::try_from(time).unwrap_or(i64::MAX);
+            table.insert("last_check".into(), toml::Value::Integer(time));
+        }
+        if let Some(version) = &self.skipped {
+            table.insert("skipped".into(), toml::Value::String(version.clone()));
+        }
+        toml::Value::Table(table)
+    }
+}
+
+/// What File → New fills the canvas with, saved as `"transparent"`, `"white"`, `"black"` or a
+/// `"#rrggbb"` colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum CanvasBackground {
+    #[default]
+    Transparent,
+    White,
+    Black,
+    /// An opaque colour of the user's choosing.
+    Custom([u8; 3]),
+}
+
+impl CanvasBackground {
+    /// The colour the canvas is filled with; `None` leaves it transparent.
+    pub fn pixel(self) -> Option<[u8; 4]> {
+        match self {
+            Self::Transparent => None,
+            Self::White => Some([255; 4]),
+            Self::Black => Some([0, 0, 0, 255]),
+            Self::Custom([r, g, b]) => Some([r, g, b, 255]),
+        }
+    }
+}
+
+impl From<String> for CanvasBackground {
+    /// Text that is none of the choices reads as transparent.
+    fn from(text: String) -> Self {
+        let text = text.trim().to_ascii_lowercase();
+        match text.as_str() {
+            "white" => Self::White,
+            "black" => Self::Black,
+            _ => text
+                .strip_prefix('#')
+                .filter(|hex| hex.len() == 6 && hex.is_ascii())
+                .and_then(|hex| {
+                    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+                    Some(Self::Custom([channel(0)?, channel(2)?, channel(4)?]))
+                })
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl From<CanvasBackground> for String {
+    fn from(background: CanvasBackground) -> Self {
+        match background {
+            CanvasBackground::Transparent => "transparent".into(),
+            CanvasBackground::White => "white".into(),
+            CanvasBackground::Black => "black".into(),
+            CanvasBackground::Custom([r, g, b]) => format!("#{r:02x}{g:02x}{b:02x}"),
+        }
+    }
+}
+
+/// A background that is not text, such as a number written by hand, reads as transparent
+/// rather than making the whole configuration unreadable.
+fn lenient_background<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<CanvasBackground, D::Error> {
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_str()
+        .map(|text| CanvasBackground::from(text.to_owned()))
+        .unwrap_or_default())
+}
+
+fn lenient_time<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error> {
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(value.as_integer().and_then(|time| u64::try_from(time).ok()))
+}
+
+/// Files File → Open Recent remembers.
+pub const MAX_RECENT_FILES: usize = 15;
+
+/// Puts `path` first in `recent`, without duplicates, keeping [`MAX_RECENT_FILES`]. Paths that
+/// are not valid Unicode cannot be written to the configuration, so they are not remembered.
+pub fn push_recent_file(recent: &mut Vec<PathBuf>, path: &Path) {
+    if path.to_str().is_none() {
+        return;
+    }
+    recent.retain(|p| p != path);
+    recent.insert(0, path.to_path_buf());
+    recent.truncate(MAX_RECENT_FILES);
+}
+
+/// The plugin chosen for each replaceable algorithm, by plugin id; `None` is the
+/// built-in one.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Providers {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub select_subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remove_background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_select: Option<String>,
+}
+
+impl Providers {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The plugin chosen for `capability`.
+    pub fn get(&self, capability: crate::plugins::manifest::Capability) -> Option<&str> {
+        use crate::plugins::manifest::Capability;
+        match capability {
+            Capability::SelectSubject => self.select_subject.as_deref(),
+            Capability::RemoveBackground => self.remove_background.as_deref(),
+            Capability::ObjectSelect => self.object_select.as_deref(),
+        }
+    }
+
+    pub fn set(
+        &mut self,
+        capability: crate::plugins::manifest::Capability,
+        plugin: Option<String>,
+    ) {
+        use crate::plugins::manifest::Capability;
+        *match capability {
+            Capability::SelectSubject => &mut self.select_subject,
+            Capability::RemoveBackground => &mut self.remove_background,
+            Capability::ObjectSelect => &mut self.object_select,
+        } = plugin;
+    }
 }
 
 /// "Block network for plugins that don't declare it" for users who never
@@ -130,7 +428,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: Language::default(),
+            theme: Theme::default(),
+            system_accent: true,
             title_bar: TitleBar::default(),
+            window_buttons: WindowButtons::default(),
             pixel_grid: true,
             pixel_grid_percent: DEFAULT_PIXEL_GRID_PERCENT,
             // Upstream's defaults: rulers and grid hidden, guides shown and unlocked.
@@ -144,8 +445,17 @@ impl Default for Config {
             plugins: BTreeMap::new(),
             keybindings: toml::Table::new(),
             recent_commands: Vec::new(),
+            recent_files: Vec::new(),
+            new_canvas_size: None,
+            new_canvas_background: CanvasBackground::Transparent,
+            auto_select: true,
+            ignore_transparent_pixels: true,
+            show_controls: true,
             disable_network_plugins: false,
             block_undeclared_network: None,
+            providers: Providers::default(),
+            units: UnitSettings::default(),
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -187,6 +497,32 @@ pub struct PluginGrant {
     /// reviewed again and starts without it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub send_without_asking: bool,
+    /// Auto mode for a plugin that declares `edit_prompt = "session"`: its
+    /// direct edits no longer wait for the user to allow each session. It
+    /// belongs to this grant like `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub edit_without_asking: bool,
+    /// "Always allow" in the prompt shown when a plugin asks to save or
+    /// export to a path it names (`file/save_as`, `file/export` or
+    /// `file/save` with a `path`): its writes no longer wait for the user,
+    /// except to replace a file Xuan did not write for this plugin in this
+    /// run. It belongs
+    /// to this grant like `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub save_without_asking: bool,
+    /// "Run other plugins' actions": the plugin may list other plugins'
+    /// actions and start them with `host/run` (the MCP server, for its
+    /// clients). Each run still asks the user once per session, unless
+    /// `run_without_asking`, and still goes through the other plugin's own
+    /// grant and prompts. It belongs to this grant like
+    /// `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_other_actions: bool,
+    /// "Always Allow" in the prompt before a run of another plugin's
+    /// action: runs no longer ask once per session. It belongs to this
+    /// grant like `send_without_asking`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub run_without_asking: bool,
 }
 
 impl PluginGrant {
@@ -326,8 +662,17 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
             Err(error) => return Err(error.into()),
         };
-        table.insert("language".into(), toml::Value::try_from(self.language)?);
+        table.insert("language".into(), toml::Value::try_from(&self.language)?);
+        table.insert("theme".into(), toml::Value::try_from(self.theme)?);
+        table.insert(
+            "system_accent".into(),
+            toml::Value::Boolean(self.system_accent),
+        );
         table.insert("title_bar".into(), toml::Value::try_from(self.title_bar)?);
+        table.insert(
+            "window_buttons".into(),
+            toml::Value::try_from(self.window_buttons)?,
+        );
         table.insert("pixel_grid".into(), toml::Value::Boolean(self.pixel_grid));
         table.insert(
             "pixel_grid_percent".into(),
@@ -365,6 +710,54 @@ impl Config {
             table.insert(
                 "keybindings".into(),
                 toml::Value::Table(self.keybindings.clone()),
+            );
+        }
+        if self.providers.is_default() {
+            table.remove("providers");
+        } else {
+            table.insert("providers".into(), toml::Value::try_from(&self.providers)?);
+        }
+        match self.new_canvas_size {
+            Some(size) => {
+                table.insert("new_canvas_size".into(), toml::Value::try_from(size)?);
+            }
+            None => {
+                table.remove("new_canvas_size");
+            }
+        }
+        if self.new_canvas_background == CanvasBackground::Transparent {
+            table.remove("new_canvas_background");
+        } else {
+            table.insert(
+                "new_canvas_background".into(),
+                toml::Value::String(self.new_canvas_background.into()),
+            );
+        }
+        if self.units == UnitSettings::default() {
+            table.remove("units");
+        } else {
+            table.insert("units".into(), toml::Value::try_from(self.units)?);
+        }
+        if self.updates == UpdateSettings::default() {
+            table.remove("updates");
+        } else {
+            table.insert("updates".into(), self.updates.to_toml());
+        }
+        table.insert("auto_select".into(), toml::Value::Boolean(self.auto_select));
+        table.insert(
+            "ignore_transparent_pixels".into(),
+            toml::Value::Boolean(self.ignore_transparent_pixels),
+        );
+        table.insert(
+            "show_controls".into(),
+            toml::Value::Boolean(self.show_controls),
+        );
+        if self.recent_files.is_empty() {
+            table.remove("recent_files");
+        } else {
+            table.insert(
+                "recent_files".into(),
+                toml::Value::try_from(&self.recent_files)?,
             );
         }
         if self.recent_commands.is_empty() {
@@ -409,8 +802,8 @@ mod tests {
         let path = dir.path().join("xuan/config.toml");
         assert_eq!(Config::load(&path).unwrap(), Config::default());
         let chinese = Config {
-            language: Language::SimplifiedChinese,
-            title_bar: TitleBar::MacOs,
+            language: Language::new("zh-CN"),
+            title_bar: TitleBar::System,
             pixel_grid: false,
             pixel_grid_percent: 1200,
             ..Config::default()
@@ -425,6 +818,171 @@ mod tests {
     }
 
     #[test]
+    fn update_settings_roundtrip_and_stay_out_of_the_file_until_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("updates"));
+        assert!(!Config::load(&path).unwrap().updates.check);
+        let config = Config {
+            updates: UpdateSettings {
+                check: true,
+                last_check: Some(1_790_000_000),
+                skipped: Some("0.6.0".into()),
+            },
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+        // A time TOML cannot hold is written as the largest it can.
+        let far = Config {
+            updates: UpdateSettings {
+                last_check: Some(u64::MAX),
+                ..UpdateSettings::default()
+            },
+            ..Config::default()
+        };
+        far.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap().updates.last_check;
+        assert_eq!(loaded, Some(i64::MAX as u64));
+        // A hand-edited time that is not one reads as never checked.
+        for value in ["-5", "'yesterday'", "1.5", "[1]"] {
+            fs::write(
+                &path,
+                format!("[updates]\ncheck = true\nlast_check = {value}\n"),
+            )
+            .unwrap();
+            let updates = Config::load(&path).unwrap().updates;
+            assert!(updates.check, "{value}");
+            assert_eq!(updates.last_check, None, "{value}");
+        }
+    }
+
+    #[test]
+    fn the_last_new_canvas_size_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            new_canvas_size: Some([1080, 1920]),
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_size")
+        );
+        assert_eq!(
+            Config::load(&path).unwrap().new_canvas_size,
+            Some([1080, 1920])
+        );
+        // Releases before it wrote none; clearing it removes the key.
+        Config::default().save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_size")
+        );
+        assert_eq!(Config::load(&path).unwrap().new_canvas_size, None);
+    }
+
+    #[test]
+    fn the_new_canvas_background_roundtrips_and_transparent_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (background, text) in [
+            (CanvasBackground::White, "\"white\""),
+            (CanvasBackground::Black, "\"black\""),
+            (CanvasBackground::Custom([18, 52, 171]), "\"#1234ab\""),
+        ] {
+            let config = Config {
+                new_canvas_background: background,
+                ..Config::default()
+            };
+            config.save(&path).unwrap();
+            let saved = fs::read_to_string(&path).unwrap();
+            assert!(
+                saved.contains(&format!("new_canvas_background = {text}")),
+                "{saved}"
+            );
+            assert_eq!(
+                Config::load(&path).unwrap().new_canvas_background,
+                background
+            );
+        }
+        // Transparent, the default, removes the key; older configurations have none.
+        Config::default().save(&path).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("new_canvas_background")
+        );
+        assert_eq!(
+            Config::load(&path).unwrap().new_canvas_background,
+            CanvasBackground::Transparent
+        );
+        // Values that are not a choice read as transparent and leave the rest readable.
+        for bad in ["\"purple\"", "\"#12345\"", "\"#gg0000\"", "7", "[1, 2]"] {
+            fs::write(
+                &path,
+                format!("new_canvas_background = {bad}\nrulers = true\n"),
+            )
+            .unwrap();
+            let loaded = Config::load(&path).unwrap();
+            assert_eq!(
+                loaded.new_canvas_background,
+                CanvasBackground::Transparent,
+                "{bad}"
+            );
+            assert!(loaded.rulers, "{bad}");
+        }
+        assert_eq!(
+            CanvasBackground::from(" #FFFFFF ".to_owned()),
+            CanvasBackground::Custom([255; 3])
+        );
+        assert_eq!(CanvasBackground::Transparent.pixel(), None);
+        assert_eq!(CanvasBackground::Black.pixel(), Some([0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn unit_preferences_roundtrip() {
+        use crate::units::{ResolutionUnit, Unit};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            units: UnitSettings {
+                size: Unit::Millimeters,
+                resolution: ResolutionUnit::PerCentimeter,
+                new_canvas_resolution: Some(300.0),
+                rulers: Unit::Inches,
+            },
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[units]") && text.contains("size = \"mm\""),
+            "{text}"
+        );
+        assert_eq!(Config::load(&path).unwrap().units, config.units);
+        assert_eq!(config.units.new_canvas_resolution(), 300.0);
+        // The defaults write nothing, and a stored resolution no document may have is ignored.
+        Config::default().save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("units"));
+        for bad in [0.0, -72.0, f32::NAN, 1e9] {
+            let units = UnitSettings {
+                new_canvas_resolution: Some(bad),
+                ..UnitSettings::default()
+            };
+            assert_eq!(units.new_canvas_resolution(), 72.0, "{bad}");
+        }
+        fs::write(&path, "[units]\nnew_canvas_resolution = -5.0\n").unwrap();
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.units.size, Unit::Pixels);
+        assert_eq!(loaded.units.new_canvas_resolution(), 72.0);
+    }
+
+    #[test]
     fn invalid_preferences_are_reported_and_preserved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -432,7 +990,49 @@ mod tests {
         assert!(Config::load(&path).is_err());
         assert!(Config::default().save(&path).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "language = [broken");
-        assert!(toml::from_str::<Config>("language = 'unknown'").is_err());
+        assert!(toml::from_str::<Config>("language = 5").is_err());
+    }
+
+    #[test]
+    fn languages_load_by_tag_in_any_spelling() {
+        // Releases with a fixed list of languages saved the same tags.
+        for (saved, tag) in [
+            ("en", "en"),
+            ("zh-CN", "zh-CN"),
+            ("zh_cn", "zh-CN"),
+            ("pt-br", "pt-BR"),
+            ("uk", "uk"),
+            ("unknown", "en"),
+            ("", "en"),
+        ] {
+            let config: Config = toml::from_str(&format!("language = '{saved}'")).unwrap();
+            assert_eq!(config.language.tag(), tag, "{saved}");
+        }
+        // A language this build lacks is shown in English but kept when saving.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "language = 'uk'\n").unwrap();
+        let mut config = Config::load(&path).unwrap();
+        assert_eq!(config.language.name(), "uk");
+        config.pixel_grid = false;
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("language = \"uk\"")
+        );
+        Config {
+            language: Language::new("zh_CN"),
+            ..Config::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("language = \"zh-CN\"")
+        );
+        assert_eq!(Config::load(&path).unwrap().language.name(), "简体中文");
     }
 
     #[test]
@@ -443,11 +1043,81 @@ mod tests {
         assert_eq!(
             Config::load(&path).unwrap(),
             Config {
-                language: Language::SimplifiedChinese,
+                language: Language::new("zh-CN"),
                 title_bar: TitleBar::default(),
                 ..Config::default()
             }
         );
+    }
+
+    #[test]
+    fn window_buttons_default_to_the_theme_on_linux_and_older_files_still_load() {
+        assert_eq!(
+            Config::default().window_buttons,
+            if cfg!(target_os = "linux") {
+                WindowButtons::Theme
+            } else {
+                WindowButtons::BuiltIn
+            }
+        );
+        // A file from before the setting existed.
+        let old: Config = toml::from_str("language = 'zh-CN'\ntitle_bar = 'compact'\n").unwrap();
+        assert_eq!(old.window_buttons, WindowButtons::default());
+        for choice in WindowButtons::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            Config {
+                window_buttons: choice,
+                ..Config::default()
+            }
+            .save(&path)
+            .unwrap();
+            assert_eq!(Config::load(&path).unwrap().window_buttons, choice);
+        }
+        let builtin: Config = toml::from_str("window_buttons = 'builtin'").unwrap();
+        assert_eq!(builtin.window_buttons, WindowButtons::BuiltIn);
+    }
+
+    #[test]
+    fn theme_defaults_to_the_system_and_older_files_still_load() {
+        assert_eq!(Config::default().theme, Theme::System);
+        // A file from before the setting existed.
+        let old: Config =
+            toml::from_str("language = 'zh-CN'\r\ntitle_bar = 'compact'\r\n").unwrap();
+        assert_eq!(old.theme, Theme::System);
+        for choice in Theme::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            Config {
+                theme: choice,
+                ..Config::default()
+            }
+            .save(&path)
+            .unwrap();
+            assert_eq!(Config::load(&path).unwrap().theme, choice);
+        }
+        let light: Config = toml::from_str("theme = 'light'").unwrap();
+        assert_eq!(light.theme, Theme::Light);
+    }
+
+    #[test]
+    fn system_accent_defaults_on_and_older_files_still_load() {
+        assert!(Config::default().system_accent);
+        // A file from before the setting existed (and before the Theme setting).
+        let old: Config = toml::from_str("language = 'zh-CN'\r\nrulers = true\r\n").unwrap();
+        assert!(old.system_accent);
+        assert!(old.rulers);
+        for choice in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            Config {
+                system_accent: choice,
+                ..Config::default()
+            }
+            .save(&path)
+            .unwrap();
+            assert_eq!(Config::load(&path).unwrap().system_accent, choice);
+        }
     }
 
     #[test]
@@ -489,6 +1159,11 @@ mod tests {
         assert!(!config.disable_network_plugins);
         let grant = config.plugins["comfy"].grant.clone().unwrap();
         assert!(!grant.send_without_asking);
+        assert!(!grant.edit_without_asking);
+        assert_eq!(
+            grant.permissions.edit_prompt,
+            crate::plugins::manifest::EditPrompt::None
+        );
         assert_eq!(grant.permissions.network, ["example.com"]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -592,10 +1267,7 @@ mod tests {
     #[test]
     fn title_bar_style_persists_and_defaults_to_compact() {
         let config: Config = toml::from_str("language = 'en'").unwrap();
-        assert_eq!(config.title_bar, TitleBar::default());
-        if !cfg!(target_os = "macos") {
-            assert_eq!(TitleBar::default(), TitleBar::Compact);
-        }
+        assert_eq!(config.title_bar, TitleBar::Compact);
         for style in TitleBar::ALL {
             let config = Config {
                 title_bar: style,
@@ -607,7 +1279,22 @@ mod tests {
         let config: Config = toml::from_str("title_bar = 'system'").unwrap();
         assert_eq!(config.title_bar, TitleBar::System);
         assert!(!TitleBar::System.client_side());
-        assert!(TitleBar::Compact.client_side() && TitleBar::MacOs.client_side());
+        assert!(TitleBar::Compact.client_side());
+    }
+
+    #[test]
+    fn the_retired_macos_title_bar_loads_as_compact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "title_bar = 'macos'\n").unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.title_bar, TitleBar::Compact);
+        config.save(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("title_bar = \"compact\"")
+        );
     }
 
     #[test]
@@ -688,7 +1375,7 @@ mod tests {
         assert_eq!(
             old,
             Config {
-                language: Language::SimplifiedChinese,
+                language: Language::new("zh-CN"),
                 title_bar: TitleBar::System,
                 pixel_grid: false,
                 ..Config::default()
@@ -767,5 +1454,46 @@ mod tests {
         // Clearing every override removes the table again.
         Config::default().save(&path).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("keybindings"));
+    }
+
+    #[test]
+    fn providers_default_to_built_in_and_round_trip() {
+        use crate::plugins::manifest::Capability;
+        // Files from before providers existed load with every algorithm built in, and
+        // a configuration that never chose one does not write the table.
+        let old: Config = toml::from_str("language = 'zh-CN'\npixel_grid = false\n").unwrap();
+        assert_eq!(old.providers, Providers::default());
+        assert!(
+            !toml::to_string(&Config::default())
+                .unwrap()
+                .contains("providers")
+        );
+        let mut config = Config::default();
+        config
+            .providers
+            .set(Capability::SelectSubject, Some("select-bright".into()));
+        let text = toml::to_string(&config).unwrap();
+        assert!(
+            text.contains("[providers]\nselect_subject = \"select-bright\""),
+            "{text}"
+        );
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(
+            back.providers.get(Capability::SelectSubject),
+            Some("select-bright")
+        );
+        assert_eq!(back.providers.get(Capability::RemoveBackground), None);
+        // Saving writes the table, and choosing Built-in again removes it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+        assert_eq!(Config::load(&path).unwrap().providers, config.providers);
+        config.providers.set(Capability::SelectSubject, None);
+        config.save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("providers"));
+        // Unknown capabilities from a later release are ignored, CRLF too.
+        let later: Config =
+            toml::from_str("[providers]\r\nobject_select = \"seg\"\r\nfuture = \"x\"\r\n").unwrap();
+        assert_eq!(later.providers.get(Capability::ObjectSelect), Some("seg"));
     }
 }

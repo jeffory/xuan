@@ -19,7 +19,9 @@ use xuan::{
         self, LoadError, Manifest, edits,
         host::{Incoming, Process},
         jobs::{self, Prepared, Region},
-        manifest::{Action, ActionKind, DocumentAccess, InputKind, Menu, ResultInto},
+        manifest::{
+            Action, ActionKind, Capability, DocumentAccess, InputKind, Menu, ResultInto, Surface,
+        },
         protocol::{self, Id, Message, Notification, Request, Response, RpcError},
         sandbox,
         ui::Node,
@@ -31,12 +33,16 @@ use xuan::{
 use super::{
     Dialog, EditorApp, Session, Tool,
     commands::{self, HostRun},
+    plugin_runs::RunOutcome,
 };
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
 /// Shortest time between two links a plugin opens.
 const LINK_INTERVAL: Duration = Duration::from_secs(1);
+/// Shortest time between two document switches of a plugin, so a plugin
+/// (or the MCP client behind one) cannot flip the user's tabs rapidly.
+pub(super) const ACTIVATE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Identifier of a plugin pane in the sidebar layout.
 pub(super) fn pane_key(plugin: &str, pane: &str) -> String {
@@ -50,6 +56,10 @@ fn split_pane_key(key: &str) -> Option<(&str, &str)> {
 /// Everything the editor keeps about plugins.
 #[derive(Default)]
 pub(super) struct PluginState {
+    /// The values each action's surface popover last used, this session.
+    pub surface_values: HashMap<(String, String), Map<String, Value>>,
+    /// The latest estimate of each action shown on a surface.
+    pub surface_estimates: HashMap<(String, String), String>,
     pub manifests: Vec<Manifest>,
     pub errors: Vec<LoadError>,
     processes: HashMap<String, Process>,
@@ -61,6 +71,10 @@ pub(super) struct PluginState {
     /// The secrets file exists but could not be read; it is never overwritten.
     pub secrets_unreadable: bool,
     pub(super) config_dir: Option<PathBuf>,
+    /// The Python plugin SDK's folder, put first on every plugin's
+    /// `PYTHONPATH` and named in `XUAN_PLUGIN_SDK` (see
+    /// [`plugins::sdk_dir`]); set when the plugins are loaded.
+    pub sdk_dir: Option<PathBuf>,
     scratch: HashMap<String, tempfile::TempDir>,
     /// Private data folders for plugins when there is no configuration folder.
     data_fallback: HashMap<String, tempfile::TempDir>,
@@ -96,8 +110,57 @@ pub(super) struct PluginState {
     /// A plugin action that runs once its models are downloaded or verified,
     /// with its inputs.
     pub awaiting_models: Option<(String, (String, Option<Value>))>,
+    /// A provider run waiting for its action to start (after a permission prompt or
+    /// a model download); see `providers.rs`.
+    pub provider_pending: Option<super::providers::ProviderRun>,
     /// How models are downloaded: https, or a fake in tests.
     pub transport: Option<Arc<dyn plugins::models::Transport>>,
+    /// `file/save_as`, `file/export` and `file/open` requests waiting for
+    /// their turn; see `plugin_files.rs`.
+    pub file_requests: std::collections::VecDeque<super::plugin_files::FileRequest>,
+    /// The `file/open` request whose prompt is open.
+    pub file_prompt: Option<super::plugin_files::FileRequest>,
+    /// Shows the save dialog for plugins: the system's, or a fake in tests.
+    pub save_dialog: Option<super::plugin_files::SaveDialogHook>,
+    /// Whether the user allowed a plugin's direct edits, by plugin and
+    /// session, until its process stops; see `plugin_sessions.rs`.
+    pub edit_answers: HashMap<(String, String), bool>,
+    /// Direct edits waiting for that answer.
+    pub edit_held: Vec<(String, Request)>,
+    /// The prompt asking for it, while it is open.
+    pub edit_prompt: Option<super::plugin_sessions::EditSessionRequest>,
+    /// Plugins whose every session the user refused until they stop.
+    pub edits_refused: std::collections::HashSet<String>,
+    /// When the user last refused a plugin's edits; see `COOLDOWN`.
+    pub edit_refused_at: HashMap<String, std::time::Instant>,
+    /// When the user last cancelled a plugin's file request.
+    pub file_refused_at: HashMap<String, std::time::Instant>,
+    /// When a plugin last switched the current document; see
+    /// `ACTIVATE_INTERVAL`.
+    pub activated_at: HashMap<String, std::time::Instant>,
+    /// By plugin, the files Xuan wrote for its `file/save_as`, `file/export`
+    /// and `file/save` requests in this run, canonicalized: a plugin allowed
+    /// to save without asking may replace these without asking, and no
+    /// others (not the user's own saves, nor another plugin's files).
+    /// Forgotten when its grant is revoked or changes.
+    pub written_files: HashMap<String, std::collections::HashSet<PathBuf>>,
+    /// Runs of other plugins' actions waiting for the user's answer, at
+    /// most one per calling plugin; see `plugin_runs.rs`.
+    pub run_held: Vec<(String, Request)>,
+    /// The prompt asking about one of them, while it is open.
+    pub run_prompt: Option<super::plugin_runs::RunPrompt>,
+    /// Sessions the user allowed to run another plugin's actions: the
+    /// calling plugin, its session and the plugin whose actions run. Kept
+    /// until the caller stops.
+    pub run_answers: std::collections::HashSet<(String, String, String)>,
+    /// When the user last cancelled a plugin's run; see `COOLDOWN`.
+    pub run_refused_at: HashMap<String, std::time::Instant>,
+    /// A run whose request waits for the send prompt of the plugin it runs;
+    /// the open action carries it too.
+    pub run_waiting: Option<super::plugin_runs::CallerRun>,
+    /// What became of the latest jobs other plugins started, for
+    /// `jobs/list`, oldest first.
+    pub finished_runs: std::collections::VecDeque<super::plugin_runs::FinishedRun>,
 }
 
 enum Pending {
@@ -108,6 +171,8 @@ enum Pending {
     Format(Uuid),
     Render(String),
     Estimate(String, String),
+    /// An estimate for a surface popover: plugin and action.
+    SurfaceEstimate(String, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -135,6 +200,16 @@ pub(super) struct PluginJob {
     /// The user confirmed sending its document data, so it may export more
     /// while it runs.
     pub consented: bool,
+    /// Set when the job stands in for a built-in command.
+    pub provider: Option<super::providers::ProviderRun>,
+    /// Set when a surface (Layers panel, AI Region, New Image) started it.
+    pub surface: Option<super::surfaces::SurfaceRun>,
+    /// The AI Region boxes it sends, hidden while it runs and put back on
+    /// their document if it fails, is cancelled or its result is refused.
+    pub ai_boxes: Vec<super::ai_regions::AiBox>,
+    /// The plugin that started it with `host/run` (see `plugin_runs.rs`),
+    /// or `None` when the user did.
+    pub caller: Option<String>,
 }
 
 /// A plugin action in a menu.
@@ -142,7 +217,6 @@ pub(super) struct PluginMenuItem {
     pub label: String,
     pub plugin: String,
     pub action: String,
-    pub shortcut: String,
     /// The plugin's name, id and folder, shown on hover.
     pub source: String,
     /// Whether the registry lets it run now (see `command_enabled`).
@@ -175,6 +249,8 @@ enum FormatKind {
 
 /// Layers a job added that the user has not accepted yet.
 pub(super) struct Proposal {
+    /// The job whose result it is.
+    pub job: Uuid,
     pub document: Uuid,
     pub name: String,
     /// The plugin it comes from, as [`PluginState::source`] shows it.
@@ -205,6 +281,16 @@ pub(super) struct ActionEdit {
     pub into: ResultInto,
     /// The user confirmed sending this run's document data.
     pub consented: bool,
+    /// Set when the action stands in for a built-in command: it runs without its
+    /// dialog and its mask is applied as that command's result.
+    pub provider: Option<super::providers::ProviderRun>,
+    /// Set when a surface (Layers panel, AI Region, New Image) started it
+    /// instead of the dialog.
+    pub surface: Option<super::surfaces::SurfaceRun>,
+    /// Set when another plugin started it with `host/run`: it runs without
+    /// its dialog, and the request is answered once its job starts or the
+    /// user refuses it. See `plugin_runs.rs`.
+    pub caller: Option<super::plugin_runs::CallerRun>,
 }
 
 #[derive(Default)]
@@ -235,7 +321,6 @@ impl PluginState {
     }
 
     /// Whether the plugin's process has not answered `initialize` yet.
-    #[cfg(all(test, unix))]
     pub fn starting(&self, plugin: &str) -> bool {
         self.starting.contains_key(plugin)
     }
@@ -268,6 +353,19 @@ impl PluginState {
     fn forget_session(&mut self, plugin: &str) {
         self.export_answers.remove(plugin);
         self.held.retain(|(id, _)| id != plugin);
+        self.file_requests
+            .retain(|request| request.plugin != plugin);
+        self.edit_answers.retain(|(id, _), _| id != plugin);
+        self.edit_held.retain(|(id, _)| id != plugin);
+        self.edits_refused.remove(plugin);
+        if (self.edit_prompt.as_ref()).is_some_and(|prompt| prompt.plugin == plugin) {
+            self.edit_prompt = None;
+        }
+        self.run_answers.retain(|(caller, ..)| caller != plugin);
+        self.run_held.retain(|(caller, _)| caller != plugin);
+        if (self.run_prompt.as_ref()).is_some_and(|prompt| prompt.caller == plugin) {
+            self.run_prompt = None;
+        }
     }
 
     pub fn log(&self, plugin: &str) -> Vec<String> {
@@ -414,11 +512,14 @@ impl EditorApp {
                 }
             }
         }
+        self.plugins.sdk_dir = plugins::sdk_dir();
+        let bundled = plugins::bundled_dir();
         let dirs = plugins::plugin_dirs(
             config_dir.as_deref(),
             std::env::var_os(plugins::PATH_VARIABLE).as_deref(),
+            bundled.as_deref(),
         );
-        let (manifests, errors) = plugins::discover(&dirs);
+        let (manifests, errors) = plugins::discover(&dirs, bundled.as_deref());
         self.install_plugins(manifests, errors);
     }
 
@@ -455,11 +556,13 @@ impl EditorApp {
         }
     }
 
-    /// Add the panes of installed plugins that the layout does not know yet.
+    /// Add the sidebar panes of installed plugins that the layout does not know yet.
     pub(super) fn add_plugin_panes(&mut self) -> bool {
         let mut changed = false;
         for manifest in &self.plugins.manifests {
-            for pane in &manifest.panes {
+            for pane in (manifest.panes.iter())
+                .filter(|pane| pane.placement == plugins::manifest::PanePlacement::Sidebar)
+            {
                 let key = pane_key(&manifest.plugin.id, &pane.id);
                 if self.config.panes.get(&key).is_none() {
                     self.config.panes.ensure(&key);
@@ -483,7 +586,11 @@ impl EditorApp {
         if !self.config.plugins.get(plugin).is_none_or(|c| c.enabled) {
             return None;
         }
-        manifest.pane(pane).map(|pane| pane.title.clone())
+        // A pane on the plugin's settings page is not a sidebar pane.
+        manifest
+            .pane(pane)
+            .filter(|pane| pane.placement == plugins::manifest::PanePlacement::Sidebar)
+            .map(|pane| pane.title.clone())
     }
 
     pub(super) fn plugin_enabled(&self, plugin: &str) -> bool {
@@ -521,8 +628,15 @@ impl EditorApp {
             && old.covers(new)
         {
             new.send_without_asking = old.send_without_asking;
+            new.edit_without_asking = old.edit_without_asking;
+            new.save_without_asking = old.save_without_asking;
+            new.run_other_actions = old.run_other_actions;
+            new.run_without_asking = old.run_without_asking;
         } else {
             self.plugins.forget_session(plugin);
+            self.plugins.written_files.remove(plugin);
+            // Sessions allowed to run this plugin's actions allowed it as it was.
+            (self.plugins.run_answers).retain(|(_, _, target)| target != plugin);
         }
         // Secrets were entered for the folder the user allowed before; never
         // hand them to a plugin with the same id from another folder.
@@ -548,13 +662,23 @@ impl EditorApp {
             process.stop();
         }
         self.plugins.pending.retain(|(id, _), _| id != plugin);
-        self.plugins.jobs.retain(|job| job.plugin != plugin);
+        let (stopped, running) = std::mem::take(&mut self.plugins.jobs)
+            .into_iter()
+            .partition(|job| job.plugin == plugin);
+        self.plugins.jobs = running;
+        for job in stopped {
+            self.note_run(&job, RunOutcome::Cancelled, tr("The plugin was stopped"));
+            self.restore_ai_boxes(job);
+        }
         self.fail_format_jobs(plugin, None);
         for (key, pane) in &mut self.plugins.panes {
             if split_pane_key(key).is_some_and(|(id, _)| id == plugin) {
                 pane.pending = false;
                 pane.dirty = false;
                 pane.queued = None;
+                // The old page describes a process that is gone: drop it so the
+                // next draw opens the pane again, or shows why it cannot.
+                pane.tree = None;
             }
         }
     }
@@ -707,6 +831,12 @@ impl EditorApp {
                 ),
                 ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
             ];
+            // Python plugins import the SDK that matches this Xuan, wherever
+            // they are installed.
+            env.extend(plugins::sdk_env(
+                self.plugins.sdk_dir.as_deref(),
+                std::env::var_os("PYTHONPATH").as_deref(),
+            ));
             let context = self.context.clone();
             let wake: plugins::host::Wake = Arc::new(move || context.request_repaint());
             let blocked = self.plugin_network_blocked(plugin);
@@ -738,7 +868,12 @@ impl EditorApp {
             // messages, and what is sent meanwhile waits in the process.
             let id = process.initialize(json!({
                 "protocol": plugins::manifest::PROTOCOL,
-                "host": {"name": "Xuan", "version": env!("CARGO_PKG_VERSION")},
+                "host": {
+                    "name": "Xuan",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    // What this Xuan understands beyond its protocol version.
+                    "features": ["surfaces", "fit_cover"],
+                },
                 "plugin_dir": manifest.dir,
                 "data_dir": data_dir,
                 "models_dir": models_dir,
@@ -767,6 +902,9 @@ impl EditorApp {
             self.dispatch_plugin_message(&plugin, message);
         }
         self.release_held_requests();
+        self.release_held_edits();
+        self.release_file_requests();
+        self.release_held_runs();
         self.check_starting_plugins();
         self.check_format_jobs();
         self.apply_completed_results();
@@ -791,6 +929,21 @@ impl EditorApp {
     fn dispatch_plugin_message(&mut self, plugin: &str, message: Incoming) {
         match message {
             Incoming::Message(Message::Request(request)) => {
+                // Saving and opening files wait for the user's choice.
+                if super::plugin_files::FILE_METHODS.contains(&request.method.as_str()) {
+                    self.queue_file_request(plugin, request);
+                    return;
+                }
+                // Another plugin's action is checked, then waits for the
+                // session's answer, and is answered once its job starts.
+                let Some(request) = self.hold_plugin_run(plugin, request) else {
+                    return;
+                };
+                // Direct edits wait for the session's answer when the plugin
+                // asked for the prompt.
+                let Some(request) = self.hold_edit(plugin, request) else {
+                    return;
+                };
                 // Exports wait while the user is asked whether to send them.
                 if super::plugin_consent::EXPORT_METHODS.contains(&request.method.as_str())
                     && self.export_answer(plugin).is_none()
@@ -798,10 +951,7 @@ impl EditorApp {
                     self.plugins.held.push((plugin.to_owned(), request));
                     return;
                 }
-                let result = self.service_request(plugin, &request);
-                if let Some(process) = self.plugins.processes.get_mut(plugin) {
-                    let _ = process.respond(request.id, result);
-                }
+                self.serve_request(plugin, request);
             }
             Incoming::Message(Message::Notification(notification)) => {
                 self.handle_notification(plugin, notification);
@@ -868,6 +1018,9 @@ impl EditorApp {
     /// end of its log so the user can see why.
     fn plugin_failed_to_start(&mut self, plugin: &str, error: &str) {
         let name = self.plugins.source(plugin);
+        if let Some(process) = self.plugins.processes.get_mut(plugin) {
+            process.settle_log(Duration::from_millis(250));
+        }
         let log = self.plugins.log(plugin);
         let tail = log[log.len().saturating_sub(5)..].join("\n");
         let message = format!("{name} {}: {error}\n{tail}", tr("did not start"))
@@ -927,13 +1080,83 @@ impl EditorApp {
         let max_side = params
             .get("max_side")
             .and_then(Value::as_u64)
-            .map(|v| v.clamp(16, 30_000) as u32);
+            .map(|v| v.clamp(16, u64::from(xuan::document::MAX_SIDE)) as u32);
         let internal =
             |error: anyhow::Error| RpcError::new(protocol::INTERNAL_ERROR, format!("{error:#}"));
+        // A direct edit of a plugin that asks per session needs that answer.
+        if let Some(error) = self.edit_refused(plugin, request) {
+            return Err(error);
+        }
         match request.method.as_str() {
+            "session/status" => Ok(self.edit_session_status(plugin, request)),
+            "plugins/actions" => self.list_plugin_actions(plugin),
+            "jobs/list" => self.list_jobs(plugin),
             "document/get" => Ok(self
                 .session()
                 .map_or(Value::Null, |session| edits::describe(&session.document))),
+            // The open tabs, without their paths.
+            "document/list" => Ok(json!({
+                "documents": (self.sessions.iter().enumerate())
+                    .map(|(index, session)| json!({
+                        "id": session.document.id,
+                        "title": session.title,
+                        "width": session.document.width,
+                        "height": session.document.height,
+                        "layers": session.document.layers.len(),
+                        "current": index == self.current,
+                        "modified": session.history.dirty(),
+                        "saved": session.path.is_some(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })),
+            // Switching tabs only changes the view, like `host/run` `fit`.
+            "document/activate" => {
+                let id = string("document")
+                    .and_then(|s| Uuid::parse_str(&s).ok())
+                    .ok_or_else(|| RpcError::invalid_params("`document` must be a document id"))?;
+                if self.dialog.is_some() || self.job.is_some() || self.develop.is_some() {
+                    return Err(RpcError::new(
+                        protocol::INVALID_REQUEST,
+                        "The editor is busy",
+                    ));
+                }
+                let index = (self.sessions.iter())
+                    .position(|s| s.document.id == id)
+                    .ok_or_else(|| RpcError::invalid_params("No such open document"))?;
+                if index != self.current {
+                    // At most one switch a second, so the tabs cannot be
+                    // made to flicker under the user's hands. Asking for the
+                    // current document is free.
+                    let now = std::time::Instant::now();
+                    if let Some(last) = self.plugins.activated_at.get(plugin)
+                        && now.duration_since(*last) < ACTIVATE_INTERVAL
+                    {
+                        let wait = ACTIVATE_INTERVAL - now.duration_since(*last);
+                        let mut error = RpcError::new(
+                            protocol::RATE_LIMITED,
+                            "Switched documents less than a second ago; wait a moment before switching again",
+                        );
+                        error.data = json!({"retry_after": wait.as_secs_f64()});
+                        return Err(error);
+                    }
+                    self.plugins.activated_at.insert(plugin.to_owned(), now);
+                    // As clicking its tab does.
+                    self.cancel_gesture();
+                    self.current = index;
+                    self.mask_target = false;
+                }
+                Ok(json!({"ok": true}))
+            }
+            // Answered when its job ends; see `plugin_raw.rs`.
+            "raw/develop" => Err(RpcError::new(
+                protocol::INVALID_REQUEST,
+                "RAW develops are answered when their job ends",
+            )),
+            // Answered once the user chose; see `plugin_files.rs`.
+            "file/save_as" | "file/export" | "file/open" => Err(RpcError::new(
+                protocol::INVALID_REQUEST,
+                "File requests are answered after the user's choice",
+            )),
             "layer/export" | "document/export" | "selection/export" => {
                 if let Some(error) = self.export_refused(plugin) {
                     return Err(error);
@@ -955,6 +1178,31 @@ impl EditorApp {
                     ));
                 };
                 let name = format!("{}.png", Uuid::new_v4());
+                let invalid = |error: anyhow::Error| RpcError::invalid_params(format!("{error:#}"));
+                let region =
+                    xuan::plugins::inspect::Region::parse(&session.document, params.get("region"))
+                        .map_err(invalid)?;
+                if let Some(region) = region.filter(|_| request.method != "selection/export") {
+                    // A rectangle of the image, or of one layer as it sits in the document.
+                    let layer = match request.method.as_str() {
+                        "layer/export" => Some(uuid("layer")?),
+                        _ => None,
+                    };
+                    let (image, scale) =
+                        xuan::plugins::inspect::part(&session.document, layer, region, max_side)
+                            .map_err(invalid)?;
+                    let path = dir.join(&name);
+                    edits::write_png(&image, &path).map_err(internal)?;
+                    return Ok(json!({
+                        "path": path,
+                        "width": image.width(),
+                        "height": image.height(),
+                        "x": region.x,
+                        "y": region.y,
+                        "scale": scale,
+                        "region": [region.x, region.y, region.width, region.height],
+                    }));
+                }
                 let export = match request.method.as_str() {
                     "layer/export" => {
                         let what = match string("what").as_deref() {
@@ -983,6 +1231,49 @@ impl EditorApp {
                     .map(|export| serde_json::to_value(export).unwrap_or(Value::Null))
                     .map_err(internal)
             }
+            "document/sample" | "document/histogram" => {
+                if let Some(error) = self.export_refused(plugin) {
+                    return Err(error);
+                }
+                let Some(session) = self.session() else {
+                    return Err(RpcError::new(
+                        protocol::INVALID_PARAMS,
+                        "No document is open",
+                    ));
+                };
+                let invalid = |error: anyhow::Error| RpcError::invalid_params(format!("{error:#}"));
+                let document = &session.document;
+                let layer = match params.get("layer") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(uuid("layer")?),
+                };
+                if request.method == "document/histogram" {
+                    let region =
+                        xuan::plugins::inspect::Region::parse(document, params.get("region"))
+                            .map_err(invalid)?;
+                    return xuan::plugins::inspect::histogram(document, layer, region)
+                        .map_err(invalid);
+                }
+                let points: Vec<[f64; 2]> = params
+                    .get("points")
+                    .cloned()
+                    .and_then(|points| serde_json::from_value(points).ok())
+                    .ok_or_else(|| {
+                        RpcError::invalid_params(
+                            "`points` must be a list of [x, y] in document pixels",
+                        )
+                    })?;
+                let radius = match params.get("radius") {
+                    None | Some(Value::Null) => 0,
+                    Some(radius) => radius
+                        .as_u64()
+                        .and_then(|radius| u32::try_from(radius).ok())
+                        .ok_or_else(|| {
+                            RpcError::invalid_params("`radius` must be a whole number")
+                        })?,
+                };
+                xuan::plugins::inspect::sample(document, layer, &points, radius).map_err(invalid)
+            }
             "document/edit" => {
                 let manifest = self
                     .plugins
@@ -995,33 +1286,50 @@ impl EditorApp {
                     ));
                 }
                 let name = string("name").unwrap_or_else(|| manifest.plugin.name.clone());
-                let edits: Vec<edits::Edit> = serde_json::from_value(
+                let edits = edits::parse_edits(
                     params.get("edits").cloned().unwrap_or(Value::Array(vec![])),
                 )
-                .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                .map_err(|e| RpcError::invalid_params(format!("{e:#}")))?;
                 if self.dialog.is_some() || self.job.is_some() || self.gesture.is_some() {
                     return Err(RpcError::new(
                         protocol::INVALID_REQUEST,
                         "The editor is busy",
                     ));
                 }
-                let mut reader = edits::Reader::new(self.plugins.access(plugin), edits::MAX_LAYERS);
-                let Some(session) = self.session_mut() else {
+                if self.session().is_none() {
                     return Err(RpcError::new(
                         protocol::INVALID_PARAMS,
                         "No document is open",
                     ));
-                };
+                }
+                // Text is drawn with the editor's renderer, whose fonts are
+                // loaded once.
+                let mut reader = edits::Reader::new(self.plugins.access(plugin), edits::MAX_LAYERS)
+                    .with_text_renderer(self.text_renderer.take());
+                let session = self.session_mut().expect("checked above");
                 let mut document = session.document.clone();
-                edits::apply(&mut document, &edits, &mut reader).map_err(internal)?;
+                let applied = edits::apply(&mut document, &edits, &mut reader);
+                self.text_renderer = reader.take_text_renderer();
+                let added = applied.map_err(internal)?;
+                let session = self.session_mut().expect("checked above");
                 session.history.begin(&name, &session.document);
                 session.fit |= (document.width, document.height)
                     != (session.document.width, session.document.height);
                 session.document = document;
                 session.document.promote_image_masks();
-                session.history.commit();
+                session.commit();
                 session.invalidate();
-                Ok(json!({"ok": true}))
+                // As clicking a layer's thumbnail does: commands then act on
+                // its pixels, not its mask.
+                if edits.iter().any(|edit| {
+                    matches!(
+                        edit,
+                        edits::Edit::Select { .. } | edits::Edit::SelectLayers { .. }
+                    )
+                }) {
+                    self.mask_target = false;
+                }
+                Ok(json!({"ok": true, "layers": added}))
             }
             "host/run" => {
                 let action = string("action")
@@ -1036,8 +1344,29 @@ impl EditorApp {
                     .plugins
                     .manifest(plugin)
                     .is_some_and(|m| m.permissions.document == DocumentAccess::Edit);
+                // The layers to select first, as clicking them would, so
+                // the command acts on them.
+                let layers = match params.get("layers") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(
+                        serde_json::from_value::<Vec<Uuid>>(value.clone()).map_err(|_| {
+                            RpcError::invalid_params("`layers` must be a list of layer ids")
+                        })?,
+                    ),
+                };
+                if layers.is_some()
+                    && (action.contains('/') || commands::host_run(&action) != HostRun::Edit)
+                {
+                    return Err(RpcError::invalid_params(
+                        "`layers` goes only with built-in commands that edit",
+                    ));
+                }
+                let mut answer = json!({"ok": true});
                 match action.split_once('/') {
-                    // A plugin may start its own actions, never another plugin's.
+                    // A plugin may start its own actions. Another plugin's
+                    // actions run only through `hold_plugin_run`, which
+                    // checks them and asks the user first (see
+                    // `plugin_runs.rs`); a request that gets here is refused.
                     Some((owner, id)) if owner == plugin => {
                         let id = id.to_owned();
                         self.start_plugin_action_with(plugin, &id, params.get("inputs"));
@@ -1051,7 +1380,58 @@ impl EditorApp {
                     None if commands::host_run(&action) == HostRun::View
                         || (edit && commands::host_run(&action) == HostRun::Edit) =>
                     {
-                        self.command(&action)
+                        let selected = self
+                            .session()
+                            .map(|s| (s.document.active, s.document.selected.clone()));
+                        if let Some(layers) = &layers {
+                            let session = self.session_mut().ok_or_else(|| {
+                                RpcError::new(protocol::INVALID_PARAMS, "No document is open")
+                            })?;
+                            edits::select_layers(&mut session.document, layers)
+                                .map_err(|e| RpcError::invalid_params(format!("{e:#}")))?;
+                            self.mask_target = false;
+                        }
+                        // As its menu item would be: greyed out commands do nothing.
+                        if !self.command_enabled(&action) {
+                            // The selection stays as it was.
+                            if let (Some(session), Some((active, selected))) =
+                                (self.session_mut(), selected)
+                            {
+                                session.document.active = active;
+                                session.document.selected = selected;
+                            }
+                            return Err(RpcError::new(
+                                protocol::INVALID_REQUEST,
+                                format!(
+                                    "`{action}` is not available now, for example because \
+                                     nothing is selected or the active layer does not suit it"
+                                ),
+                            ));
+                        }
+                        let before: std::collections::HashSet<Uuid> = self
+                            .session()
+                            .map(|s| s.document.layers.iter().map(|l| l.id).collect())
+                            .unwrap_or_default();
+                        let jobs = self.plugins.jobs.len();
+                        let pending = self.plugins.provider_pending.is_some();
+                        self.command(&action);
+                        // The layers the command added, bottom to top, as
+                        // `document/edit` reports them.
+                        let added: Vec<Uuid> = self
+                            .session()
+                            .map(|s| {
+                                (s.document.layers.iter())
+                                    .map(|l| l.id)
+                                    .filter(|id| !before.contains(id))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        // A command that starts a job returns before it ends.
+                        let running = self.job.is_some()
+                            || self.plugins.jobs.len() > jobs
+                            || (!pending && self.plugins.provider_pending.is_some());
+                        answer["layers"] = json!(added);
+                        answer["running"] = json!(running);
                     }
                     None if commands::host_run(&action) == HostRun::Edit => {
                         return Err(RpcError::new(
@@ -1066,7 +1446,7 @@ impl EditorApp {
                         ));
                     }
                 }
-                Ok(json!({"ok": true}))
+                Ok(answer)
             }
             "host/open" => {
                 if let Some(path) = string("path") {
@@ -1127,7 +1507,7 @@ impl EditorApp {
                         job.progress = Some(fraction.clamp(0.0, 1.0) as f32);
                     }
                     if let Some(message) = params.get("message").and_then(Value::as_str) {
-                        job.message = message.chars().take(200).collect();
+                        job.message = one_line(message, 200);
                     }
                 }
             }
@@ -1137,6 +1517,13 @@ impl EditorApp {
                     params.get("message").and_then(Value::as_str),
                 ) {
                     process.note(message.to_owned());
+                }
+            }
+            "request/cancel" => {
+                if let Some(id) =
+                    (params.get("id").cloned()).and_then(|id| serde_json::from_value::<Id>(id).ok())
+                {
+                    self.withdraw_request(plugin, &id);
                 }
             }
             "host/status" => {
@@ -1246,16 +1633,16 @@ impl EditorApp {
                     && edit.action == action
                     && let Ok(value) = result
                 {
-                    let cost = value.get("cost").and_then(Value::as_str).unwrap_or("");
-                    let seconds = value.get("seconds").and_then(Value::as_f64);
-                    let mut text = cost.to_owned();
-                    if let Some(seconds) = seconds {
-                        if !text.is_empty() {
-                            text.push_str(" · ");
-                        }
-                        text.push_str(&format!("≈{seconds:.0} s"));
-                    }
-                    edit.estimate = (!text.is_empty()).then_some(text);
+                    edit.estimate = estimate_text(&value);
+                }
+            }
+            Pending::SurfaceEstimate(plugin_id, action) => {
+                if let Ok(value) = result
+                    && let Some(text) = estimate_text(&value)
+                {
+                    self.plugins
+                        .surface_estimates
+                        .insert((plugin_id, action), text);
                 }
             }
         }
@@ -1318,7 +1705,6 @@ impl EditorApp {
                     label,
                     plugin: manifest.plugin.id.clone(),
                     action: action.id.clone(),
-                    shortcut: self.keymap.shortcut(&id),
                     source: source.clone(),
                     enabled: self.command_enabled(&id),
                 });
@@ -1328,7 +1714,10 @@ impl EditorApp {
     }
 
     /// Open the action's dialog, or run it straight away when it has no inputs.
+    /// Runs a plugin action as its menu item, shortcut or `host/run` does. A provider
+    /// run still waiting for its action is dropped: this is the action itself.
     pub(super) fn start_plugin_action(&mut self, plugin: &str, action: &str) {
+        self.plugins.provider_pending = None;
         self.start_plugin_action_with(plugin, action, None);
     }
 
@@ -1364,37 +1753,8 @@ impl EditorApp {
         if !self.action_models_ready(plugin, action, inputs) {
             return;
         }
-        if self
-            .plugins
-            .jobs
-            .iter()
-            .any(|job| Some(job.document) == self.session().map(|s| s.document.id))
-        {
-            self.error = Some(tr("A plugin action is already running on this document").into());
-            return;
-        }
-        if spec.needs_image()
-            && self
-                .session()
-                .and_then(|s| s.document.active())
-                .is_none_or(|layer| layer.pixels.is_none() || layer.group)
-            && spec.source.from == plugins::manifest::SourceKind::Layer
-        {
-            self.error = Some(tr("Select an image layer first").into());
-            return;
-        }
-        if spec.kind != ActionKind::Generate && self.session().is_none() {
-            self.error = Some(tr("Open a document first").into());
-            return;
-        }
-        if spec.needs_image()
-            && spec.source.mask == plugins::manifest::SourceMask::Selection
-            && spec.source.mask_empty == plugins::manifest::MaskEmpty::Error
-            && self
-                .session()
-                .is_some_and(|s| s.document.selection.is_none())
-        {
-            self.error = Some(tr("Select an area first").into());
+        if let Some(problem) = self.action_start_problem(&spec) {
+            self.error = Some(problem.into());
             return;
         }
         let mut values = Map::new();
@@ -1412,7 +1772,9 @@ impl EditorApp {
             }
             values.insert(input.id.clone(), value);
         }
-        if spec.inputs.is_empty() {
+        let provider = (self.plugins.provider_pending.take())
+            .filter(|run| run.plugin == plugin && run.action == action);
+        if spec.inputs.is_empty() || provider.is_some() {
             self.plugins.action = Some(ActionEdit {
                 plugin: plugin.into(),
                 action: action.into(),
@@ -1423,6 +1785,9 @@ impl EditorApp {
                 previous_tool: self.tool,
                 into: ResultInto::Layer,
                 consented: false,
+                provider,
+                surface: None,
+                caller: None,
             });
             self.run_plugin_action();
             return;
@@ -1442,6 +1807,9 @@ impl EditorApp {
                 ResultInto::Document
             },
             consented: false,
+            provider: None,
+            surface: None,
+            caller: None,
         });
         if spec.regions_input().is_some() {
             self.set_tool(Tool::Region);
@@ -1449,8 +1817,88 @@ impl EditorApp {
         self.request_estimate();
     }
 
+    /// Why `spec` cannot start on the current document, if it cannot: the
+    /// checks the menu and the surfaces share.
+    pub(super) fn action_start_problem(&self, spec: &Action) -> Option<&'static str> {
+        if spec.needs_image()
+            && self
+                .session()
+                .and_then(|s| s.document.active())
+                .is_none_or(|layer| layer.pixels.is_none() || layer.group)
+            && spec.source.from == plugins::manifest::SourceKind::Layer
+        {
+            return Some(tr("Select an image layer first"));
+        }
+        if spec.kind != ActionKind::Generate && self.session().is_none() {
+            return Some(tr("Open a document first"));
+        }
+        if spec.needs_image()
+            && spec.source.mask == plugins::manifest::SourceMask::Selection
+            && spec.source.mask_empty == plugins::manifest::MaskEmpty::Error
+            && self
+                .session()
+                .is_some_and(|s| s.document.selection.is_none())
+        {
+            return Some(tr("Select an area first"));
+        }
+        None
+    }
+
+    /// Send `action/estimate` for a surface: the action's values, no source
+    /// or regions (nothing from the document goes before a run), and before
+    /// send consent none of the texts either.
+    pub(super) fn send_surface_estimate(
+        &mut self,
+        plugin: &str,
+        action: &str,
+        mut values: Map<String, Value>,
+    ) {
+        let Some(spec) = (self.plugins.manifest(plugin))
+            .and_then(|m| m.action(action))
+            .cloned()
+        else {
+            return;
+        };
+        if self.sends_need_consent(plugin) {
+            withhold_private(&spec, &mut values);
+        }
+        let Ok(work_dir) = self.plugins.scratch_dir(plugin) else {
+            return;
+        };
+        let params = json!({
+            "job": Uuid::new_v4(),
+            "action": action,
+            "work_dir": work_dir,
+            "inputs": values,
+            "source": Value::Null,
+            "document": Value::Null,
+        });
+        let Ok(process) = self.plugin_process(plugin) else {
+            return;
+        };
+        if let Ok(id) = process.request("action/estimate", params) {
+            self.plugins.pending.insert(
+                (plugin.to_owned(), id),
+                Pending::SurfaceEstimate(plugin.to_owned(), action.to_owned()),
+            );
+        }
+    }
+
+    /// Whether the open action shows its dialog: surface runs and runs
+    /// another plugin started never do.
+    pub(super) fn plugin_action_dialog_shown(&self) -> bool {
+        self.plugins
+            .action
+            .as_ref()
+            .is_some_and(|edit| edit.surface.is_none() && edit.caller.is_none())
+    }
+
     pub(super) fn close_plugin_action(&mut self) {
+        // A surface run keeps the tool it was started from (AI Region), and
+        // a run another plugin started never changed it.
         if let Some(edit) = self.plugins.action.take()
+            && edit.surface.is_none()
+            && edit.caller.is_none()
             && self.tool == Tool::Region
         {
             self.set_tool(if edit.previous_tool == Tool::Region {
@@ -1491,17 +1939,46 @@ impl EditorApp {
             _ => Prepared::none(),
         };
         if withheld {
-            for input in &spec.inputs {
-                if matches!(
-                    input.kind,
-                    InputKind::Text | InputKind::Multiline | InputKind::Path | InputKind::Secret
-                ) {
-                    inputs.remove(&input.id);
-                }
-            }
+            withhold_private(&spec, &mut inputs);
         }
         if let Some(input) = spec.regions_input() {
             inputs.insert(input.id.clone(), Value::Array(prepared.regions.clone()));
+        }
+        // A provider run says what it stands in for and where the user pointed, in the
+        // source's pixels like everything else the plugin gets.
+        if let Some(run) = &edit.provider {
+            inputs.insert("capability".into(), json!(run.capability.id()));
+            if let Some(point) = run.point {
+                let (x, y) = prepared.from_document(point);
+                inputs.insert("point".into(), json!({"x": x, "y": y}));
+            }
+            if let Some([left, top, right, bottom]) = run.rect {
+                let corners = [(left, top), (right, top), (right, bottom), (left, bottom)]
+                    .map(|(x, y)| prepared.from_document(xuan::document::Point::new(x, y)));
+                let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+                let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+                let max_x = corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let max_y = corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                inputs.insert(
+                    "rect".into(),
+                    json!({"x": min_x, "y": min_y, "width": max_x - min_x, "height": max_y - min_y}),
+                );
+            }
+        }
+        // A surface run says where it came from and how many document pixels
+        // the result will cover, so the plugin can render at least that.
+        if let Some(run) = &edit.surface {
+            inputs.insert("surface".into(), json!(run.surface));
+            inputs.insert(
+                "target".into(),
+                json!({"width": run.target.0, "height": run.target.1}),
+            );
         }
         // Inputs as stored on the layer: regions in document coordinates.
         let mut stored = edit.values.clone();
@@ -1574,6 +2051,35 @@ impl EditorApp {
             return;
         }
         let chosen = edit.into;
+        // Two jobs replacing the same layer would each overwrite the other's
+        // result: the second waits until the first is done.
+        let into = if spec.result.into == ResultInto::Ask {
+            chosen
+        } else {
+            spec.result.into
+        };
+        let session = self.session();
+        let active = session.and_then(|s| s.document.active).filter(|_| {
+            spec.kind == ActionKind::Edit
+                && spec.source.from == plugins::manifest::SourceKind::Layer
+        });
+        if into == ResultInto::Replace
+            && let Some(layer) = active
+            && self.plugins.jobs.iter().any(|job| {
+                job.into == ResultInto::Replace
+                    && Some(job.document) == session.map(|s| s.document.id)
+                    && job.prepared.layer == Some(layer)
+            })
+        {
+            self.error = Some(
+                tr("A plugin is already replacing this layer; wait for it to finish or cancel it")
+                    .into(),
+            );
+            if (self.plugins.action.as_ref()).is_some_and(|e| e.surface.is_some()) {
+                self.plugins.action = None;
+            }
+            return;
+        }
         // A run that sends document data to a plugin that declares network
         // hosts waits for the user to confirm it.
         let consented =
@@ -1592,6 +2098,11 @@ impl EditorApp {
             }
         }
         let document = self.session().map(|s| s.document.id);
+        let provider = (self.plugins.action.as_ref()).and_then(|edit| edit.provider.clone());
+        let surface = (self.plugins.action.as_ref()).and_then(|edit| edit.surface.clone());
+        let caller = (self.plugins.action.as_ref())
+            .and_then(|edit| edit.caller.as_ref())
+            .map(|run| run.plugin.clone());
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
             let work_dir = self.plugin_work_dir(&plugin, "xuan-job-")?;
@@ -1612,25 +2123,50 @@ impl EditorApp {
                 prepared,
                 regions,
                 inputs,
-                into: if spec.result.into == ResultInto::Ask {
-                    chosen
-                } else {
-                    spec.result.into
-                },
+                into,
                 mask_to_regions: spec.result.mask_to_regions,
                 progress: None,
                 message: String::new(),
                 cancelled: false,
                 consented,
+                provider,
+                surface: surface.clone(),
+                ai_boxes: Vec::new(),
+                caller,
             });
             Ok(())
         })();
         match result {
+            // The status bar shows the running job, so no "started" message.
             Ok(()) => {
                 self.close_plugin_action();
-                self.status = format!("{} {}", spec.label.trim_end_matches('…'), tr("started"));
+                // AI Region boxes go with their job, and come back if it fails.
+                if let Some(run) = surface.filter(|run| !run.boxes.is_empty())
+                    && let Some(session) =
+                        (self.sessions.iter_mut()).find(|s| Some(s.document.id) == document)
+                {
+                    let (sent, kept) = std::mem::take(&mut session.ai_boxes)
+                        .into_iter()
+                        .partition(|b| run.boxes.contains(&b.id));
+                    session.ai_boxes = kept;
+                    session.ai_selected = None;
+                    if let Some(started) = self.plugins.jobs.iter_mut().find(|j| j.id == job) {
+                        started.ai_boxes = sent;
+                    }
+                }
             }
-            Err(error) => self.error = Some(format!("{error:#}")),
+            Err(error) => {
+                self.error = Some(format!("{error:#}"));
+                // A surface run has no dialog to go back to.
+                if self
+                    .plugins
+                    .action
+                    .as_ref()
+                    .is_some_and(|e| e.surface.is_some())
+                {
+                    self.plugins.action = None;
+                }
+            }
         }
     }
 
@@ -1661,17 +2197,23 @@ impl EditorApp {
             Ok(value) if !job.cancelled => value,
             Ok(_) => {
                 self.status = tr("Cancelled").into();
+                self.note_run(&job, RunOutcome::Cancelled, "");
+                self.restore_ai_boxes(job);
                 return;
             }
             Err(error) => {
                 if job.cancelled || error == tr("Cancelled") {
                     self.status = tr("Cancelled").into();
+                    self.note_run(&job, RunOutcome::Cancelled, "");
                 } else {
+                    self.note_run(&job, RunOutcome::Failed, &error);
                     self.error = Some(error);
                 }
+                self.restore_ai_boxes(job);
                 return;
             }
         };
+        self.note_run(&job, RunOutcome::Waiting, "");
         if !self.ready_for_plugin_result() {
             self.status = format!(
                 "{} {}",
@@ -1683,10 +2225,26 @@ impl EditorApp {
         self.apply_completed_results();
     }
 
+    /// Put a job's AI Region boxes back on their document, after it failed,
+    /// was cancelled or its result was refused, so the user can try again.
+    fn restore_ai_boxes(&mut self, job: PluginJob) {
+        if job.ai_boxes.is_empty() {
+            return;
+        }
+        if let Some(session) = (self.sessions.iter_mut()).find(|s| s.document.id == job.document) {
+            for ai_box in job.ai_boxes {
+                if !session.ai_boxes.iter().any(|b| b.id == ai_box.id) {
+                    session.ai_boxes.push(ai_box);
+                }
+            }
+        }
+    }
+
     /// Whether a job result can be shown now: nothing else is open or under way
-    /// that a proposal would interrupt.
+    /// that a proposal would interrupt, an AI popover included.
     fn ready_for_plugin_result(&self) -> bool {
-        self.dialog.is_none()
+        self.surface_popup.is_none()
+            && self.dialog.is_none()
             && self.error.is_none()
             && self.plugins.proposal.is_none()
             && self.job.is_none()
@@ -1702,8 +2260,18 @@ impl EditorApp {
         while self.ready_for_plugin_result()
             && let Some((job, value)) = self.plugins.completed.pop_front()
         {
-            if let Err(error) = self.apply_job_result(&job, value) {
-                self.error = Some(format!("{}: {error:#}", job.label));
+            match self.apply_job_result(&job, value) {
+                Err(error) => {
+                    self.error = Some(format!("{}: {error:#}", job.label));
+                    self.note_run(&job, RunOutcome::Failed, &format!("{error:#}"));
+                    self.restore_ai_boxes(job);
+                }
+                // Shown as a proposal for the user, or applied without one
+                // (a new document, a message).
+                Ok(()) if (self.plugins.proposal.as_ref()).is_some_and(|p| p.job == job.id) => {
+                    self.note_run(&job, RunOutcome::Proposed, "");
+                }
+                Ok(()) => self.note_run(&job, RunOutcome::Done, ""),
             }
         }
     }
@@ -1786,6 +2354,13 @@ impl EditorApp {
                 _ => &[],
             })
         };
+        if let Some(edit) = result_edits().find(|edit| edit.direct_only()) {
+            bail!(
+                "The plugin returned a {} edit, which changes the canvas; send it with \
+                 document/edit instead of in a result",
+                edit.op()
+            );
+        }
         if result_edits().any(edits::Edit::needs_edit_access) {
             ensure!(
                 manifest
@@ -1936,9 +2511,39 @@ impl EditorApp {
                 Output::None => {}
             }
         }
+        // New Image's Generate tab: its resolution, and with Exact size a
+        // canvas of the size asked for that the image covers, centred.
+        let made = job
+            .surface
+            .as_ref()
+            .filter(|run| run.surface == Surface::Document);
         for (name, image, provenance) in new_documents {
-            let mut document = Document::new(image.width(), image.height())?;
+            let (pixels_w, pixels_h) = image.dimensions();
+            let (width, height) = match made {
+                Some(run) if run.exact => run.target,
+                _ => (pixels_w, pixels_h),
+            };
+            let mut document = Document::new(width, height)?;
+            if let Some(run) = made {
+                document.resolution = run.resolution;
+            }
             let mut layer = Layer::image(&name, image);
+            if made.is_some_and(|run| run.exact) {
+                let (x, y, w, h) = jobs::cover(
+                    (pixels_w as f32, pixels_h as f32),
+                    (width as f32, height as f32),
+                );
+                layer.transform = xuan::document::Transform {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                    ..xuan::document::Transform::new(pixels_w, pixels_h)
+                };
+                if w > width as f32 + 0.5 || h > height as f32 + 0.5 {
+                    self.status = tr("Move the layer to reframe").into();
+                }
+            }
             layer.generated = Some(generated(None, None));
             layer.provenance = provenance;
             document.layers = vec![layer];
@@ -1996,13 +2601,13 @@ impl EditorApp {
         {
             document.select(source, false);
         }
-        let ids: Vec<Uuid> = layers.iter().map(|l| l.id).collect();
+        let mut ids: Vec<Uuid> = layers.iter().map(|l| l.id).collect();
         for layer in layers {
             document.insert(layer);
         }
         // Masks become the selection, in order, after every other change.
         // Changing the selection is not a pixel edit, so any plugin may.
-        let before = (!masks.is_empty()).then(|| document.selection.clone());
+        let mut before = (!masks.is_empty()).then(|| document.selection.clone());
         let mut shifted = job.prepared.clone();
         shifted.transform.x += dx;
         shifted.transform.y += dy;
@@ -2015,22 +2620,56 @@ impl EditorApp {
                 (x + dx, y + dy)
             };
             let coverage = jobs::place_mask(&shifted, size, &mask, x, y, &placed)?;
+            // A provider's mask combines as the command the user ran asked.
+            let mode = job.provider.as_ref().map_or(mode, |run| run.mode);
             selection::combine(&mut document, coverage, mode);
+        }
+        // Remove Background through a provider: the host lays the mask on the layer
+        // the user chose, as the built-in command does; the selection stays as it was.
+        if let Some(run) =
+            (job.provider.as_ref()).filter(|run| run.capability == Capability::RemoveBackground)
+            && let Some(old_selection) = before.take()
+        {
+            ensure!(
+                manifest
+                    .as_ref()
+                    .is_some_and(|m| m.permissions.document == DocumentAccess::Edit),
+                "Remove Background needs document = \"edit\" in the plugin's manifest"
+            );
+            let index = (run.layer)
+                .and_then(|id| document.layers.iter().position(|l| l.id == id))
+                .filter(|&i| document.layers[i].pixels.is_some() && !document.layers[i].locked)
+                .context(tr("Select an unlocked image layer"))?;
+            let matte = xuan::paint::mask_from_selection(&document, &document.layers[index]);
+            xuan::retouch::apply_layer_matte(&mut document.layers[index], matte);
+            document.selection = old_selection;
+            let existing: std::collections::HashSet<Uuid> =
+                document.layers.iter().map(|l| l.id).collect();
+            document.promote_image_masks();
+            ids.extend(
+                (document.layers.iter())
+                    .map(|l| l.id)
+                    .filter(|id| !existing.contains(id)),
+            );
         }
         let selection = before.map(|before| ProposedSelection {
             before,
             after: document.selection.clone(),
         });
+        let name = (job.provider.as_ref()).map_or(job.label.clone(), |run| {
+            tr(run.capability.label()).to_owned()
+        });
         document.validate()?;
-        session.history.begin(&job.label, &session.document);
+        session.history.begin(&name, &session.document);
         // A result that resized the canvas is shown whole.
         session.fit |=
             (document.width, document.height) != (session.document.width, session.document.height);
         session.document = document;
         session.invalidate();
         self.plugins.proposal = Some(Proposal {
+            job: job.id,
             document: job.document,
-            name: job.label.clone(),
+            name,
             source: self.plugins.source(&job.plugin),
             layers: ids,
             selection,
@@ -2045,6 +2684,7 @@ impl EditorApp {
         let Some(proposal) = self.plugins.proposal.take() else {
             return;
         };
+        self.note_proposal_answer(proposal.job, accept);
         if let Some(session) = self
             .sessions
             .iter_mut()
@@ -2059,7 +2699,7 @@ impl EditorApp {
                 if let Some(selection) = proposal.selection {
                     session.document.selection = selection.after;
                 }
-                session.history.commit();
+                session.commit();
                 self.status = format!("{} {}", proposal.name, tr("applied"));
             } else {
                 let size = (session.document.width, session.document.height);
@@ -2103,6 +2743,18 @@ impl EditorApp {
     }
 
     // --- Regions ---------------------------------------------------------
+
+    /// Whether the tool rail offers the Region tool: while the open plugin
+    /// action has a `regions` input to draw into, or, as the AI Region tool,
+    /// when a plugin offers a region action and a document is open.
+    pub(super) fn region_tool_available(&self) -> bool {
+        let dialog = self.plugins.action.as_ref().is_some_and(|edit| {
+            (self.plugins.manifest(&edit.plugin))
+                .and_then(|manifest| manifest.action(&edit.action))
+                .is_some_and(|action| action.regions_input().is_some())
+        });
+        dialog || (self.session().is_some() && !self.surface_actions(Surface::Region).is_empty())
+    }
 
     pub(super) fn add_region(&mut self, start: xuan::document::Point, end: xuan::document::Point) {
         let Some(edit) = &mut self.plugins.action else {
@@ -2552,8 +3204,7 @@ impl EditorApp {
         document.active = None;
         document.selected.clear();
         if let Some(resolution) = imported.resolution
-            && resolution.is_finite()
-            && (1.0..=9600.0).contains(&resolution)
+            && xuan::units::valid_resolution(f64::from(resolution))
         {
             document.resolution = resolution;
         }
@@ -2589,26 +3240,60 @@ impl EditorApp {
     }
 }
 
-/// `text` on one line, without control characters, cut to `max` characters.
+/// Remove the values a plugin that needs send consent may not see before
+/// the user agreed (see [`InputKind::private`]): an estimate goes out first.
+fn withhold_private(spec: &Action, inputs: &mut Map<String, Value>) {
+    for input in spec.inputs.iter().filter(|i| i.kind.private()) {
+        inputs.remove(&input.id);
+    }
+}
+
+/// `text` on one line, without control characters or characters that are
+/// invisible or reorder text (see [`super::plugin_files::invisible`]), cut to
+/// `max` characters. For any plugin text Xuan shows.
 pub(super) fn one_line(text: &str, max: usize) -> String {
     text.chars()
+        .filter(|&c| !super::plugin_files::invisible(c))
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(max)
         .collect()
 }
 
-/// The grant that allows this manifest to run as it is.
+/// The grant that allows this manifest to run as it is. A bundled plugin's
+/// folder is stored by name (see [`plugins::grant_dir`]), so the grant
+/// survives Xuan upgrades and the AppImage's changing mount point.
 pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
     PluginGrant {
-        dir: std::fs::canonicalize(&manifest.dir).unwrap_or_else(|_| manifest.dir.clone()),
+        dir: plugins::grant_dir(&manifest.dir, plugins::bundled_dir().as_deref()),
         command: manifest.plugin.command.clone(),
         permissions: manifest.permissions.clone(),
         send_without_asking: false,
+        edit_without_asking: false,
+        save_without_asking: false,
+        run_other_actions: false,
+        run_without_asking: false,
     }
 }
 
+/// An `action/estimate` answer as one line: "cost · ≈N s". The cost is the
+/// plugin's words: one line, without invisible characters, at most 120.
+fn estimate_text(value: &Value) -> Option<String> {
+    let cost = one_line(value.get("cost").and_then(Value::as_str).unwrap_or(""), 120);
+    let cost = cost.trim();
+    let seconds = (value.get("seconds").and_then(Value::as_f64))
+        .filter(|s| s.is_finite() && (0.0..1e9).contains(s));
+    let mut text = cost.to_owned();
+    if let Some(seconds) = seconds {
+        if !text.is_empty() {
+            text.push_str(" · ");
+        }
+        text.push_str(&format!("≈{seconds:.0} s"));
+    }
+    (!text.is_empty()).then_some(text)
+}
+
 /// The most regions an action's regions input takes.
-fn region_limit(input: &plugins::manifest::Input) -> usize {
+pub(super) fn region_limit(input: &plugins::manifest::Input) -> usize {
     input.max.map_or(plugins::manifest::MAX_REGIONS, |max| {
         (max.max(0.0) as usize).min(plugins::manifest::MAX_REGIONS)
     })
@@ -2632,7 +3317,7 @@ fn regions_to_value(regions: &[Region]) -> Value {
     )
 }
 
-fn regions_from_value(value: &Value) -> Vec<Region> {
+pub(super) fn regions_from_value(value: &Value) -> Vec<Region> {
     value
         .as_array()
         .map(|items| {
@@ -2756,7 +3441,13 @@ mod tests {
     fn the_protocol_docs_cover_every_method_the_host_speaks() {
         let source = include_str!("plugins.rs");
         let source = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
-        let source = format!("{source}{}", include_str!("plugin_models.rs"));
+        let source = format!(
+            "{source}{}{}{}{}",
+            include_str!("plugin_models.rs"),
+            include_str!("plugin_files.rs"),
+            include_str!("plugin_sessions.rs"),
+            include_str!("plugin_runs.rs")
+        );
         let source = source.as_str();
         let docs = include_str!("../../docs/PLUGINS.md");
         let mut methods = Vec::new();

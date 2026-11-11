@@ -6,7 +6,7 @@ use crate::document::{Document, Point};
 
 /// How a new selection combines with the current one. Plugins name it in
 /// `mask` outputs as `replace`, `add`, `subtract` or `intersect`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionMode {
     #[default]

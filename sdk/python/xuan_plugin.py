@@ -49,6 +49,9 @@ CANCELLED = -32800
 NEEDS_SETUP = -32001
 INSUFFICIENT_CREDITS = -32002
 RATE_LIMITED = -32003
+# Never sent by the editor: a request it did not answer in time, which was
+# withdrawn with ``request/cancel``.
+TIMED_OUT = -32004
 
 
 class RpcError(Exception):
@@ -103,8 +106,12 @@ class _Transport:
         self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         if not waiter.event.wait(timeout):
             with self._lock:
-                self._pending.pop(request_id, None)
-            raise RpcError(INTERNAL_ERROR, f"the editor did not answer {method}")
+                waiting = self._pending.pop(request_id, None)
+            if waiting is not None:
+                # Withdraw it, so a prompt the editor shows for it closes and
+                # a late answer does nothing.
+                self.send({"jsonrpc": "2.0", "method": "request/cancel", "params": {"id": request_id}})
+            raise RpcError(TIMED_OUT, f"the editor did not answer {method} in time")
         if waiter.error is not None:
             raise RpcError(
                 waiter.error.get("code", INTERNAL_ERROR),
@@ -143,12 +150,29 @@ class _Waiter:
 class Host:
     """Requests a plugin can make of the editor."""
 
-    def __init__(self, transport: _Transport):
+    def __init__(self, transport: _Transport, session: Optional[str] = None):
         self._transport = transport
         self.timeout: Optional[float] = 120.0
+        # Sent as ``session`` with every request; see ``with_session``.
+        self.session = session
 
     def request(self, method: str, params: Any = None) -> Any:
+        if self.session is not None and (params is None or isinstance(params, dict)):
+            params = dict(params or {}, session=self.session)
         return self._transport.request(method, params, self.timeout)
+
+    def with_session(self, id: str) -> "Host":
+        """A host whose requests belong to the session ``id``.
+
+        A plugin with ``edit_prompt = "session"`` is allowed to edit once per session.
+        """
+        host = Host(self._transport, session=id)
+        host.timeout = self.timeout
+        return host
+
+    def session_status(self) -> Dict[str, Any]:
+        """``{"edit_prompt", "edits": "allowed" | "denied" | "ask", "auto"}`` for this session."""
+        return self.request("session/status", {})
 
     def notify(self, method: str, params: Any = None) -> None:
         self._transport.send({"jsonrpc": "2.0", "method": method, "params": params})
@@ -197,9 +221,40 @@ class Host:
         """Write the selection mask cropped to its bounds, or None; ``dir`` as for ``export_layer``."""
         return self.request("selection/export", {"dir": dir} if dir else {})
 
-    def edit(self, name: str, edits: List[Dict[str, Any]]) -> None:
-        """Apply edits as one undo step. Needs ``document = "edit"`` in the manifest."""
-        self.request("document/edit", {"name": name, "edits": edits})
+    def edit(self, name: str, edits: List[Dict[str, Any]]) -> List[str]:
+        """Apply edits as one undo step and return the ids of the layers they added.
+
+        Needs ``document = "edit"`` in the manifest.
+        """
+        result = self.request("document/edit", {"name": name, "edits": edits}) or {}
+        return [layer for layer in result.get("layers", []) if isinstance(layer, str)]
+
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """The open documents: id, title, width, height, layers, current, modified, saved."""
+        return (self.request("document/list") or {}).get("documents", [])
+
+    def activate_document(self, id: str) -> None:
+        """Make an open document the current one, as clicking its tab does."""
+        self.request("document/activate", {"document": id})
+
+    def save_as(self, document: Optional[str] = None, suggested_name: Optional[str] = None) -> str:
+        """Show the save dialog for a document as a ``.xuan`` project; returns the chosen path.
+
+        A cancelled dialog raises ``RpcError`` with the code ``CANCELLED``.
+        """
+        params = {"document": document, "suggested_name": suggested_name}
+        return self.request("file/save_as", params)["name"]
+
+    def export_file(
+        self, format: str = "png", document: Optional[str] = None, suggested_name: Optional[str] = None
+    ) -> str:
+        """Show the save dialog to export a document as png, jpg, tiff or webp; returns the path."""
+        params = {"document": document, "format": format, "suggested_name": suggested_name}
+        return self.request("file/export", params)["name"]
+
+    def open_file(self, path: str) -> Dict[str, Any]:
+        """Ask the user to open the file at the absolute ``path`` as a document."""
+        return self.request("file/open", {"path": path})
 
     def run(self, action: str, inputs: Optional[Dict[str, Any]] = None) -> None:
         """Run an allowed host command, or one of this plugin's own ``plugin/action``."""
@@ -207,6 +262,15 @@ class Host:
 
     def open(self, path: Optional[str] = None, url: Optional[str] = None) -> None:
         self.request("host/open", {"path": path} if path else {"url": url})
+
+
+def _fit(output: Dict[str, Any], fit: Optional[str]) -> None:
+    """Set an image or mask output's ``fit``: ``source`` or ``cover``."""
+    if fit is None:
+        return
+    if fit not in ("source", "cover"):
+        raise ValueError('fit is "source" or "cover"')
+    output["fit"] = fit
 
 
 class Job:
@@ -300,6 +364,7 @@ class Job:
         height: Optional[float] = None,
         fit_source: bool = False,
         provenance: Optional[Dict[str, Any]] = None,
+        fit: Optional[str] = None,
     ) -> Dict[str, Any]:
         """An image output. Unless the action's ``result.into`` is
         ``document`` (a new tab), it changes the open document, so the manifest
@@ -307,6 +372,8 @@ class Job:
         ``width``/``height`` (document units) or
         ``fit_source=True`` (cover the source that was sent) place a result of
         any pixel size at that size, so extra pixels become higher density.
+        ``fit="cover"`` instead scales it evenly to cover the source, centred,
+        without stretching; what hangs over the source stays in the layer.
 
         ``provenance`` records how the image was made; it is shown in the
         layer's info and saved with the project. Known keys: ``model``,
@@ -326,8 +393,7 @@ class Job:
             output["width"] = width
         if height is not None:
             output["height"] = height
-        if fit_source:
-            output["fit"] = "source"
+        _fit(output, "source" if fit_source and not fit else fit)
         if provenance:
             output["provenance"] = provenance
         return output
@@ -343,6 +409,7 @@ class Job:
         width: Optional[float] = None,
         height: Optional[float] = None,
         fit_source: bool = False,
+        fit: Optional[str] = None,
     ) -> Dict[str, Any]:
         """A mask output: a grey PNG (white selected, black not, grey partly)
         that becomes the document's selection once the user accepts it.
@@ -358,8 +425,7 @@ class Job:
             output["width"] = width
         if height is not None:
             output["height"] = height
-        if fit_source:
-            output["fit"] = "source"
+        _fit(output, "source" if fit_source and not fit else fit)
         return output
 
     @staticmethod
@@ -694,8 +760,14 @@ class ui:
         return {"type": "space", "size": size}
 
     @staticmethod
-    def button(id: str, label: str, primary: bool = False, enabled: bool = True) -> Dict[str, Any]:
-        return {"type": "button", "id": id, "label": label, "primary": primary, "enabled": enabled}
+    def button(
+        id: str, label: str, primary: bool = False, enabled: bool = True, copy: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """A button; with ``copy``, Xuan also copies that text to the clipboard when it is clicked."""
+        node = {"type": "button", "id": id, "label": label, "primary": primary, "enabled": enabled}
+        if copy is not None:
+            node["copy"] = copy
+        return node
 
     @staticmethod
     def checkbox(id: str, label: str, value: bool = False) -> Dict[str, Any]:

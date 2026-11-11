@@ -27,9 +27,15 @@ timeout 120s xvfb-run -a env APPIMAGE_EXTRACT_AND_RUN=1 \
     "$xuan_appimage" --demo --screenshot 'appimage demo.png'
 test -s 'appimage demo.png'
 
+# The bundled MCP server plugin runs with the host's C library, not the
+# AppImage's: it must start here too. Without a host on stdin it exits at once.
+"$xuan_appimage" --appimage-extract >/dev/null
+timeout 30s squashfs-root/usr/lib/xuan/plugins/mcp-server/target/release/xuan-mcp-server </dev/null
+
 if [[ ${XUAN_CHECK_NATIVE:-0} == 1 ]]; then
     tar -xzf /packages/xuan-*-linux-x86_64.tar.gz
     timeout 120s xvfb-run -a ./xuan-*-linux-x86_64/bin/xuan \
         --demo --screenshot 'native demo.png'
     test -s 'native demo.png'
+    timeout 30s ./xuan-*-linux-x86_64/lib/xuan/plugins/mcp-server/target/release/xuan-mcp-server </dev/null
 fi

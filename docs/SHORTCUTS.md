@@ -2,6 +2,8 @@
 
 These are the default shortcuts. Each one can be changed, removed or added to in **Edit → Settings… → Keyboard Shortcuts**; the menus and **Help → Keyboard Shortcuts** (F1) always show the ones in effect. **Ctrl+K** opens the command palette, which finds any command by name and shows its shortcut.
 
+On macOS, **Ctrl** in these tables is ⌘ Command (the Control key also works) and the menus show Mac symbols, such as ⇧⌘S for Save As. Control+Tab still switches tabs, and ⌘H hides Xuan there, so Show Transform Controls has no default shortcut on a Mac.
+
 <!-- BEGIN GENERATED from the command registry (src/app/commands.rs); refresh with XUAN_UPDATE_DOCS=1 cargo test documented_shortcuts -->
 | Category | Command | Shortcut |
 | --- | --- | --- |
@@ -38,16 +40,35 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Select | Select All | Ctrl+A |
 | Select | Deselect | Ctrl+D |
 | Select | Inverse Selection | Ctrl+Shift+I |
+| Select | Select Subject | Ctrl+Alt+A |
+| Filter | Camera Raw Filter… | Ctrl+Shift+A |
 | View | Fit Canvas | Ctrl+0 |
 | View | Actual Pixels | Ctrl+1 |
 | View | Zoom In | Ctrl+Plus / Ctrl+= |
 | View | Zoom Out | Ctrl+Minus |
+| View | Edit All Channels | Ctrl+2 |
+| View | Edit Red Channel | Ctrl+3 |
+| View | Edit Green Channel | Ctrl+4 |
+| View | Edit Blue Channel | Ctrl+5 |
+| View | Edit Alpha Channel | Ctrl+6 |
 | View | Show Transform Controls | Ctrl+H |
 | View | Show Grid | Ctrl+' |
 | View | Show Guides | Ctrl+; |
 | View | Rulers | Ctrl+R |
 | View | Snap | Ctrl+Shift+; / Ctrl+Shift+: |
 | View | Lock Guides | Ctrl+Alt+; |
+| Window | Next Tab | Ctrl+Tab / Ctrl+PageDown |
+| Window | Previous Tab | Ctrl+Shift+Tab / Ctrl+PageUp |
+| Window | Tab 1 | Alt+1 |
+| Window | Tab 2 | Alt+2 |
+| Window | Tab 3 | Alt+3 |
+| Window | Tab 4 | Alt+4 |
+| Window | Tab 5 | Alt+5 |
+| Window | Tab 6 | Alt+6 |
+| Window | Tab 7 | Alt+7 |
+| Window | Tab 8 | Alt+8 |
+| Window | Last Tab | Alt+9 |
+| Window | Reopen Closed Tab | Ctrl+Shift+T |
 | Tools | Move / Transform | V |
 | Tools | Marquee | M |
 | Tools | Switch Rectangle / Ellipse Marquee | Shift+M |
@@ -55,21 +76,27 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Tools | Switch Freehand / Polygonal Lasso | Shift+L |
 | Tools | Magic Wand | W |
 | Tools | Crop | C |
+| Tools | Switch Crop Box / Perspective Crop | Shift+C |
 | Tools | Brush | B |
 | Tools | Switch between Brush and Pencil | Shift+B |
 | Tools | Eraser | E |
 | Tools | Spot Healing | J |
 | Tools | Clone Stamp | S |
 | Tools | Blur / Smudge | R |
+| Tools | Switch Blur / Smudge / Liquify | Shift+R |
+| Tools | Dodge / Burn | O |
+| Tools | Switch Dodge / Burn / Sponge | Shift+O |
 | Tools | Gradient | G |
+| Tools | Switch between Gradient and Paint Bucket | Shift+G |
 | Tools | Shape | U |
 | Tools | Switch Rectangle / Ellipse Shape | Shift+U |
+| Tools | Pen | P |
 | Tools | Text | T |
 | Tools | Eyedropper | I |
 | Tools | Hand | H |
 | Tools | Zoom | Z |
-| Tools | Swap Colors | X |
-| Tools | Reset Colors | D |
+| Tools | Swap Colours | X |
+| Tools | Reset Colours | D |
 | Tools | Decrease Brush Size | [ |
 | Tools | Increase Brush Size | ] |
 | Tools | Decrease Brush Hardness | Shift+[ |
@@ -78,7 +105,7 @@ These are the default shortcuts. Each one can be changed, removed or added to in
 | Help | Keyboard Shortcuts | F1 |
 <!-- END GENERATED -->
 
-With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. B selects whichever of Brush and Pencil you used last.
+With nothing selected, Clear Pixels' Delete or Backspace deletes the selected layers instead. With the Pen, Delete or Backspace removes the last anchor drawn or the anchor last edited instead. B selects whichever of Brush and Pencil you used last. G likewise selects whichever of Gradient and Paint Bucket you used last. O selects the Dodge / Burn tool in the mode you used last; with the tool selected, Shift+O moves on to the next of Dodge, Burn and Sponge. R and Shift+R do the same for the Blur / Smudge tool's Blur, Smudge and Liquify. C likewise selects the Crop tool in the mode you used last; with it selected, Shift+C switches between the crop box and Perspective Crop.
 
 ## Other keys and pointer controls
 
@@ -94,6 +121,7 @@ These keys belong to the editor and cannot be assigned to commands.
 | Pan horizontally | Horizontal mouse wheel or Shift+wheel over the canvas |
 | Adjust slider or number | Wheel up / down over the control (increase / decrease) |
 | Apply crop or polygon / Cancel | Enter / Escape |
+| Finish a Pen path | Enter / Escape |
 
 ## Changing shortcuts
 
@@ -118,6 +146,8 @@ Copy an image in another app, or copy one or more image files in a file manager,
 Use **File → Open Image from Clipboard** to open copied pixels in a new document sized to the image, even when another document is open. Copied image files open in separate tabs. Clipboard images preserve transparency and prompt to save when closed.
 
 For a marquee selection, Ctrl+C copies the active layer's selected pixels. If no layer is active, it copies the visible canvas within the selection. Ctrl+V places those pixels on a new layer at their original position. Ctrl+Shift+C always copies the visible composite; Ctrl+X requires an active layer. Successful copies show the copied dimensions in the status bar.
+
+Without a selection, Ctrl+C copies the selected layers whole: folders with their contents, clipped and adjustment layers, editable text, masks, effects, blend mode and opacity. Other apps get the layers' flattened pixels. Ctrl+V pastes the layers complete, as one undo step, until something else is copied: in the same document just above the originals, in another document centred on the canvas, and inside the selected folder when one is selected. Pixel layers clipped to a layer that was not copied keep their clipped look in another document, baked into their pixels.
 
 Shift with a selection adds coverage, Alt subtracts, and Shift+Alt intersects. Drag inside a selection to move its outline; hold Ctrl to move selected pixels, or Ctrl+Alt to duplicate them. The contextual header also offers explicit selection modes.
 

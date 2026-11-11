@@ -1,4 +1,5 @@
 //! Drawing a plugin pane from the widget tree the plugin returned.
+use super::theme::PaletteExt as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -16,7 +17,7 @@ use xuan::{
 use super::{
     EditorApp,
     plugins::{PaneImage, PaneState, PendingStart},
-    theme, widgets,
+    widgets,
 };
 
 const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
@@ -40,10 +41,16 @@ impl EditorApp {
     /// Draw a plugin pane. While a dialog is open (`enabled` is false) it is
     /// shown but takes no input, like the built-in panes.
     pub(super) fn plugin_pane(&mut self, ui: &mut egui::Ui, key: &str, enabled: bool) {
-        ui.add_enabled_ui(enabled, |ui| self.plugin_pane_contents(ui, key));
+        ui.add_enabled_ui(enabled, |ui| self.plugin_pane_contents(ui, key, false));
     }
 
-    fn plugin_pane_contents(&mut self, ui: &mut egui::Ui, key: &str) {
+    /// Draw a pane with `placement = "settings"` on its plugin's page in
+    /// Manage Plugins: as tall as its contents, up to a limit.
+    pub(super) fn plugin_settings_pane(&mut self, ui: &mut egui::Ui, key: &str) {
+        self.plugin_pane_contents(ui, key, true);
+    }
+
+    fn plugin_pane_contents(&mut self, ui: &mut egui::Ui, key: &str, embedded: bool) {
         let Some((plugin, _)) = key.strip_prefix("plugin:").and_then(|k| k.split_once('/')) else {
             return;
         };
@@ -55,80 +62,87 @@ impl EditorApp {
             .unwrap_or_default();
         // Without the file system permission, the plugin's own folders only.
         let access = self.plugins.access(&plugin);
-        egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(10, 8))
-            .show(ui, |ui| {
-                if self.plugin_offline(&plugin) {
-                    let name = self.plugins.source(&plugin);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!(
-                                "{name} {}",
-                                tr("uses the network, and plugins that use the network are disabled.")
-                            ))
-                            .color(theme::MUTED),
-                        )
-                        .wrap(),
-                    );
-                    if widgets::button(ui, tr("Manage Plugins…")).clicked() {
-                        self.plugins.manager_selected = Some(plugin.clone());
-                        self.dialog = Some(super::Dialog::Plugins);
-                    }
-                    return;
+        let margin = if embedded {
+            egui::Margin::ZERO
+        } else {
+            egui::Margin::symmetric(10, 8)
+        };
+        egui::Frame::new().inner_margin(margin).show(ui, |ui| {
+            if self.plugin_offline(&plugin) {
+                let name = self.plugins.source(&plugin);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{name} {}",
+                            tr("uses the network, and plugins that use the network are disabled.")
+                        ))
+                        .color(ui.palette().muted),
+                    )
+                    .wrap(),
+                );
+                if widgets::button(ui, tr("Manage Plugins…")).clicked() {
+                    self.plugins.manager_selected = Some(plugin.clone());
+                    self.dialog = Some(super::Dialog::Plugins);
                 }
-                if !self.plugin_granted(&plugin) {
-                    let name = self.plugins.source(&plugin);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!(
-                                "{name} {}",
-                                tr("needs your permission to run.")
-                            ))
-                            .color(theme::MUTED),
-                        )
-                        .wrap(),
-                    );
-                    if widgets::button(ui, tr("Review Permissions…")).clicked() {
-                        self.plugins.permission_request =
-                            Some((plugin.clone(), PendingStart::Pane(key.to_owned())));
-                        self.dialog = Some(super::Dialog::PluginPermissions);
-                    }
-                    return;
+                return;
+            }
+            if !self.plugin_granted(&plugin) {
+                let name = self.plugins.source(&plugin);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{name} {}", tr("needs your permission to run.")))
+                            .color(ui.palette().muted),
+                    )
+                    .wrap(),
+                );
+                if widgets::button(ui, tr("Review Permissions…")).clicked() {
+                    self.plugins.permission_request =
+                        Some((plugin.clone(), PendingStart::Pane(key.to_owned())));
+                    self.dialog = Some(super::Dialog::PluginPermissions);
                 }
-                let needs_open = self
-                    .plugins
-                    .panes
-                    .get(key)
-                    .is_none_or(|s| s.tree.is_none() && !s.pending && s.error.is_none());
-                if needs_open {
-                    self.render_pane(key, "open", None);
+                return;
+            }
+            let needs_open = self
+                .plugins
+                .panes
+                .get(key)
+                .is_none_or(|s| s.tree.is_none() && !s.pending && s.error.is_none());
+            if needs_open {
+                self.render_pane(key, "open", None);
+            }
+            let state = self.plugins.panes.entry(key.to_owned()).or_default();
+            if let Some(error) = &state.error {
+                ui.add(
+                    egui::Label::new(RichText::new(error).small().color(ui.palette().muted)).wrap(),
+                );
+                if widgets::button(ui, tr("Retry")).clicked() {
+                    state.error = None;
+                    state.tree = None;
                 }
-                let state = self.plugins.panes.entry(key.to_owned()).or_default();
-                if let Some(error) = &state.error {
-                    ui.add(
-                        egui::Label::new(RichText::new(error).small().color(theme::MUTED)).wrap(),
-                    );
-                    if widgets::button(ui, tr("Retry")).clicked() {
-                        state.error = None;
-                        state.tree = None;
-                    }
+            }
+            let Some(tree) = state.tree.take() else {
+                if state.pending {
+                    ui.spinner();
                 }
-                let Some(tree) = state.tree.take() else {
-                    if state.pending {
-                        ui.spinner();
-                    }
-                    return;
+                return;
+            };
+            let event = {
+                let ctx = ui.ctx().clone();
+                let mut pane = Pane {
+                    state,
+                    plugin_dir: &plugin_dir,
+                    access: &access,
+                    ctx: &ctx,
+                    event: None,
+                    salt: key,
                 };
-                let event = {
-                    let ctx = ui.ctx().clone();
-                    let mut pane = Pane {
-                        state,
-                        plugin_dir: &plugin_dir,
-                        access: &access,
-                        ctx: &ctx,
-                        event: None,
-                        salt: key,
-                    };
+                if embedded {
+                    // Manage Plugins' page scrolls already: no scroll area inside it.
+                    ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        draw(ui, &tree, &mut pane);
+                    });
+                } else {
                     egui::ScrollArea::vertical()
                         .id_salt(("plugin_pane_scroll", key))
                         .auto_shrink([false, false])
@@ -136,16 +150,17 @@ impl EditorApp {
                             ui.spacing_mut().item_spacing.y = 6.0;
                             draw(ui, &tree, &mut pane);
                         });
-                    pane.event
-                };
-                let state = self.plugins.panes.entry(key.to_owned()).or_default();
-                if state.tree.is_none() {
-                    state.tree = Some(tree);
                 }
-                if let Some(event) = event {
-                    self.render_pane(key, "event", Some(event));
-                }
-            });
+                pane.event
+            };
+            let state = self.plugins.panes.entry(key.to_owned()).or_default();
+            if state.tree.is_none() {
+                state.tree = Some(tree);
+            }
+            if let Some(event) = event {
+                self.render_pane(key, "event", Some(event));
+            }
+        });
     }
 }
 
@@ -179,7 +194,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
             });
         }
         Node::Heading { text } => {
-            ui.label(RichText::new(text).strong());
+            widgets::subheading(ui, text);
         }
         Node::Label {
             text,
@@ -189,7 +204,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
         } => {
             let mut rich = RichText::new(text);
             if *muted {
-                rich = rich.color(theme::MUTED);
+                rich = rich.color(ui.palette().muted);
             }
             if *small {
                 rich = rich.small();
@@ -209,15 +224,29 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
             label,
             primary,
             enabled,
+            copy,
         } => {
+            // A copy button says what it copies, and how many lines.
+            let label = match copy {
+                Some(text) => copy_label(label, text),
+                None => label.clone(),
+            };
             let response = ui.add_enabled_ui(*enabled, |ui| {
-                if *primary {
-                    widgets::primary_button(ui, label)
+                let response = if *primary {
+                    widgets::primary_button(ui, &label)
                 } else {
-                    widgets::button(ui, label)
+                    widgets::button(ui, &label)
+                };
+                match copy {
+                    Some(text) => response.on_hover_text(copy_hint(text)),
+                    None => response,
                 }
             });
             if response.inner.clicked() {
+                // Only on the user's click, never on the plugin's own.
+                if let Some(text) = copy {
+                    ui.ctx().copy_text(text.clone());
+                }
                 send(pane, id, Value::Bool(true));
             }
         }
@@ -375,7 +404,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                 ui.label(
                     RichText::new(tr("Image unavailable"))
                         .small()
-                        .color(theme::MUTED),
+                        .color(ui.palette().muted),
                 );
             }
         }
@@ -397,7 +426,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                     }
                 }
                 if !label.is_empty() {
-                    ui.label(RichText::new(label).small().color(theme::MUTED));
+                    ui.label(RichText::new(label).small().color(ui.palette().muted));
                 }
             });
         }
@@ -419,7 +448,11 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                     }
                     let response = ui.selectable_label(is_selected, &item.label);
                     if !item.detail.is_empty() {
-                        ui.label(RichText::new(&item.detail).small().color(theme::MUTED));
+                        ui.label(
+                            RichText::new(&item.detail)
+                                .small()
+                                .color(ui.palette().muted),
+                        );
                     }
                     response
                 });
@@ -450,7 +483,7 @@ fn draw(ui: &mut egui::Ui, node: &Node, pane: &mut Pane) {
                         ui.painter().rect_stroke(
                             rect,
                             3.0,
-                            egui::Stroke::new(2.0_f32, theme::ACCENT),
+                            egui::Stroke::new(2.0_f32, ui.palette().accent),
                             egui::StrokeKind::Outside,
                         );
                     }
@@ -559,10 +592,40 @@ fn decode_pane_image(bytes: Vec<u8>) -> Result<egui::ColorImage> {
     ))
 }
 
+/// A copy button's label, marked when it copies more than one line.
+fn copy_label(label: &str, text: &str) -> String {
+    match text.lines().count() {
+        0 | 1 => label.to_owned(),
+        lines => format!("{label} ({lines} {})", tr("lines")),
+    }
+}
+
+/// The tooltip of a copy button: exactly what it puts on the clipboard.
+fn copy_hint(text: &str) -> String {
+    let lines = text.lines().count();
+    let lead = if lines > 1 {
+        format!("{} {lines} {}", tr("Copies"), tr("lines to the clipboard:"))
+    } else {
+        tr("Copies to the clipboard:").to_owned()
+    };
+    format!("{lead}\n{text}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use xuan::plugins::manifest::FilesystemAccess;
+
+    #[test]
+    fn copy_buttons_show_what_they_copy() {
+        assert_eq!(copy_label("Copy URL", "http://x"), "Copy URL");
+        assert_eq!(copy_label("Copy JSON", "{\n}\n"), "Copy JSON (2 lines)");
+        assert_eq!(copy_hint("abc"), "Copies to the clipboard:\nabc");
+        assert_eq!(
+            copy_hint("a\nb\nc"),
+            "Copies 3 lines to the clipboard:\na\nb\nc"
+        );
+    }
 
     fn pane_image(dir: &Path, name: &str, size: u32) -> PathBuf {
         let path = dir.join(name);

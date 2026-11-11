@@ -1,7 +1,6 @@
 use crate::document::Document;
 
 const MAX_STEPS: usize = 64;
-const MAX_HISTORY_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Clone)]
 struct Entry {
@@ -32,11 +31,18 @@ impl History {
         }
     }
 
+    /// The document as it was when the open edit began.
+    pub fn pending_document(&self) -> Option<&Document> {
+        self.pending.as_ref().map(|entry| &entry.document)
+    }
+
     pub fn commit(&mut self) {
         if let Some(entry) = self.pending.take() {
             self.undo.push(entry);
+            // How much undo may hold follows the memory; see `crate::limits`.
+            let budget = crate::limits::get().history_bytes;
             while self.undo.len() > 1
-                && (self.undo.len() > MAX_STEPS || self.retained_bytes() > MAX_HISTORY_BYTES)
+                && (self.undo.len() > MAX_STEPS || self.retained_bytes() as u64 > budget)
             {
                 self.undo.remove(0);
             }
@@ -65,6 +71,12 @@ impl History {
                     && seen.insert(std::sync::Arc::as_ptr(&mask.pixels) as usize)
                 {
                     bytes += mask.pixels.as_raw().len();
+                }
+                if let Some(crate::document::Adjustment::ColorLookup { table, .. }) =
+                    &layer.adjustment
+                    && seen.insert(std::sync::Arc::as_ptr(table) as usize)
+                {
+                    bytes += table.bytes();
                 }
             }
             if let Some(selection) = &entry.document.selection
@@ -123,6 +135,12 @@ impl History {
     }
     pub fn dirty(&self) -> bool {
         self.revision != self.saved_revision || self.pending.is_some()
+    }
+    /// Whether a committed edit separates the document from its saved state. Unlike
+    /// [`History::dirty`], an open live preview does not count, so titles and tabs get their
+    /// bullet when an edit is applied, not when its dialog opens.
+    pub fn edited(&self) -> bool {
+        self.revision != self.saved_revision
     }
     pub fn undo_name(&self) -> Option<&str> {
         self.undo.last().map(|e| e.name.as_str())

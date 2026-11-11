@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use image::{GrayImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -14,7 +14,12 @@ use uuid::Uuid;
 use super::manifest::FilesystemAccess;
 use crate::{
     blend::BlendMode,
-    document::{Document, Layer, MAX_PIXELS, MAX_SIDE, Mask, Transform},
+    document::{Adjustment, Document, Layer, MAX_SIDE, Mask, Point, Transform},
+    effects::Filter,
+    paint::ShapeKind,
+    selection::SelectionMode,
+    text::{PathTextOptions, RunStyle, TextPath, TextRenderer, TextRun, TextStyle},
+    vector::{FillRule, VectorPath},
 };
 
 /// Describe a document for `document/get` and the `document` field of jobs.
@@ -31,11 +36,33 @@ pub fn describe(document: &Document) -> Value {
         "resolution": document.resolution,
         "active": document.active,
         "selection": selection,
-        "layers": document.layers.iter().map(describe_layer).collect::<Vec<_>>(),
+        "paths": document
+            .paths
+            .iter()
+            .map(|path| json!({"id": path.id, "name": path.name, "path": path.d}))
+            .collect::<Vec<_>>(),
+        "layers": document
+            .layers
+            .iter()
+            .map(|layer| describe_layer(document, layer))
+            .collect::<Vec<_>>(),
     })
 }
 
-pub fn describe_layer(layer: &Layer) -> Value {
+/// Check an adjustment a plugin sent. A Color Lookup's table lives outside the JSON, so a
+/// plugin cannot give one.
+fn check_adjustment(adjustment: &Adjustment) -> Result<()> {
+    ensure!(
+        !matches!(adjustment, Adjustment::ColorLookup { .. }),
+        "Plugins cannot add a Color Lookup: it needs a .cube file"
+    );
+    crate::effects::validate_adjustment(adjustment)
+}
+
+/// Describe one layer. Masks are reported both ways round: an image lists
+/// the mask layers attached to it under `masks`, and an effect layer (mask,
+/// adjustment or filter) attached to an image names it in `attached_to`.
+pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
     let kind = if layer.group {
         "group"
     } else if layer.standalone_mask {
@@ -48,9 +75,54 @@ pub fn describe_layer(layer: &Layer) -> Value {
         "text"
     } else if layer.raw.is_some() {
         "raw"
+    } else if layer.shape.is_some() {
+        "shape"
     } else {
         "image"
     };
+    let shape = layer.shape.as_ref().map(|shape| {
+        let mut described = json!({
+            "shape": shape.kind,
+            "color": Color(shape.color),
+            "corner_radius": shape.corner_radius,
+        });
+        if let Some(path) = &shape.path {
+            // Where the outline is now, as SVG path data in document coordinates (null
+            // once the layer is warped), and as stored, in its own box.
+            described["path"] = json!(path.in_document(layer.transform).map(|p| p.to_svg()));
+            described["fill_rule"] = json!(path.fill_rule);
+            described["local_path"] = json!(path.d);
+            described["local_size"] = json!([path.width, path.height]);
+        }
+        described
+    });
+    let text = layer.text.as_ref().map(|style| {
+        let mut described = json!({
+            "text": style.content,
+            "family": style.family,
+            "size": style.size,
+            "color": Color(style.color),
+            "bold": style.bold,
+            "italic": style.italic,
+            "underline": style.underline,
+            "strikethrough": style.strikethrough,
+            "runs": style.runs.iter().map(TextRunSpec::from).collect::<Vec<_>>(),
+        });
+        if let Some(path) = &style.path {
+            // As for path shapes: where the path is now, in document coordinates (null once
+            // the layer is warped), and as stored, in the layer's own box.
+            described["path"] = json!(path.in_document(layer.transform).map(|p| p.to_svg()));
+            described["path_options"] = json!(path.options);
+            described["local_path"] = json!(path.d);
+            described["local_size"] = json!([path.width, path.height]);
+        }
+        described
+    });
+    let masks = masks(document, layer);
+    // An effect layer inside an image's stack applies to that image only.
+    let attached_to = document
+        .attachment_owner(layer)
+        .filter(|owner| *owner != layer.id);
     let (width, height) = layer
         .pixels
         .as_ref()
@@ -62,6 +134,7 @@ pub fn describe_layer(layer: &Layer) -> Value {
         "visible": layer.visible,
         "locked": layer.locked,
         "opacity": layer.opacity,
+        "fill": layer.fill,
         "blend": layer.blend,
         "parent": layer.parent,
         "clip_to": layer.clip_to,
@@ -70,12 +143,40 @@ pub fn describe_layer(layer: &Layer) -> Value {
         "width": layer.transform.width,
         "height": layer.transform.height,
         "rotation": layer.transform.rotation,
+        "flip_x": layer.transform.flip_x,
+        "flip_y": layer.transform.flip_y,
         "pixel_width": width,
         "pixel_height": height,
-        "has_mask": layer.mask.is_some(),
+        "has_mask": !masks.is_empty(),
+        "masks": masks,
+        "attached_to": attached_to,
+        "shape": shape,
+        "text": text,
+        // An adjustment or filter layer's settings, as `set_adjustment` takes them.
+        "adjustment": layer.adjustment,
+        "filter": layer.filter,
+        "raw": layer.raw.as_ref().map(super::raw::describe),
         "generated": layer.generated,
         "provenance": layer.provenance,
     })
+}
+
+/// The masks that apply to `layer`: its own (a mask, adjustment or filter
+/// layer's) and, for an image, the mask layers attached to it, bottom to top.
+/// Each names the layer that holds it, which is the one to pass to
+/// `layer/export` with `what = "mask"` or to make active for `disable_mask`
+/// and `link_mask`.
+fn masks(document: &Document, layer: &Layer) -> Vec<Value> {
+    let attached = document.layers.iter().filter(|child| {
+        layer.can_attach_effects() && child.parent == Some(layer.id) && child.standalone_mask
+    });
+    std::iter::once(layer)
+        .chain(attached)
+        .filter_map(|holder| {
+            let mask = holder.mask.as_ref()?;
+            Some(json!({"layer": holder.id, "enabled": mask.enabled, "linked": mask.linked}))
+        })
+        .collect()
 }
 
 /// A PNG written for a plugin, with where it sits in the document.
@@ -88,6 +189,9 @@ pub struct Export {
     pub y: f32,
     /// Export pixels per source pixel, below one when downscaled.
     pub scale: f32,
+    /// For an image's mask: the attached mask layer it was read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_layer: Option<Uuid>,
 }
 
 pub fn write_png(image: &RgbaImage, path: &Path) -> Result<()> {
@@ -110,8 +214,6 @@ pub const MAX_LAYERS: usize = 32;
 pub const MAX_IMPORT_LAYERS: usize = 1000;
 /// Edits in one `document/edit` request or one result, all batches together.
 pub const MAX_EDITS: usize = 1000;
-/// Largest image file read for a plugin.
-const MAX_FILE: u64 = 512 * 1024 * 1024;
 
 /// Where the host may read and write files on a plugin's behalf: under its
 /// own folders (the plugin folder, its data folder, and the scratch and work
@@ -210,17 +312,34 @@ impl Access {
 }
 
 /// Reads the images of one plugin result, edit batch or import, keeping a
-/// running total so a plugin cannot make the host decode more than
-/// [`MAX_PIXELS`] pixels, or create more layers than allowed, for one answer.
+/// running total so a plugin cannot make the host decode more pixels than
+/// opening a file may add ([`crate::limits::Limits::project_pixels`]), or
+/// create more layers than allowed, for one answer.
 /// Each image is checked against the budget from its header, before it is
 /// decoded.
-#[derive(Debug)]
 pub struct Reader {
     access: Access,
     pixels: u64,
     layers: usize,
     max_layers: usize,
     edits: usize,
+    /// Work charged so far; see [`Cost`].
+    cost: Cost,
+    /// Draws `add_text_layer` edits; made when first needed.
+    text: Option<TextRenderer>,
+}
+
+impl std::fmt::Debug for Reader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reader")
+            .field("access", &self.access)
+            .field("pixels", &self.pixels)
+            .field("layers", &self.layers)
+            .field("max_layers", &self.max_layers)
+            .field("edits", &self.edits)
+            .field("cost", &self.cost)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Reader {
@@ -231,7 +350,56 @@ impl Reader {
             layers: 0,
             max_layers,
             edits: 0,
+            cost: Cost::default(),
+            text: None,
         }
+    }
+
+    /// Charge the work a batch will do, before it does any, so a batch over
+    /// budget is refused at once and as a whole.
+    fn charge(&mut self, cost: Cost) -> Result<()> {
+        let total = Cost {
+            work: self.cost.work.saturating_add(cost.work),
+            bytes: self.cost.bytes.saturating_add(cost.bytes),
+            stroke: self.cost.stroke + cost.stroke,
+        };
+        ensure!(
+            total.work <= MAX_WORK,
+            "The edits would take too long: they touch more than {} million pixels in total \
+             (filters, strokes, colour selections and masks on a large canvas count many times). \
+             Send fewer or smaller edits per request",
+            MAX_WORK / 1_000_000
+        );
+        ensure!(
+            total.bytes <= MAX_NEW_BYTES,
+            "The edits would need more than {} MiB of new masks and layers",
+            MAX_NEW_BYTES / (1024 * 1024)
+        );
+        ensure!(
+            total.stroke <= MAX_STROKE_LENGTH,
+            "The strokes are longer than {MAX_STROKE_LENGTH} pixels in total"
+        );
+        self.cost = total;
+        Ok(())
+    }
+
+    /// Draw text with this renderer (the editor's, whose fonts are loaded)
+    /// instead of making one.
+    pub fn with_text_renderer(mut self, renderer: Option<TextRenderer>) -> Self {
+        self.text = renderer;
+        self
+    }
+
+    /// The text renderer, to keep for the next time.
+    pub fn take_text_renderer(&mut self) -> Option<TextRenderer> {
+        self.text.take()
+    }
+
+    /// Count `count` more pixels against the budget, for images the host
+    /// makes itself (text, shapes, strokes that grow a layer).
+    fn add_pixels(&mut self, width: u32, height: u32) -> Result<()> {
+        self.pixels = budgeted(self.pixels, width, height)?;
+        Ok(())
     }
 
     pub fn rgba(&mut self, path: &Path) -> Result<RgbaImage> {
@@ -276,34 +444,43 @@ impl Reader {
         let mut bytes = Vec::new();
         std::fs::File::open(&resolved)
             .with_context(|| format!("Cannot read {}", path.display()))?
-            .take(MAX_FILE + 1)
+            .take(crate::io::max_asset() + 1)
             .read_to_end(&mut bytes)
             .with_context(|| format!("Cannot read {}", path.display()))?;
-        ensure!(bytes.len() as u64 <= MAX_FILE, "Image exceeds 512 MiB");
+        ensure!(
+            bytes.len() as u64 <= crate::io::max_asset(),
+            "Image files are limited to {} on this computer",
+            crate::limits::size(crate::io::max_asset())
+        );
         let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .with_context(|| format!("Cannot read {}", path.display()))?;
         let mut limits = image::Limits::default();
         limits.max_image_width = Some(MAX_SIDE);
         limits.max_image_height = Some(MAX_SIDE);
-        limits.max_alloc = Some(MAX_PIXELS * 8);
+        limits.max_alloc = Some(crate::limits::get().image_pixels * 8);
         reader.limits(limits);
         let decoder = reader
             .into_decoder()
             .with_context(|| format!("Cannot decode {}", path.display()))?;
         let (width, height) = decoder.dimensions();
         crate::document::validate_size(width, height)?;
-        let pixels = self
-            .pixels
-            .saturating_add(u64::from(width) * u64::from(height));
-        ensure!(
-            pixels <= MAX_PIXELS,
-            "The plugin's images exceed 100 megapixels in total"
-        );
-        self.pixels = pixels;
+        self.pixels = budgeted(self.pixels, width, height)?;
         image::DynamicImage::from_decoder(decoder)
             .with_context(|| format!("Cannot decode {}", path.display()))
     }
+}
+
+/// `used` plus a `width` × `height` image, if that stays within the answer's pixel budget.
+fn budgeted(used: u64, width: u32, height: u32) -> Result<u64> {
+    let pixels = used.saturating_add(u64::from(width) * u64::from(height));
+    let budget = crate::limits::get().project_pixels;
+    ensure!(
+        pixels <= budget,
+        "The plugin's images exceed {} in total, the most this computer allows",
+        crate::limits::megapixels(budget)
+    );
+    Ok(pixels)
 }
 
 /// Read one image a plugin wrote.
@@ -351,6 +528,7 @@ pub fn export_layer(
 ) -> Result<Export> {
     let layer = find(document, layer)?;
     let path = dir.join(name);
+    let mut mask_layer = None;
     let (width, height, scale) = match what {
         What::Pixels => {
             let pixels = layer
@@ -362,10 +540,15 @@ pub fn export_layer(
             (image.width(), image.height(), scale)
         }
         What::Mask => {
-            let mask = layer
-                .mask
-                .as_ref()
-                .with_context(|| format!("Layer {} has no mask", layer.name))?;
+            // An image's mask is a mask layer attached to it.
+            let holder = match layer.mask {
+                Some(_) => layer,
+                None => attached_mask(document, layer)?,
+            };
+            if holder.id != layer.id {
+                mask_layer = Some(holder.id);
+            }
+            let mask = holder.mask.as_ref().expect("checked above");
             write_gray_png(&mask.pixels, &path)?;
             (mask.pixels.width(), mask.pixels.height(), 1.0)
         }
@@ -377,7 +560,40 @@ pub fn export_layer(
         x: layer.transform.x,
         y: layer.transform.y,
         scale,
+        mask_layer,
     })
+}
+
+/// The one mask layer attached to an image, or an error that says where its
+/// masks are.
+fn attached_mask<'a>(document: &'a Document, layer: &Layer) -> Result<&'a Layer> {
+    let masks: Vec<&Layer> = document
+        .layers
+        .iter()
+        .filter(|child| {
+            layer.can_attach_effects()
+                && child.parent == Some(layer.id)
+                && child.standalone_mask
+                && child.mask.is_some()
+        })
+        .collect();
+    match masks[..] {
+        [] => bail!(
+            "Layer {} has no mask (add one from the selection with the `mask` command)",
+            layer.name
+        ),
+        [mask] => Ok(mask),
+        _ => bail!(
+            "Layer {} has {} mask layers attached; ask for one of them: {}",
+            layer.name,
+            masks.len(),
+            masks
+                .iter()
+                .map(|mask| mask.id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 /// Write the flattened document.
@@ -408,6 +624,7 @@ pub fn export_composite(
         x: 0.0,
         y: 0.0,
         scale: width as f32 / document.width as f32,
+        mask_layer: None,
     })
 }
 
@@ -429,6 +646,7 @@ pub fn export_selection(document: &Document, dir: &Path, name: &str) -> Result<O
         x: x0 as f32,
         y: y0 as f32,
         scale: 1.0,
+        mask_layer: None,
     }))
 }
 
@@ -475,8 +693,19 @@ pub enum Edit {
         locked: Option<bool>,
         #[serde(default)]
         opacity: Option<f32>,
+        /// Photoshop's Fill, 0–1: fades the layer's own pixels but not its layer effects.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill: Option<f32>,
         #[serde(default)]
         blend: Option<BlendMode>,
+        /// Clip to this layer below in the same parent (a layer or a folder), or with
+        /// `null` release the clipping; left out, it does not change.
+        #[serde(
+            default,
+            deserialize_with = "nullable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        clip_to: Option<Option<Uuid>>,
     },
     RemoveLayer {
         layer: Uuid,
@@ -506,6 +735,962 @@ pub enum Edit {
         #[serde(default)]
         bottom: u32,
     },
+    /// Make these layers the selected ones (the last is active), for the
+    /// `host/run` commands that work on the selected layers, like `merge`.
+    SelectLayers {
+        layers: Vec<Uuid>,
+    },
+    /// Layer → Merge on these layers: one layer merges down, several merge
+    /// together. The merged layer counts as added.
+    MergeLayers {
+        layers: Vec<Uuid>,
+    },
+    /// Layer → Group on these layers (siblings of the first); the new group
+    /// counts as added.
+    GroupLayers {
+        layers: Vec<Uuid>,
+    },
+    /// Layer → Ungroup: the group's layers move to its parent.
+    UngroupLayers {
+        layer: Uuid,
+    },
+    /// Move a layer in the stack, as dragging it in the Layers panel does:
+    /// directly `above` or `below` another layer (joining that layer's group),
+    /// or, with only `parent`, to the top of that group. When `parent` is given
+    /// together with `above` or `below`, it must be the target's group.
+    MoveLayer {
+        layer: Uuid,
+        #[serde(default)]
+        above: Option<Uuid>,
+        #[serde(default)]
+        below: Option<Uuid>,
+        #[serde(default)]
+        parent: Option<Uuid>,
+    },
+    /// Move, scale or rotate a layer (with its children, for a group) to
+    /// this box, in document units; missing fields keep their value.
+    Transform {
+        layer: Uuid,
+        #[serde(default)]
+        x: Option<f32>,
+        #[serde(default)]
+        y: Option<f32>,
+        #[serde(default)]
+        width: Option<f32>,
+        #[serde(default)]
+        height: Option<f32>,
+        #[serde(default)]
+        rotation: Option<f32>,
+        /// The document point `rotation` turns the layer about, instead of
+        /// the layer's own centre.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pivot: Option<[f32; 2]>,
+        /// Afterwards, scale the layer up about its centre just enough to
+        /// cover the whole canvas, leaving no corner empty.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cover: bool,
+    },
+    /// A rectangle or ellipse combined with the selection, its edge
+    /// softened by `feather` pixels first.
+    SelectRect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        #[serde(default)]
+        ellipse: bool,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: f32,
+    },
+    /// A polygon (at least three points) combined with the selection.
+    SelectPolygon {
+        points: Vec<[f32; 2]>,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: f32,
+    },
+    /// The inside of an SVG path (`d` data in document coordinates), with
+    /// antialiased edges, combined with the selection. Open subpaths are
+    /// closed, as SVG fills them.
+    SelectPath {
+        path: String,
+        #[serde(default)]
+        fill_rule: FillRule,
+        #[serde(default)]
+        mode: SelectionMode,
+        #[serde(default)]
+        feather: f32,
+    },
+    /// The Magic Wand at a point of the flattened image.
+    SelectColor {
+        x: f32,
+        y: f32,
+        #[serde(default = "default_tolerance")]
+        tolerance: u8,
+        #[serde(default = "yes")]
+        contiguous: bool,
+        #[serde(default)]
+        mode: SelectionMode,
+    },
+    /// Select → Color Range over the flattened image.
+    SelectColorRange {
+        colors: Vec<Color>,
+        #[serde(default)]
+        exclude: Vec<Color>,
+        #[serde(default = "default_fuzziness")]
+        fuzziness: u32,
+        #[serde(default)]
+        invert: bool,
+        #[serde(default)]
+        mode: SelectionMode,
+    },
+    /// Grow (positive) or shrink (negative) the selection by whole pixels.
+    GrowSelection {
+        by: i32,
+    },
+    /// Soften the selection's edge with a blur of this radius.
+    FeatherSelection {
+        radius: f32,
+    },
+    /// Fill the selection (or the whole layer) with a colour.
+    Fill {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        color: Color,
+        /// Fill the layer's mask (as luminance) instead of its pixels.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mask: bool,
+    },
+    /// Keep SVG path data with the document as a named path, as in the
+    /// Paths panel (replacing the path of that name if there is one).
+    AddPath {
+        path: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Fill the inside of an SVG path (within the selection, if there is
+    /// one) with a colour, with antialiased edges.
+    FillPath {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        path: String,
+        color: Color,
+        #[serde(default)]
+        fill_rule: FillRule,
+    },
+    /// Fill the selection (or the whole layer) with a gradient from `start`
+    /// to `end` in document coordinates: linear, or radial around `start`
+    /// with `end` on the rim.
+    Gradient {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        start: [f32; 2],
+        end: [f32; 2],
+        stops: Vec<GradientStop>,
+        #[serde(default)]
+        radial: bool,
+        #[serde(default = "one")]
+        opacity: f32,
+        /// Paint the layer's mask (as luminance) instead of its pixels.
+        #[serde(default)]
+        mask: bool,
+    },
+    /// Paint a brush stroke through the points, in document coordinates.
+    /// A point may carry pen pressure, `[x, y, pressure]`, which scales the
+    /// size (and the opacity with `pressure_opacity`). The brush dynamics
+    /// (spacing, taper, scatter, jitter) are off by default.
+    Stroke {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        #[serde(default)]
+        points: Vec<StrokePoint>,
+        /// SVG path data the stroke follows instead of `points`: one subpath,
+        /// flattened to points.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default = "black")]
+        color: Color,
+        #[serde(default = "default_brush_size")]
+        size: f32,
+        #[serde(default = "default_hardness")]
+        hardness: f32,
+        #[serde(default = "one")]
+        opacity: f32,
+        /// How much paint one pass lays down, 0 to 1, building up to
+        /// `opacity` where the stroke crosses itself; 1 (the default) paints
+        /// the whole opacity at once.
+        #[serde(default = "one")]
+        flow: f32,
+        #[serde(default)]
+        erase: bool,
+        /// Pressure (and taper) also scales the opacity.
+        #[serde(default)]
+        pressure_opacity: bool,
+        /// Distance between dabs as a fraction of the size, 0 to 10; 0 is a
+        /// continuous stroke.
+        #[serde(default)]
+        spacing: f32,
+        /// Pixels over which the stroke grows from nothing at its start.
+        #[serde(default)]
+        taper_in: f32,
+        /// Pixels over which the stroke shrinks to nothing at its end.
+        #[serde(default)]
+        taper_out: f32,
+        /// How far dabs scatter from the path, as a fraction of the size, 0 to 10.
+        #[serde(default)]
+        scatter: f32,
+        /// Dabs at each spacing step, 1 to 16.
+        #[serde(default = "one_u32")]
+        scatter_count: u32,
+        #[serde(default)]
+        size_jitter: f32,
+        #[serde(default)]
+        opacity_jitter: f32,
+        #[serde(default)]
+        hue_jitter: f32,
+        /// The random sequence for scatter and jitter.
+        #[serde(default)]
+        seed: u64,
+        /// Paint the stroke again mirrored or turned around a centre.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        symmetry: Option<StrokeSymmetry>,
+        /// What the brush does: paint (the default), erase, or the Dodge,
+        /// Burn and Sponge tools, which change the pixels under it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<StrokeMode>,
+        /// Dodge and Burn: the tones that change most (midtones by default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range: Option<StrokeRange>,
+        /// Dodge, Burn and Sponge: the strength, 0 to 1 (0.5 by default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exposure: Option<f32>,
+        /// Sponge: saturate instead of desaturate.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        saturate: bool,
+        /// Paint the layer's mask (the colour's luminance: white shows, black
+        /// hides) instead of its pixels.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mask: bool,
+    },
+    /// A filter applied to a layer's pixels inside the selection, written as
+    /// in `.xuan` files, e.g. `{"GaussianBlur": {"radius": 4}}`.
+    ApplyFilter {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        filter: Filter,
+    },
+    /// An adjustment applied to a layer's pixels inside the selection,
+    /// written as in `.xuan` files, e.g. `"Invert"`.
+    ApplyAdjustment {
+        #[serde(default)]
+        layer: Option<Uuid>,
+        adjustment: Adjustment,
+    },
+    /// A non-destructive adjustment or filter layer, masked by the selection.
+    AddAdjustmentLayer {
+        #[serde(default)]
+        adjustment: Option<Adjustment>,
+        #[serde(default)]
+        filter: Option<Filter>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// New settings for an adjustment or filter layer that is already there,
+    /// as the layer's own dialog sets them: an adjustment for an adjustment
+    /// layer, a filter for a filter layer.
+    SetAdjustment {
+        layer: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adjustment: Option<Adjustment>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<Filter>,
+    },
+    /// An adjustment Xuan works out from the picture: `contrast` stretches the
+    /// lightness to the full range, `tone` stretches red, green and blue each
+    /// on their own, and `white_balance` makes the image's average colour (or
+    /// the colour at `neutral`, a document point that should be grey) grey.
+    /// It is applied to a layer's pixels inside the selection, measured from
+    /// that layer, or with `as_layer` added as an adjustment layer measured
+    /// from the visible image.
+    AutoAdjust {
+        kind: AutoKind,
+        #[serde(default)]
+        layer: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        as_layer: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        neutral: Option<[f32; 2]>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// An empty pixel layer the size of the canvas.
+    AddEmptyLayer {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// A mask layer made from the selection (all white without one).
+    AddMaskLayer {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// An editable text layer with its top-left corner at `x`, `y`; or, with `path` (SVG path
+    /// data in document coordinates, which also places it), set along that path, laid out by
+    /// `path_options`.
+    AddTextLayer {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_options: Option<PathTextOptions>,
+        #[serde(default)]
+        family: Option<String>,
+        #[serde(default)]
+        size: Option<f32>,
+        #[serde(default = "black")]
+        color: Color,
+        #[serde(default)]
+        bold: bool,
+        #[serde(default)]
+        italic: bool,
+        #[serde(default)]
+        underline: bool,
+        #[serde(default)]
+        strikethrough: bool,
+        /// Letters with their own font, colour, weight or slant.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        runs: Vec<TextRunSpec>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// Change a text layer's text and style. `path` (SVG path data in document coordinates)
+    /// sets the text along a path, and `null` returns it to a box; `path_options` changes how
+    /// it follows the path, keeping the options it leaves out. Left out, nothing changes.
+    /// New text keeps each unchanged letter's style; a family, colour, bold or italic is the
+    /// whole layer's and replaces the letters' own; `runs` then replaces the letters' styles.
+    SetText {
+        layer: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        family: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<Color>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bold: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        italic: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        underline: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strikethrough: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        runs: Option<Vec<TextRunSpec>>,
+        #[serde(
+            default,
+            deserialize_with = "nullable",
+            skip_serializing_if = "Option::is_none"
+        )]
+        path: Option<Option<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_options: Option<Value>,
+    },
+    /// An editable shape layer covering the box, or for `Path` the shape of
+    /// `path` (SVG path data in document coordinates), which places it.
+    AddShapeLayer {
+        shape: ShapeKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default)]
+        fill_rule: FillRule,
+        #[serde(default = "black")]
+        color: Color,
+        #[serde(default)]
+        corner_radius: f32,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        above: Option<Uuid>,
+    },
+    /// Crop the canvas to a rectangle of the document, as the Crop tool does.
+    Crop {
+        x: f32,
+        y: f32,
+        width: u32,
+        height: u32,
+    },
+    /// Image → Canvas Size: a new canvas size with the content placed by
+    /// `anchor` (`[0, 0]` top-left, `[0.5, 0.5]` centred, the default).
+    ResizeCanvas {
+        width: u32,
+        height: u32,
+        #[serde(default = "centre")]
+        anchor: [f32; 2],
+    },
+    /// Image → Image Size: scale the whole document to this size.
+    ResizeImage {
+        width: u32,
+        height: u32,
+    },
+    /// Image → Rotate Canvas: turn the whole document `degrees` clockwise (90, 180 or 270; -90
+    /// is 270). Layers, masks, guides, paths and the selection turn with it.
+    RotateCanvas {
+        degrees: f32,
+        /// Grow the canvas to hold all of the turned image (the default), or
+        /// keep its size and lose the corners.
+        #[serde(default = "yes")]
+        expand: bool,
+    },
+    /// Crop the canvas to a box worked out for the caller: the largest box of
+    /// `ratio` (width : height) inside `bounds` (`[x, y, width, height]`,
+    /// the canvas by default), centred on `center` as nearly as the bounds
+    /// allow. With `straighten`, the image is first turned that many degrees
+    /// clockwise and the crop is the largest upright box (of `ratio`, or of
+    /// the canvas's own shape) with no empty corners.
+    CropTo {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ratio: Option<[f32; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bounds: Option<[f32; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center: Option<[f32; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        straighten: Option<f32>,
+    },
+    /// Image → Trim: crop the canvas to the visible composite's content, as Trim does.
+    /// `based_on` is `transparent` (the default), `top_left` or `bottom_right`; the sides
+    /// default to all four. Nothing is trimmed when there is nothing to trim.
+    Trim {
+        #[serde(default)]
+        based_on: crate::operations::TrimBasis,
+        #[serde(default = "yes")]
+        top: bool,
+        #[serde(default = "yes")]
+        bottom: bool,
+        #[serde(default = "yes")]
+        left: bool,
+        #[serde(default = "yes")]
+        right: bool,
+    },
+}
+
+/// One colour of a gradient, at `position` 0 (the start) to 1 (the end).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GradientStop {
+    pub position: f32,
+    pub color: Color,
+}
+
+/// A text style run as plugins give and read it ([`TextRun`]): letters `start..end`, counted
+/// in Unicode scalar values from the start of the text, with what they change.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextRunSpec {
+    pub start: usize,
+    pub end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+}
+
+impl From<&TextRun> for TextRunSpec {
+    fn from(run: &TextRun) -> Self {
+        Self {
+            start: run.start,
+            end: run.end,
+            family: run.style.family.clone(),
+            color: run.style.color.map(Color),
+            bold: run.style.bold,
+            italic: run.style.italic,
+        }
+    }
+}
+
+/// Replace `style`'s runs with `runs`, which must be sorted, not overlap and lie inside the
+/// text; runs that change nothing are dropped and matching neighbours merged.
+fn set_runs(style: &mut TextStyle, runs: &[TextRunSpec]) -> Result<()> {
+    style.runs = runs
+        .iter()
+        .map(|run| TextRun {
+            start: run.start,
+            end: run.end,
+            style: RunStyle {
+                family: run.family.clone(),
+                color: run.color.map(|c| c.0),
+                bold: run.bold,
+                italic: run.italic,
+            },
+        })
+        .collect();
+    style.validate()?;
+    style.normalize_runs();
+    Ok(())
+}
+
+/// Most colour stops one gradient may have.
+const MAX_GRADIENT_STOPS: usize = 64;
+
+/// A colour written `#rrggbb` or `#rrggbbaa`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Color(pub [u8; 4]);
+
+impl Color {
+    pub fn parse(text: &str) -> Result<Self> {
+        let hex = text
+            .strip_prefix('#')
+            .filter(|hex| matches!(hex.len(), 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            .with_context(|| format!("`{text}` is not a colour like #rrggbb or #rrggbbaa"))?;
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
+        let alpha = if hex.len() == 8 { byte(6) } else { 255 };
+        Ok(Self([byte(0), byte(2), byte(4), alpha]))
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let [r, g, b, a] = self.0;
+        serializer.serialize_str(&format!("#{r:02x}{g:02x}{b:02x}{a:02x}"))
+    }
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+fn default_tolerance() -> u8 {
+    32
+}
+fn default_fuzziness() -> u32 {
+    crate::selection_ops::ColorRange::DEFAULT_FUZZINESS
+}
+fn default_brush_size() -> f32 {
+    20.0
+}
+fn default_hardness() -> f32 {
+    0.8
+}
+fn one() -> f32 {
+    1.0
+}
+fn one_u32() -> u32 {
+    1
+}
+
+/// Paint symmetry for a stroke, written `{"mode": "vertical" | "horizontal"
+/// | "radial", "segments": 2–32, "center": [x, y]}`. A vertical axis
+/// mirrors left and right, a horizontal one top and bottom; radial turns the
+/// stroke into `segments` copies (6 when left out). The centre, which the
+/// axis goes through, is in document pixels on the canvas and defaults to
+/// its middle.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrokeSymmetry {
+    pub mode: StrokeSymmetryMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f32; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeSymmetryMode {
+    Off,
+    Vertical,
+    Horizontal,
+    Radial,
+}
+
+impl StrokeSymmetry {
+    /// The brush's symmetry, unchecked.
+    pub fn paint(&self) -> crate::paint::Symmetry {
+        use crate::paint::SymmetryMode;
+        let defaults = crate::paint::Symmetry::default();
+        crate::paint::Symmetry {
+            mode: match self.mode {
+                StrokeSymmetryMode::Off => SymmetryMode::Off,
+                StrokeSymmetryMode::Vertical => SymmetryMode::Vertical,
+                StrokeSymmetryMode::Horizontal => SymmetryMode::Horizontal,
+                StrokeSymmetryMode::Radial => SymmetryMode::Radial,
+            },
+            segments: self.segments.unwrap_or(defaults.segments),
+            center: self.center.map(|[x, y]| Point::new(x, y)),
+        }
+    }
+}
+
+/// A stroke point in document coordinates, written `[x, y]` or
+/// `[x, y, pressure]` with the pen pressure from 0 to 1 (1 when left out).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<f32>", into = "Vec<f32>")]
+pub struct StrokePoint {
+    pub x: f32,
+    pub y: f32,
+    pub pressure: Option<f32>,
+}
+
+impl StrokePoint {
+    pub fn xy(&self) -> [f32; 2] {
+        [self.x, self.y]
+    }
+    pub fn pressure(&self) -> f32 {
+        self.pressure.unwrap_or(1.0)
+    }
+}
+
+impl From<[f32; 2]> for StrokePoint {
+    fn from([x, y]: [f32; 2]) -> Self {
+        Self {
+            x,
+            y,
+            pressure: None,
+        }
+    }
+}
+
+impl TryFrom<Vec<f32>> for StrokePoint {
+    type Error = String;
+    fn try_from(values: Vec<f32>) -> std::result::Result<Self, String> {
+        match values[..] {
+            [x, y] => Ok(Self {
+                x,
+                y,
+                pressure: None,
+            }),
+            [x, y, pressure] => Ok(Self {
+                x,
+                y,
+                pressure: Some(pressure),
+            }),
+            _ => Err("A stroke point is [x, y] or [x, y, pressure]".into()),
+        }
+    }
+}
+
+impl From<StrokePoint> for Vec<f32> {
+    fn from(point: StrokePoint) -> Self {
+        match point.pressure {
+            Some(pressure) => vec![point.x, point.y, pressure],
+            None => vec![point.x, point.y],
+        }
+    }
+}
+fn yes() -> bool {
+    true
+}
+fn black() -> Color {
+    Color([0, 0, 0, 255])
+}
+fn centre() -> [f32; 2] {
+    [0.5, 0.5]
+}
+
+/// Points one `select_polygon` or `stroke` edit may have.
+pub const MAX_POINTS: usize = 10_000;
+/// The largest `grow_selection` and `feather_selection` amount, in pixels.
+pub const MAX_SELECTION_AMOUNT: f32 = 256.0;
+/// Pixel visits one `document/edit` request (or one result) may cost, as
+/// [`cost`] estimates them. Edits run on the editor's thread, so this keeps a
+/// request from freezing it: about a second or two of work.
+pub const MAX_WORK: u64 = 1_000_000_000;
+/// Bytes of new canvas-size masks and drawn layers one request may make.
+pub const MAX_NEW_BYTES: u64 = 256 * 1024 * 1024;
+/// Total length of the strokes of one request, in document pixels.
+pub const MAX_STROKE_LENGTH: f64 = 200_000.0;
+
+/// What a batch of edits costs, estimated before it runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Cost {
+    /// Pixel visits: renders, filters, selection changes, masks, strokes.
+    pub work: u64,
+    /// New memory for masks and layers the host draws.
+    pub bytes: u64,
+    /// Stroke length in document pixels.
+    pub stroke: f64,
+}
+
+/// Estimate a batch's cost from the document as it is, following the
+/// canvas size through the batch. Upper bounds: an edit that fails early
+/// costs less.
+pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
+    let (mut width, mut height) = (u64::from(document.width), u64::from(document.height));
+    let layers = document.layers.len() as u64;
+    let layer_area = |layer: &Option<Uuid>, canvas: u64| -> u64 {
+        let id = layer.or(document.active);
+        let area = id
+            .and_then(|id| document.layers.iter().find(|l| l.id == id))
+            .map(|l| match &l.pixels {
+                Some(pixels) => u64::from(pixels.width()) * u64::from(pixels.height()),
+                None => (l.transform.width.max(1.0) * l.transform.height.max(1.0)) as u64,
+            })
+            .unwrap_or(canvas);
+        area.max(1)
+    };
+    let mut total = Cost::default();
+    for edit in edits {
+        let canvas = width * height;
+        let (work, bytes) = match edit {
+            Edit::SetSelection { .. } => (canvas, 0),
+            Edit::SelectRect { feather, .. } | Edit::SelectPolygon { feather, .. } => {
+                (canvas.saturating_mul(if *feather > 0.0 { 6 } else { 2 }), 0)
+            }
+            Edit::SelectPath { feather, path, .. } => (
+                canvas
+                    .saturating_mul(if *feather > 0.0 { 6 } else { 2 })
+                    .saturating_add(path_work(path, height)),
+                0,
+            ),
+            Edit::FillPath { layer, path, .. } => (
+                canvas
+                    .saturating_add(layer_area(layer, canvas).saturating_mul(2))
+                    .saturating_add(path_work(path, height)),
+                0,
+            ),
+            // A render of every layer, then the mask.
+            Edit::SelectColor { .. } | Edit::SelectColorRange { .. } => {
+                (canvas.saturating_mul(2 + layers), 0)
+            }
+            Edit::GrowSelection { by } => (
+                canvas.saturating_mul(1 + u64::from(by.unsigned_abs()) / 4),
+                0,
+            ),
+            Edit::FeatherSelection { .. } => (canvas.saturating_mul(4), 0),
+            Edit::Fill { layer, .. }
+            | Edit::Gradient { layer, .. }
+            | Edit::ApplyAdjustment { layer, .. } => {
+                (layer_area(layer, canvas).saturating_mul(2), 0)
+            }
+            // Measured from the flattened image or the layer, then applied or added.
+            Edit::AutoAdjust { .. } => (canvas.saturating_mul(3), canvas),
+            Edit::ApplyFilter { layer, filter } => {
+                let area = layer_area(layer, canvas);
+                let side = (area as f64).sqrt();
+                let (pad, factor) = match *filter {
+                    Filter::GaussianBlur { radius } | Filter::Bloom { radius, .. } => {
+                        ((radius * 6.0) as f64, 4.0)
+                    }
+                    Filter::MotionBlur { distance, .. } => {
+                        (distance as f64, 1.0 + distance.max(0.0) as f64 / 4.0)
+                    }
+                    Filter::TonalContrast { .. }
+                    | Filter::UnsharpMask { .. }
+                    | Filter::Dither(_) => (0.0, 4.0),
+                    _ => (0.0, 2.0),
+                };
+                let padded = (side + pad).powi(2);
+                ((padded * factor) as u64, 0)
+            }
+            Edit::Stroke {
+                points,
+                path,
+                size,
+                spacing,
+                scatter,
+                scatter_count,
+                size_jitter,
+                opacity_jitter,
+                hue_jitter,
+                taper_in,
+                taper_out,
+                symmetry,
+                flow,
+                ..
+            } => {
+                let reach = f64::from(size.max(1.0)) + 2.0;
+                let mut work = 0u64;
+                let mut length = 0.0;
+                let points = stroke_points(points, path).unwrap_or_default();
+                let points: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
+                // Every symmetric copy is painted in full.
+                let side = |n: u64| n.min(u64::from(u32::MAX)) as u32;
+                let copies = symmetry
+                    .map(|symmetry| symmetry.paint())
+                    .unwrap_or_default()
+                    .copies(side(width), side(height));
+                let pairs = points
+                    .windows(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .chain((points.len() == 1).then(|| (points[0], points[0])));
+                let dabs = *spacing > 0.0
+                    || *scatter > 0.0
+                    || *scatter_count > 1
+                    || *size_jitter > 0.0
+                    || *opacity_jitter > 0.0
+                    || *hue_jitter > 0.0;
+                // A flow below 1 paints close dabs when nothing else does.
+                let flow_dabs = !dabs && *flow < 1.0;
+                let dabs = dabs || flow_dabs;
+                if dabs {
+                    // Each dab touches at most the brush's square, and dabs
+                    // are at least `MIN_STEP` apart along the stroke.
+                    let length: f64 = pairs
+                        .clone()
+                        .map(|(a, b)| f64::from((b[0] - a[0]).hypot(b[1] - a[1])))
+                        .filter(|l| l.is_finite())
+                        .sum();
+                    let spacing = if *spacing > 0.0 {
+                        f64::from(*spacing)
+                    } else if flow_dabs {
+                        f64::from(crate::paint::dynamics::FLOW_SPACING)
+                    } else {
+                        f64::from(crate::paint::dynamics::DEFAULT_SPACING)
+                    };
+                    let step_min = f64::from(crate::paint::dynamics::MIN_STEP);
+                    let size = f64::from(size.max(1.0));
+                    // Smaller dabs (pressure, taper, jitter) are closer together:
+                    // the worst diameter is the size, or where the step stops shrinking.
+                    let per_step = |d: f64| (d + 2.0).powi(2) / (spacing * d).max(step_min);
+                    let small = (step_min / spacing).min(size);
+                    let per_pixel = per_step(size).max(per_step(small)) + 256.0 / step_min;
+                    let count = f64::from((*scatter_count).clamp(1, 16));
+                    let copies = copies.len() as f64;
+                    total.stroke += length * copies;
+                    (
+                        ((length + 1.0) * per_pixel * count * copies).min(1e15) as u64,
+                        0,
+                    )
+                } else {
+                    for copy in &copies {
+                        for (a, b) in pairs.clone() {
+                            let [a, b] = [a, b].map(|[x, y]| {
+                                let point = copy.point(Point::new(x, y));
+                                [point.x, point.y]
+                            });
+                            let dx = f64::from((b[0] - a[0]).abs());
+                            let dy = f64::from((b[1] - a[1]).abs());
+                            if !(dx.is_finite() && dy.is_finite()) {
+                                // Refused when the stroke is checked.
+                                continue;
+                            }
+                            length += dx.hypot(dy);
+                            work =
+                                work.saturating_add(((dx + reach) * (dy + reach)).min(1e15) as u64);
+                        }
+                    }
+                    // A taper paints its stretch in short pieces of their own.
+                    if *taper_in > 0.0 || *taper_out > 0.0 {
+                        let copies = copies.len() as f64;
+                        let tapered = f64::from(taper_in + taper_out).min(length / copies) * copies;
+                        let pieces =
+                            tapered / f64::from(crate::paint::dynamics::TAPER_PIECE) + 2.0 * copies;
+                        work = work.saturating_add((pieces * reach * reach).min(1e15) as u64);
+                    }
+                    total.stroke += length;
+                    (work, 0)
+                }
+            }
+            Edit::AddMaskLayer { .. } | Edit::AddAdjustmentLayer { .. } => (canvas, canvas),
+            Edit::AddShapeLayer {
+                width: w,
+                height: h,
+                path,
+                ..
+            } => {
+                let (w, h) = match path {
+                    Some(path) => crate::vector::VectorPath::parse(path)
+                        .ok()
+                        .and_then(|path| path.bounds())
+                        .map_or((1.0, 1.0), |b| (b.width() as f32, b.height() as f32)),
+                    None => (w.unwrap_or(1.0), h.unwrap_or(1.0)),
+                };
+                let area =
+                    (f64::from(w.max(1.0) + 2.0) * f64::from(h.max(1.0) + 2.0)).min(1e15) as u64;
+                let work = match path {
+                    Some(path) => area.saturating_add(path_work(path, u64::from(MAX_SIDE))),
+                    None => area,
+                };
+                (work, area.saturating_mul(4))
+            }
+            Edit::MergeLayers { .. } => (canvas.saturating_mul(1 + layers), canvas * 4),
+            Edit::Transform { .. } => (canvas, 0),
+            Edit::ResizeImage {
+                width: w,
+                height: h,
+            } => {
+                width = u64::from(*w);
+                height = u64::from(*h);
+                (canvas.max(width * height), 0)
+            }
+            Edit::ResizeCanvas {
+                width: w,
+                height: h,
+                ..
+            } => {
+                width = u64::from(*w);
+                height = u64::from(*h);
+                (0, 0)
+            }
+            Edit::Crop {
+                width: w,
+                height: h,
+                ..
+            } => {
+                width = u64::from(*w);
+                height = u64::from(*h);
+                (0, 0)
+            }
+            Edit::RotateCanvas { degrees, expand } => {
+                if *expand && degrees.is_finite() {
+                    let side = |side: u64| u32::try_from(side).unwrap_or(u32::MAX);
+                    let (w, h) =
+                        crate::operations::rotated_canvas_size(side(width), side(height), *degrees);
+                    (width, height) = (u64::from(w), u64::from(h));
+                }
+                (0, 0)
+            }
+            Edit::Trim { .. } => (canvas, canvas.saturating_mul(4)),
+            Edit::ExtendCanvas {
+                left,
+                top,
+                right,
+                bottom,
+            } => {
+                width = width.saturating_add(u64::from(*left) + u64::from(*right));
+                height = height.saturating_add(u64::from(*top) + u64::from(*bottom));
+                (0, 0)
+            }
+            // Images are charged to the pixel budget as they are read, and
+            // text as it is drawn.
+            _ => (0, 0),
+        };
+        total.work = total.work.saturating_add(work);
+        total.bytes = total.bytes.saturating_add(bytes);
+    }
+    total
 }
 
 impl Edit {
@@ -520,8 +1705,71 @@ impl Edit {
     /// Whether the edit changes only the selection, like a `mask` output, and
     /// so may be proposed by a plugin that has `document = "read"`.
     pub fn is_selection_only(&self) -> bool {
-        matches!(self, Self::SetSelection { .. })
+        matches!(
+            self,
+            Self::SetSelection { .. }
+                | Self::SelectRect { .. }
+                | Self::SelectPolygon { .. }
+                | Self::SelectPath { .. }
+                | Self::SelectColor { .. }
+                | Self::SelectColorRange { .. }
+                | Self::GrowSelection { .. }
+                | Self::FeatherSelection { .. }
+        )
     }
+
+    /// Whether the edit may only be sent with `document/edit`, not returned
+    /// in a result: it changes the canvas, and a result's images and masks
+    /// are placed on the canvas as it was sent. (`extend_canvas` is the
+    /// exception, as results account for it.)
+    pub fn direct_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Crop { .. }
+                | Self::ResizeCanvas { .. }
+                | Self::ResizeImage { .. }
+                | Self::RotateCanvas { .. }
+                | Self::CropTo { .. }
+                | Self::Trim { .. }
+        )
+    }
+
+    /// The op's name, as plugins write it.
+    pub fn op(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.get("op")?.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    }
+}
+
+/// What an `auto_adjust` edit works out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoKind {
+    Contrast,
+    Tone,
+    WhiteBalance,
+}
+
+/// What a `stroke` edit's brush does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeMode {
+    Paint,
+    Erase,
+    Dodge,
+    Burn,
+    Sponge,
+}
+
+/// The tones a Dodge or Burn stroke changes most.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeRange {
+    Shadows,
+    Midtones,
+    Highlights,
 }
 
 /// How far a batch moves the document's content: the sum of the `left` and
@@ -536,13 +1784,192 @@ pub fn origin_shift<'a>(edits: impl IntoIterator<Item = &'a Edit>) -> (f32, f32)
         })
 }
 
+/// The fields of a `document/edit` edit that name a layer, where `"$n"` may
+/// stand for the n-th layer the request added before it.
+const LAYER_KEYS: [&str; 5] = ["layer", "above", "below", "parent", "clip_to"];
+
+/// A field where `null` differs from leaving it out: `Some(None)` is `null`.
+fn nullable<'de, D, T>(deserializer: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+/// The ids `"$n"` references are parsed to until [`apply`] resolves them:
+/// "xuan" then zeros and `n`, a version-0 UUID that no layer ever has.
+const REFERENCE: u128 = 0x7875_616e_0000_0000_0000_0000_0000_0000;
+
+/// The id that stands for `"$n"` until the edit runs.
+fn reference(n: u32) -> Uuid {
+    Uuid::from_u128(REFERENCE | u128::from(n))
+}
+
+/// Which `"$n"` an id stands for, if it is a reference.
+fn referenced(id: &Uuid) -> Option<u32> {
+    let value = id.as_u128();
+    (value & !u128::from(u32::MAX) == REFERENCE).then_some(value as u32)
+}
+
+/// Parse the `edits` of a `document/edit` request. Besides layer ids, the
+/// layer fields (`layer`, `above`, `below`, `parent` and the items of
+/// `layers`) may say `"$n"`: the n-th layer (from 1) this request added
+/// before that edit, counted as the answer's `layers` lists them.
+pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
+    let mut edits = edits;
+    for edit in edits.as_array_mut().into_iter().flatten() {
+        let Some(edit) = edit.as_object_mut() else {
+            continue;
+        };
+        let fields = edit.iter_mut().flat_map(|(key, value)| {
+            if key == "layers" {
+                match value {
+                    Value::Array(items) => items.iter_mut().collect(),
+                    _ => Vec::new(),
+                }
+            } else if LAYER_KEYS.contains(&key.as_str()) {
+                vec![value]
+            } else {
+                Vec::new()
+            }
+        });
+        for field in fields {
+            let Some(text) = field.as_str().and_then(|t| t.strip_prefix('$')) else {
+                continue;
+            };
+            let n = text.parse::<u32>().ok().filter(|n| *n >= 1).with_context(|| {
+                format!(
+                    "`${text}` is not a layer reference: `$1` is the first layer this request adds"
+                )
+            })?;
+            *field = json!(reference(n));
+        }
+    }
+    Ok(serde_json::from_value(edits)?)
+}
+
+/// The layer ids an edit names, by reference (`as_ref`, `iter`) or mutably
+/// (`as_mut`, `iter_mut`).
+macro_rules! layer_ids {
+    ($edit:expr, $option:ident, $list:ident) => {
+        match $edit {
+            Edit::Set { layer, clip_to, .. } => std::iter::once(layer)
+                .chain(clip_to.$option().and_then(|base| base.$option()))
+                .collect(),
+            Edit::ReplacePixels { layer, .. }
+            | Edit::RemoveLayer { layer }
+            | Edit::SetMask { layer, .. }
+            | Edit::Select { layer }
+            | Edit::UngroupLayers { layer }
+            | Edit::Transform { layer, .. }
+            | Edit::SetAdjustment { layer, .. }
+            | Edit::SetText { layer, .. } => vec![layer],
+            Edit::SelectLayers { layers }
+            | Edit::MergeLayers { layers }
+            | Edit::GroupLayers { layers } => layers.$list().collect(),
+            Edit::MoveLayer {
+                layer,
+                above,
+                below,
+                parent,
+            } => std::iter::once(layer)
+                .chain(above.$option())
+                .chain(below.$option())
+                .chain(parent.$option())
+                .collect(),
+            Edit::Fill { layer, .. }
+            | Edit::FillPath { layer, .. }
+            | Edit::Gradient { layer, .. }
+            | Edit::Stroke { layer, .. }
+            | Edit::ApplyFilter { layer, .. }
+            | Edit::ApplyAdjustment { layer, .. } => layer.$option().into_iter().collect(),
+            Edit::AutoAdjust { layer, above, .. } => {
+                layer.$option().into_iter().chain(above.$option()).collect()
+            }
+            Edit::AddLayer { above, .. }
+            | Edit::AddAdjustmentLayer { above, .. }
+            | Edit::AddEmptyLayer { above, .. }
+            | Edit::AddMaskLayer { above, .. }
+            | Edit::AddTextLayer { above, .. }
+            | Edit::AddShapeLayer { above, .. } => above.$option().into_iter().collect(),
+            Edit::SetSelection { .. }
+            | Edit::ExtendCanvas { .. }
+            | Edit::SelectRect { .. }
+            | Edit::SelectPolygon { .. }
+            | Edit::SelectPath { .. }
+            | Edit::AddPath { .. }
+            | Edit::SelectColor { .. }
+            | Edit::SelectColorRange { .. }
+            | Edit::GrowSelection { .. }
+            | Edit::FeatherSelection { .. }
+            | Edit::Crop { .. }
+            | Edit::ResizeCanvas { .. }
+            | Edit::ResizeImage { .. }
+            | Edit::RotateCanvas { .. }
+            | Edit::CropTo { .. }
+            | Edit::Trim { .. } => Vec::new(),
+        }
+    };
+}
+
+impl Edit {
+    /// Whether the edit names a layer by a `"$n"` reference.
+    fn has_references(&self) -> bool {
+        let ids: Vec<&Uuid> = layer_ids!(self, as_ref, iter);
+        ids.into_iter().any(|id| referenced(id).is_some())
+    }
+
+    /// The edit with its `"$n"` references replaced by the layers they name.
+    fn resolved(&self, added: &[Uuid]) -> Result<Self> {
+        let mut edit = self.clone();
+        let ids: Vec<&mut Uuid> = layer_ids!(&mut edit, as_mut, iter_mut);
+        for id in ids {
+            if let Some(n) = referenced(id) {
+                *id = *added.get(n as usize - 1).with_context(|| {
+                    format!(
+                        "`${n}` names layer {n} of the ones this request added, but it has added {} so far",
+                        added.len()
+                    )
+                })?;
+            }
+        }
+        Ok(edit)
+    }
+}
+
 /// Apply a batch, reading its images through `reader`. The caller clones the
 /// document first and only keeps the result when every edit succeeded, so a
-/// failing batch changes nothing.
+/// failing batch changes nothing. When a batch of several edits fails, the
+/// error says which edit, as `Edit 3 (stroke): …`.
 pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Result<Vec<Uuid>> {
+    let mut at = None;
+    apply_each(document, edits, reader, &mut at).map_err(|error| match at {
+        Some(index) if edits.len() > 1 => {
+            anyhow::anyhow!("Edit {} ({}): {error:#}", index + 1, edits[index].op())
+        }
+        _ => error,
+    })
+}
+
+/// [`apply`], noting in `at` which edit runs.
+fn apply_each(
+    document: &mut Document,
+    edits: &[Edit],
+    reader: &mut Reader,
+    at: &mut Option<usize>,
+) -> Result<Vec<Uuid>> {
     reader.add_edits(edits.len())?;
+    reader.charge(cost(document, edits))?;
     let mut added = Vec::new();
-    for edit in edits {
+    for (index, edit) in edits.iter().enumerate() {
+        *at = Some(index);
+        let resolved;
+        let edit = if edit.has_references() {
+            resolved = edit.resolved(&added)?;
+            &resolved
+        } else {
+            edit
+        };
         match edit {
             Edit::AddLayer {
                 image,
@@ -616,8 +2043,18 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
                 visible,
                 locked,
                 opacity,
+                fill,
                 blend,
+                clip_to,
             } => {
+                if let Some(base) = clip_to {
+                    let base = clipping_base(document, *layer, *base)?;
+                    find_mut(document, *layer)?.clip_to = base;
+                    ensure!(
+                        !document.has_clipping_cycle(),
+                        "The clipping base's shape depends on this layer"
+                    );
+                }
                 let target = find_mut(document, *layer)?;
                 if let Some(name) = name {
                     ensure!(name.len() <= 256, "Layer name too long");
@@ -631,6 +2068,17 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
                 }
                 if let Some(opacity) = opacity {
                     target.opacity = valid_opacity(*opacity)?;
+                }
+                if let Some(fill) = fill {
+                    ensure!(
+                        fill.is_finite() && (0.0..=1.0).contains(fill),
+                        "Fill must be between 0 and 1"
+                    );
+                    ensure!(
+                        *fill == 1.0 || target.can_attach_effects(),
+                        "Only pixel, text and shape layers take a fill"
+                    );
+                    target.fill = *fill;
                 }
                 if let Some(blend) = blend {
                     target.blend = *blend;
@@ -705,10 +2153,1175 @@ pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Re
             } => {
                 crate::operations::extend_canvas(document, *left, *top, *right, *bottom)?;
             }
+            Edit::SelectLayers { layers } => select_layers(document, layers)?,
+            Edit::MergeLayers { layers } => {
+                select_layers(document, layers)?;
+                ensure!(
+                    !document
+                        .layers
+                        .iter()
+                        .any(|l| document.selected.contains(&l.id) && l.locked),
+                    "Unlock the layers to merge them"
+                );
+                let before = document.layers.len();
+                crate::operations::merge_selected(document, true)?;
+                ensure!(
+                    document.layers.len() < before,
+                    "There is nothing below the layer to merge it with"
+                );
+                added.extend(document.active);
+            }
+            Edit::GroupLayers { layers } => {
+                select_layers(document, layers)?;
+                let before = document.layers.len();
+                crate::operations::group(document);
+                ensure!(
+                    document.layers.len() > before,
+                    "These layers cannot be grouped"
+                );
+                reader.add_layer()?;
+                added.extend(document.active);
+            }
+            Edit::UngroupLayers { layer } => {
+                ensure!(find(document, *layer)?.group, "The layer is not a group");
+                document.select(*layer, false);
+                crate::operations::ungroup(document);
+            }
+            Edit::MoveLayer {
+                layer,
+                above,
+                below,
+                parent,
+            } => {
+                ensure!(
+                    above.is_none() || below.is_none(),
+                    "Give either above or below, not both"
+                );
+                find(document, *layer)?;
+                let family = document.descendants(*layer);
+                let (target, at) = match (above, below, parent) {
+                    (Some(target), _, _) => (*target, crate::operations::Placement::Above),
+                    (_, Some(target), _) => (*target, crate::operations::Placement::Below),
+                    (None, None, Some(group)) => {
+                        ensure!(find(document, *group)?.group, "The parent is not a group");
+                        (*group, crate::operations::Placement::Inside)
+                    }
+                    (None, None, None) => bail!("Give above, below or parent"),
+                };
+                let destination = find(document, target)?;
+                ensure!(
+                    !family.contains(&target),
+                    "A layer cannot be moved into or next to itself"
+                );
+                if at != crate::operations::Placement::Inside
+                    && let Some(parent) = parent
+                {
+                    ensure!(
+                        destination.parent == Some(*parent),
+                        "The parent must be the group of the layer it is moved next to"
+                    );
+                }
+                crate::operations::move_layer(document, *layer, target, at);
+                document.select(*layer, false);
+            }
+            Edit::Transform {
+                layer,
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                pivot,
+                cover,
+            } => {
+                let target = find(document, *layer)?;
+                ensure!(!target.locked, "Layer {} is locked", target.name);
+                document.select(*layer, false);
+                let mut transform = crate::operations::transform_box(document, false)
+                    .context("The layer cannot be transformed")?;
+                let turned_from = transform.rotation;
+                for (value, field) in [
+                    (x, &mut transform.x),
+                    (y, &mut transform.y),
+                    (width, &mut transform.width),
+                    (height, &mut transform.height),
+                    (rotation, &mut transform.rotation),
+                ] {
+                    if let Some(value) = value {
+                        *field = *value;
+                    }
+                }
+                if let Some([px, py]) = pivot {
+                    ensure!(
+                        px.is_finite() && py.is_finite(),
+                        "`pivot` must be [x, y] in document pixels"
+                    );
+                    // Turning about a point moves the centre round it by the same angle.
+                    let (sin, cos) = (transform.rotation - turned_from).to_radians().sin_cos();
+                    let center = transform.center();
+                    let (dx, dy) = (center.x - px, center.y - py);
+                    transform.x = px + cos * dx - sin * dy - transform.width * 0.5;
+                    transform.y = py + sin * dx + cos * dy - transform.height * 0.5;
+                }
+                if *cover {
+                    // How far each canvas corner lies from the layer's centre along the
+                    // layer's own axes, against half its width and height.
+                    let (sin, cos) = transform.rotation.to_radians().sin_cos();
+                    let center = transform.center();
+                    let (w, h) = (document.width as f32, document.height as f32);
+                    let scale = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+                        .into_iter()
+                        .map(|(x, y)| {
+                            let (dx, dy) = (x - center.x, y - center.y);
+                            let along = (cos * dx + sin * dy).abs() / (transform.width * 0.5);
+                            let across = (-sin * dx + cos * dy).abs() / (transform.height * 0.5);
+                            along.max(across)
+                        })
+                        .fold(1.0_f32, f32::max);
+                    if scale > 1.0 {
+                        // A hair over, so rounding leaves no transparent edge pixel.
+                        let scale = scale * 1.0005;
+                        transform.x = center.x - transform.width * scale * 0.5;
+                        transform.y = center.y - transform.height * scale * 0.5;
+                        transform.width *= scale;
+                        transform.height *= scale;
+                    }
+                }
+                ensure!(transform.valid(), "Invalid layer placement");
+                crate::operations::apply_transform(document, transform, false)?;
+                crate::paint::refresh_shapes(document)?;
+            }
+            Edit::SelectRect {
+                x,
+                y,
+                width,
+                height,
+                ellipse,
+                mode,
+                feather,
+            } => {
+                ensure!(
+                    [x, y, width, height].iter().all(|v| v.is_finite())
+                        && *width > 0.0
+                        && *height > 0.0,
+                    "The rectangle needs a finite position and a positive size"
+                );
+                let mask = crate::selection::rectangle(
+                    document.width,
+                    document.height,
+                    Point::new(*x, *y),
+                    Point::new(x + width, y + height),
+                    *ellipse,
+                );
+                combine_selection(document, mask, *mode, *feather)?;
+            }
+            Edit::SelectPolygon {
+                points,
+                mode,
+                feather,
+            } => {
+                let points = valid_points(points)?;
+                ensure!(points.len() >= 3, "A polygon needs at least three points");
+                let mask = crate::selection::polygon(document.width, document.height, &points);
+                combine_selection(document, mask, *mode, *feather)?;
+            }
+            Edit::SelectPath {
+                path,
+                fill_rule,
+                mode,
+                feather,
+            } => {
+                let path = VectorPath::parse(path)?;
+                let mask = path.mask(*fill_rule, document.width, document.height);
+                combine_selection(document, mask, *mode, *feather)?;
+            }
+            Edit::SelectColor {
+                x,
+                y,
+                tolerance,
+                contiguous,
+                mode,
+            } => {
+                ensure!(
+                    x.is_finite()
+                        && y.is_finite()
+                        && (0.0..document.width as f32).contains(x)
+                        && (0.0..document.height as f32).contains(y),
+                    "The point must be inside the canvas"
+                );
+                let pixels = crate::render::render(document);
+                let mask =
+                    crate::selection::wand(&pixels, Point::new(*x, *y), *tolerance, *contiguous);
+                crate::selection::combine(document, mask, *mode);
+            }
+            Edit::SelectColorRange {
+                colors,
+                exclude,
+                fuzziness,
+                invert,
+                mode,
+            } => {
+                ensure!(
+                    !colors.is_empty() && colors.len() + exclude.len() <= 256,
+                    "List between 1 and 256 colours"
+                );
+                let rgb = |c: &Color| [c.0[0], c.0[1], c.0[2]];
+                let range = crate::selection_ops::ColorRange {
+                    include: colors.iter().map(rgb).collect(),
+                    exclude: exclude.iter().map(rgb).collect(),
+                    fuzziness: (*fuzziness).min(crate::selection_ops::ColorRange::MAX_FUZZINESS),
+                    invert: *invert,
+                };
+                let mask = range.mask(&crate::render::render(document));
+                crate::selection::combine(document, mask, *mode);
+            }
+            Edit::GrowSelection { by } => {
+                ensure!(
+                    by.unsigned_abs() as f32 <= MAX_SELECTION_AMOUNT,
+                    "Grow or shrink by at most {MAX_SELECTION_AMOUNT} pixels"
+                );
+                if let Some(selection) = document.selection.clone() {
+                    let cancel = std::sync::atomic::AtomicBool::new(false);
+                    let radius = by.unsigned_abs();
+                    let grown = if *by >= 0 {
+                        crate::selection_ops::expand(&selection, radius, &cancel)
+                    } else {
+                        crate::selection_ops::contract(&selection, radius, &cancel)
+                    };
+                    document.selection = grown.map(Arc::new);
+                }
+            }
+            Edit::FeatherSelection { radius } => {
+                ensure!(
+                    radius.is_finite() && (0.0..=MAX_SELECTION_AMOUNT).contains(radius),
+                    "The feather radius must be between 0 and {MAX_SELECTION_AMOUNT}"
+                );
+                if let Some(selection) = &document.selection
+                    && *radius > 0.0
+                {
+                    document.selection = Some(Arc::new(crate::gpu::blur_gray(selection, *radius)));
+                }
+            }
+            Edit::Fill { layer, color, mask } => {
+                if *mask {
+                    activate_mask(document, *layer)?;
+                } else {
+                    activate(document, *layer)?;
+                }
+                crate::paint::fill(document, color.0, false, *mask)?;
+            }
+            Edit::AddPath { path, name } => {
+                let d = VectorPath::parse(path)?;
+                let name = match name {
+                    Some(name) => {
+                        ensure!(
+                            !name.trim().is_empty() && name.len() <= 256,
+                            "A path name has 1 to 256 bytes"
+                        );
+                        name.clone()
+                    }
+                    None => crate::vector::next_path_name(&document.paths),
+                };
+                match document.paths.iter_mut().find(|p| p.name == name) {
+                    Some(existing) => existing.d = d,
+                    None => {
+                        ensure!(
+                            document.paths.len() < crate::vector::MAX_DOCUMENT_PATHS,
+                            "A document keeps at most {} paths",
+                            crate::vector::MAX_DOCUMENT_PATHS
+                        );
+                        document.paths.push(crate::vector::NamedPath::new(name, d));
+                    }
+                }
+            }
+            Edit::FillPath {
+                layer,
+                path,
+                color,
+                fill_rule,
+            } => {
+                let path = VectorPath::parse(path)?;
+                activate(document, *layer)?;
+                crate::paint::fill_path(document, &path, *fill_rule, color.0)?;
+            }
+            Edit::Gradient {
+                layer,
+                start,
+                end,
+                stops,
+                radial,
+                opacity,
+                mask,
+            } => {
+                let ends = valid_points(&[*start, *end])?;
+                ensure!(
+                    start != end,
+                    "A gradient's start and end must be different points"
+                );
+                ensure!(
+                    (2..=MAX_GRADIENT_STOPS).contains(&stops.len()),
+                    "A gradient needs between 2 and {MAX_GRADIENT_STOPS} colour stops"
+                );
+                ensure!(
+                    stops
+                        .iter()
+                        .all(|stop| stop.position.is_finite()
+                            && (0.0..=1.0).contains(&stop.position)),
+                    "Colour stop positions must be between 0 and 1"
+                );
+                valid_opacity(*opacity)?;
+                let mut stops: Vec<(f32, [u8; 4])> = stops
+                    .iter()
+                    .map(|stop| (stop.position, stop.color.0))
+                    .collect();
+                stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if *mask {
+                    activate_mask(document, *layer)?;
+                } else {
+                    activate(document, *layer)?;
+                }
+                crate::paint::gradient_stops(
+                    document,
+                    ends[0],
+                    ends[1],
+                    &stops,
+                    crate::paint::GradientShape {
+                        radial: *radial,
+                        opacity: *opacity,
+                        mask_target: *mask,
+                    },
+                )?;
+            }
+            Edit::Stroke {
+                layer,
+                points,
+                path,
+                color,
+                size,
+                hardness,
+                opacity,
+                flow,
+                erase,
+                pressure_opacity,
+                spacing,
+                taper_in,
+                taper_out,
+                scatter,
+                scatter_count,
+                size_jitter,
+                opacity_jitter,
+                hue_jitter,
+                seed,
+                symmetry,
+                mode,
+                range,
+                exposure,
+                saturate,
+                mask,
+            } => {
+                use crate::paint::PaintMode;
+                let mode = match (mode, erase) {
+                    (None | Some(StrokeMode::Paint), false) => PaintMode::Paint,
+                    (None | Some(StrokeMode::Erase), true) | (Some(StrokeMode::Erase), false) => {
+                        PaintMode::Erase
+                    }
+                    (Some(StrokeMode::Dodge), false) => PaintMode::Dodge,
+                    (Some(StrokeMode::Burn), false) => PaintMode::Burn,
+                    (Some(StrokeMode::Sponge), false) => PaintMode::Sponge,
+                    (Some(_), true) => bail!("Give `erase` or a `mode`, not both"),
+                };
+                let tones = matches!(mode, PaintMode::Dodge | PaintMode::Burn | PaintMode::Sponge);
+                ensure!(
+                    tones || (range.is_none() && exposure.is_none() && !saturate),
+                    "`range`, `exposure` and `saturate` belong to the dodge, burn and sponge modes"
+                );
+                ensure!(
+                    !(tones && *mask),
+                    "Dodge, Burn and Sponge work on layer pixels, not masks"
+                );
+                let exposure = exposure.unwrap_or(0.5);
+                ensure!(
+                    exposure.is_finite() && (0.0..=1.0).contains(&exposure),
+                    "The exposure must be between 0 and 1"
+                );
+                let tone = crate::paint::tone::Tone {
+                    range: match range {
+                        Some(StrokeRange::Shadows) => crate::paint::tone::ToneRange::Shadows,
+                        Some(StrokeRange::Highlights) => crate::paint::tone::ToneRange::Highlights,
+                        Some(StrokeRange::Midtones) | None => {
+                            crate::paint::tone::ToneRange::Midtones
+                        }
+                    },
+                    exposure,
+                    saturate: *saturate,
+                };
+                let points = &*stroke_points(points, path)?;
+                let xy: Vec<[f32; 2]> = points.iter().map(StrokePoint::xy).collect();
+                let positions = valid_points(&xy)?;
+                ensure!(!positions.is_empty(), "A stroke needs at least one point");
+                ensure!(
+                    points.iter().all(|p| p
+                        .pressure
+                        .is_none_or(|v| v.is_finite() && (0.0..=1.0).contains(&v))),
+                    "A point's pressure must be between 0 and 1"
+                );
+                ensure!(
+                    size.is_finite() && (1.0..=2000.0).contains(size),
+                    "The brush size must be between 1 and 2000"
+                );
+                ensure!(
+                    hardness.is_finite() && (0.0..=1.0).contains(hardness),
+                    "The hardness must be between 0 and 1"
+                );
+                valid_opacity(*opacity)?;
+                ensure!(
+                    flow.is_finite() && *flow > 0.0 && *flow <= 1.0,
+                    "The flow must be above 0 and at most 1"
+                );
+                let dynamics = crate::paint::Dynamics {
+                    spacing: *spacing,
+                    taper_in: *taper_in,
+                    taper_out: *taper_out,
+                    taper_size: true,
+                    taper_opacity: *pressure_opacity,
+                    scatter: *scatter,
+                    count: *scatter_count,
+                    size_jitter: *size_jitter,
+                    opacity_jitter: *opacity_jitter,
+                    hue_jitter: *hue_jitter,
+                    seed: *seed,
+                };
+                dynamics.validate().map_err(anyhow::Error::msg)?;
+                let symmetry = symmetry
+                    .map(|symmetry| symmetry.paint())
+                    .unwrap_or_default();
+                symmetry
+                    .validate(document.width, document.height)
+                    .map_err(anyhow::Error::msg)?;
+                if *mask {
+                    activate_mask(document, *layer)?;
+                } else {
+                    activate(document, *layer)?;
+                }
+                let brush = crate::paint::Brush {
+                    diameter: *size,
+                    hardness: *hardness,
+                    opacity: *opacity,
+                    flow: *flow,
+                    color: color.0,
+                    dynamics,
+                    symmetry,
+                    tone,
+                    ..crate::paint::Brush::default()
+                };
+                // Pressure goes through the pen's path: size, and opacity when asked.
+                let samples: Vec<(Point, crate::paint::Brush)> = positions
+                    .into_iter()
+                    .zip(points)
+                    .map(|(position, point)| {
+                        let mut brush = brush.clone();
+                        if let Some(pressure) = point.pressure {
+                            brush.diameter *= pressure.max(0.01);
+                            if *pressure_opacity {
+                                brush.opacity *= pressure;
+                            }
+                        }
+                        (position, brush)
+                    })
+                    .collect();
+                crate::paint::Stroke::default().path(
+                    document,
+                    &samples,
+                    crate::paint::StrokeOptions {
+                        mode,
+                        mask_target: *mask,
+                        source: None,
+                        clone_offset: Point::default(),
+                    },
+                )?;
+            }
+            Edit::ApplyFilter { layer, filter } => {
+                filter.validate()?;
+                activate(document, *layer)?;
+                crate::effects::apply_filter(document, filter, false)?;
+            }
+            Edit::ApplyAdjustment { layer, adjustment } => {
+                check_adjustment(adjustment)?;
+                activate(document, *layer)?;
+                crate::effects::apply_adjustment(document, adjustment, false)?;
+            }
+            Edit::AddAdjustmentLayer {
+                adjustment,
+                filter,
+                name,
+                above,
+            } => {
+                ensure!(
+                    adjustment.is_some() != filter.is_some(),
+                    "Give either an adjustment or a filter"
+                );
+                if let Some(adjustment) = adjustment {
+                    check_adjustment(adjustment)?;
+                }
+                if let Some(filter) = filter {
+                    filter.validate()?;
+                }
+                reader.add_layer()?;
+                let default = adjustment
+                    .as_ref()
+                    .map(Adjustment::name)
+                    .or_else(|| filter.as_ref().map(Filter::name))
+                    .unwrap_or_default();
+                let mut layer =
+                    Layer::blank(layer_name(name, default)?, document.width, document.height);
+                layer.adjustment = adjustment.clone();
+                layer.filter = filter.clone();
+                if document.selection.is_some() {
+                    layer.mask = Some(Mask {
+                        pixels: Arc::new(crate::paint::mask_from_selection(document, &layer)),
+                        ..Mask::white()
+                    });
+                }
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AutoAdjust {
+                kind,
+                layer,
+                as_layer,
+                neutral,
+                name,
+                above,
+            } => {
+                ensure!(
+                    neutral.is_none() || *kind == AutoKind::WhiteBalance,
+                    "`neutral` goes with the white balance"
+                );
+                ensure!(
+                    *as_layer || (name.is_none() && above.is_none()),
+                    "`name` and `above` go with `as_layer`"
+                );
+                ensure!(
+                    !*as_layer || layer.is_none(),
+                    "With `as_layer` the visible image is measured: leave out `layer`"
+                );
+                // What is measured, the size of the canvas: the visible image for an
+                // adjustment layer, the layer alone when its pixels are changed.
+                let measured = if *as_layer {
+                    crate::render::render(document)
+                } else {
+                    activate(document, *layer)?;
+                    let active = document.active().context("Select a layer first")?;
+                    ensure!(
+                        active.pixels.is_some() && !active.group,
+                        "Layer {} has no pixels to adjust: use `as_layer`",
+                        active.name
+                    );
+                    crate::operations::render_layers(document, &[active.id])
+                };
+                let adjustment = match kind {
+                    AutoKind::Contrast => crate::effects::auto_levels(&measured),
+                    AutoKind::Tone => crate::effects::auto_tone(&measured),
+                    AutoKind::WhiteBalance => {
+                        let color = match neutral {
+                            Some([x, y]) => {
+                                ensure!(
+                                    x.is_finite()
+                                        && y.is_finite()
+                                        && *x >= 0.0
+                                        && *y >= 0.0
+                                        && *x < measured.width() as f32
+                                        && *y < measured.height() as f32,
+                                    "`neutral` must be a point [x, y] on the canvas"
+                                );
+                                // A 5 × 5 average, as steady as an eyedropper's.
+                                let (cx, cy) = (*x as u32, *y as u32);
+                                let patch = image::imageops::crop_imm(
+                                    &measured,
+                                    cx.saturating_sub(2),
+                                    cy.saturating_sub(2),
+                                    5.min(measured.width() - cx.saturating_sub(2)),
+                                    5.min(measured.height() - cy.saturating_sub(2)),
+                                )
+                                .to_image();
+                                let (mut sum, mut count) = ([0.0f32; 3], 0.0f32);
+                                for pixel in patch.pixels().filter(|p| p.0[3] != 0) {
+                                    for (total, value) in sum.iter_mut().zip(pixel.0) {
+                                        *total += f32::from(value);
+                                    }
+                                    count += 1.0;
+                                }
+                                ensure!(count > 0.0, "Nothing is visible at `neutral`");
+                                sum.map(|channel| channel / count)
+                            }
+                            None => crate::effects::average_color(&measured)
+                                .context("Nothing is visible to measure")?,
+                        };
+                        crate::effects::white_balance(color)
+                    }
+                };
+                if *as_layer {
+                    reader.add_layer()?;
+                    let default = match kind {
+                        AutoKind::Contrast => "Auto Contrast",
+                        AutoKind::Tone => "Auto Tone",
+                        AutoKind::WhiteBalance => "Auto White Balance",
+                    };
+                    let mut layer =
+                        Layer::blank(layer_name(name, default)?, document.width, document.height);
+                    layer.adjustment = Some(adjustment);
+                    if document.selection.is_some() {
+                        layer.mask = Some(Mask {
+                            pixels: Arc::new(crate::paint::mask_from_selection(document, &layer)),
+                            ..Mask::white()
+                        });
+                    }
+                    added.push(insert_above(document, layer, *above)?);
+                } else {
+                    crate::effects::apply_adjustment(document, &adjustment, false)?;
+                }
+            }
+            Edit::SetAdjustment {
+                layer,
+                adjustment,
+                filter,
+            } => {
+                ensure!(
+                    adjustment.is_some() != filter.is_some(),
+                    "Give either an adjustment or a filter"
+                );
+                let layer = find_mut(document, *layer)?;
+                ensure!(!layer.locked, "The layer is locked");
+                if let Some(adjustment) = adjustment {
+                    check_adjustment(adjustment)?;
+                    ensure!(
+                        layer.adjustment.is_some(),
+                        "\"{}\" is not an adjustment layer",
+                        layer.name
+                    );
+                    layer.adjustment = Some(adjustment.clone());
+                }
+                if let Some(filter) = filter {
+                    filter.validate()?;
+                    ensure!(
+                        layer.filter.is_some(),
+                        "\"{}\" is not a filter layer",
+                        layer.name
+                    );
+                    layer.filter = Some(filter.clone());
+                }
+            }
+            Edit::AddEmptyLayer { name, above } => {
+                reader.add_layer()?;
+                let layer =
+                    Layer::blank(layer_name(name, "Layer")?, document.width, document.height);
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AddMaskLayer { name, above } => {
+                reader.add_layer()?;
+                let mut layer =
+                    Layer::mask(layer_name(name, "Mask")?, document.width, document.height);
+                layer.mask.as_mut().unwrap().pixels =
+                    Arc::new(crate::paint::mask_from_selection(document, &layer));
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::AddTextLayer {
+                text,
+                x,
+                y,
+                path,
+                path_options,
+                family,
+                size,
+                color,
+                bold,
+                italic,
+                underline,
+                strikethrough,
+                runs,
+                name,
+                above,
+            } => {
+                reader.add_layer()?;
+                let defaults = TextStyle::default();
+                let mut style = TextStyle {
+                    content: text.clone(),
+                    family: family.clone().unwrap_or(defaults.family),
+                    size: size.unwrap_or(defaults.size),
+                    color: color.0,
+                    bold: *bold,
+                    italic: *italic,
+                    underline: *underline,
+                    strikethrough: *strikethrough,
+                    path: None,
+                    runs: Vec::new(),
+                };
+                set_runs(&mut style, runs)?;
+                style.validate()?;
+                ensure!(!text.trim().is_empty(), "The text is empty");
+                let renderer = reader.text.get_or_insert_with(TextRenderer::default);
+                let mut layer = if let Some(path) = path {
+                    ensure!(
+                        x.is_none() && y.is_none(),
+                        "Text on a path is placed by its path's coordinates; leave out x and y"
+                    );
+                    let path = VectorPath::parse(path)?;
+                    crate::text::path_layer(
+                        renderer,
+                        style,
+                        &path,
+                        path_options.clone().unwrap_or_default(),
+                    )?
+                } else {
+                    ensure!(path_options.is_none(), "`path_options` go only with `path`");
+                    let pixels = renderer.render(&style)?;
+                    let mut layer = Layer::image(style.layer_name(), pixels);
+                    layer.text = Some(style);
+                    layer.transform.x = x.unwrap_or(0.0);
+                    layer.transform.y = y.unwrap_or(0.0);
+                    layer
+                };
+                let (w, h) = layer.pixels.as_ref().unwrap().dimensions();
+                reader.add_pixels(w, h)?;
+                if name.is_some() {
+                    layer.name = layer_name(name, "")?;
+                }
+                ensure!(layer.transform.valid(), "Invalid layer placement");
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::SetText {
+                layer,
+                text,
+                family,
+                size,
+                color,
+                bold,
+                italic,
+                underline,
+                strikethrough,
+                runs,
+                path,
+                path_options,
+            } => {
+                let target = find(document, *layer)?;
+                ensure!(!target.locked, "Layer {} is locked", target.name);
+                let mut style = target
+                    .text
+                    .clone()
+                    .with_context(|| format!("Layer {} is not a text layer", target.name))?;
+                if let Some(text) = text {
+                    ensure!(!text.trim().is_empty(), "The text is empty");
+                    ensure!(
+                        text.len() <= crate::text::MAX_TEXT_BYTES,
+                        "Text is limited to 16 KiB"
+                    );
+                    style.replace_content(text.clone());
+                }
+                if let Some(size) = size {
+                    style.size = *size;
+                }
+                // As in the Text window with nothing selected: the layer's own font and
+                // colour, which every letter then takes.
+                style.set_style_all(&RunStyle {
+                    family: family.clone(),
+                    color: color.map(|c| c.0),
+                    bold: *bold,
+                    italic: *italic,
+                });
+                if let Some(runs) = runs {
+                    set_runs(&mut style, runs)?;
+                }
+                for (value, field) in [
+                    (underline, &mut style.underline),
+                    (strikethrough, &mut style.strikethrough),
+                ] {
+                    if let Some(value) = value {
+                        *field = *value;
+                    }
+                }
+                let options = match (path_options, &style.path) {
+                    (None, Some(old)) => old.options.clone(),
+                    (None, None) => PathTextOptions::default(),
+                    (Some(changes), old) => {
+                        // Keep the options the request leaves out.
+                        let mut options = serde_json::to_value(
+                            old.as_ref().map(|p| p.options.clone()).unwrap_or_default(),
+                        )?;
+                        let changes = changes
+                            .as_object()
+                            .context("`path_options` must be an object")?;
+                        for (key, value) in changes {
+                            options[key] = value.clone();
+                        }
+                        serde_json::from_value(options)
+                            .map_err(|e| anyhow::anyhow!("Invalid `path_options`: {e}"))?
+                    }
+                };
+                match path {
+                    Some(None) => {
+                        ensure!(
+                            path_options.is_none(),
+                            "`path_options` cannot go with `path: null`"
+                        );
+                        style.path = None;
+                    }
+                    Some(Some(d)) => {
+                        let d = VectorPath::parse(d)?;
+                        style.path = Some(TextPath::from_document(
+                            &d,
+                            target.transform,
+                            target
+                                .pixels
+                                .as_ref()
+                                .context("Text layer has no pixels")?
+                                .dimensions(),
+                            options,
+                        )?);
+                    }
+                    None => match &mut style.path {
+                        Some(stored) => stored.options = options,
+                        None => ensure!(
+                            path_options.is_none(),
+                            "The text is not on a path; give `path` with `path_options`"
+                        ),
+                    },
+                }
+                style.validate()?;
+                let renderer = reader.text.get_or_insert_with(TextRenderer::default);
+                let target = find_mut(document, *layer)?;
+                crate::text::restyle_layer(renderer, target, style)?;
+                let (w, h) = target.pixels.as_ref().unwrap().dimensions();
+                reader.add_pixels(w, h)?;
+            }
+            Edit::AddShapeLayer {
+                shape,
+                x,
+                y,
+                width,
+                height,
+                path,
+                fill_rule,
+                color,
+                corner_radius,
+                name,
+                above,
+            } => {
+                reader.add_layer()?;
+                let mut layer = if *shape == ShapeKind::Path {
+                    let path = path
+                        .as_deref()
+                        .context("A path shape needs `path`, SVG path data")?;
+                    ensure!(
+                        [x, y, width, height].iter().all(|v| v.is_none()),
+                        "A path shape is placed by its path's coordinates; leave out x, y, width and height"
+                    );
+                    let path = VectorPath::parse(path)?;
+                    let (w, h) = crate::paint::path_shape_size(&path)?;
+                    reader.add_pixels(w, h)?;
+                    crate::paint::path_shape(&path, *fill_rule, color.0)?
+                } else {
+                    ensure!(path.is_none(), "`path` goes only with the Path shape");
+                    let (Some(x), Some(y), Some(width), Some(height)) = (x, y, width, height)
+                    else {
+                        bail!("The shape needs x, y, width and height");
+                    };
+                    ensure!(
+                        [x, y, width, height, corner_radius]
+                            .iter()
+                            .all(|v| v.is_finite())
+                            && *width >= 1.0
+                            && *height >= 1.0
+                            && *corner_radius >= 0.0,
+                        "The shape needs a finite position and a size of at least 1"
+                    );
+                    reader.add_pixels(width.round() as u32, height.round() as u32)?;
+                    crate::paint::shape(
+                        Point::new(*x, *y),
+                        Point::new(x + width, y + height),
+                        *shape,
+                        color.0,
+                        *corner_radius,
+                    )?
+                };
+                if name.is_some() {
+                    layer.name = layer_name(name, "")?;
+                }
+                ensure!(layer.transform.valid(), "Invalid layer placement");
+                added.push(insert_above(document, layer, *above)?);
+            }
+            Edit::Crop {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                ensure!(
+                    x.is_finite() && y.is_finite(),
+                    "The crop needs a finite position"
+                );
+                crate::operations::crop(
+                    document,
+                    Point::new(*x, *y),
+                    Point::new(x + *width as f32, y + *height as f32),
+                )?;
+            }
+            Edit::ResizeCanvas {
+                width,
+                height,
+                anchor,
+            } => {
+                ensure!(
+                    anchor.iter().all(|a| (0.0..=1.0).contains(a)),
+                    "The anchor's values must be between 0 and 1"
+                );
+                crate::operations::canvas_size(document, *width, *height, *anchor)?;
+            }
+            Edit::ResizeImage { width, height } => {
+                crate::operations::image_size(document, *width, *height)?;
+            }
+            Edit::RotateCanvas { degrees, expand } => {
+                crate::operations::rotate_canvas_by(document, *degrees, *expand)?;
+            }
+            Edit::CropTo {
+                ratio,
+                bounds,
+                center,
+                straighten,
+            } => {
+                let finite = |numbers: &[f32]| numbers.iter().all(|number| number.is_finite());
+                let ratio = match ratio {
+                    Some([w, h]) => {
+                        ensure!(
+                            finite(&[*w, *h]) && *w > 0.0 && *h > 0.0,
+                            "`ratio` must be two numbers above 0, such as [4, 5]"
+                        );
+                        Some(w / h)
+                    }
+                    None => None,
+                };
+                let (canvas_width, canvas_height) = (document.width as f32, document.height as f32);
+                let (x, y, width, height) = if let Some(degrees) = straighten {
+                    ensure!(
+                        bounds.is_none() && center.is_none(),
+                        "`straighten` crops about the canvas centre: leave out `bounds` and `center`"
+                    );
+                    ensure!(
+                        degrees.is_finite() && degrees.abs() <= 45.0 && *degrees != 0.0,
+                        "`straighten` must be an angle from -45 to 45 degrees, and not 0"
+                    );
+                    let (width, height) = crate::operations::inscribed_size(
+                        canvas_width,
+                        canvas_height,
+                        *degrees,
+                        ratio.unwrap_or(canvas_width / canvas_height),
+                    );
+                    crate::operations::rotate_canvas_by(document, *degrees, true)?;
+                    // Whole pixels, inside the turned image: never an empty edge.
+                    let (width, height) = (
+                        (width - 1.0).floor().max(1.0),
+                        (height - 1.0).floor().max(1.0),
+                    );
+                    (
+                        (document.width as f32 - width) / 2.0,
+                        (document.height as f32 - height) / 2.0,
+                        width,
+                        height,
+                    )
+                } else {
+                    let [bx, by, bw, bh] =
+                        bounds.unwrap_or([0.0, 0.0, canvas_width, canvas_height]);
+                    ensure!(
+                        finite(&[bx, by, bw, bh]) && bw >= 1.0 && bh >= 1.0,
+                        "`bounds` must be [x, y, width, height] with a width and height of at least 1"
+                    );
+                    ensure!(
+                        ratio.is_some() || bounds.is_some(),
+                        "Give a `ratio`, `bounds` or `straighten` to crop to"
+                    );
+                    let (width, height) = match ratio {
+                        Some(ratio) if bw / bh > ratio => ((bh * ratio).floor().max(1.0), bh),
+                        Some(ratio) => (bw, (bw / ratio).floor().max(1.0)),
+                        None => (bw, bh),
+                    };
+                    let [cx, cy] = center.unwrap_or([bx + bw / 2.0, by + bh / 2.0]);
+                    ensure!(finite(&[cx, cy]), "`center` must be [x, y]");
+                    (
+                        (cx - width / 2.0).clamp(bx, bx + bw - width),
+                        (cy - height / 2.0).clamp(by, by + bh - height),
+                        width,
+                        height,
+                    )
+                };
+                let (x, y) = (x.round(), y.round());
+                crate::operations::crop(
+                    document,
+                    Point::new(x, y),
+                    Point::new(x + width.round(), y + height.round()),
+                )?;
+            }
+            Edit::Trim {
+                based_on,
+                top,
+                bottom,
+                left,
+                right,
+            } => {
+                crate::operations::trim(
+                    document,
+                    *based_on,
+                    crate::operations::TrimSides {
+                        top: *top,
+                        bottom: *bottom,
+                        left: *left,
+                        right: *right,
+                    },
+                )?;
+            }
         }
     }
+    // Grouping and moving release clipping that would depend on itself, as in the app.
+    document.release_clipping_cycles();
     document.validate()?;
     Ok(added)
+}
+
+/// Select these layers, the last one active.
+pub fn select_layers(document: &mut Document, layers: &[Uuid]) -> Result<()> {
+    ensure!(!layers.is_empty(), "List at least one layer");
+    ensure!(layers.len() <= 1000, "Too many layers");
+    for id in layers {
+        find(document, *id)?;
+    }
+    document.selected = layers.iter().copied().collect();
+    document.active = layers.last().copied();
+    Ok(())
+}
+
+/// Make `layer` the active layer when given; there must be an active layer.
+fn activate(document: &mut Document, layer: Option<Uuid>) -> Result<()> {
+    if let Some(layer) = layer {
+        find(document, layer)?;
+        document.select(layer, false);
+    }
+    ensure!(document.active().is_some(), "Select a layer first");
+    Ok(())
+}
+
+/// As [`activate`], for an edit that paints a mask: an image keeps its mask on a mask
+/// layer attached to it, so when it has exactly one, that layer becomes the active one
+/// and is painted, instead of a second mask being started.
+fn activate_mask(document: &mut Document, layer: Option<Uuid>) -> Result<()> {
+    activate(document, layer)?;
+    let Some(active) = document.active() else {
+        return Ok(());
+    };
+    if active.mask.is_some() || !active.can_attach_effects() {
+        return Ok(());
+    }
+    let attached: Vec<Uuid> = document
+        .layers
+        .iter()
+        .filter(|child| {
+            child.parent == Some(active.id) && child.standalone_mask && child.mask.is_some()
+        })
+        .map(|child| child.id)
+        .collect();
+    match attached[..] {
+        [] => {}
+        [mask] => document.select(mask, false),
+        _ => bail!(
+            "Layer {} has {} mask layers attached; name one of them: {}",
+            active.name,
+            attached.len(),
+            attached
+                .iter()
+                .map(Uuid::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+    Ok(())
+}
+
+/// Insert a new layer above `above`, or above the active layer.
+fn insert_above(document: &mut Document, layer: Layer, above: Option<Uuid>) -> Result<Uuid> {
+    if let Some(above) = above {
+        find(document, above)?;
+        document.select(above, false);
+    }
+    let id = layer.id;
+    document.insert(layer);
+    Ok(id)
+}
+
+fn layer_name(name: &Option<String>, default: &str) -> Result<String> {
+    match name {
+        Some(name) => {
+            ensure!(name.len() <= 256, "Layer name too long");
+            Ok(name.clone())
+        }
+        None => Ok(default.to_owned()),
+    }
+}
+
+fn valid_points(points: &[[f32; 2]]) -> Result<Vec<Point>> {
+    ensure!(
+        points.len() <= MAX_POINTS,
+        "At most {MAX_POINTS} points are allowed"
+    );
+    ensure!(
+        points
+            .iter()
+            .flatten()
+            .all(|v| v.is_finite() && v.abs() <= 1_000_000.0),
+        "Points must be finite"
+    );
+    Ok(points.iter().map(|[x, y]| Point::new(*x, *y)).collect())
+}
+
+/// What filling a path over `rows` pixel rows (from its top, or the canvas's) costs beyond
+/// its area, as [`cost`] counts it; nothing for a path that does not parse, which is refused
+/// when it runs.
+fn path_work(path: &str, rows: u64) -> u64 {
+    VectorPath::parse(path).map_or(0, |path| {
+        let top = path.bounds().map_or(0.0, |b| b.y0.max(0.0));
+        path.fill_work(top, top + rows as f64)
+    })
+}
+
+/// A stroke's points: those given, or its `path` flattened.
+fn stroke_points<'a>(
+    points: &'a [StrokePoint],
+    path: &Option<String>,
+) -> Result<std::borrow::Cow<'a, [StrokePoint]>> {
+    let Some(path) = path else {
+        return Ok(points.into());
+    };
+    ensure!(
+        points.is_empty(),
+        "Give a stroke `points` or a `path`, not both"
+    );
+    let points = crate::vector::VectorPath::parse(path)?.stroke_points()?;
+    Ok(points.into_iter().map(StrokePoint::from).collect())
+}
+
+/// Combine `mask` with the selection, its edge first softened by `feather` pixels.
+fn combine_selection(
+    document: &mut Document,
+    mask: GrayImage,
+    mode: SelectionMode,
+    feather: f32,
+) -> Result<()> {
+    ensure!(
+        feather.is_finite() && (0.0..=MAX_SELECTION_AMOUNT).contains(&feather),
+        "The feather radius must be between 0 and {MAX_SELECTION_AMOUNT}"
+    );
+    let mask = if feather > 0.0 {
+        crate::gpu::blur_gray(&mask, feather)
+    } else {
+        mask
+    };
+    crate::selection::combine(document, mask, mode);
+    Ok(())
 }
 
 fn valid_opacity(opacity: f32) -> Result<f32> {
@@ -717,6 +3330,43 @@ fn valid_opacity(opacity: f32) -> Result<f32> {
         "Opacity must be between 0 and 1"
     );
     Ok(opacity)
+}
+
+/// The base `layer` clips to when asked to clip to `base`, following **Layer → Clipping
+/// Mask**: a layer or folder below it in the same parent, not a mask, adjustment or filter
+/// layer. A base that is itself clipped passes on its own base. Folders, mask layers and
+/// filter layers cannot be clipped.
+fn clipping_base(document: &Document, layer: Uuid, base: Option<Uuid>) -> Result<Option<Uuid>> {
+    let clipped = find(document, layer)?;
+    let Some(base) = base else {
+        return Ok(None);
+    };
+    ensure!(
+        !clipped.group && !clipped.standalone_mask && clipped.filter.is_none(),
+        "Layer {} cannot be clipped: folders, mask layers and filter layers do not clip",
+        clipped.name
+    );
+    let target = find(document, base)?;
+    ensure!(base != layer, "A layer cannot clip to itself");
+    ensure!(
+        target.parent == clipped.parent,
+        "The clipping base {} must be in the same folder as {}",
+        target.name,
+        clipped.name
+    );
+    let position = |id| document.layers.iter().position(|l| l.id == id);
+    ensure!(
+        position(base) < position(layer),
+        "The clipping base {} must be below {}",
+        target.name,
+        clipped.name
+    );
+    ensure!(
+        !target.is_effect(),
+        "{} cannot be a clipping base: mask, adjustment and filter layers have no pixels to clip to",
+        target.name
+    );
+    Ok(Some(target.clip_to.unwrap_or(base)))
 }
 
 fn find(document: &Document, id: Uuid) -> Result<&Layer> {
@@ -788,6 +3438,10 @@ pub fn blend_names() -> Vec<String> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "edits_path_tests.rs"]
+mod path_tests;
 
 #[cfg(test)]
 mod tests {
@@ -997,6 +3651,193 @@ mod tests {
         assert!(blend_names().contains(&"Multiply".to_owned()));
     }
 
+    fn described(document: &Document, id: Uuid) -> Value {
+        describe(document)["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["id"] == json!(id))
+            .cloned()
+            .unwrap()
+    }
+
+    #[test]
+    fn describes_shapes_and_flips() {
+        let mut document = Document::new(40, 30).unwrap();
+        let added = run(
+            &mut document,
+            &[edit(json!({
+                "op": "add_shape_layer", "shape": "RoundedRectangle", "x": 2, "y": 2,
+                "width": 20, "height": 10, "color": "#ff000080", "corner_radius": 3,
+            }))],
+        )
+        .unwrap();
+        let shape = described(&document, added[0]);
+        assert_eq!(shape["kind"], "shape");
+        assert_eq!(
+            shape["shape"],
+            json!({"shape": "RoundedRectangle", "color": "#ff000080", "corner_radius": 3.0})
+        );
+        assert_eq!(
+            (&shape["flip_x"], &shape["flip_y"]),
+            (&json!(false), &json!(false))
+        );
+        let base = document.layers[0].id;
+        assert_eq!(described(&document, base)["kind"], "image");
+        assert!(described(&document, base)["shape"].is_null());
+        document.layers[0].transform.flip_x = true;
+        let flipped = described(&document, base);
+        assert_eq!(
+            (&flipped["flip_x"], &flipped["flip_y"]),
+            (&json!(true), &json!(false))
+        );
+    }
+
+    #[test]
+    fn attached_masks_are_reported_and_exported_through_their_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = Document::new(40, 30).unwrap();
+        let image = document.layers[0].id;
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::new(40, 30)));
+        let no_mask = export_layer(&document, image, What::Mask, None, dir.path(), "n.png");
+        assert!(
+            no_mask.unwrap_err().to_string().contains("`mask` command"),
+            "the error says how to add one"
+        );
+        // As the `mask` command attaches one: a child mask layer.
+        let mut mask = Layer::mask("Mask", 40, 30);
+        mask.parent = Some(image);
+        mask.mask.as_mut().unwrap().linked = false;
+        let mask_id = mask.id;
+        document.layers.push(mask);
+        let value = described(&document, image);
+        assert_eq!(value["has_mask"], true);
+        assert_eq!(
+            value["masks"],
+            json!([{"layer": mask_id, "enabled": true, "linked": false}])
+        );
+        assert!(value["attached_to"].is_null());
+        let value = described(&document, mask_id);
+        assert_eq!(value["kind"], "mask");
+        assert_eq!(value["attached_to"], json!(image));
+        assert_eq!(value["masks"][0]["layer"], json!(mask_id));
+        // The image's mask is read from the mask layer, which is named.
+        let export = export_layer(&document, image, What::Mask, None, dir.path(), "m.png").unwrap();
+        assert_eq!(export.mask_layer, Some(mask_id));
+        assert_eq!(read_gray_png(&export.path).unwrap().dimensions(), (1, 1));
+        let own = export_layer(&document, mask_id, What::Mask, None, dir.path(), "o.png").unwrap();
+        assert_eq!(own.mask_layer, None);
+        // With two, the client is told which to ask for.
+        let mut second = Layer::mask("Mask 2", 40, 30);
+        second.parent = Some(image);
+        let second_id = second.id;
+        document.layers.push(second);
+        let error = export_layer(&document, image, What::Mask, None, dir.path(), "t.png")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&mask_id.to_string()) && error.contains(&second_id.to_string()),
+            "{error}"
+        );
+        assert_eq!(
+            described(&document, image)["masks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        // A mask outside any image's stack is not attached.
+        let loose = Layer::mask("Loose", 40, 30);
+        let loose_id = loose.id;
+        document.layers.push(loose);
+        assert!(described(&document, loose_id)["attached_to"].is_null());
+    }
+
+    #[test]
+    fn out_of_range_settings_name_the_field_and_its_range() {
+        for (value, expected) in [
+            (
+                json!({"HueSaturation": {"hue": 0, "saturation": 150, "lightness": 0, "colorize": false}}),
+                "`HueSaturation.saturation` must be between -100 and 100, not 150",
+            ),
+            (
+                json!({"Grain": {"amount": 101, "monochrome": true, "seed": 1}}),
+                "`Grain.amount` must be between 0 and 100",
+            ),
+            (
+                json!({"Levels": {"black": 200, "gamma": 1, "white": 100, "output_black": 0, "output_white": 255}}),
+                "must be above `black`",
+            ),
+            (
+                json!({"Curves": {"points": [{"x": 0, "y": 0}, {"x": 1, "y": 2}]}}),
+                "`Curves.points y` must be between 0 and 1",
+            ),
+            (
+                json!({"FilmGrain": {"amount": 10, "size": 0, "roughness": 50, "seed": 1}}),
+                "`FilmGrain.size` must be between 0.1 and 100",
+            ),
+        ] {
+            let mut document = Document::new(8, 8).unwrap();
+            document.layers[0].pixels = Some(Arc::new(RgbaImage::new(8, 8)));
+            let edits = [edit(
+                json!({"op": "apply_adjustment", "layer": document.layers[0].id, "adjustment": value}),
+            )];
+            let error = format!("{:#}", run(&mut document, &edits).unwrap_err());
+            assert!(error.contains(expected), "{error}");
+        }
+        let filter = edit(
+            json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 500}}}),
+        );
+        let error = run(&mut Document::new(8, 8).unwrap(), &[filter]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("`GaussianBlur.radius` must be between 0 and 100"),
+            "{error:#}"
+        );
+    }
+
+    /// The MCP server's tool descriptions list every adjustment and filter
+    /// Xuan accepts. Serde's error for an unknown variant lists them all, so
+    /// the list comes from the code and a new variant fails this test until
+    /// it is described.
+    #[test]
+    fn the_mcp_tools_describe_every_adjustment_and_filter() {
+        fn variants<T: serde::de::DeserializeOwned + std::fmt::Debug>() -> Vec<String> {
+            let error = serde_json::from_value::<T>(json!({"NoSuchVariant": {}}))
+                .unwrap_err()
+                .to_string();
+            let listed = error
+                .split("expected one of")
+                .nth(1)
+                .expect("variants listed");
+            listed
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .map(str::to_owned)
+                .collect()
+        }
+        let tools = include_str!("../../plugins/mcp-server/src/tools.rs");
+        let constant = |name: &str| {
+            let line = tools
+                .lines()
+                .find(|line| line.starts_with(&format!("const {name}: &str = ")))
+                .unwrap_or_else(|| panic!("tools.rs has no {name}"));
+            line.replace("\\\"", "\"")
+        };
+        for (described, names) in [
+            (constant("ADJUSTMENTS"), variants::<Adjustment>()),
+            (constant("FILTERS"), variants::<Filter>()),
+        ] {
+            assert!(names.len() >= 4, "{names:?}");
+            for name in names {
+                assert!(
+                    described.contains(&format!("\"{name}\"")),
+                    "plugins/mcp-server/src/tools.rs does not describe {name}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn exports_fit_the_longest_side_and_report_scale() {
         let dir = tempfile::tempdir().unwrap();
@@ -1067,7 +3908,9 @@ mod tests {
                     visible: Some(false),
                     locked: None,
                     opacity: None,
+                    fill: None,
                     blend: None,
+                    clip_to: None,
                 },
             ],
         )
@@ -1116,7 +3959,9 @@ mod tests {
                     visible: None,
                     locked: None,
                     opacity: Some(2.0),
-                    blend: None
+                    fill: None,
+                    blend: None,
+                    clip_to: None,
                 }]
             )
             .is_err()
@@ -1214,14 +4059,1115 @@ mod tests {
         let error = run(
             &mut copy,
             &[Edit::ExtendCanvas {
-                left: 30_000,
+                left: MAX_SIDE,
                 top: 0,
                 right: 0,
                 bottom: 0,
             }],
         )
         .unwrap_err();
-        assert!(error.to_string().contains("30000"), "{error}");
+        assert!(error.to_string().contains("65,535"), "{error}");
+    }
+
+    fn edit(value: Value) -> Edit {
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// A 40 × 30 document with one opaque grey pixel layer.
+    fn grey_document() -> (Document, Uuid) {
+        let mut document = Document::new(40, 30).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            40,
+            30,
+            image::Rgba([100, 100, 100, 255]),
+        )));
+        let id = document.layers[0].id;
+        (document, id)
+    }
+
+    #[test]
+    fn colours_parse_and_print() {
+        assert_eq!(Color::parse("#ff8000").unwrap(), Color([255, 128, 0, 255]));
+        assert_eq!(
+            Color::parse("#FF800080").unwrap(),
+            Color([255, 128, 0, 128])
+        );
+        for bad in ["ff8000", "#ff80", "#gg8000", "#ff8000ff00", ""] {
+            assert!(Color::parse(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            serde_json::to_value(Color([1, 2, 3, 4])).unwrap(),
+            json!("#01020304")
+        );
+        assert!(serde_json::from_value::<Edit>(json!({"op": "fill", "color": "red"})).is_err());
+    }
+
+    #[test]
+    fn selection_ops_combine_with_the_selection() {
+        let (mut document, _) = grey_document();
+        let ops = [
+            json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10}),
+            json!({"op": "select_rect", "x": 20, "y": 0, "width": 10, "height": 10, "ellipse": true, "mode": "add"}),
+            json!({"op": "select_polygon", "points": [[0, 20], [10, 20], [0, 30]], "mode": "add"}),
+        ];
+        let edits: Vec<Edit> = ops.into_iter().map(edit).collect();
+        assert!(edits.iter().all(Edit::is_selection_only));
+        assert!(!edits.iter().any(Edit::direct_only));
+        run(&mut document, &edits).unwrap();
+        let selection = document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(5, 5)[0], 255);
+        assert_eq!(selection.get_pixel(25, 5)[0], 255);
+        assert_eq!(selection.get_pixel(20, 0)[0], 0, "outside the ellipse");
+        assert_eq!(selection.get_pixel(2, 25)[0], 255);
+        assert_eq!(selection.get_pixel(35, 25)[0], 0);
+        // Subtract, grow and feather.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 40, "height": 15, "mode": "subtract"}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(document.selection.as_ref().unwrap().get_pixel(5, 5)[0], 0);
+        run(
+            &mut document,
+            &[edit(json!({"op": "grow_selection", "by": 2}))],
+        )
+        .unwrap();
+        assert_eq!(
+            document.selection.as_ref().unwrap().get_pixel(2, 18)[0],
+            255
+        );
+        run(
+            &mut document,
+            &[edit(json!({"op": "grow_selection", "by": -40}))],
+        )
+        .unwrap();
+        assert!(crate::selection::bounds(document.selection.as_ref().unwrap()).is_none());
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 10, "y": 10, "width": 20, "height": 10})),
+                edit(json!({"op": "feather_selection", "radius": 3})),
+            ],
+        )
+        .unwrap();
+        let edge = document.selection.as_ref().unwrap().get_pixel(10, 15)[0];
+        assert!(edge > 0 && edge < 255, "{edge}");
+        for bad in [
+            json!({"op": "select_polygon", "points": [[0, 0], [1, 1]]}),
+            json!({"op": "select_rect", "x": 0, "y": 0, "width": 0, "height": 4}),
+            json!({"op": "grow_selection", "by": 1000}),
+            json!({"op": "feather_selection", "radius": -1}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
+        let too_many = vec![[1.0f32, 1.0]; MAX_POINTS + 1];
+        let error = run(
+            &mut document,
+            &[Edit::SelectPolygon {
+                points: too_many,
+                mode: SelectionMode::Replace,
+                feather: 0.0,
+            }],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("points"), "{error}");
+    }
+
+    #[test]
+    fn colour_selections_read_the_flattened_image() {
+        let (mut document, base) = grey_document();
+        let pixels = Arc::make_mut(document.layers[0].pixels.as_mut().unwrap());
+        for y in 0..30 {
+            for x in 20..40 {
+                pixels.put_pixel(x, y, image::Rgba([220, 30, 30, 255]));
+            }
+        }
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_color", "x": 30, "y": 5, "tolerance": 10}),
+            )],
+        )
+        .unwrap();
+        let selection = document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(25, 10)[0], 255);
+        assert_eq!(selection.get_pixel(5, 10)[0], 0);
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_color_range", "colors": ["#646464"], "fuzziness": 10}),
+            )],
+        )
+        .unwrap();
+        let selection = document.selection.clone().unwrap();
+        assert_eq!(selection.get_pixel(5, 10)[0], 255);
+        assert_eq!(selection.get_pixel(25, 10)[0], 0);
+        assert!(
+            run(
+                &mut document,
+                &[edit(json!({"op": "select_color", "x": 50, "y": 5}))]
+            )
+            .is_err()
+        );
+        assert!(
+            run(
+                &mut document,
+                &[edit(json!({"op": "select_color_range", "colors": []}))]
+            )
+            .is_err()
+        );
+        assert_eq!(document.active, Some(base));
+    }
+
+    #[test]
+    fn pixel_ops_respect_the_selection_and_locks() {
+        let (mut document, base) = grey_document();
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 0, "y": 0, "width": 20, "height": 30})),
+                edit(json!({"op": "fill", "layer": base, "color": "#ff0000"})),
+            ],
+        )
+        .unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        assert_eq!(pixels.get_pixel(5, 5).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(30, 5).0, [100, 100, 100, 255]);
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "apply_adjustment", "adjustment": "Invert"}),
+            )],
+        )
+        .unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        assert_eq!(pixels.get_pixel(5, 5).0, [0, 255, 255, 255]);
+        assert_eq!(pixels.get_pixel(30, 5).0, [100, 100, 100, 255]);
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 0, "y": 0, "width": 40, "height": 30})),
+                edit(json!({"op": "apply_filter", "filter": {"GaussianBlur": {"radius": 3}}})),
+            ],
+        )
+        .unwrap();
+        // The blur pads the layer, so read the flattened image.
+        let pixels = crate::render::render(&document);
+        let edge = pixels.get_pixel(20, 15).0;
+        assert!(edge[0] > 0 && edge[0] < 100, "{edge:?}");
+        // A stroke paints along its points and stays one change.
+        run(
+            &mut document,
+            &[
+                Edit::SetSelection { mask: None },
+                edit(json!({"op": "stroke", "points": [[2, 25], [38, 25]], "color": "#0000ff", "size": 4, "hardness": 1})),
+            ],
+        )
+        .unwrap();
+        let pixels = crate::render::render(&document);
+        assert_eq!(pixels.get_pixel(20, 25).0, [0, 0, 255, 255]);
+        assert_ne!(pixels.get_pixel(20, 15).0, [0, 0, 255, 255]);
+        run(
+            &mut document,
+            &[edit(json!({"op": "stroke", "points": [[20, 25]], "size": 6, "erase": true, "hardness": 1}))],
+        )
+        .unwrap();
+        // Erased down to the white canvas the flattened image shows through.
+        assert_ne!(
+            crate::render::render(&document).get_pixel(20, 25).0,
+            [0, 0, 255, 255]
+        );
+        // Bad values and locked layers are refused.
+        for bad in [
+            json!({"op": "apply_filter", "filter": {"GaussianBlur": {"radius": 1000}}}),
+            json!({"op": "apply_filter", "filter": {"Sharpen": {}}}),
+            json!({"op": "stroke", "points": [], "size": 4}),
+            json!({"op": "stroke", "points": [[1, 1]], "size": 0}),
+            json!({"op": "stroke", "points": [[1, 1]], "opacity": 2}),
+            json!({"op": "fill", "layer": Uuid::new_v4(), "color": "#000000"}),
+        ] {
+            let parsed = serde_json::from_value::<Edit>(bad.clone());
+            assert!(
+                parsed.is_err() || run(&mut document.clone(), &[parsed.unwrap()]).is_err(),
+                "{bad}"
+            );
+        }
+        document.layers[0].locked = true;
+        for locked in [
+            json!({"op": "fill", "color": "#000000"}),
+            json!({"op": "stroke", "points": [[1, 1]]}),
+            json!({"op": "apply_adjustment", "adjustment": "Invert"}),
+            json!({"op": "apply_filter", "filter": {"GaussianBlur": {"radius": 2}}}),
+            json!({"op": "transform", "layer": base, "x": 3}),
+        ] {
+            let error = run(&mut document.clone(), &[edit(locked.clone())]).unwrap_err();
+            assert!(error.to_string().contains("lock"), "{locked}: {error}");
+        }
+    }
+
+    /// Upstream Compositor's filters as plugins and MCP's `apply_filter` send them: the same
+    /// JSON as `.xuan` files, Dither's settings with upstream's defaults for what is left out.
+    #[test]
+    fn compositor_filters_apply_from_json_and_check_their_ranges() {
+        for filter in [
+            json!({"Vignette": {"amount": 35, "color": [0, 0, 0], "midpoint": 50, "roundness": 100, "feather": 60, "highlights": 25}}),
+            json!({"Bloom": {"amount": 40, "radius": 24}}),
+            json!({"TonalContrast": {"amount": 50, "radius": 16, "shadows": 40, "midtones": 60, "highlights": 30}}),
+            json!({"Dither": {}}),
+            json!({"Dither": {"style": "Bayer4", "levels": 3, "colors": "TwoColors", "dark": [0, 0, 64]}}),
+        ] {
+            let (mut document, _) = grey_document();
+            document.layers[0].pixels = Some(Arc::new(RgbaImage::from_fn(40, 30, |x, y| {
+                image::Rgba([(x * 6) as u8, (y * 8) as u8, 90, 255])
+            })));
+            let before = crate::render::render(&document);
+            let parsed: Filter = serde_json::from_value(filter.clone()).unwrap();
+            run(
+                &mut document,
+                &[edit(
+                    json!({"op": "apply_filter", "filter": filter.clone()}),
+                )],
+            )
+            .unwrap();
+            assert_ne!(crate::render::render(&document), before, "{filter}");
+            // As a filter layer, it changes the composite and keeps the source pixels.
+            let (mut layered, base) = grey_document();
+            layered.layers[0].pixels = document.layers[0].pixels.clone();
+            let source = layered.layers[0].pixels.clone();
+            let added = run(
+                &mut layered,
+                &[edit(
+                    json!({"op": "add_adjustment_layer", "filter": filter.clone()}),
+                )],
+            )
+            .unwrap();
+            let layer = layered.layers.iter().find(|l| l.id == added[0]).unwrap();
+            assert_eq!(layer.filter.as_ref(), Some(&parsed));
+            assert_eq!(layer.name, parsed.name());
+            assert_eq!(
+                layered.layers.iter().find(|l| l.id == base).unwrap().pixels,
+                source
+            );
+        }
+        let parsed: Filter = serde_json::from_value(json!({"Dither": {"style": "Ascii"}})).unwrap();
+        let Filter::Dither(settings) = parsed else {
+            panic!("{parsed:?}")
+        };
+        assert_eq!(settings.style, crate::effects::DitherStyle::Ascii);
+        assert_eq!(
+            settings.characters,
+            crate::effects::dither::DEFAULT_CHARACTERS
+        );
+        let (document, _) = grey_document();
+        for bad in [
+            json!({"Bloom": {"amount": 40, "radius": 0}}),
+            json!({"Bloom": {"amount": 140, "radius": 4}}),
+            json!({"Vignette": {"amount": 35, "color": [0, 0, 0], "midpoint": 50, "roundness": 101, "feather": 60, "highlights": 25}}),
+            json!({"TonalContrast": {"amount": 50, "radius": 16, "shadows": -140, "midtones": 60, "highlights": 30}}),
+            json!({"Dither": {"levels": 9}}),
+            json!({"Dither": {"style": "Sepia"}}),
+            json!({"Dither": {"pixel_size": 0}}),
+        ] {
+            let parsed =
+                serde_json::from_value::<Edit>(json!({"op": "apply_filter", "filter": bad}));
+            assert!(
+                parsed.is_err() || run(&mut document.clone(), &[parsed.unwrap()]).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_one_point_stroke_paints_one_round_dab() {
+        let (mut document, _) = grey_document();
+        let edits = parse_edits(json!([
+            {"op": "add_empty_layer", "name": "Stars"},
+            {"op": "stroke", "layer": "$1", "points": [[10, 10]], "size": 8, "hardness": 1, "color": "#ff0000"},
+            {"op": "stroke", "layer": "$1", "points": [[30, 20]], "size": 2, "hardness": 1, "color": "#00ff00"},
+        ]))
+        .unwrap();
+        let added = run(&mut document, &edits).unwrap();
+        let stars = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+        let pixels = stars.pixels.clone().unwrap();
+        // A disc of diameter 8 around (10, 10): its centre and just inside
+        // its edge are painted, outside it nothing is.
+        assert_eq!(pixels.get_pixel(10, 10).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(12, 10).0[3], 255);
+        assert_eq!(pixels.get_pixel(15, 10).0[3], 0);
+        assert_eq!(pixels.get_pixel(10, 15).0[3], 0);
+        assert_eq!(pixels.get_pixel(13, 13).0[3], 0, "round, not square");
+        // The second dab is separate: nothing is painted between them.
+        assert_eq!(pixels.get_pixel(30, 20).0[1], 255);
+        assert_eq!(pixels.get_pixel(20, 15).0[3], 0);
+        let painted = pixels.pixels().filter(|p| p.0[3] > 0).count();
+        assert!((40..=80).contains(&painted), "{painted} pixels painted");
+    }
+
+    #[test]
+    fn set_clips_to_a_layer_or_folder_below_and_null_releases() {
+        let mut document = Document::new(8, 8).unwrap();
+        let mut group = Layer::blank("Figure", 8, 8);
+        group.group = true;
+        let mut inside = Layer::image("Cloak", RgbaImage::new(8, 8));
+        inside.parent = Some(group.id);
+        let base = Layer::image("Base", RgbaImage::new(8, 8));
+        let mut clipped = Layer::image("Clipped", RgbaImage::new(8, 8));
+        clipped.clip_to = Some(base.id);
+        let shading = Layer::image("Shading", RgbaImage::new(8, 8));
+        let mut invert = Layer::blank("Invert", 8, 8);
+        invert.adjustment = Some(Adjustment::Invert);
+        let [
+            inside_id,
+            group_id,
+            base_id,
+            clipped_id,
+            shading_id,
+            invert_id,
+        ] = [&inside, &group, &base, &clipped, &shading, &invert].map(|l| l.id);
+        // Bottom to top: the folder, a base with a clipped layer, the shading layer and an
+        // adjustment.
+        document.layers = vec![inside, group, base, clipped, shading, invert];
+        document.select(shading_id, false);
+        document.validate().unwrap();
+        let set = |document: &mut Document, layer: Uuid, clip_to: Value| {
+            let edits =
+                parse_edits(json!([{"op": "set", "layer": layer, "clip_to": clip_to}])).unwrap();
+            run(document, &edits).map_err(|e| format!("{e:#}"))
+        };
+        let clip_of = |document: &Document, id: Uuid| {
+            document.layers.iter().find(|l| l.id == id).unwrap().clip_to
+        };
+
+        // A folder below in the same parent is a base.
+        set(&mut document, shading_id, json!(group_id)).unwrap();
+        assert_eq!(clip_of(&document, shading_id), Some(group_id));
+        // Leaving `clip_to` out keeps it; `null` releases it.
+        let edits =
+            parse_edits(json!([{"op": "set", "layer": shading_id, "opacity": 0.5}])).unwrap();
+        run(&mut document, &edits).unwrap();
+        assert_eq!(clip_of(&document, shading_id), Some(group_id));
+        set(&mut document, shading_id, Value::Null).unwrap();
+        assert_eq!(clip_of(&document, shading_id), None);
+        // A clipped layer passes on its base, as Layer → Clipping Mask does.
+        set(&mut document, shading_id, json!(clipped_id)).unwrap();
+        assert_eq!(clip_of(&document, shading_id), Some(base_id));
+        // Adjustments clip too.
+        set(&mut document, invert_id, json!(group_id)).unwrap();
+        assert_eq!(clip_of(&document, invert_id), Some(group_id));
+
+        let before = document.clone();
+        for (layer, base, message) in [
+            (base_id, json!(shading_id), "must be below"),
+            (shading_id, json!(shading_id), "cannot clip to itself"),
+            (shading_id, json!(inside_id), "same folder"),
+            (inside_id, json!(group_id), "same folder"),
+            (shading_id, json!(invert_id), "must be below"),
+            (group_id, json!(base_id), "cannot be clipped"),
+            (shading_id, json!(Uuid::new_v4()), "No layer"),
+        ] {
+            let mut copy = before.clone();
+            let error = set(&mut copy, layer, base).unwrap_err();
+            assert!(
+                error.to_lowercase().contains(&message.to_lowercase()),
+                "{message}: {error}"
+            );
+        }
+        // An adjustment is no base.
+        document.layers.swap(4, 5);
+        let error = set(&mut document, shading_id, json!(invert_id)).unwrap_err();
+        assert!(error.contains("cannot be a clipping base"), "{error}");
+
+        // A layer the same request adds can be the base, as `$n`.
+        let edits = parse_edits(json!([
+            {"op": "add_empty_layer", "name": "New base", "above": invert_id},
+            {"op": "add_empty_layer", "name": "On top"},
+            {"op": "set", "layer": "$2", "clip_to": "$1"},
+        ]))
+        .unwrap();
+        let added = run(&mut document, &edits).unwrap();
+        assert_eq!(clip_of(&document, added[1]), Some(added[0]));
+    }
+
+    #[test]
+    fn references_name_the_layers_added_before_and_say_which_edit_failed() {
+        let (document, base) = grey_document();
+        let edits = parse_edits(json!([
+            {"op": "add_empty_layer", "name": "A"},
+            {"op": "add_text_layer", "text": "B", "above": "$1"},
+            {"op": "merge_layers", "layers": ["$2"]},
+            {"op": "set", "layer": "$3", "name": "Merged"},
+            {"op": "move_layer", "layer": "$3", "below": base},
+        ]))
+        .unwrap();
+        let mut copy = document.clone();
+        let added = run(&mut copy, &edits).unwrap();
+        assert_eq!(added.len(), 3);
+        assert_eq!(copy.layers.len(), 2, "B merged into A");
+        assert_eq!(copy.layers[0].id, added[2]);
+        assert_eq!(copy.layers[0].name, "Merged");
+
+        // A reference past the layers added so far, before any, or not a
+        // number at all is refused, naming the edit.
+        let ahead = parse_edits(json!([
+            {"op": "add_empty_layer"},
+            {"op": "fill", "layer": "$2", "color": "#000000"},
+        ]))
+        .unwrap();
+        let error = run(&mut document.clone(), &ahead).unwrap_err().to_string();
+        assert!(error.starts_with("Edit 2 (fill): `$2`"), "{error}");
+        let first = parse_edits(json!([{"op": "set", "layer": "$1", "visible": false}])).unwrap();
+        let error = run(&mut document.clone(), &first).unwrap_err().to_string();
+        assert!(error.contains("added 0 so far"), "{error}");
+        for bad in ["$0", "$", "$one", "$-1"] {
+            let error = parse_edits(json!([{"op": "select", "layer": bad}])).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("not a layer reference"),
+                "{bad}: {error:#}"
+            );
+        }
+        // Text is never taken for a reference; a single failing edit is
+        // reported as before, without an edit number.
+        let text = parse_edits(json!([{"op": "add_text_layer", "text": "$1"}])).unwrap();
+        assert!(matches!(&text[0], Edit::AddTextLayer { text, .. } if text == "$1"));
+        let lone = [edit(
+            json!({"op": "fill", "layer": Uuid::new_v4(), "color": "#000000"}),
+        )];
+        let error = run(&mut document.clone(), &lone).unwrap_err().to_string();
+        assert!(!error.contains("Edit 1"), "{error}");
+    }
+
+    fn near(actual: [u8; 4], expected: [u8; 4], tolerance: u8) {
+        for i in 0..4 {
+            assert!(
+                actual[i].abs_diff(expected[i]) <= tolerance,
+                "{actual:?} is not near {expected:?}"
+            );
+        }
+    }
+
+    fn gradient(extra: Value) -> Edit {
+        let mut op = json!({
+            "op": "gradient", "start": [0, 0], "end": [40, 0],
+            "stops": [
+                {"position": 0, "color": "#000000"},
+                {"position": 1, "color": "#ffffff"},
+            ],
+        });
+        op.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        edit(op)
+    }
+
+    #[test]
+    fn a_two_stop_linear_gradient_runs_from_start_to_end() {
+        let (mut document, base) = grey_document();
+        run(&mut document, &[gradient(json!({"layer": base}))]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(0, 10).0, [0, 0, 0, 255], 4);
+        near(pixels.get_pixel(20, 10).0, [131, 131, 131, 255], 4);
+        near(pixels.get_pixel(39, 10).0, [250, 250, 250, 255], 4);
+        // Constant down each column.
+        assert_eq!(pixels.get_pixel(20, 0), pixels.get_pixel(20, 29));
+
+        // Opacity blends with what is there.
+        let (mut document, _) = grey_document();
+        run(&mut document, &[gradient(json!({"opacity": 0.5}))]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(0, 10).0, [50, 50, 50, 255], 4);
+    }
+
+    #[test]
+    fn a_multi_stop_gradient_passes_through_each_stop_and_ignores_input_order() {
+        let (mut document, _) = grey_document();
+        let stops = json!([
+            {"position": 1, "color": "#0000ff"},
+            {"position": 0, "color": "#ff0000"},
+            {"position": 0.5, "color": "#00ff00"},
+        ]);
+        run(&mut document, &[gradient(json!({"stops": stops}))]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(0, 5).0, [250, 5, 0, 255], 8);
+        near(pixels.get_pixel(20, 5).0, [5, 250, 5, 255], 12);
+        near(pixels.get_pixel(39, 5).0, [0, 5, 250, 255], 8);
+        // Halfway between the first two stops.
+        near(pixels.get_pixel(10, 5).0, [128, 128, 0, 255], 8);
+    }
+
+    #[test]
+    fn a_radial_gradient_spreads_from_the_start_to_the_end_radius() {
+        let (mut document, _) = grey_document();
+        let radial = gradient(json!({"start": [20, 15], "end": [30, 15], "radial": true}));
+        run(&mut document, &[radial]).unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(20, 15).0, [18, 18, 18, 255], 6);
+        near(pixels.get_pixel(25, 15).0, [140, 140, 140, 255], 6);
+        near(pixels.get_pixel(20, 25).0, [255, 255, 255, 255], 2);
+        assert_eq!(pixels.get_pixel(35, 15).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_gradient_stays_inside_the_selection() {
+        let (mut document, _) = grey_document();
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "select_rect", "x": 0, "y": 0, "width": 20, "height": 30})),
+                gradient(json!({})),
+            ],
+        )
+        .unwrap();
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        near(pixels.get_pixel(10, 5).0, [66, 66, 66, 255], 4);
+        assert_eq!(pixels.get_pixel(30, 5).0, [100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn a_gradient_can_paint_the_mask_and_leaves_the_pixels() {
+        let (mut document, _) = grey_document();
+        let before = document.layers[0].pixels.clone().unwrap();
+        run(&mut document, &[gradient(json!({"mask": true}))]).unwrap();
+        let layer = &document.layers[0];
+        assert_eq!(layer.pixels.as_ref().unwrap(), &before);
+        let mask = &layer.mask.as_ref().unwrap().pixels;
+        assert_eq!(mask.dimensions(), (40, 30));
+        assert!(mask.get_pixel(0, 5)[0] <= 4);
+        assert!(mask.get_pixel(20, 5)[0].abs_diff(131) <= 4);
+        assert!(mask.get_pixel(39, 5)[0] >= 250);
+    }
+
+    #[test]
+    fn invalid_gradients_are_refused_and_locked_layers_are_left_alone() {
+        let (mut document, _) = grey_document();
+        let one = json!([{"position": 0, "color": "#000000"}]);
+        let many: Vec<Value> = (0..65)
+            .map(|i| json!({"position": i as f32 / 64.0, "color": "#000000"}))
+            .collect();
+        let bad = [
+            json!({"stops": []}),
+            json!({"stops": one}),
+            json!({"stops": many}),
+            json!({"stops": [
+                {"position": -0.1, "color": "#000000"}, {"position": 1, "color": "#ffffff"}]}),
+            json!({"stops": [
+                {"position": 0, "color": "#000000"}, {"position": 1.5, "color": "#ffffff"}]}),
+            json!({"opacity": 2}),
+            json!({"opacity": -1}),
+            json!({"start": [5, 5], "end": [5, 5]}),
+            json!({"end": [1.0e12, 0]}),
+            json!({"layer": Uuid::new_v4()}),
+        ];
+        for extra in bad {
+            let mut op = json!({
+                "op": "gradient", "start": [0, 0], "end": [40, 0],
+                "stops": [
+                    {"position": 0, "color": "#000000"},
+                    {"position": 1, "color": "#ffffff"},
+                ],
+            });
+            op.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let parsed = serde_json::from_value::<Edit>(op);
+            let mut scratch = document.clone();
+            assert!(
+                parsed.is_err() || run(&mut scratch, &[parsed.unwrap()]).is_err(),
+                "{extra}"
+            );
+        }
+        // A colour that isn't #rrggbb is refused when parsing.
+        assert!(
+            serde_json::from_value::<Edit>(json!({
+                "op": "gradient", "start": [0, 0], "end": [1, 0],
+                "stops": [{"position": 0, "color": "red"}, {"position": 1, "color": "#fff"}],
+            }))
+            .is_err()
+        );
+        document.layers[0].locked = true;
+        let error = run(&mut document, &[gradient(json!({}))]).unwrap_err();
+        assert!(error.to_string().contains("lock"), "{error}");
+    }
+
+    #[test]
+    fn new_layers_are_editable_and_counted() {
+        let (mut document, base) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10}),
+            )],
+        )
+        .unwrap();
+        let added = run(
+            &mut document,
+            &[
+                edit(json!({"op": "add_adjustment_layer", "adjustment": {"HueSaturation": {"hue": 30, "saturation": 0, "lightness": 0, "colorize": false}}})),
+                edit(json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 2}}, "name": "Soft"})),
+                edit(json!({"op": "add_empty_layer", "name": "Paint", "above": base})),
+                edit(json!({"op": "add_mask_layer"})),
+                edit(json!({"op": "add_shape_layer", "shape": "Ellipse", "x": 4, "y": 6, "width": 12, "height": 8, "color": "#00ff00"})),
+            ],
+        )
+        .unwrap();
+        assert_eq!(added.len(), 5);
+        let layer = |id: Uuid| document.layers.iter().find(|l| l.id == id).unwrap();
+        assert!(layer(added[0]).adjustment.is_some());
+        assert!(layer(added[0]).mask.is_some(), "masked by the selection");
+        assert_eq!(layer(added[1]).name, "Soft");
+        assert!(layer(added[1]).filter.is_some());
+        assert!(layer(added[2]).pixels.is_none());
+        assert_eq!(layer(added[2]).name, "Paint");
+        // Added right above the base layer.
+        let index = |id: Uuid| document.layers.iter().position(|l| l.id == id).unwrap();
+        assert_eq!(index(added[2]), index(base) + 1);
+        assert!(layer(added[3]).standalone_mask);
+        let shape = layer(added[4]);
+        assert_eq!(shape.shape.as_ref().unwrap().color, [0, 255, 0, 255]);
+        assert_eq!((shape.transform.x, shape.transform.y), (4.0, 6.0));
+        assert_eq!(document.active, Some(added[4]));
+        for bad in [
+            json!({"op": "add_adjustment_layer"}),
+            json!({"op": "add_adjustment_layer", "adjustment": "Invert", "filter": {"GaussianBlur": {"radius": 2}}}),
+            json!({"op": "add_shape_layer", "shape": "Ellipse", "x": 0, "y": 0, "width": 0, "height": 5}),
+            json!({"op": "add_empty_layer", "above": Uuid::new_v4()}),
+            json!({"op": "add_empty_layer", "name": "x".repeat(300)}),
+            // A Color Lookup's table cannot come in the JSON.
+            json!({"op": "add_adjustment_layer", "adjustment": {"ColorLookup": {"name": "a.cube"}}}),
+            json!({"op": "apply_adjustment", "adjustment": {"ColorLookup": {"name": "a.cube"}}}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
+        // New layers count against the batch's layer limit.
+        let empty = edit(json!({"op": "add_empty_layer"}));
+        assert!(run(&mut document.clone(), &vec![empty; MAX_LAYERS + 1]).is_err());
+    }
+
+    #[test]
+    fn text_layers_are_drawn_and_keep_their_style() {
+        let (mut document, _) = grey_document();
+        let added = run(
+            &mut document,
+            &[edit(json!({"op": "add_text_layer", "text": "Hi", "x": 3, "y": 4, "size": 12, "color": "#ff0000", "bold": true}))],
+        )
+        .unwrap();
+        let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+        let style = layer.text.as_ref().unwrap();
+        assert_eq!(
+            (style.content.as_str(), style.size, style.bold),
+            ("Hi", 12.0, true)
+        );
+        assert_eq!(layer.name, "Hi");
+        assert_eq!((layer.transform.x, layer.transform.y), (3.0, 4.0));
+        assert!(layer.pixels.as_ref().unwrap().pixels().any(|p| p.0[3] > 0));
+        for bad in [
+            json!({"op": "add_text_layer", "text": "  "}),
+            json!({"op": "add_text_layer", "text": "x", "size": 5000}),
+            json!({"op": "add_text_layer", "text": "x".repeat(20_000)}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_runs_are_set_kept_and_described() {
+        let (mut document, _) = grey_document();
+        let added = run(
+            &mut document,
+            &[edit(
+                json!({"op": "add_text_layer", "text": "APPle", "runs": [
+                    {"start": 0, "end": 3, "family": "Menlo", "color": "#ff0000"}
+                ]}),
+            )],
+        )
+        .unwrap()[0];
+        let style = |document: &Document| {
+            let layer = document.layers.iter().find(|l| l.id == added).unwrap();
+            layer.text.clone().unwrap()
+        };
+        let menlo_red = RunStyle {
+            family: Some("Menlo".into()),
+            color: Some([255, 0, 0, 255]),
+            ..Default::default()
+        };
+        assert_eq!(
+            style(&document).runs,
+            vec![TextRun {
+                start: 0,
+                end: 3,
+                style: menlo_red.clone()
+            }]
+        );
+        let layer = document.layers.iter().find(|l| l.id == added).unwrap();
+        assert_eq!(
+            describe_layer(&document, layer)["text"]["runs"],
+            json!([{"start": 0, "end": 3, "family": "Menlo", "color": "#ff0000ff"}])
+        );
+        // New text keeps each letter's style.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "set_text", "layer": added, "text": "APPle pie"}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(style(&document).runs[0].end, 3);
+        // The layer's colour recolours every letter but keeps their fonts.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "set_text", "layer": added, "color": "#0000ff"}),
+            )],
+        )
+        .unwrap();
+        let text = style(&document);
+        assert_eq!(text.color, [0, 0, 255, 255]);
+        assert_eq!(text.runs.len(), 1);
+        assert_eq!(text.runs[0].style.color, None);
+        assert_eq!(text.runs[0].style.family.as_deref(), Some("Menlo"));
+        // Runs replace the letters' styles; an empty list clears them.
+        run(
+            &mut document,
+            &[edit(json!({"op": "set_text", "layer": added, "runs": [
+                {"start": 6, "end": 9, "bold": true, "italic": true}
+            ]}))],
+        )
+        .unwrap();
+        assert_eq!(style(&document).runs.len(), 1);
+        assert_eq!(style(&document).runs[0].start, 6);
+        run(
+            &mut document,
+            &[edit(json!({"op": "set_text", "layer": added, "runs": []}))],
+        )
+        .unwrap();
+        assert!(style(&document).runs.is_empty());
+        for bad in [
+            json!([{"start": 0, "end": 99, "bold": true}]),
+            json!([{"start": 2, "end": 2, "bold": true}]),
+            json!([{"start": 0, "end": 3, "bold": true}, {"start": 1, "end": 4, "italic": true}]),
+            json!([{"start": 0, "end": 3, "color": "red"}]),
+            json!([{"start": 0, "end": 3, "family": ""}]),
+            json!([{"start": 0, "end": 3, "size": 12}]),
+            json!([{"start": -1, "end": 3, "bold": true}]),
+        ] {
+            for op in [
+                json!({"op": "set_text", "layer": added, "runs": bad}),
+                json!({"op": "add_text_layer", "text": "APPle pie", "runs": bad}),
+            ] {
+                let parsed = serde_json::from_value::<Edit>(op.clone());
+                assert!(
+                    parsed.is_err() || run(&mut document.clone(), &[parsed.unwrap()]).is_err(),
+                    "{op}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn transforms_layer_selection_and_canvas_ops() {
+        let (mut document, base) = grey_document();
+        let second = run(&mut document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0];
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": base, "x": 5, "y": 6, "width": 20, "rotation": 15}))],
+        )
+        .unwrap();
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == base)
+            .unwrap()
+            .transform;
+        assert_eq!(
+            (
+                transform.x,
+                transform.y,
+                transform.width,
+                transform.height,
+                transform.rotation
+            ),
+            (5.0, 6.0, 20.0, 30.0, 15.0)
+        );
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(json!({"op": "transform", "layer": base, "width": -3}))]
+            )
+            .is_err()
+        );
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "select_layers", "layers": [base, second]}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(document.selected.len(), 2);
+        assert_eq!(document.active, Some(second));
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(json!({"op": "select_layers", "layers": []}))]
+            )
+            .is_err()
+        );
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(
+                    json!({"op": "select_layers", "layers": [Uuid::new_v4()]})
+                )]
+            )
+            .is_err()
+        );
+
+        let canvas = [
+            edit(json!({"op": "crop", "x": 2, "y": 3, "width": 20, "height": 10})),
+            edit(json!({"op": "resize_canvas", "width": 30, "height": 20, "anchor": [0, 0]})),
+            edit(json!({"op": "resize_image", "width": 60, "height": 40})),
+        ];
+        assert!(canvas.iter().all(Edit::direct_only));
+        assert!(!canvas.iter().any(Edit::is_selection_only));
+        assert_eq!(canvas[0].op(), "crop");
+        run(&mut document, &canvas[..1]).unwrap();
+        assert_eq!((document.width, document.height), (20, 10));
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == base)
+            .unwrap()
+            .transform;
+        assert_eq!((transform.x, transform.y), (3.0, 3.0));
+        run(&mut document, &canvas[1..]).unwrap();
+        assert_eq!((document.width, document.height), (60, 40));
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == base)
+            .unwrap()
+            .transform;
+        assert_eq!((transform.x, transform.y), (6.0, 6.0));
+        for bad in [
+            json!({"op": "crop", "x": 0, "y": 0, "width": 0, "height": 5}),
+            json!({"op": "resize_canvas", "width": 70_000, "height": 5}),
+            json!({"op": "resize_canvas", "width": 10, "height": 5, "anchor": [2, 0]}),
+            json!({"op": "resize_image", "width": 0, "height": 5}),
+        ] {
+            assert!(
+                run(&mut document.clone(), &[edit(bad.clone())]).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn heavy_batches_are_refused_before_any_work() {
+        let (mut document, base) = grey_document();
+        let before = document.clone();
+        // A zig-zag of huge dabs across the canvas.
+        let points: Vec<[f32; 2]> = (0..MAX_POINTS)
+            .map(|i| {
+                if i % 2 == 0 {
+                    [0.0, 0.0]
+                } else {
+                    [29_000.0, 29_000.0]
+                }
+            })
+            .collect();
+        let bomb = edit(json!({
+            "op": "stroke", "layer": base, "points": points, "size": 2000, "hardness": 1,
+        }));
+        let started = std::time::Instant::now();
+        let error = run(&mut document, &[bomb]).unwrap_err().to_string();
+        assert!(
+            error.contains("too long") || error.contains("longer"),
+            "{error}"
+        );
+        // Canvas-size masks after growing the canvas to 100 megapixels.
+        let mut masks = vec![edit(
+            json!({"op": "resize_canvas", "width": 10_000, "height": 10_000}),
+        )];
+        masks.extend((0..MAX_LAYERS).map(|_| edit(json!({"op": "add_mask_layer"}))));
+        let error = run(&mut document, &masks).unwrap_err().to_string();
+        assert!(
+            error.contains("MiB") || error.contains("too long"),
+            "{error}"
+        );
+        // Colour selections and grown selections on a large canvas.
+        let mut renders = vec![edit(
+            json!({"op": "resize_canvas", "width": 10_000, "height": 10_000}),
+        )];
+        renders.extend((0..20).map(|_| edit(json!({"op": "select_color", "x": 1, "y": 1}))));
+        assert!(run(&mut document, &renders).is_err());
+        let grow = [
+            edit(json!({"op": "resize_canvas", "width": 10_000, "height": 10_000})),
+            edit(json!({"op": "grow_selection", "by": 256})),
+        ];
+        assert!(run(&mut document, &grow).is_err());
+        let blur = [edit(
+            json!({"op": "apply_filter", "filter": {"MotionBlur": {"distance": 200, "angle": 0}}}),
+        )];
+        let mut wide = document.clone();
+        wide.layers[0].pixels = Some(Arc::new(RgbaImage::new(20_000, 5_000)));
+        assert!(run(&mut wide, &blur).is_err());
+        // Nothing was done, and quickly.
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(document.width, before.width);
+        assert_eq!(document.layers.len(), before.layers.len());
+        // One reader shares the budget across the batches of a result.
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS);
+        let big = [edit(
+            json!({"op": "resize_canvas", "width": 10_000, "height": 10_000}),
+        )];
+        let mut huge = document.clone();
+        apply(&mut huge, &big, &mut reader).unwrap();
+        let masks: Vec<Edit> = (0..6)
+            .map(|_| edit(json!({"op": "add_mask_layer"})))
+            .collect();
+        assert!(apply(&mut huge.clone(), &masks, &mut reader).is_err());
+        // Ordinary edits fit easily.
+        let stroke = edit(json!({"op": "stroke", "points": [[1, 1], [30, 20]], "size": 40}));
+        let fine = vec![stroke; 50];
+        run(&mut document, &fine).unwrap();
+        assert!(cost(&document, &fine).work < MAX_WORK / 100);
+    }
+
+    #[test]
+    fn move_layer_places_layers_and_rejects_bad_targets() {
+        let (mut document, base) = grey_document();
+        let add = |document: &mut Document| {
+            run(document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0]
+        };
+        let (a, b, c) = (add(&mut document), add(&mut document), add(&mut document));
+        let order =
+            |document: &Document| -> Vec<Uuid> { document.layers.iter().map(|l| l.id).collect() };
+        let mv = |document: &mut Document, value: serde_json::Value| run(document, &[edit(value)]);
+        assert_eq!(order(&document), [base, a, b, c]);
+        // Above and below.
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": base, "above": c}),
+        )
+        .unwrap();
+        assert_eq!(order(&document), [a, b, c, base]);
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": base, "below": b}),
+        )
+        .unwrap();
+        assert_eq!(order(&document), [a, base, b, c]);
+        assert_eq!(document.active, Some(base));
+        // Into a group, then back out next to a root layer.
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [b, c]}))],
+        )
+        .unwrap()[0];
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": a, "parent": group}),
+        )
+        .unwrap();
+        let parent = |document: &Document, id: Uuid| {
+            document.layers.iter().find(|l| l.id == id).unwrap().parent
+        };
+        assert_eq!(parent(&document, a), Some(group));
+        let index = |document: &Document, id: Uuid| order(document).iter().position(|l| *l == id);
+        assert!(
+            index(&document, a) > index(&document, c),
+            "above the group's top layer"
+        );
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": a, "above": b, "parent": group}),
+        )
+        .unwrap();
+        assert_eq!(parent(&document, a), Some(group));
+        mv(
+            &mut document,
+            json!({"op": "move_layer", "layer": a, "below": base}),
+        )
+        .unwrap();
+        assert_eq!(parent(&document, a), None);
+        for bad in [
+            json!({"op": "move_layer", "layer": Uuid::new_v4(), "above": base}),
+            json!({"op": "move_layer", "layer": base, "above": Uuid::new_v4()}),
+            json!({"op": "move_layer", "layer": base, "parent": Uuid::new_v4()}),
+            json!({"op": "move_layer", "layer": base}),
+            json!({"op": "move_layer", "layer": base, "above": a, "below": a}),
+            // Not a group.
+            json!({"op": "move_layer", "layer": a, "parent": base}),
+            // A group into itself or its own child, or next to itself.
+            json!({"op": "move_layer", "layer": group, "parent": group}),
+            json!({"op": "move_layer", "layer": group, "above": c}),
+            json!({"op": "move_layer", "layer": base, "above": base}),
+            // The parent is not the target's group.
+            json!({"op": "move_layer", "layer": a, "above": base, "parent": group}),
+        ] {
+            assert!(mv(&mut document.clone(), bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn layers_merge_group_and_ungroup_in_one_edit() {
+        let (mut document, base) = grey_document();
+        let red = run(
+            &mut document,
+            &[edit(json!({"op": "add_shape_layer", "shape": "Rectangle", "x": 0, "y": 0, "width": 4, "height": 4, "color": "#ff0000"}))],
+        )
+        .unwrap()[0];
+        let empty = run(&mut document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0];
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [red, empty]}))],
+        )
+        .unwrap()[0];
+        let layer =
+            |document: &Document, id: Uuid| document.layers.iter().find(|l| l.id == id).cloned();
+        assert!(layer(&document, group).unwrap().group);
+        assert_eq!(layer(&document, red).unwrap().parent, Some(group));
+        assert!(
+            run(
+                &mut document.clone(),
+                &[edit(json!({"op": "ungroup_layers", "layer": base}))]
+            )
+            .is_err()
+        );
+        run(
+            &mut document,
+            &[edit(json!({"op": "ungroup_layers", "layer": group}))],
+        )
+        .unwrap();
+        assert!(layer(&document, group).is_none());
+        assert_eq!(layer(&document, red).unwrap().parent, None);
+        // One layer merges down; the merged layer is reported.
+        let merged = run(
+            &mut document,
+            &[edit(json!({"op": "merge_layers", "layers": [red]}))],
+        )
+        .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert!(layer(&document, red).is_none() && layer(&document, base).is_none());
+        let pixels = crate::render::render(&document);
+        assert_eq!(pixels.get_pixel(1, 1).0, [255, 0, 0, 255]);
+        // The bottom layer has nothing to merge into.
+        let bottom = document.layers[0].id;
+        let error = run(
+            &mut document,
+            &[edit(json!({"op": "merge_layers", "layers": [bottom]}))],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("layer"), "{error}");
     }
 
     #[test]
@@ -1245,5 +5191,930 @@ mod tests {
         let hash = pixel_hash(&RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 4])));
         assert!(hash.starts_with("fnv1a:"));
         assert_ne!(hash, pixel_hash(&RgbaImage::new(2, 2)));
+    }
+
+    /// A clear 200 × 60 document with one pixel layer.
+    fn clear_document() -> Document {
+        let mut document = Document::new(200, 60).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::new(200, 60)));
+        document
+    }
+
+    fn painted_rows(document: &Document, x: u32) -> usize {
+        let image = crate::render::render(document);
+        (0..image.height())
+            .filter(|&y| image.get_pixel(x, y)[3] > 0)
+            .count()
+    }
+
+    #[test]
+    fn stroke_point_pressure_tapers_the_width_and_optionally_the_opacity() {
+        let mut document = clear_document();
+        run(
+            &mut document,
+            &[edit(json!({
+                "op": "stroke", "size": 30, "hardness": 1,
+                "points": [[10, 30, 0.1], [100, 30, 1], [190, 30, 0.1]],
+            }))],
+        )
+        .unwrap();
+        let (thin, wide) = (painted_rows(&document, 15), painted_rows(&document, 100));
+        assert_eq!(wide, 30);
+        assert!(thin > 0 && thin < 8, "{thin}");
+        assert!(painted_rows(&document, 55) > thin && painted_rows(&document, 55) < wide);
+        assert!(painted_rows(&document, 185) < 8);
+        // Full strength along the middle: pressure changed only the size.
+        let image = crate::render::render(&document);
+        assert_eq!(image.get_pixel(15, 30)[3], 255);
+
+        // With `pressure_opacity` the thin ends are also fainter.
+        let mut faded = clear_document();
+        run(
+            &mut faded,
+            &[edit(json!({
+                "op": "stroke", "size": 30, "hardness": 1, "pressure_opacity": true,
+                "points": [[10, 30, 0.1], [100, 30, 1], [190, 30, 0.1]],
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&faded);
+        assert!(image.get_pixel(15, 30)[3] < 80);
+        assert_eq!(image.get_pixel(100, 30)[3], 255);
+
+        // Two-number points keep pressure 1, mixed with three-number ones.
+        let mut mixed = clear_document();
+        run(
+            &mut mixed,
+            &[edit(json!({
+                "op": "stroke", "size": 30, "hardness": 1,
+                "points": [[10, 30], [100, 30, 1], [190, 30]],
+            }))],
+        )
+        .unwrap();
+        assert_eq!(painted_rows(&mixed, 15), 30);
+    }
+
+    #[test]
+    fn stroke_flow_defaults_to_full_and_builds_up_where_the_stroke_goes_back() {
+        let parsed: Edit =
+            serde_json::from_value(json!({"op": "stroke", "points": [[1, 1]]})).unwrap();
+        let Edit::Stroke { flow, .. } = parsed else {
+            panic!("not a stroke");
+        };
+        assert_eq!(flow, 1.0);
+        let alpha = |flow: Option<f32>, passes: usize| {
+            let mut document = clear_document();
+            let points: Vec<_> = (0..=passes)
+                .map(|i| json!([if i % 2 == 0 { 20 } else { 180 }, 30]))
+                .collect();
+            let mut stroke = json!({"op": "stroke", "size": 20, "hardness": 1, "points": points});
+            if let Some(flow) = flow {
+                stroke["flow"] = json!(flow);
+            }
+            run(&mut document, &[edit(stroke)]).unwrap();
+            crate::render::render(&document).get_pixel(100, 30)[3]
+        };
+        assert_eq!(alpha(None, 1), 255);
+        assert_eq!(alpha(Some(1.0), 1), 255);
+        let (once, often) = (alpha(Some(0.2), 1), alpha(Some(0.2), 20));
+        assert!((40..=65).contains(&once), "{once}");
+        assert!(often > 240, "{often}");
+        let mut document = clear_document();
+        for flow in [0.0, -0.5, 1.5, f32::NAN] {
+            let stroke = json!({"op": "stroke", "points": [[1, 1]], "flow": flow});
+            let parsed = serde_json::from_value::<Edit>(stroke.clone());
+            assert!(
+                parsed.is_err() || run(&mut document, &[parsed.unwrap()]).is_err(),
+                "{stroke}"
+            );
+        }
+    }
+
+    #[test]
+    fn stroke_dynamics_are_checked_and_repeat_for_a_seed() {
+        let mut document = clear_document();
+        for (stroke, says) in [
+            (json!({"op": "stroke", "points": [[1, 1, 1.5]]}), "pressure"),
+            (
+                json!({"op": "stroke", "points": [[1, 1, -0.1]]}),
+                "pressure",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1], [2, 2]], "spacing": 11}),
+                "spacing",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 0}),
+                "count",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "scatter_count": 17}),
+                "count",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "hue_jitter": 2}),
+                "hue jitter",
+            ),
+            (
+                json!({"op": "stroke", "points": [[1, 1]], "taper_in": -1}),
+                "taper",
+            ),
+        ] {
+            let error = run(&mut document, &[edit(stroke.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{stroke}: {error}");
+        }
+        for points in [json!([[1, 2, 3, 4]]), json!([[1]])] {
+            let error = serde_json::from_value::<Edit>(json!({"op": "stroke", "points": points}))
+                .unwrap_err();
+            assert!(error.to_string().contains("[x, y, pressure]"), "{error}");
+        }
+        assert_eq!(
+            serde_json::to_value(edit(
+                json!({"op": "stroke", "points": [[1, 2], [3, 4, 0.5]]})
+            ))
+            .unwrap()["points"],
+            json!([[1.0, 2.0], [3.0, 4.0, 0.5]])
+        );
+        let stars = |seed: u64| {
+            let mut document = clear_document();
+            run(
+                &mut document,
+                &[edit(json!({
+                    "op": "stroke", "size": 6, "hardness": 1, "color": "#ffe080",
+                    "points": [[10, 30], [190, 30]],
+                    "spacing": 2, "scatter": 3, "scatter_count": 2,
+                    "size_jitter": 0.6, "opacity_jitter": 0.5, "hue_jitter": 0.3, "seed": seed,
+                }))],
+            )
+            .unwrap();
+            crate::render::render(&document)
+        };
+        assert_eq!(stars(5), stars(5));
+        assert_ne!(stars(5), stars(6));
+        // Spacing leaves gaps between the dabs on the path.
+        let mut dotted = clear_document();
+        run(
+            &mut dotted,
+            &[edit(json!({
+                "op": "stroke", "size": 6, "hardness": 1, "points": [[10, 30], [190, 30]],
+                "spacing": 3,
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&dotted);
+        assert_eq!(image.get_pixel(10, 30)[3], 255);
+        assert_eq!(image.get_pixel(28, 30)[3], 255);
+        assert_eq!(image.get_pixel(19, 30)[3], 0);
+    }
+
+    #[test]
+    fn stroke_dynamics_count_against_the_work_budget() {
+        let document = clear_document();
+        let plain = cost(
+            &document,
+            &[edit(
+                json!({"op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100}),
+            )],
+        );
+        let scattered = cost(
+            &document,
+            &[edit(json!({
+                "op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100,
+                "spacing": 0.01, "scatter": 1, "scatter_count": 16,
+            }))],
+        );
+        assert_eq!(plain.stroke, scattered.stroke);
+        assert!(scattered.work > plain.work * 100, "{scattered:?} {plain:?}");
+        // Taper is cut into short pieces, which cost more than one sweep.
+        let tapered = cost(
+            &document,
+            &[edit(json!({
+                "op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100,
+                "taper_in": 500, "taper_out": 500,
+            }))],
+        );
+        assert!(tapered.work > plain.work * 2, "{tapered:?} {plain:?}");
+    }
+
+    #[test]
+    fn stroke_symmetry_is_checked_and_mirrors_the_stroke() {
+        let mut document = clear_document();
+        for (symmetry, says) in [
+            (json!({"mode": "radial", "segments": 1}), "segments"),
+            (json!({"mode": "radial", "segments": 33}), "segments"),
+            (json!({"mode": "vertical", "center": [201, 10]}), "centre"),
+            (json!({"mode": "horizontal", "center": [10, -1]}), "centre"),
+        ] {
+            let stroke = json!({"op": "stroke", "points": [[1, 1]], "symmetry": symmetry});
+            let error = run(&mut document, &[edit(stroke.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{stroke}: {error}");
+        }
+        for symmetry in [
+            json!({"mode": "diagonal"}),
+            json!({"mode": "radial", "count": 4}),
+            json!({"segments": 4}),
+        ] {
+            assert!(
+                serde_json::from_value::<Edit>(
+                    json!({"op": "stroke", "points": [[1, 1]], "symmetry": symmetry})
+                )
+                .is_err(),
+                "{symmetry}"
+            );
+        }
+        let symmetric = edit(json!({
+            "op": "stroke", "points": [[1, 1]],
+            "symmetry": {"mode": "radial", "segments": 12, "center": [100, 30]},
+        }));
+        let Edit::Stroke { symmetry, .. } = &symmetric else {
+            unreachable!()
+        };
+        assert_eq!(
+            symmetry.unwrap().paint(),
+            crate::paint::Symmetry {
+                mode: crate::paint::SymmetryMode::Radial,
+                segments: 12,
+                center: Some(Point::new(100.0, 30.0)),
+            }
+        );
+        // Without symmetry the edit writes no `symmetry` at all.
+        let plain =
+            serde_json::to_value(edit(json!({"op": "stroke", "points": [[1, 1]]}))).unwrap();
+        assert!(plain.get("symmetry").is_none(), "{plain}");
+
+        // A vertical axis through the middle of the canvas by default: the
+        // dab at x = 20 is also painted at x = 180.
+        let mut mirrored = clear_document();
+        run(
+            &mut mirrored,
+            &[edit(json!({
+                "op": "stroke", "size": 10, "hardness": 1, "points": [[20, 20], [40, 30]],
+                "symmetry": {"mode": "vertical"},
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&mirrored);
+        assert_eq!(image.get_pixel(20, 20)[3], 255);
+        assert_eq!(image.get_pixel(179, 20)[3], 255);
+        assert_eq!(image.get_pixel(159, 30)[3], 255);
+        assert_eq!(image.get_pixel(100, 25)[3], 0);
+        assert_eq!(image, image::imageops::flip_horizontal(&image));
+        // A path stroke is mirrored the same way.
+        let mut along_path = clear_document();
+        run(
+            &mut along_path,
+            &[edit(json!({
+                "op": "stroke", "size": 10, "hardness": 1, "path": "M 20 20 L 40 30",
+                "symmetry": {"mode": "vertical"},
+            }))],
+        )
+        .unwrap();
+        assert_eq!(crate::render::render(&along_path), image);
+        // Four turns around a centre of choice.
+        let mut radial = clear_document();
+        run(
+            &mut radial,
+            &[edit(json!({
+                "op": "stroke", "size": 6, "hardness": 1, "points": [[120, 30]],
+                "symmetry": {"mode": "radial", "segments": 4, "center": [100, 30]},
+            }))],
+        )
+        .unwrap();
+        let image = crate::render::render(&radial);
+        for [x, y] in [[120, 30], [100, 50], [80, 30], [100, 10]] {
+            assert_eq!(image.get_pixel(x, y)[3], 255, "{x}, {y}");
+        }
+        assert_eq!(image.get_pixel(100, 30)[3], 0);
+    }
+
+    #[test]
+    fn stroke_symmetry_counts_every_copy_against_the_budget() {
+        let document = clear_document();
+        let stroke = |extra: Value| {
+            let mut value = json!({"op": "stroke", "points": [[0, 0], [1000, 0]], "size": 100});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            cost(&document, &[edit(value)])
+        };
+        let plain = stroke(json!({}));
+        let radial = stroke(json!({"symmetry": {"mode": "radial", "segments": 8}}));
+        assert!(
+            (radial.stroke - plain.stroke * 8.0).abs() < 0.1,
+            "{radial:?}"
+        );
+        assert!(radial.work >= plain.work * 8, "{radial:?} {plain:?}");
+        let mirrored = stroke(json!({"symmetry": {"mode": "horizontal"}}));
+        assert_eq!(mirrored.stroke, plain.stroke * 2.0);
+        assert_eq!(mirrored.work, plain.work * 2);
+        let off = stroke(json!({"symmetry": {"mode": "off", "segments": 30}}));
+        assert_eq!(off, plain);
+        let dabs = json!({"spacing": 0.5, "scatter": 1});
+        let dabbed = stroke(dabs.clone());
+        let mut symmetric = dabs;
+        symmetric["symmetry"] = json!({"mode": "radial", "segments": 32});
+        let symmetric = stroke(symmetric);
+        assert!(
+            symmetric.work >= dabbed.work * 31,
+            "{symmetric:?} {dabbed:?}"
+        );
+        // Long enough strokes go over the length limit only with their copies.
+        let long = json!({"op": "stroke", "points": [[0, 0], [10_000, 0]]});
+        let mut copies = long.clone();
+        copies["symmetry"] = json!({"mode": "radial", "segments": 32});
+        assert!(cost(&document, &[edit(long)]).stroke <= MAX_STROKE_LENGTH);
+        assert!(cost(&document, &[edit(copies)]).stroke > MAX_STROKE_LENGTH);
+    }
+
+    #[test]
+    fn adjustment_layers_report_their_settings_and_set_adjustment_changes_them_in_place() {
+        let (mut document, image) = grey_document();
+        let hue = |saturation: i32| json!({"HueSaturation": {"hue": 0.0, "saturation": saturation, "lightness": 0.0, "colorize": false}});
+        let added = run(
+            &mut document,
+            &[
+                edit(json!({"op": "add_adjustment_layer", "adjustment": hue(16)})),
+                edit(json!({"op": "add_adjustment_layer", "filter": {"GaussianBlur": {"radius": 2.0}}})),
+            ],
+        )
+        .unwrap();
+        let (grade, blur) = (added[0], added[1]);
+        let described = |document: &Document, id: Uuid| {
+            describe_layer(
+                document,
+                document.layers.iter().find(|l| l.id == id).unwrap(),
+            )
+        };
+        assert_eq!(
+            described(&document, grade)["adjustment"]["HueSaturation"]["saturation"],
+            16.0
+        );
+        assert_eq!(described(&document, grade)["filter"], Value::Null);
+        assert_eq!(
+            described(&document, blur)["filter"]["GaussianBlur"]["radius"],
+            2.0
+        );
+        assert_eq!(described(&document, image)["adjustment"], Value::Null);
+
+        let order: Vec<Uuid> = document.layers.iter().map(|l| l.id).collect();
+        run(
+            &mut document,
+            &[
+                edit(json!({"op": "set_adjustment", "layer": grade, "adjustment": hue(6)})),
+                edit(json!({"op": "set_adjustment", "layer": blur, "filter": {"GaussianBlur": {"radius": 5.0}}})),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            described(&document, grade)["adjustment"]["HueSaturation"]["saturation"],
+            6.0
+        );
+        assert_eq!(
+            described(&document, blur)["filter"]["GaussianBlur"]["radius"],
+            5.0
+        );
+        assert_eq!(
+            order,
+            document.layers.iter().map(|l| l.id).collect::<Vec<_>>(),
+            "the layers keep their places"
+        );
+
+        for (bad, says) in [
+            (json!({"op": "set_adjustment", "layer": grade}), "either"),
+            (
+                json!({"op": "set_adjustment", "layer": grade, "filter": {"GaussianBlur": {"radius": 5.0}}}),
+                "not a filter layer",
+            ),
+            (
+                json!({"op": "set_adjustment", "layer": image, "adjustment": hue(1)}),
+                "not an adjustment layer",
+            ),
+            (
+                json!({"op": "set_adjustment", "layer": grade, "adjustment": hue(500)}),
+                "",
+            ),
+        ] {
+            let error = run(&mut document.clone(), &[edit(bad.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn strokes_dodge_burn_and_paint_masks_and_fills_reach_masks_too() {
+        let level = |document: &Document, id: Uuid, x: u32, y: u32| {
+            let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+            layer.pixels.as_ref().unwrap().get_pixel(x, y).0[0]
+        };
+        let across = json!([[5, 15], [35, 15]]);
+        for (mode, lighter) in [("dodge", true), ("burn", false)] {
+            let (mut document, id) = grey_document();
+            let stroke = edit(json!({
+                "op": "stroke", "layer": id, "points": across, "size": 8,
+                "mode": mode, "range": "midtones", "exposure": 1.0,
+            }));
+            run(&mut document, &[stroke]).unwrap();
+            let (under, away) = (level(&document, id, 20, 15), level(&document, id, 20, 2));
+            assert_eq!(away, 100, "{mode}");
+            assert_eq!(under > 100, lighter, "{mode}: {under}");
+            assert_ne!(under, 100, "{mode}");
+        }
+
+        // An adjustment layer's mask is painted directly: black hides the adjustment.
+        let (mut document, image) = grey_document();
+        let grade = run(
+            &mut document,
+            &[edit(
+                json!({"op": "add_adjustment_layer", "adjustment": "Invert"}),
+            )],
+        )
+        .unwrap()[0];
+        let mask_at = |document: &Document, id: Uuid, x: u32, y: u32| {
+            let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+            layer.mask.as_ref().unwrap().pixels.get_pixel(x, y).0[0]
+        };
+        run(
+            &mut document,
+            &[edit(json!({
+                "op": "stroke", "layer": grade, "points": across, "size": 8,
+                "color": "#000000", "mask": true,
+            }))],
+        )
+        .unwrap();
+        assert!(mask_at(&document, grade, 20, 15) < 10);
+        assert_eq!(mask_at(&document, grade, 20, 2), 255);
+        let flat = crate::render::render(&document);
+        assert_eq!(
+            flat.get_pixel(20, 15).0[0],
+            100,
+            "not inverted under the stroke"
+        );
+        assert_eq!(flat.get_pixel(20, 2).0[0], 155);
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "fill", "layer": grade, "color": "#ffffff", "mask": true}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(mask_at(&document, grade, 20, 15), 255);
+
+        // An image keeps its mask on an attached mask layer: once it has one, that is
+        // the mask a second stroke paints.
+        run(
+            &mut document,
+            &[edit(json!({
+                "op": "stroke", "layer": image, "points": across, "size": 8,
+                "color": "#000000", "mask": true,
+            }))],
+        )
+        .unwrap();
+        document.promote_image_masks();
+        let attached: Vec<Uuid> = document
+            .layers
+            .iter()
+            .filter(|l| l.parent == Some(image) && l.standalone_mask)
+            .map(|l| l.id)
+            .collect();
+        assert_eq!(attached.len(), 1);
+        assert!(mask_at(&document, attached[0], 20, 15) < 10);
+        for edit in [
+            edit(json!({
+                "op": "stroke", "layer": image, "points": [[20, 2], [20, 28]],
+                "size": 4, "color": "#000000", "mask": true,
+            })),
+            edit(json!({
+                "op": "gradient", "layer": image, "start": [0, 0], "end": [40, 0], "mask": true,
+                "stops": [{"position": 0, "color": "#000000"}, {"position": 1, "color": "#ffffff"}],
+            })),
+        ] {
+            run(&mut document, &[edit]).unwrap();
+            document.promote_image_masks();
+            let masks = document
+                .layers
+                .iter()
+                .filter(|l| l.parent == Some(image) && l.standalone_mask)
+                .count();
+            assert_eq!(masks, 1, "no second mask layer");
+        }
+        assert!(
+            mask_at(&document, attached[0], 2, 15) < 40,
+            "the gradient's dark end"
+        );
+
+        for (bad, says) in [
+            (json!({"mode": "dodge", "mask": true}), "not masks"),
+            (json!({"mode": "burn", "erase": true}), "not both"),
+            (json!({"exposure": 0.5}), "belong to"),
+            (json!({"mode": "sponge", "exposure": 2}), "exposure"),
+        ] {
+            let mut stroke = json!({"op": "stroke", "layer": image, "points": across});
+            stroke
+                .as_object_mut()
+                .unwrap()
+                .extend(bad.as_object().unwrap().clone());
+            let error = run(&mut document.clone(), &[edit(stroke)]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
+        assert!(serde_json::from_value::<Edit>(json!({"op": "stroke", "mode": "smear"})).is_err());
+    }
+
+    #[test]
+    fn auto_adjust_stretches_contrast_and_tone_and_neutralises_a_cast() {
+        // A warm, flat image: every channel short of the full range, red highest.
+        let warm = || {
+            let mut document = Document::new(16, 4).unwrap();
+            let mut pixels = RgbaImage::new(16, 4);
+            for (x, _, pixel) in pixels.enumerate_pixels_mut() {
+                let v = 60 + (x as u8) * 6;
+                *pixel = image::Rgba([v + 40, v, v - 20, 255]);
+            }
+            document.layers[0].pixels = Some(Arc::new(pixels));
+            let id = document.layers[0].id;
+            (document, id)
+        };
+        let means = |document: &Document| {
+            crate::effects::average_color(&crate::render::render(document)).unwrap()
+        };
+
+        // As a layer: the pixels stay, and the settings can be read back and changed.
+        let (mut document, id) = warm();
+        let added = run(
+            &mut document,
+            &[edit(
+                json!({"op": "auto_adjust", "kind": "white_balance", "as_layer": true}),
+            )],
+        )
+        .unwrap();
+        let layer = document.layers.iter().find(|l| l.id == added[0]).unwrap();
+        assert_eq!(layer.name, "Auto White Balance");
+        assert!(matches!(
+            layer.adjustment,
+            Some(Adjustment::LevelsChannels { .. })
+        ));
+        let [r, g, b] = means(&document);
+        assert!((r - g).abs() < 3.0 && (b - g).abs() < 3.0, "{r} {g} {b}");
+        let original = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(
+            original.pixels.as_ref().unwrap().get_pixel(0, 0).0,
+            [100, 60, 40, 255]
+        );
+
+        // On the pixels, from a point that should be grey.
+        let (mut document, id) = warm();
+        run(
+            &mut document,
+            &[edit(json!({"op": "auto_adjust", "kind": "white_balance", "layer": id, "neutral": [8, 2]}))],
+        )
+        .unwrap();
+        let pixel = crate::render::render(&document).get_pixel(8, 2).0;
+        assert!(
+            pixel[0].abs_diff(pixel[1]) <= 3 && pixel[2].abs_diff(pixel[1]) <= 3,
+            "{pixel:?}"
+        );
+
+        // Contrast keeps the cast and fills the range; tone stretches each channel.
+        let (mut document, id) = warm();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "auto_adjust", "kind": "contrast", "layer": id}),
+            )],
+        )
+        .unwrap();
+        let flat = crate::render::render(&document);
+        let (dark, light) = (flat.get_pixel(0, 0).0, flat.get_pixel(15, 0).0);
+        // The lightness fills the range, so the lightest pixel's strongest channel tops out.
+        assert!(
+            dark[1] < 20 && light[0] == 255 && light[1] > 220,
+            "{dark:?} {light:?}"
+        );
+        assert!(light[0] > light[2], "still warm");
+        let (mut document, id) = warm();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "auto_adjust", "kind": "tone", "layer": id}),
+            )],
+        )
+        .unwrap();
+        let flat = crate::render::render(&document);
+        let (dark, light) = (flat.get_pixel(0, 0).0, flat.get_pixel(15, 0).0);
+        assert!(dark.iter().take(3).all(|v| *v < 12), "{dark:?}");
+        assert!(light.iter().take(3).all(|v| *v > 243), "{light:?}");
+
+        for (bad, says) in [
+            (
+                json!({"kind": "contrast", "neutral": [1, 1]}),
+                "white balance",
+            ),
+            (json!({"kind": "tone", "name": "x"}), "`as_layer`"),
+            (
+                json!({"kind": "tone", "as_layer": true, "layer": id}),
+                "leave out",
+            ),
+            (
+                json!({"kind": "white_balance", "neutral": [99, 1]}),
+                "on the canvas",
+            ),
+        ] {
+            let mut auto = json!({"op": "auto_adjust"});
+            auto.as_object_mut()
+                .unwrap()
+                .extend(bad.as_object().unwrap().clone());
+            let (mut document, _) = warm();
+            let error = run(&mut document, &[edit(auto)]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
+        assert!(
+            serde_json::from_value::<Edit>(json!({"op": "auto_adjust", "kind": "magic"})).is_err()
+        );
+    }
+
+    /// Whether every pixel of the flattened image is opaque: no corner is empty.
+    fn covered(document: &Document) -> bool {
+        crate::render::render(document)
+            .pixels()
+            .all(|p| p.0[3] == 255)
+    }
+
+    #[test]
+    fn the_canvas_turns_by_any_angle_growing_to_fit_or_keeping_its_size() {
+        let (mut document, id) = grey_document();
+        document.selection = Some(Arc::new(image::GrayImage::from_pixel(
+            40,
+            30,
+            image::Luma([255]),
+        )));
+        let turn = edit(json!({"op": "rotate_canvas", "degrees": 30}));
+        assert!(turn.direct_only());
+        run(&mut document, &[turn]).unwrap();
+        // 40 cos 30° + 30 sin 30° = 49.6, 40 sin 30° + 30 cos 30° = 45.98.
+        assert_eq!((document.width, document.height), (50, 46));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.rotation, 30.0);
+        assert_eq!(
+            (layer.transform.width, layer.transform.height),
+            (40.0, 30.0),
+            "the pixels are not resampled"
+        );
+        let center = layer.transform.center();
+        assert!((center.x - 25.0).abs() < 0.01 && (center.y - 23.0).abs() < 0.01);
+        assert!(!covered(&document), "the corners are empty");
+        let selection = document.selection.as_deref().unwrap();
+        assert_eq!(selection.dimensions(), (50, 46));
+        assert_eq!(selection.get_pixel(25, 23).0, [255]);
+        assert_eq!(selection.get_pixel(0, 0).0, [0]);
+
+        // Turning back gives the picture back, on the larger canvas.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "rotate_canvas", "degrees": -30, "expand": false}),
+            )],
+        )
+        .unwrap();
+        assert_eq!((document.width, document.height), (50, 46));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert!(layer.transform.rotation.abs() < 0.001);
+
+        // Without expanding, even a quarter turn keeps the canvas.
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "rotate_canvas", "degrees": 90, "expand": false}),
+            )],
+        )
+        .unwrap();
+        assert_eq!((document.width, document.height), (40, 30));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.rotation, 90.0);
+        assert_eq!(layer.transform.center(), Point::new(20.0, 15.0));
+        let nan = Edit::RotateCanvas {
+            degrees: f32::NAN,
+            expand: true,
+        };
+        assert!(run(&mut document, &[nan]).is_err());
+    }
+
+    #[test]
+    fn crop_to_finds_the_box_for_a_ratio_and_straightens_without_empty_corners() {
+        let size = |document: &Document| (document.width, document.height);
+        let (mut document, id) = grey_document();
+        let square = edit(json!({"op": "crop_to", "ratio": [1, 1]}));
+        assert!(square.direct_only());
+        run(&mut document, &[square]).unwrap();
+        assert_eq!(size(&document), (30, 30));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.x, -5.0, "centred");
+
+        // The centre is honoured as far as the canvas allows.
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "crop_to", "ratio": [4, 5], "center": [0, 15]}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(size(&document), (24, 30));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.x, 0.0);
+
+        // Inside bounds, the ratio's largest box.
+        let (mut document, _) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "crop_to", "ratio": [2, 1], "bounds": [10, 10, 20, 20]}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(size(&document), (20, 10));
+
+        for degrees in [7.5, -12.0, 45.0] {
+            let (mut document, _) = grey_document();
+            run(
+                &mut document,
+                &[edit(json!({"op": "crop_to", "straighten": degrees}))],
+            )
+            .unwrap();
+            assert!(covered(&document), "{degrees}: {:?}", size(&document));
+            let (width, height) = size(&document);
+            assert!(width < 40 && height < 30 && width > 10, "{degrees}");
+            let shape = width as f32 / height as f32;
+            assert!((shape - 4.0 / 3.0).abs() < 0.15, "{degrees}: {shape}");
+        }
+        let (mut document, _) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "crop_to", "straighten": 5, "ratio": [1, 1]}),
+            )],
+        )
+        .unwrap();
+        assert!(covered(&document));
+        assert_eq!(document.width, document.height);
+
+        for (bad, says) in [
+            (json!({"op": "crop_to"}), "Give a `ratio`"),
+            (json!({"op": "crop_to", "ratio": [0, 1]}), "`ratio`"),
+            (json!({"op": "crop_to", "straighten": 60}), "-45 to 45"),
+            (
+                json!({"op": "crop_to", "straighten": 5, "center": [1, 1]}),
+                "leave out",
+            ),
+            (
+                json!({"op": "crop_to", "ratio": [1, 1], "bounds": [0, 0, 0, 5]}),
+                "`bounds`",
+            ),
+        ] {
+            let (mut document, _) = grey_document();
+            let error = run(&mut document, &[edit(bad.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn layers_turn_about_a_pivot_and_grow_to_cover_the_canvas() {
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": id, "rotation": 90, "pivot": [0, 0]}),
+            )],
+        )
+        .unwrap();
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == id)
+            .unwrap()
+            .transform;
+        // The centre (20, 15) goes round the corner to (-15, 20).
+        assert!((transform.x + 35.0).abs() < 0.001 && (transform.y - 5.0).abs() < 0.001);
+        assert_eq!((transform.width, transform.height), (40.0, 30.0));
+
+        // A turned layer leaves corners empty until it is asked to cover.
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": id, "rotation": 8}))],
+        )
+        .unwrap();
+        assert!(!covered(&document));
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": id, "cover": true}))],
+        )
+        .unwrap();
+        assert!(covered(&document));
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == id)
+            .unwrap()
+            .transform;
+        assert!(transform.width > 40.0 && transform.width < 60.0);
+        assert!((transform.width / transform.height - 4.0 / 3.0).abs() < 0.001);
+        assert_eq!(transform.center(), Point::new(20.0, 15.0));
+
+        // A layer that already covers is left alone; one moved off centre grows more.
+        let before = transform;
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": id, "cover": true}))],
+        )
+        .unwrap();
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .unwrap()
+                .transform,
+            before
+        );
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": id, "x": before.x + 6.0, "cover": true}),
+            )],
+        )
+        .unwrap();
+        assert!(covered(&document));
+    }
+
+    #[test]
+    fn rotate_canvas_and_trim_edits_work_and_reject_bad_angles() {
+        let mut document = Document::new(6, 4).unwrap();
+        let mut pixels = image::RgbaImage::new(6, 4);
+        pixels.put_pixel(2, 1, image::Rgba([255, 0, 0, 255]));
+        document.layers[0].pixels = Some(Arc::new(pixels));
+        let rotate = edit(json!({"op": "rotate_canvas", "degrees": 90}));
+        let trim = edit(json!({"op": "trim", "top": false}));
+        assert!(rotate.direct_only() && trim.direct_only());
+        assert_eq!(rotate.op(), "rotate_canvas");
+        run(&mut document, &[rotate]).unwrap();
+        assert_eq!((document.width, document.height), (4, 6));
+        run(
+            &mut document,
+            &[edit(json!({"op": "rotate_canvas", "degrees": -90}))],
+        )
+        .unwrap();
+        assert_eq!((document.width, document.height), (6, 4));
+        run(&mut document, &[trim]).unwrap();
+        // Left, right and bottom trimmed; the top margin stays.
+        assert_eq!((document.width, document.height), (1, 2));
+        for bad in [0, 360] {
+            let edit = edit(json!({"op": "rotate_canvas", "degrees": bad}));
+            assert!(run(&mut document.clone(), &[edit]).is_err(), "{bad}");
+        }
+        assert!(
+            serde_json::from_value::<Edit>(json!({"op": "trim", "based_on": "middle"})).is_err()
+        );
+        run(
+            &mut document,
+            &[edit(json!({"op": "trim", "based_on": "top_left"}))],
+        )
+        .unwrap();
+    }
+
+    /// `set` takes a layer's Fill apart from its opacity, and `document/get` reports it.
+    #[test]
+    fn set_changes_fill_on_pixel_layers_only() {
+        let mut document = Document::new(8, 8).unwrap();
+        let layer = document.layers[0].id;
+        let set = |value: Value| serde_json::from_value::<Edit>(value).unwrap();
+        run(
+            &mut document,
+            &[set(json!({"op": "set", "layer": layer, "fill": 0.25}))],
+        )
+        .unwrap();
+        assert_eq!(document.layers[0].fill, 0.25);
+        assert_eq!(document.layers[0].opacity, 1.0);
+        assert_eq!(describe(&document)["layers"][0]["fill"], 0.25);
+        // Left out, it does not change.
+        run(
+            &mut document,
+            &[set(json!({"op": "set", "layer": layer, "opacity": 0.5}))],
+        )
+        .unwrap();
+        assert_eq!(document.layers[0].fill, 0.25);
+        for bad in [json!(1.5), json!(-0.1)] {
+            let edit = set(json!({"op": "set", "layer": layer, "fill": bad}));
+            assert!(run(&mut document.clone(), &[edit]).is_err(), "{bad}");
+        }
+        let mut folder = Layer::blank("Folder", 8, 8);
+        folder.group = true;
+        let folder_id = folder.id;
+        document.layers.push(folder);
+        let edit = set(json!({"op": "set", "layer": folder_id, "fill": 0.5}));
+        let error = run(&mut document.clone(), &[edit]).unwrap_err();
+        assert!(error.to_string().contains("take a fill"), "{error}");
+        // 100% is every layer's fill, so setting it anywhere is fine.
+        let edit = set(json!({"op": "set", "layer": folder_id, "fill": 1}));
+        run(&mut document, &[edit]).unwrap();
     }
 }

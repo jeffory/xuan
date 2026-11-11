@@ -19,6 +19,10 @@ jobs:
     timeout-minutes: 90
     env:
       CARGO_TERM_COLOR: always
+      # Shown in About and `xuan --version`; build.rs shortens the commit to 7 characters.
+      XUAN_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Only the tag-triggered Release workflow (which calls this one) builds a release.
+      XUAN_BUILD_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'dev' }}
       XUAN_MAX_GLIBC: '2.35'
       # Missing real-camera fixtures fail the RAW tests instead of skipping.
       XUAN_REQUIRE_RAW_FIXTURES: '1'
@@ -49,8 +53,11 @@ jobs:
           echo "$RUNNER_TEMP/appimage-tools" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/appimage-tools/bin" >> "$GITHUB_PATH"
       - name: Set up Rust
-        # Installs the toolchain pinned in rust-toolchain.toml.
-        run: rustup toolchain install
+        # Installs the toolchain pinned in rust-toolchain.toml, and the musl
+        # target the packaged MCP server plugin is linked statically with.
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
       - name: Cache RAW test fixtures
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -97,6 +104,53 @@ jobs:
           name: xuan-linux-x86_64
           path: dist/*
           if-no-files-found: error
+  mcp-server:
+    # The MCP server plugin is its own Cargo workspace (its dependencies stay
+    # out of Xuan's lock file), so the main check does not build it.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: plugins/mcp-server
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        # Installs the toolchain pinned in the repository's rust-toolchain.toml.
+        run: rustup toolchain install
+      - name: Format
+        run: cargo fmt -- --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked
+  python:
+    # The Python SDK's and the example plugins' own tests. Standard library
+    # only and quick, so they run beside the main check instead of in it.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - name: Test
+        # Each folder in its own process: the plugins' tests share file names.
+        run: |
+          status=0
+          for dir in sdk/python plugins/*/; do
+            ls "$dir"/test_*.py >/dev/null 2>&1 || continue
+            echo "::group::$dir"
+            (cd "$dir" && python3 -m unittest -v) || status=1
+            echo "::endgroup::"
+          done
+          exit $status
   compatibility:
     needs: check
     runs-on: ubuntu-24.04

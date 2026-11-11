@@ -30,6 +30,16 @@ class Provenance(unittest.TestCase):
         self.assertNotIn("provenance", Job.mask("/tmp/m.png"))
 
 
+class Placement(unittest.TestCase):
+    def test_image_and_mask_outputs_can_cover_the_source(self):
+        self.assertEqual(Job.image("a.png", fit="cover")["fit"], "cover")
+        self.assertEqual(Job.image("a.png", fit_source=True)["fit"], "source")
+        self.assertNotIn("fit", Job.image("a.png"))
+        self.assertEqual(Job.mask("m.png", fit="cover")["fit"], "cover")
+        with self.assertRaises(ValueError):
+            Job.image("a.png", fit="stretch")
+
+
 class Models(unittest.TestCase):
     def test_paths_come_from_initialize_and_models_changed(self):
         plugin = Plugin()
@@ -51,6 +61,67 @@ class Models(unittest.TestCase):
         )
         self.assertEqual(job.model_path("extra"), "/d/models/extra.bin")
         self.assertIsNone(plugin.model_path("net"))
+
+
+class FakeTransport:
+    def __init__(self, answers):
+        self.answers = answers
+        self.sent = []
+
+    def request(self, method, params, timeout):
+        self.sent.append((method, params))
+        return self.answers.get(method)
+
+
+class HostRequests(unittest.TestCase):
+    def test_a_request_that_times_out_is_withdrawn(self):
+        import io
+        import json
+        import xuan_plugin
+
+        transport = xuan_plugin._Transport()
+        transport._out = io.BytesIO()
+        with self.assertRaises(xuan_plugin.RpcError) as raised:
+            transport.request("file/open", {"path": "/x.png"}, 0.01)
+        self.assertEqual(raised.exception.code, xuan_plugin.TIMED_OUT)
+        sent = [json.loads(line) for line in transport._out.getvalue().decode().splitlines()]
+        self.assertEqual(sent[0]["method"], "file/open")
+        self.assertEqual(sent[1], {"jsonrpc": "2.0", "method": "request/cancel", "params": {"id": sent[0]["id"]}})
+
+    def test_edits_documents_and_files_use_the_documented_methods(self):
+        from xuan_plugin import Host
+
+        transport = FakeTransport({
+            "document/edit": {"ok": True, "layers": ["a", 3, "b"]},
+            "document/list": {"documents": [{"id": "d"}]},
+            "file/save_as": {"name": "x.xuan"},
+            "file/export": {"name": "x.png"},
+            "file/open": {"ok": True, "document": "e"},
+        })
+        host = Host(transport)
+        self.assertEqual(host.edit("Name", [{"op": "add_empty_layer"}]), ["a", "b"])
+        self.assertEqual(host.list_documents(), [{"id": "d"}])
+        host.activate_document("d")
+        self.assertEqual(host.save_as(suggested_name="x"), "x.xuan")
+        self.assertEqual(host.export_file("png"), "x.png")
+        self.assertEqual(host.open_file("/home/u/x.png")["document"], "e")
+        methods = [method for method, _ in transport.sent]
+        self.assertEqual(
+            methods,
+            ["document/edit", "document/list", "document/activate", "file/save_as", "file/export", "file/open"],
+        )
+        self.assertEqual(transport.sent[4][1]["format"], "png")
+        self.assertNotIn("session", transport.sent[0][1])
+
+    def test_a_session_host_names_its_session(self):
+        from xuan_plugin import Host
+
+        transport = FakeTransport({"session/status": {"edits": "ask"}})
+        host = Host(transport).with_session("client-1")
+        self.assertEqual(host.session_status(), {"edits": "ask"})
+        host.edit("x", [])
+        host.request("document/get")
+        self.assertEqual([params["session"] for _, params in transport.sent], ["client-1"] * 3)
 
 
 if __name__ == "__main__":

@@ -15,11 +15,39 @@ plugin, such as Select Subject (#5): the composite in, a grey mask out,
 progress, cancel and a backend hook, so that a real model can replace it
 without touching the manifest or the host.
 
+## Select Subject provider
+
+The manifest declares
+
+```toml
+[[provides]]
+capability = "select_subject"
+action = "select-bright"
+```
+
+so it can stand in for Xuan's built-in (classical, GrabCut) **Select →
+Subject**: choose **Select Bright Areas (select-bright)** under **Settings →
+Selection → Select Subject provider**. **Select → Subject** (Ctrl+Alt+A) then
+runs this action without its dialog, with its inputs at their defaults plus
+`inputs.capability = "select_subject"`, and the returned mask is proposed as
+the selection exactly as when the action is run from its menu. If the plugin is
+disabled, Xuan uses the built-in algorithm and says so in the status bar. A
+read-only plugin can provide `select_subject` and `object_select` (which also
+gets `inputs.point` or `inputs.rect` in source pixels);
+`remove_background` needs `document = "edit"`, since its mask becomes a layer
+mask. See "Providers" in `docs/PLUGINS.md`.
+
 ## Try it
 
 ```sh
 XUAN_PLUGIN_PATH=$PWD/plugins xuan
 ```
+
+To install it instead, copy this folder into Xuan's plugins directory or use
+**Plugins → Install from Folder or Zip…**. It needs nothing else: Xuan puts
+the Python SDK it ships (`xuan_plugin`) on the plugin's `PYTHONPATH` (see
+"The Python SDK" in `docs/PLUGINS.md`). With a Xuan from before that, copy
+`sdk/python/xuan_plugin.py` from the same release next to `main.py`.
 
 Then allow it in **Plugins → Manage Plugins…**, open an image and run
 **Select → Select Bright Areas…**. The composite is sent at most 1024 pixels

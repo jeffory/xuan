@@ -4,8 +4,10 @@ struct Sample {
 }
 
 struct Parameters {
-    // Output width/height, transparent padding, sample count.
+    // Output width/height, padding, sample count.
     size: vec4<u32>,
+    // Nonzero for source sides (left, top, right, bottom) that repeat edge pixels.
+    edges: vec4<u32>,
     samples: array<Sample, 256>,
 }
 
@@ -13,8 +15,14 @@ struct Parameters {
 @group(0) @binding(1) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> params: Parameters;
 
-fn pixel_at(point: vec2<i32>) -> vec4<f32> {
-    if any(point < vec2(0)) || any(point >= vec2<i32>(textureDimensions(source))) {
+fn pixel_at(requested: vec2<i32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    var point = requested;
+    if params.edges.x != 0u { point.x = max(point.x, 0); }
+    if params.edges.y != 0u { point.y = max(point.y, 0); }
+    if params.edges.z != 0u { point.x = min(point.x, size.x - 1); }
+    if params.edges.w != 0u { point.y = min(point.y, size.y - 1); }
+    if any(point < vec2(0)) || any(point >= size) {
         return vec4(0.0);
     }
     // Accumulate byte values just like the CPU reference, in premultiplied form.

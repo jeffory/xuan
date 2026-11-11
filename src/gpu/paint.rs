@@ -82,6 +82,11 @@ pub(crate) fn adjust_mask(
 ) -> Option<GrayImage> {
     let size = [image.width(), image.height()];
     attempt(u64::from(size[0]) * u64::from(size[1]), 65_536, |gpu| {
+        // The raster shader has no table binding; `effects::adjust` applies it on the CPU.
+        anyhow::ensure!(
+            !matches!(adjustment, Adjustment::ColorLookup { .. }),
+            "Color Lookup is applied on the CPU"
+        );
         let mut layer = Layer::blank("Adjustment", size[0], size[1]);
         layer.adjustment = Some(adjustment.clone());
         let params = super::parameters(&Document::new(size[0], size[1])?, &layer, size);
@@ -107,7 +112,8 @@ pub(crate) fn shape(
 ) -> Option<RgbaImage> {
     use crate::paint::ShapeKind;
     // Solid rectangles are a memory fill; curved boundaries benefit from compute.
-    if kind == ShapeKind::Rectangle {
+    // Paths are filled on the CPU (`vector::VectorPath::coverage`).
+    if !matches!(kind, ShapeKind::Ellipse | ShapeKind::RoundedRectangle) {
         return None;
     }
     attempt(u64::from(size[0]) * u64::from(size[1]), 65_536, |gpu| {
@@ -168,6 +174,9 @@ pub(crate) struct Stroke<'a> {
     pub endpoints: [Point; 2],
     pub brush: &'a crate::paint::Brush,
     pub from_brush: &'a crate::paint::Brush,
+    /// How far each pixel's coverage moves up to this segment's; see
+    /// [`crate::paint::build_up`].
+    pub flow: f32,
     pub options: crate::paint::StrokeOptions<'a>,
 }
 
@@ -191,6 +200,11 @@ pub(crate) fn stroke(
         PaintMode::Blur => 3,
         PaintMode::Heal => 4,
         PaintMode::Smudge => 5,
+        PaintMode::Dodge => 6,
+        PaintMode::Burn => 7,
+        PaintMode::Sponge => 8,
+        // Warped on the CPU by `paint::liquify`.
+        PaintMode::Liquify => return false,
     };
     let minimum = if mode == 3 || mode == 4 {
         16_384
@@ -256,12 +270,22 @@ pub(crate) fn stroke(
         if let Some(source) = source {
             auxiliary.extend_from_slice(source.as_raw());
         }
-        config.push([stroke.brush.tilt[0], stroke.brush.tilt[1], 0.0, 0.0]);
+        let tone = stroke.brush.tone;
+        config.push([
+            stroke.brush.tilt[0],
+            stroke.brush.tilt[1],
+            match tone.range {
+                crate::paint::ToneRange::Shadows => 0.0,
+                crate::paint::ToneRange::Midtones => 1.0,
+                crate::paint::ToneRange::Highlights => 2.0,
+            },
+            tone.exposure,
+        ]);
         config.push([
             if coverage.is_some() { 1.0 } else { 0.0 },
             f32::from_bits((auxiliary.len() / 4) as u32),
-            0.0,
-            0.0,
+            stroke.flow,
+            if tone.saturate { 1.0 } else { 0.0 },
         ]);
         if let Some(coverage) = &coverage {
             for y in top..bottom {
@@ -371,4 +395,22 @@ pub(crate) fn filter_selection(edit: FilterSelection<'_>) -> Option<Vec<u8>> {
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use wgpu::naga;
+
+    /// The brush's coverage build-up (flow) runs only with a GPU, so at
+    /// least check the shader still validates without one.
+    #[test]
+    fn paint_shader_validates() {
+        let module = naga::front::wgsl::parse_str(super::SHADER).expect("paint shader parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("paint shader validates");
+    }
 }

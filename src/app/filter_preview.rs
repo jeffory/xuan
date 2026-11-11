@@ -119,7 +119,7 @@ impl EditorApp {
 
         if preview.ready.as_ref() == Some(filter) && preview.applying {
             if let Some(session) = self.session_mut() {
-                session.history.commit();
+                session.commit();
             }
             self.dialog = None;
             return true;
@@ -414,9 +414,18 @@ mod tests {
         assert!(edit.filter_preview.busy());
         assert!(wait(&mut app, &mut edit));
         assert!(app.dialog != Some(Dialog::Effect));
-        assert_ne!(
-            app.session().unwrap().document.active().unwrap().pixels,
-            edit.original.active().unwrap().pixels
-        );
+        // Blurring a uniform layer that fills the canvas leaves its values
+        // unchanged, but Apply still replaces the layer's pixels.
+        assert!(!Arc::ptr_eq(
+            app.session()
+                .unwrap()
+                .document
+                .active()
+                .unwrap()
+                .pixels
+                .as_ref()
+                .unwrap(),
+            edit.original.active().unwrap().pixels.as_ref().unwrap()
+        ));
     }
 }

@@ -1,0 +1,3418 @@
+{
+ "BatchImagesNode": {
+  "input": {
+   "required": {
+    "images": [
+     "COMFY_AUTOGROW_V3",
+     {
+      "template": {
+       "input": {
+        "required": {
+         "image": [
+          "IMAGE",
+          {}
+         ]
+        }
+       },
+       "prefix": "image",
+       "min": 1,
+       "max": 50
+      }
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "images"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "BatchImagesNode",
+  "display_name": "Batch Images",
+  "description": "",
+  "python_module": "comfy_extras.nodes_post_processing",
+  "category": "image/batch",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": [
+   "batch",
+   "image batch",
+   "batch images",
+   "combine images",
+   "merge images",
+   "stack images"
+  ],
+  "essentials_category": "Image Tools",
+  "has_intermediate_output": false
+ },
+ "BatchMasksNode": {
+  "input": {
+   "required": {
+    "masks": [
+     "COMFY_AUTOGROW_V3",
+     {
+      "template": {
+       "input": {
+        "required": {
+         "mask": [
+          "MASK",
+          {}
+         ]
+        }
+       },
+       "prefix": "mask",
+       "min": 1,
+       "max": 50
+      }
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "masks"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "MASK"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "MASK"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "BatchMasksNode",
+  "display_name": "Batch Masks",
+  "description": "",
+  "python_module": "comfy_extras.nodes_post_processing",
+  "category": "image/mask",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": [
+   "combine masks",
+   "stack masks",
+   "merge masks"
+  ],
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "BriaRemoveImageBackground": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "moderation": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "Moderation settings",
+      "options": [
+       {
+        "key": "false",
+        "inputs": {
+         "required": {}
+        }
+       },
+       {
+        "key": "true",
+        "inputs": {
+         "required": {
+          "visual_input_moderation": [
+           "BOOLEAN",
+           {
+            "default": false
+           }
+          ],
+          "visual_output_moderation": [
+           "BOOLEAN",
+           {
+            "default": true
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "tooltip": "Seed controls whether the node should re-run; results are non-deterministic regardless of seed.",
+      "default": 0,
+      "min": 0,
+      "max": 2147483647,
+      "control_after_generate": true,
+      "display": "number"
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "moderation",
+    "seed"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "BriaRemoveImageBackground",
+  "display_name": "Bria Remove Image Background",
+  "description": "Remove the background from an image using Bria RMBG 2.0.",
+  "python_module": "comfy_api_nodes.nodes_bria",
+  "category": "partner/image/Bria",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [],
+    "inputs": [],
+    "input_groups": []
+   },
+   "expr": "{\"type\":\"usd\",\"usd\":0.018}"
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "BuildJsonPromptIdeogram": {
+  "input": {
+   "required": {
+    "element": [
+     "ARRAY",
+     {
+      "tooltip": "Prompt elements from the node Create Bounding Boxes."
+     }
+    ],
+    "high_level_description": [
+     "STRING",
+     {
+      "tooltip": "Optional description of the image in one or two sentences. Strongly recommended.",
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "background": [
+     "STRING",
+     {
+      "tooltip": "Mandatory description of the image background or environment.",
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "style": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "options": [
+       {
+        "key": "none",
+        "inputs": {
+         "required": {}
+        }
+       },
+       {
+        "key": "photo",
+        "inputs": {
+         "required": {
+          "photo": [
+           "STRING",
+           {
+            "tooltip": "Camera or lens details for photographic outputs (e.g. 35mm, f/1.4, bokeh).",
+            "default": "",
+            "multiline": false
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "art_style",
+        "inputs": {
+         "required": {
+          "art_style": [
+           "STRING",
+           {
+            "tooltip": "Art style description (e.g. flat vector illustration, bold outlines).",
+            "default": "",
+            "multiline": false
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "aesthetics": [
+     "STRING",
+     {
+      "tooltip": "Mandatory aesthetic keywords (e.g. moody, cinematic, desaturated).",
+      "default": "",
+      "multiline": false
+     }
+    ],
+    "lighting": [
+     "STRING",
+     {
+      "tooltip": "Mandatory lighting description (e.g. golden hour, rim light, dramatic shadows).",
+      "default": "",
+      "multiline": false
+     }
+    ],
+    "medium": [
+     "STRING",
+     {
+      "tooltip": "Mandatory medium type (e.g. photograph, illustration, 3d_render, painting, graphic_design). When style = photo, set to photograph.",
+      "default": "",
+      "multiline": false
+     }
+    ],
+    "color_palette": [
+     "COLORS",
+     {
+      "tooltip": "Hex color codes that steer the image's dominant colors. Up to 16 entries.",
+      "default": [],
+      "socketless": false
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "element",
+    "high_level_description",
+    "background",
+    "style",
+    "aesthetics",
+    "lighting",
+    "medium",
+    "color_palette"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "DICT"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "prompt"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "BuildJsonPromptIdeogram",
+  "display_name": "Build JSON Prompt (Ideogram)",
+  "description": "Build a JSON prompt for the Ideogram 4 model.",
+  "python_module": "comfy_extras.nodes_json_prompt",
+  "category": "text",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": true,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "ByteDanceSeedreamLayerSeparationNodeV2": {
+  "input": {
+   "required": {
+    "model": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "options": [
+       {
+        "key": "seedream 5.0 pro",
+        "inputs": {
+         "required": {
+          "image": [
+           "IMAGE",
+           {
+            "tooltip": "The image to separate. Exactly one image, at least 512x512 pixels, aspect ratio between 1:16 and 16:1. Inputs larger than about 4MP are downscaled before upload."
+           }
+          ],
+          "prompt": [
+           "STRING",
+           {
+            "tooltip": "How to separate the image. Leave empty to auto-detect and separate all major elements. Describe elements in natural language to control the separation, or target exact regions with <bbox>left top right bottom</bbox> tags (0-1000 per-mille coordinates).",
+            "default": "",
+            "multiline": true
+           }
+          ],
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Output resolution level. 'auto' follows the input image size (clamped to the 1K-2K range).",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1K",
+             "1.5K",
+             "2K"
+            ]
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed to use for generation.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ],
+          "prompt_optimization": [
+           "COMBO",
+           {
+            "tooltip": "Prompt-optimization mode: 'standard' gives higher quality, 'fast' shorter generation time.",
+            "advanced": true,
+            "default": "standard",
+            "multiselect": false,
+            "options": [
+             "standard",
+             "fast"
+            ]
+           }
+          ],
+          "watermark": [
+           "BOOLEAN",
+           {
+            "tooltip": "Whether to add an \"AI generated\" watermark to the images.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "crop_layers": [
+           "BOOLEAN",
+           {
+            "tooltip": "Geometry of the layers/masks batch outputs (layer_stack is unaffected and always tight). Full canvas: each layer on a base-sized canvas at its bounding-box position - recompose directly with ImageCompositeMasked. Minimal size: each layer cropped to its bounding box (padded to the largest layer for batching) - much smaller tensors; rebuild placement with Layers From Bounding Boxes using the bboxes output.",
+            "default": false,
+            "label_on": "minimal size",
+            "label_off": "full canvas"
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "seedream 5.0 flash",
+        "inputs": {
+         "required": {
+          "image": [
+           "IMAGE",
+           {
+            "tooltip": "The image to separate. Exactly one image, at least 512x512 pixels, aspect ratio between 1:16 and 16:1. Inputs larger than about 4MP are downscaled before upload."
+           }
+          ],
+          "prompt": [
+           "STRING",
+           {
+            "tooltip": "How to separate the image. Leave empty to auto-detect and separate all major elements. Describe elements in natural language to control the separation, or target exact regions with <bbox>left top right bottom</bbox> tags (0-1000 per-mille coordinates).",
+            "default": "",
+            "multiline": true
+           }
+          ],
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Output resolution level. 'auto' follows the input image size (clamped to the 1K-2K range).",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1K",
+             "1.5K",
+             "2K"
+            ]
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed to use for generation.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ],
+          "watermark": [
+           "BOOLEAN",
+           {
+            "tooltip": "Whether to add an \"AI generated\" watermark to the images.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "crop_layers": [
+           "BOOLEAN",
+           {
+            "tooltip": "Geometry of the layers/masks batch outputs (layer_stack is unaffected and always tight). Full canvas: each layer on a base-sized canvas at its bounding-box position - recompose directly with ImageCompositeMasked. Minimal size: each layer cropped to its bounding box (padded to the largest layer for batching) - much smaller tensors; rebuild placement with Layers From Bounding Boxes using the bboxes output.",
+            "default": false,
+            "label_on": "minimal size",
+            "label_off": "full canvas"
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE",
+   "MASK",
+   "IMAGE",
+   "MASK",
+   "BOUNDING_BOX",
+   "LAYERS"
+  ],
+  "output_is_list": [
+   false,
+   false,
+   false,
+   false,
+   false,
+   false
+  ],
+  "output_name": [
+   "base_image",
+   "base_mask",
+   "layers",
+   "masks",
+   "bboxes",
+   "layer_stack"
+  ],
+  "output_tooltips": [
+   "The base image (background plate) the layers stack onto.",
+   "Transparency of the base image (1 = transparent, LoadImage convention); currently always fully opaque.",
+   "Transparent layers ordered bottom to top. Full canvas mode: placed on a black base-sized canvas at their bounding-box position. Minimal size mode: cropped to their bounding box, anchored top-left, padded to the largest layer.",
+   "Per-layer transparency, index-aligned with the layers batch (1 = transparent, LoadImage convention). For ImageCompositeMasked-style compositing, add InvertMask first.",
+   "One placement box per layer, index-aligned with the layers batch (feed both, plus masks, into Layers From Bounding Boxes to rebuild per-layer placement): {x, y, width, height, metadata: {name, desc, z_index, native_size, content_rect, flags}}. content_rect = [left, top, width, height] is the layer's content region within its own frame; it lands on the canvas at the box position plus that offset.",
+   "Ready-to-edit layer document for Create Layered Image: the base plate plus each element as its own named, tight-cropped layer at its true position and stacking order. Connect directly, or extend with Add Layer."
+  ],
+  "output_matchtypes": null,
+  "name": "ByteDanceSeedreamLayerSeparationNodeV2",
+  "display_name": "ByteDance Seedream 5.0 Layer Separation",
+  "description": "Decompose an image into a background plate plus up to 16 repositionable transparent layers, each with stacking order, bounding box, name and description.",
+  "python_module": "comfy_api_nodes.nodes_bytedance",
+  "category": "partner/image/ByteDance",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [
+     {
+      "name": "model",
+      "type": "COMFY_DYNAMICCOMBO_V3"
+     },
+     {
+      "name": "model.size",
+      "type": "COMBO"
+     }
+    ],
+    "inputs": [],
+    "input_groups": []
+   },
+   "expr": "\n                (\n                  $size := $lookup(widgets, \"model.size\");\n                  $contains(widgets.model, \"flash\")\n                    ? {\n                        \"type\": \"usd\",\n                        \"usd\": 0.02574,\n                        \"format\": { \"suffix\": \" x images/Run\", \"approximate\": true }\n                      }\n                    : $size in [\"1k\", \"1.5k\"]\n                      ? {\n                          \"type\": \"usd\",\n                          \"usd\": 0.032175,\n                          \"format\": { \"suffix\": \" x images/Run\", \"approximate\": true }\n                        }\n                      : {\n                          \"type\": \"range_usd\",\n                          \"min_usd\": 0.032175,\n                          \"max_usd\": 0.06435,\n                          \"format\": { \"suffix\": \" x images/Run\", \"approximate\": true }\n                        }\n                )\n                "
+  },
+  "search_aliases": [
+   "layer separation",
+   "split layers",
+   "decompose",
+   "cutout",
+   "RGBA layers"
+  ],
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "ByteDanceSeedreamNodeV3": {
+  "input": {
+   "required": {
+    "prompt": [
+     "STRING",
+     {
+      "tooltip": "Text prompt for creating or editing an image.",
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "model": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "options": [
+       {
+        "key": "seedream 5.0 pro",
+        "inputs": {
+         "required": {
+          "size_preset": [
+           "COMBO",
+           {
+            "tooltip": "Pick a recommended size. Select Custom to use the width and height below.",
+            "multiselect": false,
+            "options": [
+             "(1K) 1024x1024 (1:1)",
+             "(1K) 864x1152 (3:4)",
+             "(1K) 1152x864 (4:3)",
+             "(1K) 1312x736 (16:9)",
+             "(1K) 736x1312 (9:16)",
+             "(1K) 832x1248 (2:3)",
+             "(1K) 1248x832 (3:2)",
+             "(1K) 1568x672 (21:9)",
+             "(2K) 2048x2048 (1:1)",
+             "(2K) 1728x2304 (3:4)",
+             "(2K) 2304x1728 (4:3)",
+             "(2K) 2848x1600 (16:9)",
+             "(2K) 1600x2848 (9:16)",
+             "(2K) 1664x2496 (2:3)",
+             "(2K) 2496x1664 (3:2)",
+             "(2K) 3136x1344 (21:9)",
+             "Custom"
+            ]
+           }
+          ],
+          "width": [
+           "INT",
+           {
+            "tooltip": "Custom width for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 4514,
+            "step": 2
+           }
+          ],
+          "height": [
+           "INT",
+           {
+            "tooltip": "Custom height for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 4514,
+            "step": 2
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image-to-image or multi-reference generation. Up to 10 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10"
+             ],
+             "min": 0
+            }
+           }
+          ],
+          "prompt_optimization": [
+           "COMBO",
+           {
+            "tooltip": "Prompt-optimization mode when reference images are provided: 'standard' gives higher quality, 'fast' shorter generation time.",
+            "advanced": true,
+            "default": "standard",
+            "multiselect": false,
+            "options": [
+             "standard",
+             "fast"
+            ]
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed to use for generation.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ],
+          "watermark": [
+           "BOOLEAN",
+           {
+            "tooltip": "Whether to add an \"AI generated\" watermark to the image.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "thinking": [
+           "BOOLEAN",
+           {
+            "tooltip": "Enable the model's prompt-optimization reasoning ('thinking') for better adherence. Can substantially increase generation time \u2014 notably on Seedream 5.0 Pro. Can only be disabled for text-to-image (not when reference images are provided).",
+            "advanced": true,
+            "default": true
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "seedream 5.0 flash",
+        "inputs": {
+         "required": {
+          "size_preset": [
+           "COMBO",
+           {
+            "tooltip": "Pick a recommended size. Select Custom to use the width and height below.",
+            "multiselect": false,
+            "options": [
+             "(1K) 1024x1024 (1:1)",
+             "(1K) 864x1152 (3:4)",
+             "(1K) 1152x864 (4:3)",
+             "(1K) 1424x800 (16:9)",
+             "(1K) 800x1424 (9:16)",
+             "(1K) 832x1248 (2:3)",
+             "(1K) 1248x832 (3:2)",
+             "(1K) 1568x672 (21:9)",
+             "(1.5K) 1536x1536 (1:1)",
+             "(1.5K) 1344x1792 (3:4)",
+             "(1.5K) 1792x1344 (4:3)",
+             "(1.5K) 2048x1152 (16:9)",
+             "(1.5K) 1152x2048 (9:16)",
+             "(1.5K) 1248x1872 (2:3)",
+             "(1.5K) 1872x1248 (3:2)",
+             "(1.5K) 2352x1008 (21:9)",
+             "(2K) 2048x2048 (1:1)",
+             "(2K) 1776x2368 (3:4)",
+             "(2K) 2368x1776 (4:3)",
+             "(2K) 2816x1584 (16:9)",
+             "(2K) 1584x2816 (9:16)",
+             "(2K) 1664x2496 (2:3)",
+             "(2K) 2496x1664 (3:2)",
+             "(2K) 3136x1344 (21:9)",
+             "Custom"
+            ]
+           }
+          ],
+          "width": [
+           "INT",
+           {
+            "tooltip": "Custom width for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 4514,
+            "step": 2
+           }
+          ],
+          "height": [
+           "INT",
+           {
+            "tooltip": "Custom height for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 4514,
+            "step": 2
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image-to-image or multi-reference generation. Up to 10 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10"
+             ],
+             "min": 0
+            }
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed to use for generation.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ],
+          "watermark": [
+           "BOOLEAN",
+           {
+            "tooltip": "Whether to add an \"AI generated\" watermark to the image.",
+            "advanced": true,
+            "default": false
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "seedream 5.0 lite",
+        "inputs": {
+         "required": {
+          "size_preset": [
+           "COMBO",
+           {
+            "tooltip": "Pick a recommended size. Select Custom to use the width and height below.",
+            "multiselect": false,
+            "options": [
+             "(2K) 2048x2048 (1:1)",
+             "(2K) 1728x2304 (3:4)",
+             "(2K) 2304x1728 (4:3)",
+             "(2K) 2848x1600 (16:9)",
+             "(2K) 1600x2848 (9:16)",
+             "(2K) 1664x2496 (2:3)",
+             "(2K) 2496x1664 (3:2)",
+             "(2K) 3136x1344 (21:9)",
+             "(3K) 3072x3072 (1:1)",
+             "(3K) 2592x3456 (3:4)",
+             "(3K) 3456x2592 (4:3)",
+             "(3K) 4096x2304 (16:9)",
+             "(3K) 2304x4096 (9:16)",
+             "(3K) 2496x3744 (2:3)",
+             "(3K) 3744x2496 (3:2)",
+             "(3K) 4704x2016 (21:9)",
+             "(4K) 4096x4096 (1:1)",
+             "(4K) 3520x4704 (3:4)",
+             "(4K) 4704x3520 (4:3)",
+             "(4K) 5504x3040 (16:9)",
+             "(4K) 3040x5504 (9:16)",
+             "(4K) 3328x4992 (2:3)",
+             "(4K) 4992x3328 (3:2)",
+             "(4K) 6240x2656 (21:9)",
+             "Custom"
+            ]
+           }
+          ],
+          "width": [
+           "INT",
+           {
+            "tooltip": "Custom width for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 6240,
+            "step": 2
+           }
+          ],
+          "height": [
+           "INT",
+           {
+            "tooltip": "Custom height for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 4992,
+            "step": 2
+           }
+          ],
+          "max_images": [
+           "INT",
+           {
+            "tooltip": "Maximum number of images to generate. With 1, exactly one image is produced. With >1, the model generates between 1 and max_images related images (e.g., story scenes, character variations). Total images (input + generated) cannot exceed 15.",
+            "default": 1,
+            "min": 1,
+            "max": 14,
+            "step": 1,
+            "display": "number"
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image-to-image or multi-reference generation. Up to 14 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14"
+             ],
+             "min": 0
+            }
+           }
+          ],
+          "fail_on_partial": [
+           "BOOLEAN",
+           {
+            "tooltip": "If enabled, abort execution if any requested images are missing or return an error.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed to use for generation.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ],
+          "watermark": [
+           "BOOLEAN",
+           {
+            "tooltip": "Whether to add an \"AI generated\" watermark to the image.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "thinking": [
+           "BOOLEAN",
+           {
+            "tooltip": "Enable the model's prompt-optimization reasoning ('thinking') for better adherence. Can substantially increase generation time \u2014 notably on Seedream 5.0 Pro. Can only be disabled for text-to-image (not when reference images are provided).",
+            "advanced": true,
+            "default": true
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "seedream-4-5-251128",
+        "inputs": {
+         "required": {
+          "size_preset": [
+           "COMBO",
+           {
+            "tooltip": "Pick a recommended size. Select Custom to use the width and height below.",
+            "multiselect": false,
+            "options": [
+             "(2K) 2048x2048 (1:1)",
+             "(2K) 1728x2304 (3:4)",
+             "(2K) 2304x1728 (4:3)",
+             "(2K) 2848x1600 (16:9)",
+             "(2K) 1600x2848 (9:16)",
+             "(2K) 1664x2496 (2:3)",
+             "(2K) 2496x1664 (3:2)",
+             "(2K) 3136x1344 (21:9)",
+             "(4K) 4096x4096 (1:1)",
+             "(4K) 3520x4704 (3:4)",
+             "(4K) 4704x3520 (4:3)",
+             "(4K) 5504x3040 (16:9)",
+             "(4K) 3040x5504 (9:16)",
+             "(4K) 3328x4992 (2:3)",
+             "(4K) 4992x3328 (3:2)",
+             "(4K) 6240x2656 (21:9)",
+             "Custom"
+            ]
+           }
+          ],
+          "width": [
+           "INT",
+           {
+            "tooltip": "Custom width for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 6240,
+            "step": 2
+           }
+          ],
+          "height": [
+           "INT",
+           {
+            "tooltip": "Custom height for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 4992,
+            "step": 2
+           }
+          ],
+          "max_images": [
+           "INT",
+           {
+            "tooltip": "Maximum number of images to generate. With 1, exactly one image is produced. With >1, the model generates between 1 and max_images related images (e.g., story scenes, character variations). Total images (input + generated) cannot exceed 15.",
+            "default": 1,
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "display": "number"
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image-to-image or multi-reference generation. Up to 10 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10"
+             ],
+             "min": 0
+            }
+           }
+          ],
+          "fail_on_partial": [
+           "BOOLEAN",
+           {
+            "tooltip": "If enabled, abort execution if any requested images are missing or return an error.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed to use for generation.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ],
+          "watermark": [
+           "BOOLEAN",
+           {
+            "tooltip": "Whether to add an \"AI generated\" watermark to the image.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "thinking": [
+           "BOOLEAN",
+           {
+            "tooltip": "Enable the model's prompt-optimization reasoning ('thinking') for better adherence. Can substantially increase generation time \u2014 notably on Seedream 5.0 Pro. Can only be disabled for text-to-image (not when reference images are provided).",
+            "advanced": true,
+            "default": true
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "seedream-4-0-250828",
+        "inputs": {
+         "required": {
+          "size_preset": [
+           "COMBO",
+           {
+            "tooltip": "Pick a recommended size. Select Custom to use the width and height below.",
+            "multiselect": false,
+            "options": [
+             "(1K) 1024x1024 (1:1)",
+             "(1K) 864x1152 (3:4)",
+             "(1K) 1152x864 (4:3)",
+             "(1K) 1312x736 (16:9)",
+             "(1K) 736x1312 (9:16)",
+             "(1K) 832x1248 (2:3)",
+             "(1K) 1248x832 (3:2)",
+             "(1K) 1568x672 (21:9)",
+             "(2K) 2048x2048 (1:1)",
+             "(2K) 1728x2304 (3:4)",
+             "(2K) 2304x1728 (4:3)",
+             "(2K) 2848x1600 (16:9)",
+             "(2K) 1600x2848 (9:16)",
+             "(2K) 1664x2496 (2:3)",
+             "(2K) 2496x1664 (3:2)",
+             "(2K) 3136x1344 (21:9)",
+             "(4K) 4096x4096 (1:1)",
+             "(4K) 3520x4704 (3:4)",
+             "(4K) 4704x3520 (4:3)",
+             "(4K) 5504x3040 (16:9)",
+             "(4K) 3040x5504 (9:16)",
+             "(4K) 3328x4992 (2:3)",
+             "(4K) 4992x3328 (3:2)",
+             "(4K) 6240x2656 (21:9)",
+             "Custom"
+            ]
+           }
+          ],
+          "width": [
+           "INT",
+           {
+            "tooltip": "Custom width for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 6240,
+            "step": 2
+           }
+          ],
+          "height": [
+           "INT",
+           {
+            "tooltip": "Custom height for image. Value is working only if `size_preset` is set to `Custom`",
+            "default": 2048,
+            "min": 1024,
+            "max": 4992,
+            "step": 2
+           }
+          ],
+          "max_images": [
+           "INT",
+           {
+            "tooltip": "Maximum number of images to generate. With 1, exactly one image is produced. With >1, the model generates between 1 and max_images related images (e.g., story scenes, character variations). Total images (input + generated) cannot exceed 15.",
+            "default": 1,
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "display": "number"
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image-to-image or multi-reference generation. Up to 10 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10"
+             ],
+             "min": 0
+            }
+           }
+          ],
+          "fail_on_partial": [
+           "BOOLEAN",
+           {
+            "tooltip": "If enabled, abort execution if any requested images are missing or return an error.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed to use for generation.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ],
+          "watermark": [
+           "BOOLEAN",
+           {
+            "tooltip": "Whether to add an \"AI generated\" watermark to the image.",
+            "advanced": true,
+            "default": false
+           }
+          ],
+          "thinking": [
+           "BOOLEAN",
+           {
+            "tooltip": "Enable the model's prompt-optimization reasoning ('thinking') for better adherence. Can substantially increase generation time \u2014 notably on Seedream 5.0 Pro. Can only be disabled for text-to-image (not when reference images are provided).",
+            "advanced": true,
+            "default": true
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "prompt",
+    "model"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "ByteDanceSeedreamNodeV3",
+  "display_name": "ByteDance Seedream 4.5 & 5.0",
+  "description": "Unified text-to-image generation and precise single-sentence editing at up to 4K resolution.",
+  "python_module": "comfy_api_nodes.nodes_bytedance",
+  "category": "partner/image/ByteDance",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [
+     {
+      "name": "model",
+      "type": "COMFY_DYNAMICCOMBO_V3"
+     },
+     {
+      "name": "model.size_preset",
+      "type": "COMBO"
+     },
+     {
+      "name": "model.width",
+      "type": "INT"
+     },
+     {
+      "name": "model.height",
+      "type": "INT"
+     }
+    ],
+    "inputs": [],
+    "input_groups": [
+     "model.images"
+    ]
+   },
+   "expr": "\n                (\n                  $model := $string(widgets.model);\n                  $sp := $string($lookup(widgets, \"model.size_preset\"));\n                  $w := $lookup(widgets, \"model.width\");\n                  $h := $lookup(widgets, \"model.height\");\n                  $px := ($type($w) = \"number\" and $type($h) = \"number\") ? $w * $h : 0;\n                  $refs := $lookup(inputGroups, \"model.images\");\n                  $extra := ($type($refs) = \"number\" and $refs > 1) ? ($refs - 1) * 0.003 : 0;\n                  $isPro := $contains($model, \"5.0 pro\");\n                  $isFlash := $contains($model, \"5.0 flash\");\n                  $isCustom := $contains($sp, \"custom\");\n                  $sizeKnown := $isCustom ? $px > 0 : ($contains($sp, \"1k\") or $contains($sp, \"2k\"));\n                  $proPrice := $isCustom\n                                 ? ($px < 2610000 ? 0.045 : 0.09)\n                                 : ($contains($sp, \"1k\") ? 0.045 : 0.09);\n                  ($isPro and ($sizeKnown = false))\n                    ? {\n                        \"type\": \"range_usd\",\n                        \"min_usd\": 0.045 + $extra,\n                        \"max_usd\": 0.09 + $extra,\n                        \"format\": { \"suffix\": \"/Image\", \"approximate\": true }\n                      }\n                    : {\n                        \"type\": \"usd\",\n                        \"usd\": $isPro ? $proPrice + $extra\n                               : $isFlash ? 0.02574\n                               : $contains($model, \"5.0 lite\") ? 0.035\n                               : $contains($model, \"4-5\") ? 0.04\n                               : 0.03,\n                        \"format\": { \"suffix\": ($isPro or $isFlash) ? \"/Image\" : \" x images/Run\", \"approximate\": true }\n                      }\n                )\n                "
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "CreateBoundingBoxes": {
+  "input": {
+   "required": {
+    "width": [
+     "INT",
+     {
+      "tooltip": "Width of the canvas and the pixel grid for the bounding boxes.",
+      "default": 1024,
+      "min": 64,
+      "max": 16384,
+      "step": 16
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "tooltip": "Height of the canvas and the pixel grid for the bounding boxes.",
+      "default": 1024,
+      "min": 64,
+      "max": 16384,
+      "step": 16
+     }
+    ],
+    "editor_state": [
+     "BOUNDING_BOXES",
+     {
+      "tooltip": "Draw bounding boxes and set each box type, text, description, color palette. Start with background element first and foreground last.",
+      "default": [],
+      "socketless": false
+     }
+    ]
+   },
+   "optional": {
+    "background": [
+     "IMAGE",
+     {
+      "tooltip": "Optional image used as background in the canvas and preview."
+     }
+    ],
+    "bboxes": [
+     "BOUNDING_BOX,ARRAY,STRING",
+     {
+      "tooltip": "Bounding boxes, elements, or a JSON string to initialize the canvas. A new upstream value initializes the canvas; edits made on the canvas take priority and are kept until the upstream value changes again."
+     }
+    ],
+    "last_incoming": [
+     "BOUNDING_BOXES",
+     {
+      "tooltip": "Internal state managed by the canvas: the upstream bboxes value that last initialized it. Leave empty to re-initialize the canvas from the bboxes input on the next run.",
+      "default": [],
+      "socketless": true
+     }
+    ]
+   },
+   "hidden": {
+    "prompt": [
+     "PROMPT"
+    ],
+    "extra_pnginfo": [
+     "EXTRA_PNGINFO"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "width",
+    "height",
+    "editor_state"
+   ],
+   "optional": [
+    "background",
+    "bboxes",
+    "last_incoming"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE",
+   "BOUNDING_BOX",
+   "ARRAY"
+  ],
+  "output_is_list": [
+   false,
+   false,
+   false
+  ],
+  "output_name": [
+   "preview",
+   "bboxes",
+   "elements"
+  ],
+  "output_tooltips": [
+   null,
+   null,
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "CreateBoundingBoxes",
+  "display_name": "Create Bounding Boxes",
+  "description": "Draw bounding boxes in a canvas. Outputs Ideogram prompt elements, pixel-space bounding boxes, and a preview image.",
+  "python_module": "comfy_extras.nodes_bounding_boxes",
+  "category": "utilities",
+  "output_node": true,
+  "deprecated": false,
+  "experimental": true,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "IdeogramEditApi": {
+  "input": {
+   "required": {
+    "model": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "Model to use.",
+      "options": [
+       {
+        "key": "ideogram-4.5",
+        "inputs": {
+         "required": {
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Image 1 is the image to edit; images 2-5 are optional references. Refer to them in the prompt as @Image1, @Image2, ...; a batched input counts once per image.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5"
+             ],
+             "min": 1
+            }
+           }
+          ],
+          "prompt": [
+           "STRING",
+           {
+            "tooltip": "Editing instructions. Supports @Image1-style references to the input images.",
+            "default": "",
+            "multiline": true
+           }
+          ],
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Output size. 'auto' picks a ~2K canvas from the images and prompt, 'source' keeps the size of image 1 (images above ~4 MP are scaled down first), and a preset with a different aspect ratio recomposes the scene. Select 'custom' to use the width and height below.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "source",
+             "(2K) 2048x2048 (1:1)",
+             "(2K) 1440x2880 (1:2)",
+             "(2K) 2880x1440 (2:1)",
+             "(2K) 1664x2496 (2:3)",
+             "(2K) 2496x1664 (3:2)",
+             "(2K) 1792x2240 (4:5)",
+             "(2K) 2240x1792 (5:4)",
+             "(2K) 1440x2560 (9:16)",
+             "(2K) 2560x1440 (16:9)",
+             "(2K) 1600x2560 (5:8)",
+             "(2K) 2560x1600 (8:5)",
+             "(2K) 1728x2304 (3:4)",
+             "(2K) 2304x1728 (4:3)",
+             "(2K) 1152x2944 (9:23)",
+             "(2K) 2944x1152 (23:9)",
+             "(2K) 1248x3328 (3:8)",
+             "(2K) 3328x1248 (8:3)",
+             "(2K) 1280x3072 (5:12)",
+             "(2K) 3072x1280 (12:5)",
+             "(2K) 1024x3072 (1:3)",
+             "(2K) 3072x1024 (3:1)",
+             "(1K) 1024x1024 (1:1)",
+             "(1K) 896x1120 (4:5)",
+             "(1K) 1120x896 (5:4)",
+             "(1K) 864x1152 (3:4)",
+             "(1K) 1152x864 (4:3)",
+             "(1K) 832x1248 (2:3)",
+             "(1K) 1248x832 (3:2)",
+             "(1K) 800x1280 (5:8)",
+             "(1K) 1280x800 (8:5)",
+             "custom"
+            ]
+           }
+          ],
+          "width": [
+           "INT",
+           {
+            "tooltip": "Custom output width. Used only when size is set to 'custom'.",
+            "default": 2048,
+            "min": 256,
+            "max": 4608,
+            "step": 32
+           }
+          ],
+          "height": [
+           "INT",
+           {
+            "tooltip": "Custom output height. Used only when size is set to 'custom'.",
+            "default": 2048,
+            "min": 256,
+            "max": 4608,
+            "step": 32
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Quality tier. Higher tiers cost more and take longer.",
+            "default": "medium",
+            "multiselect": false,
+            "options": [
+             "very_low",
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed for generation. The same images, prompt, settings and seed give the same result.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "IdeogramEditApi",
+  "display_name": "Ideogram 4.5 Edit",
+  "description": "Edits or combines up to 5 images guided by a text prompt using Ideogram 4.5. Re-renders the whole image and can change its size or aspect ratio; use Ideogram 4.5 Precise Edit to keep untouched pixels unchanged.",
+  "python_module": "comfy_api_nodes.nodes_ideogram",
+  "category": "partner/image/Ideogram",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [
+     {
+      "name": "model",
+      "type": "COMFY_DYNAMICCOMBO_V3"
+     },
+     {
+      "name": "model.quality",
+      "type": "COMBO"
+     }
+    ],
+    "inputs": [],
+    "input_groups": []
+   },
+   "expr": "\n        (\n          $q := $lookup(widgets, \"model.quality\");\n          {\"type\": \"usd\", \"usd\": $q = \"very_low\" ? 0.01144 : $q = \"low\" ? 0.0429 : $q = \"high\" ? 0.286 : 0.0858}\n        )\n        "
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "IdeogramPreciseEditApi": {
+  "input": {
+   "required": {
+    "model": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "Model to use.",
+      "options": [
+       {
+        "key": "ideogram-4.5",
+        "inputs": {
+         "required": {
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Image 1 is the image to edit; images 2-5 are optional references. Refer to them in the prompt as @Image1, @Image2, ...; a batched input counts once per image.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5"
+             ],
+             "min": 1
+            }
+           }
+          ],
+          "prompt": [
+           "STRING",
+           {
+            "tooltip": "Editing instructions. Supports @Image1-style references to the input images.",
+            "default": "",
+            "multiline": true
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Quality tier. Higher tiers cost more and take longer.",
+            "default": "medium",
+            "multiselect": false,
+            "options": [
+             "very_low",
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed for generation. The same images, prompt, settings and seed give the same result.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "IdeogramPreciseEditApi",
+  "display_name": "Ideogram 4.5 Precise Edit",
+  "description": "Edits an image guided by a text prompt using Ideogram 4.5 precise editing: only what the prompt asks for changes, untouched pixels stay identical and the output keeps the size of image 1 (images above ~4 MP are scaled down first). Accepts up to 4 reference images.",
+  "python_module": "comfy_api_nodes.nodes_ideogram",
+  "category": "partner/image/Ideogram",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [
+     {
+      "name": "model",
+      "type": "COMFY_DYNAMICCOMBO_V3"
+     },
+     {
+      "name": "model.quality",
+      "type": "COMBO"
+     }
+    ],
+    "inputs": [],
+    "input_groups": []
+   },
+   "expr": "\n        (\n          $q := $lookup(widgets, \"model.quality\");\n          {\"type\": \"usd\", \"usd\": $q = \"very_low\" ? 0.01144 : $q = \"low\" ? 0.0429 : $q = \"high\" ? 0.286 : 0.0858}\n        )\n        "
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "IdeogramTextToImageApi": {
+  "input": {
+   "required": {
+    "model": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "Model to use.",
+      "options": [
+       {
+        "key": "ideogram-4.5",
+        "inputs": {
+         "required": {
+          "prompt": [
+           "STRING",
+           {
+            "tooltip": "Text prompt. Also accepts an Ideogram structured JSON caption, for example a previous final_prompt.",
+            "default": "",
+            "multiline": true
+           }
+          ],
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Output size. 'auto' lets the model pick a canvas that suits the prompt.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "(2K) 2048x2048 (1:1)",
+             "(2K) 1440x2880 (1:2)",
+             "(2K) 2880x1440 (2:1)",
+             "(2K) 1664x2496 (2:3)",
+             "(2K) 2496x1664 (3:2)",
+             "(2K) 1792x2240 (4:5)",
+             "(2K) 2240x1792 (5:4)",
+             "(2K) 1440x2560 (9:16)",
+             "(2K) 2560x1440 (16:9)",
+             "(2K) 1600x2560 (5:8)",
+             "(2K) 2560x1600 (8:5)",
+             "(2K) 1728x2304 (3:4)",
+             "(2K) 2304x1728 (4:3)",
+             "(2K) 1296x3168 (9:22)",
+             "(2K) 3168x1296 (22:9)",
+             "(2K) 1152x2944 (9:23)",
+             "(2K) 2944x1152 (23:9)",
+             "(2K) 1248x3328 (3:8)",
+             "(2K) 3328x1248 (8:3)",
+             "(2K) 1280x3072 (5:12)",
+             "(2K) 3072x1280 (12:5)",
+             "(2K) 1024x3072 (1:3)",
+             "(2K) 3072x1024 (3:1)",
+             "(1K) 1024x1024 (1:1)",
+             "(1K) 896x1120 (4:5)",
+             "(1K) 1120x896 (5:4)",
+             "(1K) 864x1152 (3:4)",
+             "(1K) 1152x864 (4:3)",
+             "(1K) 832x1248 (2:3)",
+             "(1K) 1248x832 (3:2)",
+             "(1K) 800x1280 (5:8)",
+             "(1K) 1280x800 (8:5)",
+             "(1K) 720x1280 (9:16)",
+             "(1K) 1280x720 (16:9)",
+             "(1K) 720x1440 (1:2)",
+             "(1K) 1440x720 (2:1)"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Quality tier. Higher tiers cost more and take longer.",
+            "default": "medium",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "magic_prompt": [
+           "COMBO",
+           {
+            "tooltip": "Rewrites the prompt into a detailed structured caption before generating; 'off' keeps your wording as literal as possible. The caption is returned as final_prompt.",
+            "advanced": true,
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "on",
+             "off"
+            ]
+           }
+          ],
+          "seed": [
+           "INT",
+           {
+            "tooltip": "Seed for generation. Text-to-image is not reproducible from the seed alone because the prompt is rewritten on every run; to reproduce an image, reuse its final_prompt with magic_prompt set to 'off' and the same seed.",
+            "default": 42,
+            "min": 0,
+            "max": 2147483647,
+            "step": 1,
+            "control_after_generate": true,
+            "display": "number"
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "model"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE",
+   "STRING"
+  ],
+  "output_is_list": [
+   false,
+   false
+  ],
+  "output_name": [
+   "IMAGE",
+   "final_prompt"
+  ],
+  "output_tooltips": [
+   null,
+   "The structured caption the image was generated from. Feed it back with magic_prompt set to 'off' and the same seed to reproduce the image."
+  ],
+  "output_matchtypes": null,
+  "name": "IdeogramTextToImageApi",
+  "display_name": "Ideogram 4.5 Text to Image",
+  "description": "Generates images from a text prompt using Ideogram 4.5.",
+  "python_module": "comfy_api_nodes.nodes_ideogram",
+  "category": "partner/image/Ideogram",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [
+     {
+      "name": "model",
+      "type": "COMFY_DYNAMICCOMBO_V3"
+     },
+     {
+      "name": "model.quality",
+      "type": "COMBO"
+     }
+    ],
+    "inputs": [],
+    "input_groups": []
+   },
+   "expr": "\n        (\n          $q := $lookup(widgets, \"model.quality\");\n          {\"type\": \"usd\", \"usd\": $q = \"very_low\" ? 0.01144 : $q = \"low\" ? 0.0429 : $q = \"high\" ? 0.286 : 0.0858}\n        )\n        "
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "ImageCompare": {
+  "input": {
+   "required": {
+    "compare_view": [
+     "IMAGECOMPARE",
+     {
+      "socketless": true
+     }
+    ]
+   },
+   "optional": {
+    "image_a": [
+     "IMAGE",
+     {}
+    ],
+    "image_b": [
+     "IMAGE",
+     {}
+    ]
+   },
+   "hidden": {
+    "prompt": [
+     "PROMPT"
+    ],
+    "extra_pnginfo": [
+     "EXTRA_PNGINFO"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "compare_view"
+   ],
+   "optional": [
+    "image_a",
+    "image_b"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "is_input_list": false,
+  "output": [],
+  "output_is_list": [],
+  "output_name": [],
+  "output_tooltips": [],
+  "output_matchtypes": null,
+  "name": "ImageCompare",
+  "display_name": "Compare Images",
+  "description": "Compares two images side by side with a slider.",
+  "python_module": "comfy_extras.nodes_image_compare",
+  "category": "image",
+  "output_node": true,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": "Image Tools",
+  "has_intermediate_output": false
+ },
+ "ImageCompositor": {
+  "input": {
+   "required": {
+    "layers": [
+     "LAYERS",
+     {
+      "tooltip": "Layer stack to composite; build it with Add Layer. Items are stacked by z_index, batch frames inside an item expand to consecutive layers, and item placement, opacity, and blend mode define the initial composition. Without an explicit document canvas the size is a best-effort maximum extent of the placed layers. A saved composition that matches the current inputs takes priority."
+     }
+    ],
+    "compositor": [
+     "COMPOSITOR",
+     {
+      "tooltip": "Layered composition saved by the compositor editor.",
+      "default": {},
+      "socketless": true
+     }
+    ]
+   },
+   "hidden": {
+    "prompt": [
+     "PROMPT"
+    ],
+    "extra_pnginfo": [
+     "EXTRA_PNGINFO"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "layers",
+    "compositor"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_is_list": [
+   false,
+   false
+  ],
+  "output_name": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_tooltips": [
+   "Composited image. Carries an alpha channel when the composite has transparent areas (e.g. hidden background), otherwise plain RGB.",
+   "Transparency of the composite (1 = fully transparent). All zeros when the composite is opaque."
+  ],
+  "output_matchtypes": null,
+  "name": "ImageCompositor",
+  "display_name": "Create Layered Image",
+  "description": "",
+  "python_module": "comfy_extras.nodes_compositor",
+  "category": "image",
+  "output_node": true,
+  "deprecated": false,
+  "experimental": true,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": [
+   "compositor",
+   "composite",
+   "layer",
+   "layers",
+   "layer editor",
+   "psd"
+  ],
+  "essentials_category": null,
+  "has_intermediate_output": true
+ },
+ "JoinImageWithAlpha": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "alpha": [
+     "MASK",
+     {}
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "alpha"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "JoinImageWithAlpha",
+  "display_name": "Join Image with Alpha",
+  "description": "",
+  "python_module": "comfy_extras.nodes_compositing",
+  "category": "image/compositing",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": [
+   "add transparency",
+   "apply alpha",
+   "composite alpha",
+   "RGBA"
+  ],
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "LoadImage": {
+  "input": {
+   "required": {
+    "image": [
+     [
+      "example.png"
+     ],
+     {
+      "image_upload": true
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_is_list": [
+   false,
+   false
+  ],
+  "output_name": [
+   "IMAGE",
+   "MASK"
+  ],
+  "name": "LoadImage",
+  "display_name": "Load Image",
+  "description": "",
+  "python_module": "nodes",
+  "category": "image",
+  "output_node": false,
+  "has_intermediate_output": false,
+  "search_aliases": [
+   "load image",
+   "open image",
+   "import image",
+   "image input",
+   "upload image",
+   "read image",
+   "image loader"
+  ],
+  "essentials_category": "Basics"
+ },
+ "OpenAIGPTImageNodeV2": {
+  "input": {
+   "required": {
+    "prompt": [
+     "STRING",
+     {
+      "tooltip": "Text prompt for GPT Image",
+      "default": "",
+      "multiline": true
+     }
+    ],
+    "model": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "options": [
+       {
+        "key": "gpt-image-2.5-flare",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024",
+             "2048x2048",
+             "2048x1152",
+             "1152x2048",
+             "3840x2160",
+             "2160x3840",
+             "Custom"
+            ]
+           }
+          ],
+          "custom_width": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "custom_height": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high",
+             "xhigh",
+             "max"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-2.5-sunburst",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024",
+             "2048x2048",
+             "2048x1152",
+             "1152x2048",
+             "3840x2160",
+             "2160x3840",
+             "Custom"
+            ]
+           }
+          ],
+          "custom_width": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "custom_height": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high",
+             "xhigh",
+             "max"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-2",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size. Select 'Custom' to use the custom width and height.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024",
+             "2048x2048",
+             "2048x1152",
+             "1152x2048",
+             "3840x2160",
+             "2160x3840",
+             "Custom"
+            ]
+           }
+          ],
+          "custom_width": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "custom_height": [
+           "INT",
+           {
+            "tooltip": "Used only when `size` is 'Custom'. Must be a multiple of 16.",
+            "default": 1024,
+            "min": 480,
+            "max": 3840,
+            "step": 16
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-1.5",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024"
+            ]
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "gpt-image-1",
+        "inputs": {
+         "required": {
+          "size": [
+           "COMBO",
+           {
+            "tooltip": "Image size.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "1024x1024",
+             "1024x1536",
+             "1536x1024"
+            ]
+           }
+          ],
+          "background": [
+           "COMBO",
+           {
+            "tooltip": "Return image with or without background.",
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "opaque",
+             "transparent"
+            ]
+           }
+          ],
+          "quality": [
+           "COMBO",
+           {
+            "tooltip": "Image quality, affects cost and generation time.",
+            "default": "low",
+            "multiselect": false,
+            "options": [
+             "low",
+             "medium",
+             "high"
+            ]
+           }
+          ],
+          "images": [
+           "COMFY_AUTOGROW_V3",
+           {
+            "tooltip": "Optional reference image(s) for image editing. Up to 16 images.",
+            "template": {
+             "input": {
+              "required": {
+               "image": [
+                "IMAGE",
+                {}
+               ]
+              }
+             },
+             "names": [
+              "image_1",
+              "image_2",
+              "image_3",
+              "image_4",
+              "image_5",
+              "image_6",
+              "image_7",
+              "image_8",
+              "image_9",
+              "image_10",
+              "image_11",
+              "image_12",
+              "image_13",
+              "image_14",
+              "image_15",
+              "image_16"
+             ],
+             "min": 0
+            }
+           }
+          ]
+         },
+         "optional": {
+          "mask": [
+           "MASK",
+           {
+            "tooltip": "Optional mask for inpainting (white areas will be replaced). Requires exactly one reference image."
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "n": [
+     "INT",
+     {
+      "tooltip": "How many images to generate",
+      "default": 1,
+      "min": 1,
+      "max": 8,
+      "step": 1,
+      "display": "number"
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "tooltip": "not implemented yet in backend",
+      "default": 0,
+      "min": 0,
+      "max": 2147483647,
+      "step": 1,
+      "control_after_generate": true,
+      "display": "number"
+     }
+    ]
+   },
+   "hidden": {
+    "auth_token_comfy_org": [
+     "AUTH_TOKEN_COMFY_ORG"
+    ],
+    "api_key_comfy_org": [
+     "API_KEY_COMFY_ORG"
+    ],
+    "unique_id": [
+     "UNIQUE_ID"
+    ],
+    "comfy_usage_source": [
+     "COMFY_USAGE_SOURCE"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "prompt",
+    "model",
+    "n",
+    "seed"
+   ],
+   "hidden": [
+    "auth_token_comfy_org",
+    "api_key_comfy_org",
+    "unique_id",
+    "comfy_usage_source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "IMAGE"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "OpenAIGPTImageNodeV2",
+  "display_name": "OpenAI GPT Image 2.5",
+  "description": "Generates images via OpenAI's GPT Image endpoint.",
+  "python_module": "comfy_api_nodes.nodes_openai",
+  "category": "partner/image/OpenAI",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": true,
+  "price_badge": {
+   "engine": "jsonata",
+   "depends_on": {
+    "widgets": [
+     {
+      "name": "model",
+      "type": "COMFY_DYNAMICCOMBO_V3"
+     },
+     {
+      "name": "model.quality",
+      "type": "COMBO"
+     },
+     {
+      "name": "model.size",
+      "type": "COMBO"
+     },
+     {
+      "name": "n",
+      "type": "INT"
+     }
+    ],
+    "inputs": [],
+    "input_groups": [
+     "model.images"
+    ]
+   },
+   "expr": "\n                (\n                  $ranges := {\n                    \"gpt-image-1\": {\n                      \"low\":    [0.011, 0.02],\n                      \"medium\": [0.042, 0.07],\n                      \"high\":   [0.167, 0.25]\n                    },\n                    \"gpt-image-1.5\": {\n                      \"low\":    [0.009, 0.02],\n                      \"medium\": [0.034, 0.062],\n                      \"high\":   [0.133, 0.22]\n                    },\n                    \"gpt-image-2\": {\n                      \"low\":    [0.0019, 0.0237],\n                      \"medium\": [0.0186, 0.2135],\n                      \"high\":   [0.0744, 0.8539]\n                    },\n                    \"gpt-image-2.5-flare\": {\n                      \"low\":    [0.0023, 0.0283],\n                      \"medium\": [0.0056, 0.0636],\n                      \"high\":   [0.0222, 0.2544],\n                      \"xhigh\":  [0.0388, 0.4523],\n                      \"max\":    [0.0887, 1.0175]\n                    },\n                    \"gpt-image-2.5-sunburst\": {\n                      \"low\":    [0.0023, 0.0283],\n                      \"medium\": [0.0056, 0.0636],\n                      \"high\":   [0.0222, 0.2544],\n                      \"xhigh\":  [0.0388, 0.4523],\n                      \"max\":    [0.0887, 1.0175]\n                    }\n                  };\n                  $presets := {\n                    \"gpt-image-2\": {\n                      \"low\": {\"1024x1024\": 0.0071, \"1024x1536\": 0.0057, \"1536x1024\": 0.0057, \"2048x2048\": 0.0143, \"2048x1152\": 0.0057, \"1152x2048\": 0.0057, \"3840x2160\": 0.0134, \"2160x3840\": 0.0134},\n                      \"medium\": {\"1024x1024\": 0.0632, \"1024x1536\": 0.0494, \"1536x1024\": 0.0494, \"2048x2048\": 0.1284, \"2048x1152\": 0.0509, \"1152x2048\": 0.0509, \"3840x2160\": 0.1201, \"2160x3840\": 0.1201},\n                      \"high\": {\"1024x1024\": 0.2529, \"1024x1536\": 0.1976, \"1536x1024\": 0.1976, \"2048x2048\": 0.5138, \"2048x1152\": 0.2034, \"1152x2048\": 0.2034, \"3840x2160\": 0.4803, \"2160x3840\": 0.4803}\n                    },\n                    \"gpt-image-2.5\": {\n                      \"low\": {\"1024x1024\": 0.0084, \"1024x1536\": 0.0068, \"1536x1024\": 0.0068, \"2048x2048\": 0.0170, \"2048x1152\": 0.0067, \"1152x2048\": 0.0067, \"3840x2160\": 0.0159, \"2160x3840\": 0.0159},\n                      \"medium\": {\"1024x1024\": 0.0188, \"1024x1536\": 0.0147, \"1536x1024\": 0.0147, \"2048x2048\": 0.0383, \"2048x1152\": 0.0157, \"1152x2048\": 0.0157, \"3840x2160\": 0.0371, \"2160x3840\": 0.0371},\n                      \"high\": {\"1024x1024\": 0.0753, \"1024x1536\": 0.0589, \"1536x1024\": 0.0589, \"2048x2048\": 0.1531, \"2048x1152\": 0.0606, \"1152x2048\": 0.0606, \"3840x2160\": 0.1431, \"2160x3840\": 0.1431},\n                      \"xhigh\": {\"1024x1024\": 0.1339, \"1024x1536\": 0.1055, \"1536x1024\": 0.1055, \"2048x2048\": 0.2721, \"2048x1152\": 0.1077, \"1152x2048\": 0.1077, \"3840x2160\": 0.2544, \"2160x3840\": 0.2544},\n                      \"max\": {\"1024x1024\": 0.3013, \"1024x1536\": 0.2354, \"1536x1024\": 0.2354, \"2048x2048\": 0.6123, \"2048x1152\": 0.2424, \"1152x2048\": 0.2424, \"3840x2160\": 0.5724, \"2160x3840\": 0.5724}\n                    }\n                  };\n                  $perImage := {\n                    \"gpt-image-1\": [0.0019, 0.0019],\n                    \"gpt-image-1.5\": [0.0016, 0.0016],\n                    \"gpt-image-2\": [0.0098, 0.0147],\n                    \"gpt-image-2.5-flare\": [0.0117, 0.0176],\n                    \"gpt-image-2.5-sunburst\": [0.0117, 0.0176]\n                  };\n                  $model := widgets.model;\n                  $family := ($model = \"gpt-image-2.5-flare\" or $model = \"gpt-image-2.5-sunburst\") ? \"gpt-image-2.5\" : $model;\n                  $qualityRaw := $lookup(widgets, \"model.quality\");\n                  $quality := ($qualityRaw != null) ? $qualityRaw : \"\";\n                  $sizeRaw := $lookup(widgets, \"model.size\");\n                  $size := ($sizeRaw != null) ? $sizeRaw : \"\";\n                  $range := $lookup($lookup($ranges, $model), $quality);\n                  $preset := $lookup($lookup($lookup($presets, $family), $quality), $size);\n                  $out := ($preset != null) ? [$preset, $preset] : $range;\n                  $image := $lookup($perImage, $model);\n                  $refsRaw := $lookup(inputGroups, \"model.images\");\n                  $refs := ($refsRaw != null) ? $refsRaw : 0;\n                  $nRaw := widgets.n;\n                  $n := ($nRaw != null and $nRaw != 0) ? $nRaw : 1;\n                  $min := ($out[0] + $refs * $image[0]) * $n;\n                  $max := ($out[1] + $refs * $image[1]) * $n;\n                  $format := ($n = 1) ? {\"approximate\": true} : {\"suffix\": \"/Run\", \"approximate\": true};\n                  ($min = $max)\n                    ? {\"type\": \"usd\", \"usd\": $min, \"format\": $format}\n                    : {\"type\": \"range_usd\", \"min_usd\": $min, \"max_usd\": $max, \"format\": $format}\n                )\n                "
+  },
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "Painter": {
+  "input": {
+   "required": {
+    "mask": [
+     "STRING",
+     {
+      "widgetType": "PAINTER",
+      "image_upload": true,
+      "default": "",
+      "socketless": true,
+      "multiline": false
+     }
+    ],
+    "width": [
+     "INT",
+     {
+      "hidden": true,
+      "default": 512,
+      "socketless": true,
+      "min": 64,
+      "max": 4096,
+      "step": 64
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "hidden": true,
+      "default": 512,
+      "socketless": true,
+      "min": 64,
+      "max": 4096,
+      "step": 64
+     }
+    ],
+    "bg_color": [
+     "COLOR",
+     {
+      "default": "#000000",
+      "socketless": true
+     }
+    ]
+   },
+   "optional": {
+    "image": [
+     "IMAGE",
+     {
+      "tooltip": "Optional base image to paint over"
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "mask",
+    "width",
+    "height",
+    "bg_color"
+   ],
+   "optional": [
+    "image"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_is_list": [
+   false,
+   false
+  ],
+  "output_name": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_tooltips": [
+   null,
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "Painter",
+  "display_name": "Painter",
+  "description": "",
+  "python_module": "comfy_extras.nodes_painter",
+  "category": "image",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": true
+ },
+ "PreviewAny": {
+  "input": {
+   "required": {
+    "source": [
+     "*",
+     {}
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "source"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "STRING"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "STRING"
+  ],
+  "name": "PreviewAny",
+  "display_name": "Preview as Text",
+  "description": "Preview any input value as text.",
+  "python_module": "comfy_extras.nodes_preview_any",
+  "category": "utilities",
+  "output_node": true,
+  "has_intermediate_output": false,
+  "search_aliases": [
+   "preview",
+   "preview text",
+   "show output",
+   "inspect",
+   "debug",
+   "print value",
+   "show text"
+  ]
+ },
+ "PreviewImage": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE"
+    ]
+   },
+   "hidden": {
+    "prompt": "PROMPT",
+    "extra_pnginfo": "EXTRA_PNGINFO"
+   }
+  },
+  "input_order": {
+   "required": [
+    "images"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "images"
+  ],
+  "name": "PreviewImage",
+  "display_name": "Preview Image",
+  "description": "Preview the images without saving them to the ComfyUI output directory.",
+  "python_module": "nodes",
+  "category": "image",
+  "output_node": true,
+  "has_intermediate_output": false,
+  "search_aliases": [
+   "preview",
+   "preview image",
+   "show image",
+   "view image",
+   "display image",
+   "image viewer"
+  ],
+  "essentials_category": "Basics"
+ },
+ "SaveImage": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE",
+     {
+      "tooltip": "The images to save."
+     }
+    ],
+    "filename_prefix": [
+     "STRING",
+     {
+      "default": "ComfyUI",
+      "tooltip": "The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."
+     }
+    ]
+   },
+   "hidden": {
+    "prompt": "PROMPT",
+    "extra_pnginfo": "EXTRA_PNGINFO"
+   }
+  },
+  "input_order": {
+   "required": [
+    "images",
+    "filename_prefix"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "images"
+  ],
+  "name": "SaveImage",
+  "display_name": "Save Image",
+  "description": "Saves the input images to your ComfyUI output directory.",
+  "python_module": "nodes",
+  "category": "image",
+  "output_node": true,
+  "has_intermediate_output": false,
+  "search_aliases": [
+   "save",
+   "save image",
+   "export image",
+   "output image",
+   "write image",
+   "download"
+  ],
+  "essentials_category": "Basics"
+ },
+ "SaveImageAdvanced": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE",
+     {
+      "tooltip": "The images to save."
+     }
+    ],
+    "filename_prefix": [
+     "STRING",
+     {
+      "tooltip": "The prefix for the file to save. May include formatting tokens such as %date:yyyy-MM-dd% or %Empty Latent Image.width%.",
+      "default": "ComfyUI",
+      "multiline": false
+     }
+    ],
+    "format": [
+     "COMFY_DYNAMICCOMBO_V3",
+     {
+      "tooltip": "The file format in which to save the image.",
+      "options": [
+       {
+        "key": "png",
+        "inputs": {
+         "required": {
+          "bit_depth": [
+           "COMBO",
+           {
+            "advanced": true,
+            "default": "8-bit",
+            "multiselect": false,
+            "options": [
+             "8-bit",
+             "16-bit"
+            ]
+           }
+          ],
+          "input_color_space": [
+           "COMBO",
+           {
+            "advanced": true,
+            "default": "sRGB",
+            "multiselect": false,
+            "options": [
+             "sRGB"
+            ]
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "exr",
+        "inputs": {
+         "required": {
+          "bit_depth": [
+           "COMBO",
+           {
+            "advanced": true,
+            "default": "16-bit float",
+            "multiselect": false,
+            "options": [
+             "32-bit float",
+             "16-bit float"
+            ]
+           }
+          ],
+          "input_color_space": [
+           "COMBO",
+           {
+            "tooltip": "Colorspace of the input tensor. The EXR is always written as scene-linear in the matching gamut.\nsRGB \u2014 input is sRGB-encoded Rec.709; the inverse sRGB EOTF is applied.\nHDR \u2014 input is HLG-encoded Rec.2020 (BT.2100); the inverse HLG OETF is applied to get scene-linear light.\nlinear \u2014 input is already scene-linear (Rec.709 primaries); written through unchanged. Use this for renderer/compositor output.",
+            "advanced": true,
+            "default": "sRGB",
+            "multiselect": false,
+            "options": [
+             "sRGB",
+             "HDR",
+             "linear"
+            ]
+           }
+          ]
+         }
+        }
+       },
+       {
+        "key": "avif",
+        "inputs": {
+         "required": {
+          "bit_depth": [
+           "COMBO",
+           {
+            "tooltip": "Auto uses 8-bit YUV420 for sRGB and 10-bit YUV420 for HDR.",
+            "advanced": true,
+            "default": "auto",
+            "multiselect": false,
+            "options": [
+             "auto",
+             "8-bit YUV420",
+             "10-bit YUV420"
+            ]
+           }
+          ],
+          "input_color_space": [
+           "COMBO",
+           {
+            "tooltip": "Colorspace of the input images. HDR selects BT.2020/HLG and HDR PQ selects BT.2020/PQ.",
+            "advanced": true,
+            "default": "sRGB",
+            "multiselect": false,
+            "options": [
+             "sRGB",
+             "HDR",
+             "HDR PQ"
+            ]
+           }
+          ],
+          "crf": [
+           "INT",
+           {
+            "tooltip": "Lower values produce higher quality and larger files.",
+            "advanced": true,
+            "default": 18,
+            "min": 1,
+            "max": 63
+           }
+          ],
+          "save_mode": [
+           "COMFY_DYNAMICCOMBO_V3",
+           {
+            "display_name": "save mode",
+            "options": [
+             {
+              "key": "still images",
+              "inputs": {
+               "required": {}
+              }
+             },
+             {
+              "key": "animated",
+              "inputs": {
+               "required": {
+                "fps": [
+                 "FLOAT",
+                 {
+                  "default": 6.0,
+                  "min": 0.01,
+                  "max": 1000.0,
+                  "step": 0.01
+                 }
+                ],
+                "loop_count": [
+                 "INT",
+                 {
+                  "tooltip": "Number of times to loop the animation. 0 loops forever.",
+                  "advanced": true,
+                  "default": 0,
+                  "min": 0,
+                  "max": 1000
+                 }
+                ]
+               }
+              }
+             }
+            ]
+           }
+          ]
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "hidden": {
+    "prompt": [
+     "PROMPT"
+    ],
+    "extra_pnginfo": [
+     "EXTRA_PNGINFO"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "images",
+    "filename_prefix",
+    "format"
+   ],
+   "hidden": [
+    "prompt",
+    "extra_pnginfo"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "IMAGE"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "images"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "SaveImageAdvanced",
+  "display_name": "Save Image (Advanced)",
+  "description": "Saves the input images to your ComfyUI output directory.",
+  "python_module": "comfy_extras.nodes_images",
+  "category": "image",
+  "output_node": true,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": [
+   "save",
+   "save image",
+   "export image",
+   "output image",
+   "write image"
+  ],
+  "essentials_category": "Basics",
+  "has_intermediate_output": false
+ }
+}

@@ -56,6 +56,26 @@ impl Homography {
         )
     }
 
+    /// Scales unit coordinates to a `width` × `height` rectangle.
+    pub fn scale(width: f32, height: f32) -> Self {
+        Self([[width, 0.0, 0.0], [0.0, height, 0.0], [0.0, 0.0, 1.0]])
+    }
+
+    /// This mapping followed by `next`.
+    pub fn then(self, next: Self) -> Self {
+        let (a, b) = (next.0, self.0);
+        Self(std::array::from_fn(|row| {
+            std::array::from_fn(|column| (0..3).map(|k| a[row][k] * b[k][column]).sum())
+        }))
+    }
+
+    /// The projective divisor at `p`: it keeps one sign over the half of the plane that maps to
+    /// a finite place and is zero along the line sent to infinity (the vanishing line).
+    pub fn divisor(self, p: Point) -> f32 {
+        let m = self.0;
+        m[2][0] * p.x + m[2][1] * p.y + m[2][2]
+    }
+
     pub fn inverse(self) -> Option<Self> {
         let [[a, b, c], [d, e, f], [g, h, i]] = self.0;
         let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
@@ -94,5 +114,42 @@ mod tests {
             assert!(inverse.map(h.map(point)).distance(point) < 0.00001);
         }
         assert!(Homography::from_quad([quad[0], quad[2], quad[1], quad[3]]).is_none());
+    }
+
+    #[test]
+    fn composition_applies_in_order_and_scale_stretches_the_unit_square() {
+        let quad = [
+            Point::new(10.0, 20.0),
+            Point::new(90.0, 10.0),
+            Point::new(110.0, 80.0),
+            Point::new(0.0, 70.0),
+        ];
+        let h = Homography::from_quad(quad).unwrap();
+        let scale = Homography::scale(4.0, 2.0);
+        assert!(
+            scale
+                .map(Point::new(0.5, 0.25))
+                .distance(Point::new(2.0, 0.5))
+                < 1e-6
+        );
+        let both = scale.then(h);
+        for point in [Point::new(0.1, 0.2), Point::new(0.24, 0.5)] {
+            assert!(both.map(point).distance(h.map(scale.map(point))) < 1e-3);
+        }
+        let back = h.inverse().unwrap();
+        for (corner, unit) in quad
+            .into_iter()
+            .zip([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        {
+            assert!(
+                h.then(back)
+                    .map(Point::new(unit[0], unit[1]))
+                    .distance(Point::new(unit[0], unit[1]))
+                    < 1e-4
+            );
+            assert!(back.map(corner).distance(Point::new(unit[0], unit[1])) < 1e-4);
+            // The whole quad is on one side of its vanishing line.
+            assert!(back.divisor(corner).signum() == back.divisor(quad[0]).signum());
+        }
     }
 }

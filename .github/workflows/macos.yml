@@ -1,0 +1,101 @@
+name: macOS
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+# Literal prefix: inside a reusable-workflow call github.workflow is the
+# caller's name, which would put the platforms in one group.
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    # Apple Silicon, with a desktop session and Metal, so no virtual display is needed.
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      # Shown in About and `xuan --version`; build.rs shortens the commit to 7 characters.
+      XUAN_BUILD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Only the tag-triggered Release workflow (which calls this one) builds a release.
+      XUAN_BUILD_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'dev' }}
+      # Missing real-camera fixtures fail the RAW tests instead of skipping.
+      XUAN_REQUIRE_RAW_FIXTURES: '1'
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        # Installs the toolchain pinned in rust-toolchain.toml.
+        run: rustup toolchain install
+      - name: Cache RAW test fixtures
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: testdata/raw/cache
+          key: raw-fixtures-${{ hashFiles('testdata/raw/fixtures.txt') }}
+      - name: Fetch RAW test fixtures
+        run: scripts/fetch-raw-fixtures.sh
+      - name: Check and test
+        run: scripts/check.sh --gpu
+      - name: Upload golden-image differences
+        # Written by the golden tests (src/goldens.rs) when a rendering differs.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: golden-failures-macos
+          path: target/golden-failures/
+          if-no-files-found: ignore
+      - name: Native clipboard test
+        run: cargo test --locked --bin xuan system_clipboard_images_and_files_paste_from_another_process -- --ignored --test-threads=1
+      - name: Build
+        run: cargo build --release --locked
+      - name: Native Metal smoke test
+        timeout-minutes: 5
+        run: |
+          screenshot="$RUNNER_TEMP/xuan demo.png"
+          target/release/xuan --demo --screenshot "$screenshot"
+          width=$(sips -g pixelWidth "$screenshot" | awk '/pixelWidth/ { print $2 }')
+          height=$(sips -g pixelHeight "$screenshot" | awk '/pixelHeight/ { print $2 }')
+          echo "Screenshot: ${width}x${height}"
+          test "$width" -ge 850 && test "$height" -ge 560
+          mkdir -p dist
+          cp "$screenshot" dist/xuan-macos-demo.png
+      - name: Archive the unsigned build
+        # Not a release package: no app bundle, signature or notarization yet. Extract it
+        # and run `xattr -d com.apple.quarantine xuan` before starting it from a terminal.
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          tar -czf "dist/xuan-$version-macos-arm64-unsigned.tar.gz" -C target/release xuan
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: xuan-macos-arm64-unsigned
+          path: dist/*
+          if-no-files-found: error
+  mcp-server:
+    # The MCP server plugin is its own Cargo workspace (its dependencies stay
+    # out of Xuan's lock file), so the main check does not build it.
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: plugins/mcp-server
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        # Installs the toolchain pinned in the repository's rust-toolchain.toml.
+        run: rustup toolchain install
+      - name: Format
+        run: cargo fmt -- --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked

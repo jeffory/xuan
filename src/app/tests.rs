@@ -3,6 +3,12 @@ use super::*;
 #[path = "tests/canvas_preview.rs"]
 mod canvas_preview;
 
+#[path = "tests/channels.rs"]
+mod channels;
+
+#[path = "tests/clone_marker.rs"]
+mod clone_marker;
+
 #[path = "tests/eyedropper.rs"]
 mod eyedropper;
 
@@ -33,6 +39,66 @@ mod keymap;
 #[path = "tests/palette.rs"]
 mod command_palette;
 
+#[path = "tests/selection.rs"]
+mod selection;
+
+#[path = "tests/paths.rs"]
+mod paths;
+
+#[path = "tests/pencil_cursor.rs"]
+mod pencil_cursor;
+
+#[path = "tests/pen.rs"]
+mod pen;
+
+#[path = "tests/providers.rs"]
+mod providers;
+
+#[path = "tests/canvas_commands.rs"]
+mod canvas_commands;
+
+#[path = "tests/collage.rs"]
+mod collage;
+
+#[path = "tests/paint_bucket.rs"]
+mod paint_bucket;
+
+#[path = "tests/dodge_burn.rs"]
+mod dodge_burn;
+
+#[path = "tests/liquify.rs"]
+mod liquify;
+
+#[path = "tests/stroke.rs"]
+mod stroke;
+
+#[path = "tests/crop.rs"]
+mod crop;
+
+#[path = "tests/perspective_crop.rs"]
+mod perspective_crop;
+
+#[path = "tests/compositor_filters.rs"]
+mod compositor_filters;
+
+#[path = "tests/adjustment_presets.rs"]
+mod adjustment_presets;
+
+#[path = "tests/units.rs"]
+mod units;
+
+#[path = "tests/update_check.rs"]
+mod update_check;
+
+#[path = "tests/menu_bar.rs"]
+mod menu_bar;
+
+#[path = "tests/menu_changes.rs"]
+mod menu_changes;
+
+#[path = "tests/mac_keys.rs"]
+mod mac_keys;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -56,6 +122,139 @@ fn heic_opens_as_a_document_and_imports_as_an_undoable_layer() {
         pixels
     );
     app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
+fn svg_opens_at_its_own_size_and_imports_sharp_at_canvas_size() {
+    let (_, mut app) = app();
+    let dir = tempfile::tempdir().unwrap();
+    app.config_path = Some(dir.path().join("config.toml"));
+    let path = dir.path().join("logo.svg");
+    // A rectangle whose edge, at 1.5 of 4 units, falls mid-pixel at small sizes.
+    std::fs::write(
+        &path,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50" viewBox="0 0 4 1">
+            <rect width="1.5" height="1" fill="blue"/></svg>"#,
+    )
+    .unwrap();
+    assert!(app.open_path(&path, false));
+    assert!(
+        app.error.is_none() && app.notice.is_none(),
+        "{:?}",
+        app.error
+    );
+    let session = app.session().unwrap();
+    assert_eq!(session.title, "logo");
+    assert_eq!(session.source.as_deref(), Some(path.as_path()));
+    assert!(session.path.is_none(), "saving must not overwrite the SVG");
+    assert_eq!((session.document.width, session.document.height), (200, 50));
+    assert_eq!(
+        app.config.recent_files.first().map(|p| p.as_path()),
+        Some(std::path::absolute(&path).unwrap().as_path())
+    );
+
+    app.dimensions = [400, 400];
+    app.new_document();
+    let sessions = app.sessions.len();
+    assert!(app.open_path(&path, true));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), sessions);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 2);
+    let layer = document.active().unwrap();
+    assert_eq!(layer.name, "logo");
+    assert_eq!((layer.transform.x, layer.transform.y), (0.0, 150.0));
+    // Drawn at 400 × 100, not scaled from the file's own 200 × 50.
+    let pixels = layer.pixels.as_deref().unwrap();
+    assert_eq!(pixels.dimensions(), (400, 100));
+    assert_eq!(pixels.get_pixel(149, 50).0, [0, 0, 255, 255]);
+    assert_eq!(pixels.get_pixel(150, 50).0[3], 0);
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
+fn svg_files_pasted_from_the_clipboard_fit_the_canvas() {
+    use super::clipboard::ClipboardContent;
+
+    let (_, mut app) = app();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tall.svgz");
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 2"/>"#;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut encoder, svg).unwrap();
+    std::fs::write(&path, encoder.finish().unwrap()).unwrap();
+    // Without a document, the file opens at its own size.
+    app.paste_content(ClipboardContent::Files(vec![path.clone()]));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (1, 2));
+
+    app.dimensions = [300, 100];
+    app.new_document();
+    app.paste_content(ClipboardContent::Files(vec![path]));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let layer = app.session().unwrap().document.active().unwrap();
+    assert_eq!(
+        (layer.transform.width, layer.transform.height),
+        (50.0, 100.0)
+    );
+    assert_eq!((layer.transform.x, layer.transform.y), (125.0, 0.0));
+}
+
+#[test]
+fn svg_imports_report_what_was_not_drawn_and_refuse_damaged_files() {
+    let (_, mut app) = app();
+    let dir = tempfile::tempdir().unwrap();
+    let text = dir.path().join("text.svg");
+    std::fs::write(
+        &text,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><text>Hi</text>
+            <image href="https://example.com/a.png" width="5" height="5"/></svg>"#,
+    )
+    .unwrap();
+    assert!(app.open_path(&text, false));
+    assert_eq!(app.status, "Imported with changes");
+    let notice = app.notice.take().unwrap();
+    assert!(
+        notice.contains("Text") && notice.contains("linked images"),
+        "{notice}"
+    );
+
+    let sessions = app.sessions.len();
+    for (name, bytes) in [
+        (
+            "broken.svg",
+            b"<svg xmlns='http://www.w3.org/2000/svg'".as_slice(),
+        ),
+        (
+            "huge.svg",
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="90000" height="9"/>"#,
+        ),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        app.error = None;
+        assert!(!app.open_path(&path, false), "{name}");
+        let error = app.error.take().unwrap();
+        assert!(
+            error.contains("Could not open") && error.contains(name),
+            "{error}"
+        );
+        // Drawn to fit the canvas, a file too large to open on its own still imports.
+        assert_eq!(app.open_path(&path, true), name == "huge.svg", "{name}");
+        if name == "huge.svg" {
+            app.command("undo");
+            continue;
+        }
+        let error = app.error.clone().unwrap();
+        assert!(
+            error.contains("Could not open") && error.contains(name),
+            "{error}"
+        );
+    }
+    assert_eq!(app.sessions.len(), sessions);
     assert_eq!(app.session().unwrap().document.layers.len(), 1);
 }
 
@@ -217,6 +416,333 @@ fn photoshop_files_import_as_a_centered_folder_and_drop_like_images() {
     assert!(app.dialog == Some(Dialog::DropChoice));
     app.drop_choose_for_test(Some(true));
     assert_eq!(app.session().unwrap().document.layers.len(), 3);
+}
+
+/// A descriptor key or class ID: a length (0 for four characters), then the characters.
+fn descriptor_id(out: &mut Vec<u8>, key: &str) {
+    let length = if key.len() == 4 { 0 } else { key.len() as u32 };
+    out.extend(length.to_be_bytes());
+    out.extend(key.as_bytes());
+}
+
+/// An `artb` block: a versioned descriptor with the artboard's rectangle and background type.
+fn artboard_block(left: f64, top: f64, right: f64, bottom: f64, background: i32) -> Vec<u8> {
+    let mut out = 16_u32.to_be_bytes().to_vec();
+    out.extend(0_u32.to_be_bytes());
+    descriptor_id(&mut out, "artboard");
+    out.extend(2_u32.to_be_bytes());
+    descriptor_id(&mut out, "artboardRect");
+    out.extend(b"Objc");
+    out.extend(0_u32.to_be_bytes());
+    descriptor_id(&mut out, "classFloatRect");
+    out.extend(4_u32.to_be_bytes());
+    for (key, value) in [
+        ("Top ", top),
+        ("Left", left),
+        ("Btom", bottom),
+        ("Rght", right),
+    ] {
+        descriptor_id(&mut out, key);
+        out.extend(b"doub");
+        out.extend(value.to_be_bytes());
+    }
+    descriptor_id(&mut out, "artboardBackgroundType");
+    out.extend(b"long");
+    out.extend(background.to_be_bytes());
+    out
+}
+
+/// A layer record's additional information block: its key and data.
+type PhotoshopBlock = (&'static [u8; 4], Vec<u8>);
+
+/// One layer record (`rect` is top, left, bottom, right; raw RGB channels of one gray) and its
+/// channel data.
+fn photoshop_record(
+    info: &mut Vec<u8>,
+    data: &mut Vec<u8>,
+    name: &str,
+    rect: [i32; 4],
+    blocks: &[PhotoshopBlock],
+) {
+    for v in rect {
+        info.extend(v.to_be_bytes());
+    }
+    let area = ((rect[3] - rect[1]) * (rect[2] - rect[0])) as usize;
+    let channels: &[i16] = if area > 0 { &[0, 1, 2] } else { &[] };
+    info.extend((channels.len() as u16).to_be_bytes());
+    for &id in channels {
+        info.extend(id.to_be_bytes());
+        info.extend(((2 + area) as u32).to_be_bytes());
+        data.extend([0, 0]);
+        data.extend(vec![60; area]);
+    }
+    info.extend(b"8BIMnorm");
+    info.extend([255, 0, 0, 0]);
+    let mut extra = vec![0; 8]; // no mask or blending ranges
+    extra.push(name.len() as u8);
+    extra.extend(name.as_bytes());
+    while !extra.len().is_multiple_of(4) {
+        extra.push(0);
+    }
+    for (key, block) in blocks {
+        extra.extend(b"8BIM");
+        extra.extend(*key);
+        extra.extend((block.len() as u32).to_be_bytes());
+        extra.extend(block);
+        if block.len() % 2 == 1 {
+            extra.push(0);
+        }
+    }
+    info.extend((extra.len() as u32).to_be_bytes());
+    info.extend(extra);
+}
+
+/// A 30×10 Photoshop file with two 10×10 artboards: "Left" at (0, 0) with a white background and
+/// a 2×2 layer at (2, 1), and "Right" at (20, 0), transparent, with a 2×2 layer at (22, 3); and
+/// a layer, "Loose", outside them.
+fn photoshop_artboards() -> Vec<u8> {
+    let divider = || (b"lsct", 3_u32.to_be_bytes().to_vec());
+    let folder = |left: f64, background| {
+        let mut section = 1_u32.to_be_bytes().to_vec();
+        section.extend(b"8BIMpass");
+        [
+            (b"lsct", section),
+            (
+                b"artb",
+                artboard_block(left, 0.0, left + 10.0, 10.0, background),
+            ),
+        ]
+    };
+    let mut info = 7_i16.to_be_bytes().to_vec();
+    let mut data = Vec::new();
+    let records: [(&str, [i32; 4], Vec<PhotoshopBlock>); 7] = [
+        ("Loose", [0, 0, 1, 1], vec![]),
+        ("</Layer group>", [0; 4], vec![divider()]),
+        ("Left art", [1, 2, 3, 4], vec![]),
+        ("Left", [0; 4], folder(0.0, 1).to_vec()),
+        ("</Layer group>", [0; 4], vec![divider()]),
+        ("Right art", [3, 22, 5, 24], vec![]),
+        ("Right", [0; 4], folder(20.0, 3).to_vec()),
+    ];
+    for (name, rect, blocks) in &records {
+        photoshop_record(&mut info, &mut data, name, *rect, blocks);
+    }
+    info.extend(data);
+    if info.len() % 2 == 1 {
+        info.push(0);
+    }
+    let mut out = b"8BPS\0\x01\0\0\0\0\0\0\0\x03".to_vec();
+    out.extend(10_u32.to_be_bytes());
+    out.extend(30_u32.to_be_bytes());
+    out.extend(8_u16.to_be_bytes());
+    out.extend(3_u16.to_be_bytes());
+    out.extend([0; 8]); // no color mode data or image resources
+    let mut section = (info.len() as u32).to_be_bytes().to_vec();
+    section.extend(info);
+    section.extend([0; 4]);
+    out.extend((section.len() as u32).to_be_bytes());
+    out.extend(section);
+    out.extend([0, 0]);
+    out.extend([255; 900]);
+    out
+}
+
+#[test]
+fn photoshop_artboards_open_as_tabs_and_take_an_untouched_tab() {
+    let (_, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Boards.psd");
+    std::fs::write(&path, photoshop_artboards()).unwrap();
+    let titles =
+        |app: &EditorApp| -> Vec<String> { app.sessions.iter().map(|s| s.title.clone()).collect() };
+
+    // The report lists the artboards and what is left out before anything opens.
+    app.dimensions = [64, 48];
+    app.new_document();
+    app.open_path(&path, false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(
+        lines.contains(&"Artboards (each opened as its own document): 2 (“Right”, “Left”)".into()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"Layers outside every artboard (left out): 1 (“Loose”)".into()),
+        "{lines:?}"
+    );
+    assert_eq!(titles(&app), ["Untitled"]);
+    app.finish_photoshop(true);
+
+    // The untouched new document gives its tab to the first artboard.
+    assert_eq!(titles(&app), ["Right", "Left"]);
+    assert_eq!(app.current, 0);
+    let right = &app.sessions[0];
+    assert!(right.path.is_none() && right.source.is_none());
+    assert_eq!((right.document.width, right.document.height), (10, 10));
+    let art = &right.document.layers[0];
+    assert_eq!(art.name, "Right art");
+    assert_eq!((art.transform.x, art.transform.y), (2.0, 3.0));
+    let left = &app.sessions[1].document;
+    let names: Vec<_> = left.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Artboard Background", "Left art"]);
+    assert_eq!(
+        (left.layers[1].transform.x, left.layers[1].transform.y),
+        (2.0, 1.0)
+    );
+    assert_eq!(app.status, "Imported with changes");
+
+    // Tabs with work in them stay.
+    app.open_path(&path, false);
+    app.finish_photoshop(true);
+    assert_eq!(titles(&app), ["Right", "Left", "Right", "Left"]);
+    assert_eq!(app.current, 2);
+
+    // So does an edited new document, or one of several.
+    for edited in [true, false] {
+        app.sessions.clear();
+        app.new_document();
+        if edited {
+            app.sessions[0].history.mark_modified();
+        } else {
+            app.new_document();
+        }
+        app.open_path(&path, false);
+        app.finish_photoshop(true);
+        assert_eq!(app.sessions.len(), if edited { 3 } else { 4 });
+        assert_eq!(app.sessions[app.current].title, "Right");
+    }
+
+    // With no tabs open, each artboard opens in a new one.
+    app.sessions.clear();
+    app.open_path(&path, false);
+    app.finish_photoshop(true);
+    assert_eq!(titles(&app), ["Right", "Left"]);
+    assert_eq!(app.current, 0);
+}
+
+#[test]
+fn photoshop_artboards_import_as_layer_as_folders_in_their_layout() {
+    let (_, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Boards.psd");
+    std::fs::write(&path, photoshop_artboards()).unwrap();
+    app.dimensions = [40, 20];
+    app.new_document();
+    app.open_path(&path, true);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(
+        lines.contains(&"Artboards (each imported as a folder): 2 (“Right”, “Left”)".into()),
+        "{lines:?}"
+    );
+    app.finish_photoshop(true);
+    assert_eq!(app.sessions.len(), 1);
+    let document = &app.session().unwrap().document;
+    let names: Vec<_> = document.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Layer 1",
+            "Artboard Background",
+            "Left art",
+            "Left",
+            "Right art",
+            "Right",
+            "Boards"
+        ]
+    );
+    let find = |name| document.layers.iter().find(|l| l.name == name).unwrap();
+    let file = find("Boards");
+    assert!(file.group && file.parent.is_none());
+    for (board, art, at) in [
+        ("Left", "Left art", (7.0, 6.0)),
+        ("Right", "Right art", (27.0, 8.0)),
+    ] {
+        let folder = find(board);
+        assert!(folder.group);
+        assert_eq!(folder.parent, Some(file.id));
+        let art = find(art);
+        assert_eq!(art.parent, Some(folder.id));
+        // The artboards keep their layout, 30 × 10 centered on the 40 × 20 canvas.
+        assert_eq!((art.transform.x, art.transform.y), at);
+    }
+    let background = find("Artboard Background");
+    assert_eq!((background.transform.x, background.transform.y), (5.0, 5.0));
+    assert_eq!(background.parent, Some(find("Left").id));
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+/// An OpenRaster file with one 2 × 1 layer at (1, 1) drawn with `op`.
+fn openraster_file(op: &str) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut png = std::io::Cursor::new(Vec::new());
+    RgbaImage::from_pixel(2, 1, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let xml = format!(
+        "<image w=\"4\" h=\"3\"><stack><layer name=\"Art\" src=\"data/a.png\" x=\"1\" y=\"1\" composite-op=\"{op}\"/></stack></image>"
+    );
+    for (name, bytes) in [
+        ("mimetype", b"image/openraster".to_vec()),
+        ("stack.xml", xml.into_bytes()),
+        ("data/a.png", png.into_inner()),
+    ] {
+        archive.start_file(name, stored).unwrap();
+        archive.write_all(&bytes).unwrap();
+    }
+    archive.finish().unwrap().into_inner()
+}
+
+#[test]
+fn openraster_files_open_import_and_export_like_photoshop_files() {
+    let (context, mut app) = app();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("Sketch.ora");
+    assert!(builtin_extension(&path));
+
+    // A conversion is listed first, under OpenRaster's name.
+    std::fs::write(&path, openraster_file("svg:dst-out")).unwrap();
+    app.open_path(&path, false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.sessions.is_empty());
+    let lines = app.pending_photoshop_lines().unwrap();
+    assert!(lines.iter().any(|l| l.contains("svg:dst-out")), "{lines:?}");
+    let enter = text_key(egui::Key::Enter, egui::Modifiers::NONE);
+    keyboard_frame(&context, &mut app, vec![enter], egui::Modifiers::NONE);
+    assert_eq!(app.sessions.len(), 1);
+    let session = app.session().unwrap();
+    assert_eq!(session.title, "Sketch");
+    assert!(session.path.is_none(), "saving must not overwrite the ORA");
+    assert_eq!(session.document.layers[0].name, "Art");
+
+    // A file Xuan represents completely opens at once, and imports as a folder.
+    std::fs::write(&path, openraster_file("svg:multiply")).unwrap();
+    app.open_path(&path, true);
+    assert!(app.pending_photoshop_lines().is_none());
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 3);
+    let folder = document.active().unwrap();
+    assert!(folder.group && folder.name == "Sketch");
+    assert_eq!(document.layers[1].blend, xuan::blend::BlendMode::Multiply);
+
+    // Exporting reports what was flattened.
+    let exported = directory.path().join("out.ora");
+    assert_eq!(app.export_to(&exported).unwrap(), None);
+    app.session_mut().unwrap().document.layers[1].fill = 0.5;
+    let notice = app.export_to(&exported).unwrap().unwrap();
+    assert!(notice.contains("Fill below 100%"), "{notice}");
+    let (back, _) = io::ora::load(&exported, io::psd::PixelBudget::default()).unwrap();
+    assert_eq!(back.layers.len(), 3);
+
+    // Damaged files are refused with the reason.
+    std::fs::write(&path, b"not a zip").unwrap();
+    app.open_path(&path, false);
+    let error = app.error.take().unwrap();
+    assert!(error.contains("not an OpenRaster file"), "{error}");
 }
 
 #[test]
@@ -639,6 +1165,15 @@ fn benchmark_large_image_filter_layers() {
             distortion: 10.0,
             vignette: 15.0,
         },
+        Filter::VIGNETTE,
+        Filter::BLOOM,
+        Filter::TONAL_CONTRAST,
+        Filter::Dither(Box::new(xuan::effects::DitherSettings {
+            style: xuan::effects::DitherStyle::Bayer8,
+            ..Default::default()
+        })),
+        Filter::Dither(Box::default()),
+        Filter::UNSHARP_MASK,
     ] {
         app.start_filter_layer(filter.clone());
         for _ in 0..3 {
@@ -653,6 +1188,11 @@ fn benchmark_large_image_filter_layers() {
                 Filter::MotionBlur { angle, .. } => *angle = 30.0 + value,
                 Filter::Noise { amount, .. } => *amount = 10.0 + value,
                 Filter::LensCorrection { distortion, .. } => *distortion = 10.0 + value,
+                Filter::Vignette { amount, .. }
+                | Filter::Bloom { amount, .. }
+                | Filter::TonalContrast { amount, .. }
+                | Filter::UnsharpMask { amount, .. } => *amount = 30.0 + value,
+                Filter::Dither(settings) => settings.density = value,
             }
             edit.refresh = true;
             let start = std::time::Instant::now();
@@ -747,12 +1287,26 @@ fn benchmark_large_image_motion_blur_apply() {
             angle: 35.0,
         };
         let padding = (distance * 0.5_f32).ceil() as u32 + 1;
+        let edges = xuan::effects::canvas_edges(
+            original.active().unwrap().transform,
+            [original.width, original.height],
+        );
         let start = std::time::Instant::now();
         let result = worker
-            .render(pixels, distance, 35.0, padding, &cancel)
+            .render(pixels, distance, 35.0, padding, edges, &cancel)
             .unwrap()
             .expect("GPU must execute the benchmark");
         let gpu_time = start.elapsed();
+        // Apply crops the padding of sides that reach the canvas edge.
+        let [left, top, right, bottom] = edges.map(|repeat| if repeat { padding } else { 0 });
+        let result = image::imageops::crop_imm(
+            &result,
+            left,
+            top,
+            result.width() - left - right,
+            result.height() - top - bottom,
+        )
+        .to_image();
         let mut expected = original.clone();
         let start = std::time::Instant::now();
         xuan::effects::apply_filter(&mut expected, &filter, false).unwrap();
@@ -1764,6 +2318,12 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
                         .expect("Copy must replace the old file list with image pixels");
                     assert_eq!((image.width, image.height), (4, 3));
                 }
+                "inspect layers" => {
+                    let image = clipboard
+                        .get_image()
+                        .expect("Copying layers must give other apps their pixels");
+                    assert_eq!((image.width, image.height), (20, 16));
+                }
                 _ => panic!("unexpected clipboard test command"),
             }
             println!("clipboard ready");
@@ -1884,6 +2444,44 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
     );
     assert_eq!(app.session().unwrap().document.layers.len(), 5);
     assert!(app.clipboard.is_none());
+
+    // Without a selection, Ctrl+C copies the layer whole, and other apps get its pixels.
+    app.command("deselect");
+    app.session_mut()
+        .unwrap()
+        .document
+        .active_mut()
+        .unwrap()
+        .name = "Whole".into();
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Copy],
+        egui::Modifiers::CTRL,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.copied_layers.is_some());
+    copy("inspect layers");
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        egui::Modifiers::CTRL,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 6);
+    assert_eq!(document.active().unwrap().name, "Whole");
+    copy("image");
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        egui::Modifiers::CTRL,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 7);
+    assert_eq!(document.active().unwrap().pixels.as_deref(), Some(&pixels));
+    assert!(app.copied_layers.is_none());
 
     // Exercise the File menu against another process's native clipboard.
     app.sessions.clear();
@@ -2411,7 +3009,7 @@ fn layer_drop_indicator_stays_on_the_shared_boundary_between_rows() {
             .into_iter()
             .filter_map(|shape| match shape.shape {
                 egui::Shape::LineSegment { points, stroke }
-                    if stroke.color == theme::ACCENT
+                    if stroke.color == theme::Palette::DARK.accent
                         && stroke.width == 2.0
                         && points[0].y == points[1].y
                         && (middle.y..bottom.y + 36.0).contains(&points[0].y) =>
@@ -3022,6 +3620,83 @@ fn pointer_brush_selection_and_pixel_move_are_undoable() {
 }
 
 #[test]
+fn pointer_brush_tapers_its_end_on_release_as_one_undo_step() {
+    let (context, mut app) = app();
+    app.dimensions = [120, 40];
+    app.new_document();
+    app.brush.diameter = 12.0;
+    app.brush.hardness = 1.0;
+    app.brush.color = [255, 0, 0, 255];
+    app.brush.dynamics.taper_out = 40.0;
+    app.set_tool(Tool::Brush);
+    let before = render::render(&app.session().unwrap().document);
+    drag(
+        &context,
+        &mut app,
+        Point::new(10.0, 20.0),
+        Point::new(110.0, 20.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let image = render::render(&app.session().unwrap().document);
+    let rows = |x| (0..40).filter(|&y| image.get_pixel(x, y)[3] > 0).count();
+    assert_eq!(rows(40), 12);
+    assert!(rows(105) < 4, "{}", rows(105));
+    assert!(rows(90) > rows(105) && rows(90) < 12);
+    app.command("undo");
+    assert_eq!(render::render(&app.session().unwrap().document), before);
+}
+
+#[test]
+fn pointer_brush_paints_symmetric_copies_as_one_undo_step() {
+    let (context, mut app) = app();
+    app.dimensions = [120, 60];
+    app.new_document();
+    app.brush.diameter = 8.0;
+    app.brush.hardness = 1.0;
+    app.brush.color = [255, 0, 0, 255];
+    app.brush.symmetry.mode = xuan::paint::SymmetryMode::Vertical;
+    app.set_tool(Tool::Brush);
+    // The axis and its centre are drawn over the canvas while painting.
+    frame(&context, &mut app);
+    let before = render::render(&app.session().unwrap().document);
+    drag(
+        &context,
+        &mut app,
+        Point::new(10.0, 20.0),
+        Point::new(40.0, 20.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let image = render::render(&app.session().unwrap().document);
+    for x in [12, 25, 38] {
+        assert_eq!(image.get_pixel(x, 20)[3], 255, "{x}");
+        assert_eq!(image.get_pixel(119 - x, 20)[3], 255, "mirror of {x}");
+    }
+    assert_eq!(image.get_pixel(60, 20)[3], 0);
+    // Radial copies around a centre of choice, then other tools ignore it.
+    app.brush.symmetry.mode = xuan::paint::SymmetryMode::Radial;
+    app.brush.symmetry.segments = 4;
+    app.brush.symmetry.center = Some(Point::new(60.0, 30.0));
+    frame(&context, &mut app);
+    app.command("undo");
+    assert_eq!(render::render(&app.session().unwrap().document), before);
+    drag(
+        &context,
+        &mut app,
+        Point::new(80.0, 30.0),
+        Point::new(90.0, 30.0),
+        egui::Modifiers::NONE,
+    );
+    let image = render::render(&app.session().unwrap().document);
+    for [x, y] in [[85, 30], [60, 55], [34, 30], [60, 4]] {
+        assert_eq!(image.get_pixel(x, y)[3], 255, "{x}, {y}");
+    }
+    app.command("undo");
+    assert_eq!(render::render(&app.session().unwrap().document), before);
+}
+
+#[test]
 fn transform_handles_and_control_drag_distortion_change_geometry() {
     let (context, mut app) = app();
     app.dimensions = [64, 48];
@@ -3457,6 +4132,38 @@ fn standalone_mask_creation_uses_selection_and_supports_groups() {
 }
 
 #[test]
+fn clipping_mask_command_clips_to_a_folder_below() {
+    let (context, mut app) = app();
+    app.dimensions = [8, 8];
+    app.new_document();
+    let document = &mut app.session_mut().unwrap().document;
+    let mut folder = Layer::blank("Figure", 8, 8);
+    folder.group = true;
+    let mut cloak = Layer::image(
+        "Cloak",
+        RgbaImage::from_pixel(8, 8, image::Rgba([9, 9, 9, 255])),
+    );
+    cloak.parent = Some(folder.id);
+    let shading = Layer::image("Shading", RgbaImage::new(8, 8));
+    let (folder_id, shading_id) = (folder.id, shading.id);
+    document.layers.extend([cloak, folder, shading]);
+    document.select(shading_id, false);
+    app.command("clip");
+    let document = &app.session().unwrap().document;
+    document.validate().unwrap();
+    assert_eq!(document.active().unwrap().clip_to, Some(folder_id));
+    frame(&context, &mut app);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    // Ungrouping the folder releases the layers clipped to it.
+    app.session_mut().unwrap().document.select(folder_id, false);
+    app.command("ungroup");
+    let document = &app.session().unwrap().document;
+    document.validate().unwrap();
+    let shading = document.layers.iter().find(|l| l.id == shading_id).unwrap();
+    assert_eq!(shading.clip_to, None);
+}
+
+#[test]
 fn layer_commands_and_tabs_have_independent_histories() {
     let (_, mut app) = app();
     app.dimensions = [16, 16];
@@ -3615,8 +4322,13 @@ fn live_adjustment_cancel_restores_original_and_export_renders() {
     assert_eq!(render::render(&app.session().unwrap().document), original);
     app.effect = None;
     app.dialog = Some(Dialog::Export);
-    frame(&context, &mut app);
-    assert!(app.export_texture.is_some());
+    // The preview is made on a worker thread.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.export_texture.is_none() {
+        assert!(std::time::Instant::now() < deadline, "no export preview");
+        frame(&context, &mut app);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 #[test]
@@ -3687,6 +4399,238 @@ fn copying_layers_between_projects_keeps_source_and_undoes_in_destination() {
     app.command("undo");
     assert_eq!(app.sessions[1].document.layers.len(), 1);
     assert_eq!(app.sessions[0].document.layers.len(), 2);
+}
+
+/// A layer with editable text, a stroke and a mask, selected on its own in a 20 × 16 document.
+fn text_layer_document(app: &mut EditorApp) -> Uuid {
+    app.dimensions = [20, 16];
+    app.new_document();
+    let mut text = Layer::image(
+        "Title",
+        RgbaImage::from_pixel(6, 4, image::Rgba([0, 0, 0, 255])),
+    );
+    text.transform.x = 1.0;
+    text.transform.y = 2.0;
+    text.text = Some(xuan::text::TextStyle {
+        content: "Hello".into(),
+        ..Default::default()
+    });
+    text.effects = Some(xuan::layer_effects::LayerEffects {
+        stroke: Some(xuan::layer_effects::StrokeEffect {
+            size: 2.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut mask = Layer::mask("Mask", 6, 4);
+    mask.parent = Some(text.id);
+    mask.transform = text.transform;
+    let id = text.id;
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers.extend([text, mask]);
+    document.select(id, false);
+    document.validate().unwrap();
+    id
+}
+
+#[test]
+fn copy_without_a_selection_pastes_an_editable_text_layer_into_another_tab() {
+    use super::clipboard::ClipboardContent;
+
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
+    let (_, mut app) = app();
+    let original = text_layer_document(&mut app);
+    app.command("copy");
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.status.starts_with("Copied layers: 1"), "{}", app.status);
+    let (pixels, point) = app.clipboard.clone().unwrap();
+    // Other apps get the layer flattened on a canvas the size of the document.
+    assert_eq!(pixels.dimensions(), (20, 16));
+    assert_eq!(point, Point::default());
+    assert_eq!(pixels.get_pixel(3, 3).0, [0, 0, 0, 255]);
+    assert_eq!(app.copied_layers.as_ref().unwrap().roots, [original]);
+
+    app.dimensions = [30, 20];
+    app.new_document();
+    app.mask_target = true;
+    app.paste_content(ClipboardContent::Image(pixels.clone()));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(!app.mask_target);
+    let document = &app.sessions[1].document;
+    assert_eq!(document.layers.len(), 3);
+    let copy = document.active().unwrap();
+    assert_ne!(copy.id, original);
+    assert_eq!(copy.name, "Title");
+    assert_eq!(
+        copy.text.as_ref().unwrap().content,
+        "Hello",
+        "still editable"
+    );
+    assert_eq!(
+        copy.effects.as_ref().unwrap().stroke.unwrap().size,
+        2.0,
+        "keeps its stroke"
+    );
+    assert_eq!(copy.transform.center(), Point::new(15.0, 10.0), "centred");
+    let mask = document.layers.iter().find(|l| l.name == "Mask").unwrap();
+    assert_eq!(mask.parent, Some(copy.id), "keeps its mask");
+    assert!(mask.standalone_mask);
+    assert_eq!(mask.transform.center(), copy.transform.center());
+    assert_eq!(app.sessions[0].document.layers.len(), 3);
+    assert_eq!(
+        app.session().unwrap().history.undo_name(),
+        Some("Paste Layers")
+    );
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("redo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+
+    // In the document it came from, the copy lands just above the original, in place.
+    app.current = 0;
+    app.paste_content(ClipboardContent::Image(pixels));
+    let document = &app.session().unwrap().document;
+    let names: Vec<_> = document.layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Layer 1", "Title", "Mask", "Title", "Mask"]);
+    let copy = document.active().unwrap();
+    assert_eq!(document.layers[3].id, copy.id);
+    assert_eq!((copy.transform.x, copy.transform.y), (1.0, 2.0));
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+}
+
+#[test]
+fn layer_copies_give_way_to_images_copied_in_other_apps_and_to_selections() {
+    use super::clipboard::ClipboardContent;
+
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
+    let (_, mut app) = app();
+    text_layer_document(&mut app);
+    app.command("copy");
+    assert!(app.copied_layers.is_some());
+
+    // Another app replaced the system clipboard since: its image is pasted instead.
+    let theirs = RgbaImage::from_pixel(4, 2, image::Rgba([9, 9, 9, 255]));
+    app.paste_content(ClipboardContent::Image(theirs.clone()));
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 4);
+    assert_eq!(document.active().unwrap().name, "Pasted image");
+    assert_eq!(document.active().unwrap().pixels.as_deref(), Some(&theirs));
+    assert!(app.copied_layers.is_none());
+    assert!(app.clipboard.is_none());
+    app.command("undo");
+
+    // Without a system clipboard, Xuan's own copy is the newest.
+    app.command("copy");
+    app.paste_content(ClipboardContent::Unavailable);
+    assert_eq!(app.session().unwrap().document.layers.len(), 5);
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().name,
+        "Title"
+    );
+    app.command("undo");
+    app.paste_content(ClipboardContent::Empty);
+    assert!(app.copied_layers.is_none());
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+
+    // With no document open, the layers go into a new one the size of their own.
+    app.command("copy");
+    app.sessions.clear();
+    app.paste_content(ClipboardContent::Unavailable);
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (20, 16));
+    let copy = document.active().unwrap();
+    assert!(copy.text.is_some());
+    assert_eq!((copy.transform.x, copy.transform.y), (7.0, 6.0), "centred");
+
+    // With a selection, Copy still takes pixels.
+    app.command("select_all");
+    app.command("copy");
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(app.copied_layers.is_none());
+    assert!(
+        app.status.starts_with("Copied 20 × 16 px"),
+        "{}",
+        app.status
+    );
+    let (pixels, _) = app.clipboard.clone().unwrap();
+    app.paste_content(ClipboardContent::Image(pixels));
+    let pasted = app.session().unwrap().document.active().unwrap();
+    assert_eq!(pasted.name, "Pasted image");
+    assert!(pasted.text.is_none());
+
+    // Copy Merged takes pixels without a selection too.
+    app.command("deselect");
+    app.command("copy_merged");
+    assert!(app.copied_layers.is_none());
+}
+
+#[test]
+fn copy_and_paste_shortcuts_duplicate_a_folder_whole_in_one_undo_step() {
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
+    let (context, mut app) = app();
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    let base = app.session().unwrap().document.active.unwrap();
+    let mut clipped = Layer::image(
+        "Clipped",
+        RgbaImage::from_pixel(16, 16, image::Rgba([0, 200, 0, 255])),
+    );
+    clipped.clip_to = Some(base);
+    let mut adjustment = Layer::blank("Invert", 16, 16);
+    adjustment.adjustment = Some(xuan::document::Adjustment::Invert);
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers.extend([clipped, adjustment]);
+    for layer in &mut document.layers {
+        document.selected.insert(layer.id);
+    }
+    app.command("group");
+    let folder = app.session().unwrap().document.active.unwrap();
+    assert_eq!(app.session().unwrap().document.layers.len(), 4);
+    let ctrl = egui::Modifiers {
+        ctrl: true,
+        command: true,
+        ..Default::default()
+    };
+    keyboard_frame(&context, &mut app, vec![egui::Event::Copy], ctrl);
+    assert!(app.copied_layers.is_some(), "{}", app.status);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        ctrl,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 8);
+    let copy = document.active().unwrap();
+    assert!(copy.group);
+    assert_ne!(copy.id, folder);
+    let children: Vec<_> = document
+        .layers
+        .iter()
+        .filter(|l| l.parent == Some(copy.id))
+        .collect();
+    assert_eq!(children.len(), 3);
+    let base_copy = children.iter().find(|l| l.name == "Layer 1").unwrap().id;
+    assert_ne!(base_copy, base);
+    assert_eq!(
+        children
+            .iter()
+            .find(|l| l.name == "Clipped")
+            .unwrap()
+            .clip_to,
+        Some(base_copy)
+    );
+    assert!(children.iter().any(|l| l.adjustment.is_some()));
+    document.validate().unwrap();
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 4);
+
+    // Edit → Paste takes the same path.
+    app.command("paste");
+    assert_eq!(app.session().unwrap().document.layers.len(), 8);
 }
 
 fn has_command(
@@ -3844,9 +4788,15 @@ fn view_menu_pixel_grid_toggle_applies_and_persists() {
 
 #[test]
 fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
+    use super::chrome::{ButtonLayout, WindowButton::*};
     let (context, mut app) = app();
-    // The traffic lights sit at fixed positions on the left.
-    app.config.title_bar = xuan::config::TitleBar::MacOs;
+    // Buttons on the left, as GNOME's `close,minimize,maximize:` puts them: 30 px each after
+    // the title bar's 14 px margin.
+    app.config.title_bar = xuan::config::TitleBar::Compact;
+    app.button_layout = ButtonLayout {
+        left: vec![Close, Minimize, Maximize],
+        right: vec![],
+    };
     frame(&context, &mut app);
     frame(&context, &mut app);
     let output = pointer_frame(
@@ -3906,7 +4856,7 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
         egui::Modifiers::NONE,
     );
 
-    for (x, maximize) in [(61.0, true), (41.0, false)] {
+    for (x, maximize) in [(89.0, true), (59.0, false)] {
         pointer_frame(
             &context,
             &mut app,
@@ -3942,14 +4892,14 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     pointer_frame(
         &context,
         &mut app,
-        Pos2::new(21.0, 20.0),
+        Pos2::new(29.0, 20.0),
         Some(true),
         egui::Modifiers::NONE,
     );
     let output = pointer_frame(
         &context,
         &mut app,
-        Pos2::new(21.0, 20.0),
+        Pos2::new(29.0, 20.0),
         Some(false),
         egui::Modifiers::NONE,
     );
@@ -3965,6 +4915,102 @@ fn click(context: &egui::Context, app: &mut EditorApp, pos: Pos2) -> egui::FullO
     pointer_frame(context, app, pos, None, egui::Modifiers::NONE);
     pointer_frame(context, app, pos, Some(true), egui::Modifiers::NONE);
     pointer_frame(context, app, pos, Some(false), egui::Modifiers::NONE)
+}
+
+/// macOS: the system draws the window buttons and resize edges, Xuan's menus sit beside them.
+#[test]
+fn native_window_buttons_keep_the_system_decorations_and_leave_room() {
+    use xuan::config::TitleBar;
+    let (context, mut app) = app();
+    let file = layer_label(&context, &mut app, "File");
+    app.native_buttons = true;
+    app.set_startup_title_bar(TitleBar::Compact);
+    frame(&context, &mut app);
+    let output = frame(&context, &mut app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    assert_eq!(app.window_corner_radius(&context), 0);
+    // The menus move right, past the system's buttons.
+    let moved = layer_label(&context, &mut app, "File");
+    assert!(
+        moved.x > file.x + 50.0 && moved.x > 75.0,
+        "{file:?} -> {moved:?}"
+    );
+    // Xuan draws no window buttons and no resize edges of its own. (Later clicks come quickly
+    // enough to be a double-click on the title, which zooms.)
+    let output = click(&context, &mut app, Pos2::new(1221.0, 16.0));
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Maximized(_)
+    )));
+    for x in [1191.0, 1251.0, 29.0] {
+        let output = click(&context, &mut app, Pos2::new(x, 16.0));
+        assert!(!has_command(&output, |c| matches!(
+            c,
+            egui::ViewportCommand::Close | egui::ViewportCommand::Minimized(_)
+        )));
+    }
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::BeginResize(_)
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    // The title still moves the window.
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(950.0, 20.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(970.0, 25.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::StartDrag
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(970.0, 25.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    // The full-size content view stays until Xuan restarts, and so does the title bar.
+    app.config.title_bar = TitleBar::System;
+    let output = frame(&context, &mut app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Decorations(_)
+    )));
+    assert_eq!(layer_label(&context, &mut app, "File"), moved);
 }
 
 #[test]
@@ -4106,6 +5152,25 @@ fn gnome_button_layout_picks_sides_and_order() {
     );
     assert_eq!(ButtonLayout::parse_gnome("'appmenu:'"), None);
     assert_eq!(ButtonLayout::parse_gnome(""), None);
+}
+
+/// macOS quits at once unless this says the quit flow would ask first (`macos.rs`).
+#[test]
+fn quitting_needs_a_prompt_only_with_unsaved_changes() {
+    let (context, mut app) = app();
+    assert!(!app.quit_needs_prompt());
+    app.dimensions = [16, 16];
+    app.new_document();
+    frame(&context, &mut app);
+    assert!(!app.quit_needs_prompt());
+    assert!(app.begin_quit());
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    assert!(app.quit_needs_prompt());
+    // Once the prompt lets the window close, nothing is left to ask.
+    app.allow_close = true;
+    assert!(!app.quit_needs_prompt());
+    assert!(app.begin_quit());
 }
 
 #[test]
@@ -4324,7 +5389,7 @@ fn titlebar_double_click_toggles_maximize_without_starting_a_drag() {
 #[test]
 fn custom_controls_keep_keyboard_input_and_disabled_behavior() {
     let context = egui::Context::default();
-    theme::apply(&context);
+    theme::apply(&context, &theme::Palette::DARK);
     let mut value = 0.5_f32;
     let mut enabled = true;
     let mut slider_id = egui::Id::NULL;
@@ -4778,7 +5843,10 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
 fn settings_threshold_field(context: &egui::Context, app: &mut EditorApp) -> Pos2 {
     app.dialog = Some(Dialog::Settings);
     settings::show_settings_page(context, settings::SettingsPage::Appearance);
-    frame(context, app);
+    // The page is a grid, which lays itself out invisibly on its first frame.
+    for _ in 0..3 {
+        frame(context, app);
+    }
     layer_label(context, app, "500%") + Vec2::new(8.0, 6.0)
 }
 
@@ -4858,7 +5926,7 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
         egui::Modifiers::CTRL,
     );
     assert!(app.dialog == Some(Dialog::Settings));
-    app.config.language = xuan::config::Language::SimplifiedChinese;
+    app.config.language = xuan::config::Language::new("zh-CN");
     // egui resolves window placement on its first pass.
     frame(&context, &mut app);
     let output = frame(&context, &mut app);
@@ -4876,15 +5944,6 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
             "Missing {label}: {text:?}"
         );
     }
-    context.fonts_mut(|fonts| {
-        for line in include_str!("../../assets/locales/zh-CN.tsv").lines() {
-            let translated = line.split_once('\t').unwrap().1;
-            assert!(
-                fonts.has_glyphs(&egui::FontId::proportional(12.0), translated),
-                "Missing font glyph: {translated}"
-            );
-        }
-    });
     keyboard_frame(
         &context,
         &mut app,
@@ -4892,9 +5951,81 @@ fn settings_shortcut_and_chinese_interface_are_available_without_a_document() {
         egui::Modifiers::NONE,
     );
     assert!(app.dialog.is_none());
-    app.config.language = xuan::config::Language::English;
+    app.config.language = xuan::config::Language::english();
     frame(&context, &mut app);
     assert_eq!(Tool::Brush.label(), "Brush");
+}
+
+/// Every translation can be drawn, and the bundled fonts cover what `docs/TRANSLATING.md` says.
+#[test]
+fn bundled_fonts_draw_every_locale_and_the_scripts_the_guide_lists() {
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    context.fonts_mut(|fonts| {
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let font = egui::FontId::new(12.0, family);
+            for (tag, source) in xuan::i18n::bundled_sources() {
+                for translated in xuan::i18n::catalog::Catalog::parse(source).0.texts() {
+                    assert!(
+                        fonts.has_glyphs(&font, translated),
+                        "Missing font glyph in {tag}: {translated}"
+                    );
+                }
+            }
+        }
+        // Names of languages, in their scripts. Monospace text, such as plugin logs, is drawn with
+        // Hack, which lacks Vietnamese's stacked accents.
+        let proportional = egui::FontId::proportional(12.0);
+        let monospace = egui::FontId::monospace(12.0);
+        for (covered, fonts_for) in [
+            ("Tiếng Việt", &[&proportional][..]),
+            (
+                "Čeština, Polski, Türkçe, Ελληνικά",
+                &[&proportional, &monospace],
+            ),
+            (
+                "Українська ґєії, Русский ёъыэ, Беларуская ў, Српски ђћџ, Қазақ ғқңөұүһі",
+                &[&proportional, &monospace],
+            ),
+            (
+                "简体中文, 繁體中文, 日本語 ひらがな カタカナ",
+                &[&proportional, &monospace],
+            ),
+        ] {
+            for font in fonts_for {
+                assert!(fonts.has_glyphs(font, covered), "{font:?}: {covered}");
+            }
+        }
+        for missing in ["한국어", "العربية", "עברית", "हिन्दी", "বাংলা", "ไทย"]
+        {
+            for font in [&proportional, &monospace] {
+                assert!(
+                    !fonts.has_glyphs(font, missing),
+                    "{missing} can be drawn now: update the table in docs/TRANSLATING.md"
+                );
+            }
+        }
+    });
+}
+
+/// Command labels and category names reach `tr` through variables, so the source scan in
+/// `xuan::i18n` cannot see them; this keeps them in the English catalog translators work from.
+#[test]
+fn every_command_label_and_category_is_in_the_english_catalog() {
+    let (_, english) = xuan::i18n::bundled_sources()
+        .iter()
+        .find(|(tag, _)| *tag == xuan::i18n::ENGLISH)
+        .expect("assets/locales/en.tsv");
+    let english = xuan::i18n::catalog::Catalog::parse(english).0;
+    let names = super::commands::COMMANDS
+        .iter()
+        .map(|command| command.label)
+        .chain(super::commands::Category::ALL.map(|category| category.name()));
+    let missing: Vec<_> = names.filter(|name| english.get(name).is_none()).collect();
+    assert!(
+        missing.is_empty(),
+        "Add these to assets/locales/en.tsv: {missing:#?}"
+    );
 }
 
 fn drop_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {

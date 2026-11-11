@@ -2,7 +2,7 @@ use image::{GrayImage, Rgba, RgbaImage};
 use rayon::prelude::*;
 
 use crate::{
-    blend::{BlendMode, composite, dissolve_alpha},
+    blend::{BlendMode, composite_filled, dissolve_alpha},
     document::{Document, Layer, Point},
 };
 
@@ -60,9 +60,15 @@ pub fn own_mask(layer: &Layer, point: Point) -> f32 {
         })
 }
 
+/// The alpha `layer` contributes at `point` as a clipping base: its pixels' alpha times its
+/// opacity and mask (and its own clipping base's alpha), or for a folder, the folder's
+/// composited alpha ([`group_alpha`]).
 pub fn layer_alpha(document: &Document, layer: &Layer, point: Point, depth: usize) -> f32 {
     if depth > 256 {
         return 0.0;
+    }
+    if layer.group {
+        return group_alpha(document, layer, point, depth);
     }
     let mut alpha = layer.pixels.as_ref().map_or(0.0, |image| {
         sample(image, layer.transform.inverse(point))[3]
@@ -75,6 +81,47 @@ pub fn layer_alpha(document: &Document, layer: &Layer, point: Point, depth: usiz
         alpha *= layer_alpha(document, source, point, depth + 1);
     }
     alpha
+}
+
+/// Whether a folder child adds to the folder's alpha: pixel layers and folders do;
+/// adjustments and filters only recolour what is below and add none.
+pub(crate) fn adds_group_alpha(layer: &Layer) -> bool {
+    layer.group
+        || (layer.pixels.is_some()
+            && !layer.standalone_mask
+            && layer.adjustment.is_none()
+            && layer.filter.is_none())
+}
+
+/// Whether a folder child is a mask layer that fades the folder's content below it.
+pub(crate) fn fades_group(layer: &Layer) -> bool {
+    layer.standalone_mask && layer.opacity > 0.0 && layer.mask.as_ref().is_some_and(|m| m.enabled)
+}
+
+/// The alpha a folder composites to on its own, over transparency: the visible children
+/// are combined bottom to top as `a + below * (1 - a)` (every blend mode composites alpha
+/// that way), mask layers inside fade what is below them, and the folder's own opacity and
+/// mask apply last. Folders pass through, so their children blend straight into the
+/// backdrop, but the alpha is the same either way; this is the shape a layer clipped to the
+/// folder takes. The folder's own visibility is not checked, as for a layer base.
+pub fn group_alpha(document: &Document, group: &Layer, point: Point, depth: usize) -> f32 {
+    if depth > 256 {
+        return 0.0;
+    }
+    let mut alpha = 0.0;
+    for child in document
+        .layers
+        .iter()
+        .filter(|l| l.parent == Some(group.id) && l.visible)
+    {
+        if fades_group(child) {
+            alpha *= 1.0 - child.opacity * (1.0 - own_mask(child, point));
+        } else if adds_group_alpha(child) {
+            let a = layer_alpha(document, child, point, depth + 1);
+            alpha = a + alpha * (1.0 - a);
+        }
+    }
+    alpha * group.opacity * own_mask(group, point)
 }
 
 pub fn inherited_coverage(document: &Document, layer: &Layer, point: Point) -> f32 {
@@ -233,6 +280,28 @@ pub fn source_size(document: &Document, layer: &Layer, size: [u32; 2]) -> [u32; 
     [target(width, image.width()), target(height, image.height())]
 }
 
+/// The canvas as exactly the one layer's pixels, when the document is a single plain layer that
+/// covers the canvas pixel for pixel. Compositing would round colours and drop the colour under
+/// fully transparent pixels, where packed channel maps keep data, so exports use these instead.
+pub fn unaltered(document: &Document) -> Option<std::sync::Arc<RgbaImage>> {
+    let [layer] = document.layers.as_slice() else {
+        return None;
+    };
+    let pixels = layer.pixels.as_ref()?;
+    (layer.visible
+        && !layer.group
+        && !layer.is_effect()
+        && layer.opacity == 1.0
+        && layer.fill == 1.0
+        && layer.blend == crate::blend::BlendMode::Normal
+        && layer.mask.is_none()
+        && layer.clip_to.is_none()
+        && layer.effects.as_ref().is_none_or(|e| e.is_empty())
+        && pixels.dimensions() == (document.width, document.height)
+        && layer.transform == crate::document::Transform::new(document.width, document.height))
+    .then(|| pixels.clone())
+}
+
 pub fn render(document: &Document) -> RgbaImage {
     render_scaled(document, document.width, document.height)
 }
@@ -277,7 +346,7 @@ pub(crate) fn render_pixels(document: &Document, width: u32, height: u32) -> Rgb
             let filter = filter.scaled(width as f32 / document.width as f32);
             steps.push(CompositeStep::Filtered(
                 layer,
-                crate::effects::filtered(&backdrop, &filter),
+                crate::effects::filtered_backdrop(&backdrop, &filter),
             ));
         } else {
             steps.push(step);
@@ -293,19 +362,23 @@ fn render_steps(
     height: u32,
 ) -> RgbaImage {
     let mut output = RgbaImage::new(width, height);
+    if width == 0 {
+        return output;
+    }
+    // A row per task: each thread composites whole rows, without per-pixel scheduling.
     output
         .as_mut()
-        .par_chunks_exact_mut(4)
+        .par_chunks_exact_mut(width as usize * 4)
         .enumerate()
-        .for_each_init(Vec::new, |groups, (index, target)| {
-            let x = index as u32 % width;
-            let y = index as u32 / width;
-            let point = Point::new(
-                (x as f32 + 0.5) * document.width as f32 / width as f32,
-                (y as f32 + 0.5) * document.height as f32 / height as f32,
-            );
-            let pixel = composite_at(document, steps, point, groups);
-            target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+        .for_each_init(Vec::new, |groups, (y, row)| {
+            for (x, target) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let point = Point::new(
+                    (x as f32 + 0.5) * document.width as f32 / width as f32,
+                    (y as f32 + 0.5) * document.height as f32 / height as f32,
+                );
+                let pixel = composite_at(document, steps, point, groups);
+                target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
+            }
         });
     output
 }
@@ -392,10 +465,14 @@ fn composite_at(
         if let Some(image) = &layer.pixels {
             let mut source = sample(image, layer.transform.inverse(point));
             source[3] = layer_alpha(document, layer, point, 0) * coverage;
+            // Fill fades the layer's own pixels (the effects are already drawn into a layer
+            // with any, at full fill); as a clipping base the layer keeps its full alpha.
+            let mut fill = layer.fill;
             if layer.blend == BlendMode::Dissolve {
-                source[3] = dissolve_alpha(source[3], point.x, point.y);
+                source[3] = dissolve_alpha(source[3] * fill, point.x, point.y);
+                fill = 1.0;
             }
-            pixel = composite(pixel, source, layer.blend);
+            pixel = composite_filled(pixel, source, layer.blend, fill);
         }
     }
     pixel
@@ -639,6 +716,122 @@ mod tests {
         );
     }
 
+    /// A folder holding two one-pixel shapes at x = 0 and x = 1 of a 4×1 canvas, and a blue
+    /// layer clipped to the folder: [shape A, shape B, folder, clipped].
+    fn clipped_to_folder() -> Document {
+        let mut doc = Document::new(4, 1).unwrap();
+        let mut group = Layer::blank("Figure", 4, 1);
+        group.group = true;
+        let shape = |name, at: u32, color| {
+            let mut layer = Layer::image(
+                name,
+                RgbaImage::from_fn(4, 1, |x, _| Rgba(if x == at { color } else { [0; 4] })),
+            );
+            layer.parent = Some(group.id);
+            layer
+        };
+        let a = shape("Cloak", 0, [255, 0, 0, 255]);
+        let b = shape("Hood", 1, [0, 255, 0, 255]);
+        let mut clipped = Layer::image(
+            "Shading",
+            RgbaImage::from_pixel(4, 1, Rgba([0, 0, 255, 255])),
+        );
+        clipped.clip_to = Some(group.id);
+        doc.layers = vec![a, b, group, clipped];
+        doc.active = doc.layers.last().map(|l| l.id);
+        doc.validate().unwrap();
+        doc
+    }
+
+    #[test]
+    fn a_layer_clipped_to_a_folder_shows_only_inside_its_layers() {
+        let doc = clipped_to_folder();
+        let image = render_pixels(&doc, 4, 1);
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 255, 255]);
+        assert_eq!(image.get_pixel(1, 0).0, [0, 0, 255, 255]);
+        assert_eq!(image.get_pixel(2, 0).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(3, 0).0, [0, 0, 0, 0]);
+        // The shape follows later edits: moving a layer in the folder moves the clipping.
+        let mut moved = doc.clone();
+        moved.layers[1].transform.x = 2.0;
+        let image = render_pixels(&moved, 4, 1);
+        assert_eq!(image.get_pixel(1, 0).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(3, 0).0, [0, 0, 255, 255]);
+        // Hidden layers, adjustments and empty layers in the folder add nothing.
+        let mut hidden = doc.clone();
+        hidden.layers[1].visible = false;
+        let mut invert = Layer::blank("Invert", 4, 1);
+        invert.adjustment = Some(crate::document::Adjustment::Invert);
+        invert.parent = doc.layers[0].parent;
+        hidden.layers.insert(2, invert);
+        let image = render_pixels(&hidden, 4, 1);
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 255, 255]);
+        assert_eq!(image.get_pixel(1, 0)[3], 0);
+        assert_eq!(image.get_pixel(2, 0)[3], 0);
+    }
+
+    #[test]
+    fn a_folder_base_clips_through_its_mask_and_mask_layers() {
+        let mut doc = clipped_to_folder();
+        // The folder's own mask hides the left pixel: neither the folder's layers nor the
+        // clipped layer show there.
+        doc.layers[2].mask = Some(Mask {
+            pixels: Arc::new(GrayImage::from_fn(4, 1, |x, _| {
+                image::Luma([if x == 0 { 0 } else { 255 }])
+            })),
+            ..Mask::white()
+        });
+        let image = render_pixels(&doc, 4, 1);
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(1, 0).0, [0, 0, 255, 255]);
+        let point = Point::new(0.5, 0.5);
+        assert_eq!(group_alpha(&doc, &doc.layers[2], point, 0), 0.0);
+        // A mask layer inside the folder fades the layers below it, and so the shape.
+        doc.layers[2].mask = None;
+        let mut mask = Layer::mask("Fade", 4, 1);
+        mask.parent = Some(doc.layers[2].id);
+        mask.mask.as_mut().unwrap().pixels = Arc::new(GrayImage::from_fn(4, 1, |x, _| {
+            image::Luma([if x == 1 { 0 } else { 255 }])
+        }));
+        doc.layers.insert(2, mask);
+        doc.validate().unwrap();
+        let image = render_pixels(&doc, 4, 1);
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 255, 255]);
+        assert_eq!(image.get_pixel(1, 0).0, [0, 0, 0, 0]);
+    }
+
+    /// As for a layer base (and in Photoshop), the base's opacity applies to the clipped
+    /// layers: half-opaque folder, half-opaque clipped layer on top.
+    #[test]
+    fn a_folder_base_passes_its_opacity_to_the_clipped_layer() {
+        let mut doc = clipped_to_folder();
+        doc.layers[2].opacity = 0.5;
+        let point = Point::new(0.5, 0.5);
+        assert_eq!(layer_alpha(&doc, &doc.layers[2], point, 0), 0.5);
+        let image = render_pixels(&doc, 4, 1);
+        // Red at half, then blue at half over it: alpha 0.75.
+        let pixel = image.get_pixel(0, 0).0;
+        assert_eq!(pixel, [85, 0, 170, 191]);
+        assert_eq!(image.get_pixel(2, 0).0, [0, 0, 0, 0]);
+        // A non-folder base works the same way.
+        let mut layer_base = clipped_to_folder();
+        layer_base.layers[0].opacity = 0.5;
+        layer_base.layers[0].parent = None;
+        layer_base.layers[3].clip_to = Some(layer_base.layers[0].id);
+        layer_base.layers.swap(0, 2);
+        layer_base.validate().unwrap();
+        assert_eq!(render_pixels(&layer_base, 4, 1).get_pixel(0, 0).0, pixel);
+        // Overlapping layers in the folder combine like the composite: 0.5 over 0.5 is 0.75,
+        // and the clipped layer at 0.75 over that makes 0.9375.
+        let mut overlap = clipped_to_folder();
+        overlap.layers[1].transform.x = -1.0;
+        overlap.layers[0].opacity = 0.5;
+        overlap.layers[1].opacity = 0.5;
+        assert_eq!(layer_alpha(&overlap, &overlap.layers[2], point, 0), 0.75);
+        let image = render_pixels(&overlap, 4, 1);
+        assert_eq!(image.get_pixel(0, 0)[3], 239);
+    }
+
     #[test]
     fn folder_visibility_mask_and_clipping_compose() {
         let mut doc = Document::new(2, 1).unwrap();
@@ -667,3 +860,6 @@ mod tests {
         assert_eq!(render(&doc).get_pixel(0, 0).0, [255, 0, 0, 255]);
     }
 }
+
+#[cfg(test)]
+mod fill_tests;

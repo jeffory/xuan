@@ -78,11 +78,19 @@ const SCENES: &[&str] = &[
     "blend_modes_photoshop",
     "layer_mask",
     "clipping_mask",
+    "clipping_folder",
     "adjustment_layers",
     "black_white_color_balance",
     "layer_effects",
     "layer_effects_combined",
+    "fill_opacity",
     "text_and_shapes",
+    "path_shapes",
+    "text_on_path",
+    "remove_background",
+    "compositor_filters",
+    "unsharp_mask",
+    "dither_styles",
     "raw_default",
     "raw_negative",
     "raw_quarter_turn",
@@ -140,11 +148,24 @@ pub(crate) fn scenes() -> Vec<Scene> {
         composite("blend_modes_photoshop", blend_modes_photoshop()),
         composite("layer_mask", layer_mask()),
         composite("clipping_mask", clipping_mask()),
+        composite("clipping_folder", clipping_folder()),
         composite("adjustment_layers", adjustment_layers()),
         composite("black_white_color_balance", black_white_color_balance()),
         composite("layer_effects", layer_effects()),
         composite("layer_effects_combined", layer_effects_combined()),
+        composite("fill_opacity", fill_opacity()),
         composite("text_and_shapes", text_and_shapes()),
+        composite("path_shapes", path_shapes()),
+        composite("text_on_path", text_on_path()),
+        composite("remove_background", remove_background()),
+        composite("compositor_filters", compositor_filters()),
+        composite("unsharp_mask", unsharp_mask()),
+        Scene {
+            // Thresholds: a pixel one level off on the GPU can land on the other side of a
+            // dither threshold, which moves it by a whole tone.
+            gpu: Tolerance::new(4, 0.02),
+            ..composite("dither_styles", dither_styles())
+        },
     ];
     if let Some(raw) = raw_fixture() {
         let raw = Arc::new(raw);
@@ -295,6 +316,38 @@ fn blend_strips(modes: &[BlendMode], top: f32, height: u32) -> Document {
 
 /// A checkerboard with a radial layer mask over the gradient, and a second
 /// layer whose horizontal-ramp mask is placed independently of its pixels.
+/// Filter → Remove Background's graph cut on a two-colour subject over a mottled,
+/// graded background, shown over a checkerboard: the mask, its soft guided-filter edge
+/// and how it combines with the layer all show.
+fn remove_background() -> Document {
+    let mottle = |x: u32, y: u32| ((x / 5 * 7 + y / 5 * 13) % 4 * 9) as u8;
+    let photo = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let (dx, dy) = (x as i32 - 128, y as i32 - 136);
+        if dx * dx * 4 + dy * dy * 3 <= 90 * 90 * 3 {
+            if y < 120 {
+                Rgba([210, 70 + mottle(x, y), 40, 255])
+            } else {
+                Rgba([40, 60, 170 + mottle(x, y), 255])
+            }
+        } else {
+            let level = (90 + x * 80 / SIZE) as u8;
+            Rgba([level + mottle(x, y), level + 30, level, 255])
+        }
+    });
+    let mut document = document(vec![
+        Layer::image(
+            "Checker",
+            checker(16, [250, 250, 250, 255], [200, 200, 200, 255]),
+        ),
+        Layer::image("Photo", photo),
+    ]);
+    let photo = document.layers[1].id;
+    document.select(photo, false);
+    crate::retouch::remove_background(&mut document, &|_| {}, &AtomicBool::new(false)).unwrap();
+    document.promote_image_masks();
+    document
+}
+
 fn layer_mask() -> Document {
     let radial = GrayImage::from_fn(128, 128, |x, y| {
         let (dx, dy) = (x as i32 - 64, y as i32 - 64);
@@ -353,6 +406,73 @@ fn clipping_mask() -> Document {
         base,
         clipped,
         glow,
+    ])
+}
+
+/// A folder of an ellipse and a rotated rounded rectangle, at 85% opacity behind a gradient
+/// folder mask, with a mask layer fading its lower half. Multiplied stripes and a half-masked
+/// Invert are clipped to the folder, so they take the shapes' union, the masks and the opacity.
+fn clipping_folder() -> Document {
+    let mut folder = Layer::blank("Figure", SIZE, SIZE);
+    folder.group = true;
+    folder.opacity = 0.85;
+    folder.mask = Some(Mask {
+        pixels: Arc::new(GrayImage::from_fn(SIZE, 1, |x, _| {
+            Luma([(64 + x * 191 / (SIZE - 1)) as u8])
+        })),
+        ..Mask::white()
+    });
+    let mut ellipse = paint::shape(
+        Point::new(24.0, 40.0),
+        Point::new(150.0, 200.0),
+        ShapeKind::Ellipse,
+        [240, 200, 60, 255],
+        0.0,
+    )
+    .unwrap();
+    ellipse.parent = Some(folder.id);
+    let mut rectangle = paint::shape(
+        Point::new(110.0, 70.0),
+        Point::new(230.0, 170.0),
+        ShapeKind::RoundedRectangle,
+        [60, 200, 220, 200],
+        20.0,
+    )
+    .unwrap();
+    rectangle.transform.rotation = 20.0;
+    rectangle.parent = Some(folder.id);
+    let mut fade = Layer::mask("Fade", SIZE, SIZE);
+    fade.parent = Some(folder.id);
+    fade.opacity = 0.6;
+    fade.mask.as_mut().unwrap().pixels = Arc::new(GrayImage::from_fn(1, SIZE, |_, y| {
+        Luma([if y < SIZE / 2 { 255 } else { 0 }])
+    }));
+    let stripes = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if ((x + 2 * y) / 12).is_multiple_of(2) {
+            [90, 40, 160, 255]
+        } else {
+            [255, 255, 255, 255]
+        })
+    });
+    let mut shading = Layer::image("Shading", stripes);
+    shading.blend = BlendMode::Multiply;
+    shading.clip_to = Some(folder.id);
+    let mut invert = adjustment("Invert", Adjustment::Invert);
+    invert.clip_to = Some(folder.id);
+    invert.mask = Some(Mask {
+        pixels: Arc::new(GrayImage::from_fn(SIZE, 1, |x, _| {
+            Luma([if x < SIZE / 2 { 0 } else { 255 }])
+        })),
+        ..Mask::white()
+    });
+    document(vec![
+        Layer::image("Gradient", gradient()),
+        ellipse,
+        rectangle,
+        fade,
+        folder,
+        shading,
+        invert,
     ])
 }
 
@@ -461,6 +581,215 @@ fn black_white_color_balance() -> Document {
         preserving,
         shifting,
     ])
+}
+
+/// A mask showing one cell of a `columns` × `rows` grid, counted along rows.
+fn cell_mask(columns: u32, rows: u32, index: u32) -> Mask {
+    Mask {
+        pixels: Arc::new(GrayImage::from_fn(columns * 16, rows * 16, |x, y| {
+            Luma([if x / 16 + y / 16 * columns == index {
+                255
+            } else {
+                0
+            }])
+        })),
+        ..Mask::white()
+    }
+}
+
+fn filter_layer(filter: crate::effects::Filter, mask: Option<Mask>) -> Layer {
+    let mut layer = Layer::blank(filter.name(), SIZE, SIZE);
+    layer.filter = Some(filter);
+    layer.mask = mask;
+    layer
+}
+
+/// Upstream Compositor's filters as filter layers over the hue ramp: Bloom / Glow around white
+/// spots (top left), Tonal Contrast on a fine checker (top right), a card with a Vignette
+/// attached to it (bottom left, framing the card), and a Vignette filter layer over the
+/// whole canvas.
+/// Soft texture and hard-edged tiles under Unsharp Mask filter layers: a fine, strong one in
+/// the top-left cell, a wide one with a threshold in the bottom-right, the rest untouched.
+fn unsharp_mask() -> Document {
+    use crate::effects::Filter;
+    let texture = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let wave = (x as f32 / 9.0).sin() * (y as f32 / 11.0).sin();
+        let v = (128.0 + 70.0 * wave) as u8;
+        Rgba([v, (v as f32 * 0.9) as u8, 255 - v, 220])
+    });
+    let tiles = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if (x / 16 + y / 16) % 4 == 0 && x % 16 > 3 && y % 16 > 3 {
+            [235, 200, 60, 255]
+        } else {
+            [0, 0, 0, 0]
+        })
+    });
+    document(vec![
+        Layer::image("Hues", hue_ramp(SIZE, SIZE)),
+        Layer::image("Texture", texture),
+        Layer::image("Tiles", tiles),
+        filter_layer(
+            Filter::UnsharpMask {
+                amount: 250.0,
+                radius: 2.0,
+                threshold: 0.0,
+            },
+            Some(cell_mask(2, 2, 0)),
+        ),
+        filter_layer(
+            Filter::UnsharpMask {
+                amount: 120.0,
+                radius: 12.0,
+                threshold: 24.0,
+            },
+            Some(cell_mask(2, 2, 3)),
+        ),
+    ])
+}
+
+fn compositor_filters() -> Document {
+    use crate::effects::Filter;
+    let spots = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        let (dx, dy) = (x % 40, y % 40);
+        Rgba(
+            if x < 128 && y < 128 && (14..26).contains(&dx) && (14..26).contains(&dy) {
+                [255, 255, 240, 255]
+            } else {
+                [0, 0, 0, 0]
+            },
+        )
+    });
+    let detail = RgbaImage::from_fn(SIZE, SIZE, |x, y| {
+        Rgba(if x >= 128 && y < 128 && (x / 6 + y / 6) % 2 == 0 {
+            [40, 40, 40, 90]
+        } else {
+            [0, 0, 0, 0]
+        })
+    });
+    let card = placed(
+        Layer::image(
+            "Card",
+            RgbaImage::from_fn(96, 96, |x, y| {
+                Rgba([200, (x * 2) as u8, (y * 2) as u8, 255])
+            }),
+        ),
+        16.0,
+        144.0,
+    );
+    let mut attached = filter_layer(
+        Filter::Vignette {
+            amount: 80.0,
+            color: [20, 30, 120],
+            midpoint: 20.0,
+            roundness: -40.0,
+            feather: 50.0,
+            highlights: 25.0,
+        },
+        None,
+    );
+    attached.parent = Some(card.id);
+    document(vec![
+        Layer::image("Hues", hue_ramp(SIZE, SIZE)),
+        Layer::image("Spots", spots),
+        Layer::image("Detail", detail),
+        filter_layer(
+            Filter::Bloom {
+                amount: 70.0,
+                radius: 6.0,
+            },
+            Some(cell_mask(2, 2, 0)),
+        ),
+        filter_layer(
+            Filter::TonalContrast {
+                amount: 100.0,
+                radius: 5.0,
+                shadows: 60.0,
+                midtones: 100.0,
+                highlights: -50.0,
+            },
+            Some(cell_mask(2, 2, 1)),
+        ),
+        card,
+        attached,
+        filter_layer(
+            Filter::Vignette {
+                amount: 55.0,
+                color: [30, 10, 0],
+                midpoint: 40.0,
+                roundness: 60.0,
+                feather: 60.0,
+                highlights: 25.0,
+            },
+            None,
+        ),
+    ])
+}
+
+/// Dither as filter layers over the gradient, one style per cell of a 4 × 2 grid, from the
+/// top left: Atkinson in 2 px chunky pixels, Bayer 4 × 4 in two colors, halftone dots in the
+/// image's colors, Mac patterns as ink on paper, then thin and glowing wobbly scanlines,
+/// ASCII, and three-level Floyd–Steinberg in the image's colors with round chunky pixels.
+fn dither_styles() -> Document {
+    use crate::effects::{DitherColors, DitherPixelShape, DitherSettings, DitherStyle, Filter};
+    let styles = [
+        DitherSettings::default(),
+        DitherSettings {
+            style: DitherStyle::Bayer4,
+            pixel_size: 1.0,
+            colors: DitherColors::TwoColors,
+            dark: [30, 20, 80],
+            light: [250, 220, 160],
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::HalftoneDots,
+            pixel_size: 1.0,
+            cell_size: 6.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::MacPatterns,
+            pixel_size: 1.0,
+            light_on_dark: false,
+            density: 20.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            glow: 0.0,
+            dots: 50.0,
+            wobble: 3.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Scanlines,
+            line_spacing: 6.0,
+            contrast: 30.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::Ascii,
+            text_size: 10.0,
+            ..Default::default()
+        },
+        DitherSettings {
+            style: DitherStyle::FloydSteinberg,
+            pixel_size: 3.0,
+            pixel_shape: DitherPixelShape::Dot,
+            levels: 3.0,
+            colors: DitherColors::Original,
+            ..Default::default()
+        },
+    ];
+    let mut layers = vec![Layer::image("Gradient", gradient())];
+    for (index, settings) in styles.into_iter().enumerate() {
+        layers.push(filter_layer(
+            Filter::Dither(Box::new(settings)),
+            Some(cell_mask(4, 2, index as u32)),
+        ));
+    }
+    document(layers)
 }
 
 /// A rounded rectangle of `color` at (`x`, `y`), `width` by `height`.
@@ -589,6 +918,79 @@ fn layer_effects_combined() -> Document {
     ])
 }
 
+/// Fill against Opacity. Top: a strip for each of the eight modes Fill changes, at Fill 50% on
+/// the left half and Opacity 50% on the right, fading out at each half's end. Bottom: a layer
+/// with a stroke, a drop shadow and an inner glow at Fill 100%, 50% and 0%, and at Opacity 50%.
+fn fill_opacity() -> Document {
+    use crate::layer_effects::{GlowEffect, LayerEffects, ShadowEffect, StrokeEffect};
+    let special: Vec<_> = BlendMode::ALL
+        .into_iter()
+        .filter(|m| m.fill_is_special())
+        .collect();
+    let mut layers = vec![Layer::image("Gradient", gradient())];
+    let half = SIZE / 2;
+    for (index, &mode) in special.iter().enumerate() {
+        for side in 0..2 {
+            let mut strip = hue_ramp(half, 18);
+            for (x, _, pixel) in strip.enumerate_pixels_mut() {
+                if x >= half * 3 / 4 {
+                    pixel[3] = (255 - (x - half * 3 / 4) * 7) as u8;
+                }
+            }
+            let mut layer = placed(
+                Layer::image(mode.name(), strip),
+                (side * half) as f32,
+                2.0 + (index as u32 * 18) as f32,
+            );
+            layer.blend = mode;
+            if side == 0 {
+                layer.fill = 0.5;
+            } else {
+                layer.opacity = 0.5;
+            }
+            layers.push(layer);
+        }
+    }
+    let effects = LayerEffects {
+        stroke: Some(StrokeEffect {
+            size: 4.0,
+            color: [250, 240, 40],
+            ..StrokeEffect::default()
+        }),
+        drop_shadow: Some(ShadowEffect {
+            angle: 120.0,
+            distance: 8.0,
+            blur: 6.0,
+            opacity: 0.8,
+            ..ShadowEffect::DROP
+        }),
+        inner_glow: Some(GlowEffect {
+            size: 10.0,
+            color: [255, 255, 200],
+            opacity: 1.0,
+            ..GlowEffect::INNER
+        }),
+        ..LayerEffects::default()
+    };
+    for (index, (fill, opacity)) in [(1.0, 1.0), (0.5, 1.0), (0.0, 1.0), (1.0, 0.5)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut layer = rounded(
+            12.0 + index as f32 * 62.0,
+            168.0,
+            46.0,
+            70.0,
+            [60, 90, 200, 255],
+        );
+        layer.effects = Some(effects.clone());
+        layer.fill = fill;
+        layer.opacity = opacity;
+        layers.push(layer);
+    }
+    document(layers)
+}
+
 fn text(renderer: &mut TextRenderer, style: TextStyle, x: f32, y: f32) -> Layer {
     let pixels = renderer.render(&style).unwrap();
     let mut layer = placed(Layer::image(style.layer_name(), pixels), x, y);
@@ -656,6 +1058,160 @@ fn text_and_shapes() -> Document {
         rotated,
         text(&mut renderer, regular, 24.0, 100.0),
         text(&mut renderer, emphasis, 120.0, 196.0),
+    ])
+}
+
+/// Path shape layers from SVG path data: a translucent heart of cubic curves, an even-odd ring
+/// of arcs, a quadratic wave stretched and rotated after it was made (so it is redrawn from its
+/// outline), and a star filled into a pixel layer with `fill_path` inside a selection.
+fn path_shapes() -> Document {
+    use crate::vector::{FillRule, VectorPath};
+    let path = |d: &str| VectorPath::parse(d).unwrap();
+    let heart = paint::path_shape(
+        &path(
+            "M 80 60 C 80 40 50 30 40 50 C 30 70 60 90 80 110 \
+             C 100 90 130 70 120 50 C 110 30 80 40 80 60 Z",
+        ),
+        FillRule::Nonzero,
+        [200, 40, 70, 200],
+    )
+    .unwrap();
+    let ring = paint::path_shape(
+        &path(
+            "M 150 70 a 45 45 0 1 0 90 0 a 45 45 0 1 0 -90 0 Z \
+             M 170 70 a 25 25 0 1 0 50 0 a 25 25 0 1 0 -50 0 Z",
+        ),
+        FillRule::Evenodd,
+        [40, 110, 200, 255],
+    )
+    .unwrap();
+    let mut wave = paint::path_shape(
+        &path("M 20 200 Q 50 150 80 200 T 140 200 T 200 200 L 200 230 L 20 230 Z"),
+        FillRule::Nonzero,
+        [40, 150, 90, 255],
+    )
+    .unwrap();
+    wave.transform.width *= 1.15;
+    wave.transform.height *= 0.8;
+    wave.transform.rotation = -8.0;
+    let mut doc = document(vec![
+        Layer::image(
+            "Paper",
+            RgbaImage::from_pixel(SIZE, SIZE, Rgba([238, 232, 220, 255])),
+        ),
+        Layer::image("Star", RgbaImage::new(SIZE, SIZE)),
+        heart,
+        ring,
+        wave,
+    ]);
+    paint::refresh_shapes(&mut doc).unwrap();
+    doc.active = Some(doc.layers[1].id);
+    doc.selection = Some(Arc::new(crate::selection::rectangle(
+        SIZE,
+        SIZE,
+        Point::new(0.0, 0.0),
+        Point::new(SIZE as f32, 160.0),
+        false,
+    )));
+    paint::fill_path(
+        &mut doc,
+        &path("M 200 120 L 211 152 L 245 152 L 218 172 L 228 205 L 200 185 L 172 205 L 182 172 L 155 152 L 189 152 Z"),
+        FillRule::Nonzero,
+        [230, 180, 30, 255],
+    )
+    .unwrap();
+    doc.selection = None;
+    doc
+}
+
+/// Text on paths in the bundled Inter font: centred on an arch, wrapped around a circle from
+/// a start offset, shrinking and fading up an S-curve (the issue's 17 → 7 px, 95% → 55%),
+/// flipped under a line with letter spacing, and a wave whose layer was rotated afterwards.
+fn text_on_path() -> Document {
+    use crate::text::{PathAlign, PathSide, PathTextOptions, path_layer};
+    use crate::vector::VectorPath;
+    let mut renderer = TextRenderer::default();
+    let mut on = |content: &str, size: f32, color, d: &str, options| {
+        let style = TextStyle {
+            content: content.into(),
+            size,
+            color,
+            ..Default::default()
+        };
+        path_layer(
+            &mut renderer,
+            style,
+            &VectorPath::parse(d).unwrap(),
+            options,
+        )
+        .unwrap()
+    };
+    let arch = on(
+        "Type on a path",
+        22.0,
+        [30, 40, 90, 255],
+        "M 20 90 C 70 20 186 20 236 90",
+        PathTextOptions {
+            start_offset: 50.0,
+            align: PathAlign::Center,
+            ..Default::default()
+        },
+    );
+    let circle = on(
+        "around and around · ",
+        15.0,
+        [170, 50, 40, 255],
+        "M 215 135 A 35 35 0 1 1 145 135 A 35 35 0 1 1 215 135 Z",
+        PathTextOptions {
+            start_offset: 80.0,
+            ..Default::default()
+        },
+    );
+    let rising = on(
+        "ΑΒΓ letters rise",
+        17.0,
+        [20, 110, 80, 255],
+        "M 16 240 C 60 240 60 170 100 160 S 110 110 96 100",
+        PathTextOptions {
+            size_end: Some(7.0),
+            opacity_start: 0.95,
+            opacity_end: 0.55,
+            ..Default::default()
+        },
+    );
+    let flipped = on(
+        "flipped",
+        16.0,
+        [90, 60, 150, 255],
+        "M 130 236 L 246 236",
+        PathTextOptions {
+            side: PathSide::Right,
+            letter_spacing: 3.0,
+            ..Default::default()
+        },
+    );
+    let mut wave = on(
+        "upright wave",
+        14.0,
+        [200, 120, 20, 255],
+        "M 120 215 Q 150 200 180 215 T 240 215",
+        PathTextOptions {
+            rotate: false,
+            baseline_shift: 2.0,
+            ..Default::default()
+        },
+    );
+    wave.transform.rotation = -6.0;
+    document(vec![
+        Layer::image(
+            "Paper",
+            RgbaImage::from_pixel(SIZE, SIZE, Rgba([238, 232, 220, 255])),
+        ),
+        arch,
+        circle,
+        rising,
+        flipped,
+        wave,
     ])
 }
 

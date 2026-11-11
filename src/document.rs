@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Result, ensure};
 use image::{GrayImage, RgbaImage};
@@ -7,18 +10,22 @@ use uuid::Uuid;
 
 use crate::blend::BlendMode;
 
-pub const MAX_SIDE: u32 = 30_000;
-pub const MAX_PIXELS: u64 = 100_000_000;
+pub use crate::limits::MAX_SIDE;
 pub const MAX_LAYERS: usize = 10_000;
 
+/// Check a canvas, layer or mask size against [`MAX_SIDE`] and this computer's
+/// [`image_pixels`](crate::limits::Limits::image_pixels).
 pub fn validate_size(width: u32, height: u32) -> Result<()> {
     ensure!(
         (1..=MAX_SIDE).contains(&width) && (1..=MAX_SIDE).contains(&height),
-        "Dimensions must be between 1 and {MAX_SIDE} pixels"
+        "Dimensions must be between 1 and {} pixels",
+        crate::limits::grouped(MAX_SIDE.into())
     );
+    let limit = crate::limits::get().image_pixels;
     ensure!(
-        u64::from(width) * u64::from(height) <= MAX_PIXELS,
-        "Images are limited to 100 megapixels"
+        u64::from(width) * u64::from(height) <= limit,
+        "Images are limited to {} on this computer",
+        crate::limits::megapixels(limit)
     );
     Ok(())
 }
@@ -111,6 +118,26 @@ impl Transform {
             Point::new(0.0, 1.0),
         ]
         .map(|point| self.point(point))
+    }
+
+    /// The affine map from a `width` × `height` box stretched over the layer to document
+    /// coordinates, unless the layer is warped (then no affine map fits).
+    pub fn box_affine(self, width: f32, height: f32) -> Option<kurbo::Affine> {
+        if self.warp.is_some() {
+            return None;
+        }
+        let o = self.point(Point::new(0.0, 0.0));
+        let x = self.point(Point::new(1.0, 0.0));
+        let y = self.point(Point::new(0.0, 1.0));
+        let (w, h) = (f64::from(width), f64::from(height));
+        Some(kurbo::Affine::new([
+            f64::from(x.x - o.x) / w,
+            f64::from(x.y - o.y) / w,
+            f64::from(y.x - o.x) / h,
+            f64::from(y.y - o.y) / h,
+            f64::from(o.x),
+            f64::from(o.y),
+        ]))
     }
 
     pub fn valid(self) -> bool {
@@ -263,6 +290,17 @@ pub enum Adjustment {
         highlights: [f32; 3],
         preserve_luminosity: bool,
     },
+    /// Photoshop's Color Lookup: colours mapped through a table read from a `.cube` file.
+    /// Format 15 keeps the table in the project as `luts/<layer UUID>.cube`, not in the
+    /// manifest, so the project does not depend on the original file.
+    ColorLookup {
+        /// The file's name, to show which table this is.
+        name: String,
+        #[serde(default)]
+        interpolation: crate::lut::Interpolation,
+        #[serde(skip)]
+        table: Arc<crate::lut::Lut>,
+    },
 }
 
 impl Adjustment {
@@ -283,7 +321,19 @@ impl Adjustment {
 
     /// Whether .xuan format 6 and earlier can store this adjustment.
     pub fn is_legacy(&self) -> bool {
-        !matches!(self, Self::BlackWhite { .. } | Self::ColorBalance { .. })
+        !matches!(
+            self,
+            Self::BlackWhite { .. } | Self::ColorBalance { .. } | Self::ColorLookup { .. }
+        )
+    }
+
+    /// A Color Lookup adjustment for a table read from the file `name`.
+    pub fn color_lookup(name: impl Into<String>, table: crate::lut::Lut) -> Self {
+        Self::ColorLookup {
+            name: name.into(),
+            interpolation: crate::lut::Interpolation::default(),
+            table: Arc::new(table),
+        }
     }
 
     pub fn name(&self) -> &'static str {
@@ -300,6 +350,7 @@ impl Adjustment {
             Self::Invert => "Invert",
             Self::BlackWhite { .. } => "Black & White",
             Self::ColorBalance { .. } => "Color Balance",
+            Self::ColorLookup { .. } => "Color Lookup",
         }
     }
 }
@@ -309,6 +360,54 @@ pub struct ShapeStyle {
     pub kind: crate::paint::ShapeKind,
     pub color: [u8; 4],
     pub corner_radius: f32,
+    /// The outline of a `Path` shape (format 10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<ShapePath>,
+}
+
+/// A path shape's outline: SVG path data in the coordinates of a `width` × `height` box,
+/// which the layer's pixels cover, so the path stretches with the layer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapePath {
+    pub d: crate::vector::VectorPath,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub fill_rule: crate::vector::FillRule,
+}
+
+impl ShapePath {
+    pub fn validate(&self) -> Result<()> {
+        self.d.validate()?;
+        ensure!(
+            [self.width, self.height]
+                .iter()
+                .all(|v| v.is_finite() && (1.0..=300_000.0).contains(v)),
+            "Invalid path shape box"
+        );
+        Ok(())
+    }
+
+    /// The outline in document coordinates for a layer placed by `transform`, unless the
+    /// layer is warped (then it is no longer an affine image of the box).
+    pub fn in_document(&self, transform: Transform) -> Option<crate::vector::VectorPath> {
+        if transform.warp.is_some() {
+            return None;
+        }
+        let o = transform.point(Point::new(0.0, 0.0));
+        let x = transform.point(Point::new(1.0, 0.0));
+        let y = transform.point(Point::new(0.0, 1.0));
+        let (w, h) = (f64::from(self.width), f64::from(self.height));
+        let affine = kurbo::Affine::new([
+            f64::from(x.x - o.x) / w,
+            f64::from(x.y - o.y) / w,
+            f64::from(y.x - o.x) / h,
+            f64::from(y.y - o.y) / h,
+            f64::from(o.x),
+            f64::from(o.y),
+        ]);
+        Some(self.d.transformed(affine))
+    }
 }
 
 /// Where a layer produced by a plugin came from, so the action can be repeated.
@@ -337,6 +436,10 @@ pub struct Layer {
     pub visible: bool,
     pub locked: bool,
     pub opacity: f32,
+    /// Photoshop's Fill: fades the layer's own pixels but not its layer effects, where
+    /// `opacity` fades both (format 13). Only pixel, text and shape layers have one below 1.
+    #[serde(default = "full_fill", skip_serializing_if = "is_full_fill")]
+    pub fill: f32,
     pub blend: BlendMode,
     pub transform: Transform,
     pub parent: Option<Uuid>,
@@ -366,6 +469,14 @@ pub struct Layer {
     pub pixels: Option<Arc<RgbaImage>>,
 }
 
+fn full_fill() -> f32 {
+    1.0
+}
+
+fn is_full_fill(fill: &f32) -> bool {
+    *fill == 1.0
+}
+
 impl Layer {
     pub fn is_effect(&self) -> bool {
         self.standalone_mask || self.adjustment.is_some() || self.filter.is_some()
@@ -382,6 +493,7 @@ impl Layer {
             visible: true,
             locked: false,
             opacity: 1.0,
+            fill: 1.0,
             blend: BlendMode::Normal,
             transform: Transform::new(width, height),
             parent: None,
@@ -442,6 +554,12 @@ pub struct Document {
     /// This project's layout grid; `None` uses the app's default grid (format version 5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid: Option<crate::layout::GridSettings>,
+    /// Paths kept with the document, as in Photoshop's Paths panel (format version 10).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<crate::vector::NamedPath>,
+    /// The collage the document was made as, so its layout can be changed (format version 16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collage: Option<Box<crate::collage::Collage>>,
     #[serde(skip)]
     pub selected: HashSet<Uuid>,
     #[serde(skip)]
@@ -462,6 +580,8 @@ impl Document {
             layers: vec![layer],
             guides: Vec::new(),
             grid: None,
+            paths: Vec::new(),
+            collage: None,
             selection: None,
         })
     }
@@ -608,16 +728,116 @@ impl Document {
         self.selected = self.active.into_iter().collect();
     }
 
+    /// A layer whose clipping is part of a cycle, where some clipping shape depends on itself.
+    /// A layer's clipping shape depends on its base, and a folder's shape on its children,
+    /// so a layer inside a folder (or clipped through a chain to a layer inside it) cannot
+    /// clip to that folder.
+    fn clipping_cycle(&self) -> Option<usize> {
+        let index: HashMap<Uuid, usize> = self
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.id, i))
+            .collect();
+        // A layer's clipping edge comes first among its edges.
+        let mut edges: Vec<Vec<usize>> = self
+            .layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .clip_to
+                    .as_ref()
+                    .and_then(|id| index.get(id))
+                    .copied()
+                    .into_iter()
+                    .collect()
+            })
+            .collect();
+        let clips: Vec<bool> = edges.iter().map(|e| !e.is_empty()).collect();
+        for (i, layer) in self.layers.iter().enumerate() {
+            if let Some(&parent) = layer.parent.as_ref().and_then(|id| index.get(id))
+                && self.layers[parent].group
+            {
+                edges[parent].push(i);
+            }
+        }
+        // Iterative depth-first search: 0 unvisited, 1 on the stack, 2 done. Each stack entry
+        // holds the index of its next edge, so the edge it last took is one before.
+        let mut state = vec![0_u8; self.layers.len()];
+        for start in 0..self.layers.len() {
+            if state[start] != 0 {
+                continue;
+            }
+            let mut stack = vec![(start, 0)];
+            state[start] = 1;
+            while let Some(&(node, next)) = stack.last() {
+                if let Some(&to) = edges[node].get(next) {
+                    stack.last_mut().unwrap().1 += 1;
+                    match state[to] {
+                        0 => {
+                            state[to] = 1;
+                            stack.push((to, 0));
+                        }
+                        1 => {
+                            let from = stack.iter().position(|(n, _)| *n == to).unwrap_or(0);
+                            let cycle = &stack[from..];
+                            return cycle
+                                .iter()
+                                .find(|(n, next)| clips[*n] && *next == 1)
+                                .or_else(|| cycle.iter().find(|(n, _)| clips[*n]))
+                                .map(|(n, _)| *n);
+                        }
+                        _ => {}
+                    }
+                } else {
+                    state[node] = 2;
+                    stack.pop();
+                }
+            }
+        }
+        None
+    }
+
+    /// Whether some clipping shape depends on itself (see [`Self::release_clipping_cycles`]).
+    pub fn has_clipping_cycle(&self) -> bool {
+        self.clipping_cycle().is_some()
+    }
+
+    /// Release clipping that makes a clipping shape depend on itself, as moving a layer that
+    /// clips to a folder into that folder would. Other clipping is kept.
+    pub fn release_clipping_cycles(&mut self) {
+        let groups: HashSet<Uuid> = self
+            .layers
+            .iter()
+            .filter(|l| l.group)
+            .map(|l| l.id)
+            .collect();
+        if !self
+            .layers
+            .iter()
+            .any(|l| l.clip_to.is_some_and(|id| groups.contains(&id)))
+        {
+            return;
+        }
+        while let Some(index) = self.clipping_cycle() {
+            self.layers[index].clip_to = None;
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         validate_size(self.width, self.height)?;
         ensure!(
-            self.resolution.is_finite() && (1.0..=9600.0).contains(&self.resolution),
+            crate::units::valid_resolution(f64::from(self.resolution)),
             "Invalid resolution"
         );
         ensure!(self.layers.len() <= MAX_LAYERS, "Too many layers");
         crate::layout::validate_guides(&self.guides)?;
         if let Some(grid) = &self.grid {
             grid.validate()?;
+        }
+        crate::vector::validate_paths(&self.paths)?;
+        if let Some(collage) = &self.collage {
+            collage.validate()?;
         }
         // Indexed so hostile files with many deeply nested layers validate in linear time.
         let ids: std::collections::HashMap<_, _> =
@@ -630,9 +850,9 @@ impl Document {
             self.active.is_none_or(|id| ids.contains_key(&id)),
             "Missing active layer"
         );
-        let mut pixels = 0_u64;
-        let mut mask_pixels = 0_u64;
-        let mut raw_bytes = 0_u64;
+        // Only each image's own size is checked: how many pixels a project holds is limited
+        // when a file is opened or imported (see `crate::limits`), so a document edited in
+        // the app can always be saved.
         for layer in &self.layers {
             ensure!(
                 !layer.standalone_mask
@@ -646,7 +866,6 @@ impl Document {
             );
             if let Some(raw) = &layer.raw {
                 raw.validate()?;
-                raw_bytes += raw.bytes.len() as u64;
                 ensure!(
                     layer.pixels.is_some() && layer.text.is_none() && layer.shape.is_none(),
                     "Invalid RAW layer"
@@ -663,9 +882,13 @@ impl Document {
                 ensure!(
                     shape.corner_radius.is_finite()
                         && shape.corner_radius >= 0.0
-                        && layer.pixels.is_some(),
+                        && layer.pixels.is_some()
+                        && (shape.kind == crate::paint::ShapeKind::Path) == shape.path.is_some(),
                     "Invalid live shape"
                 );
+                if let Some(path) = &shape.path {
+                    path.validate()?;
+                }
             }
             if let Some(adjustment) = &layer.adjustment {
                 crate::effects::validate_adjustment(adjustment)?;
@@ -698,13 +921,21 @@ impl Document {
                 "Invalid opacity"
             );
             ensure!(
+                layer.fill.is_finite() && (0.0..=1.0).contains(&layer.fill),
+                "Invalid fill"
+            );
+            // As in Photoshop, folders and adjustment, filter and mask layers have no fill.
+            ensure!(
+                layer.fill == 1.0 || layer.can_attach_effects(),
+                "Only pixel, text and shape layers take a fill"
+            );
+            ensure!(
                 !(layer.group || layer.adjustment.is_some() || layer.filter.is_some())
                     || layer.pixels.is_none(),
                 "Group/effect cannot contain pixels"
             );
             if let Some(image) = &layer.pixels {
                 validate_size(image.width(), image.height())?;
-                pixels += u64::from(image.width()) * u64::from(image.height());
             }
             if let Some(mask) = &layer.mask {
                 validate_size(mask.pixels.width(), mask.pixels.height())?;
@@ -712,7 +943,6 @@ impl Document {
                     mask.placement.is_none_or(Transform::valid),
                     "Invalid mask transform"
                 );
-                mask_pixels += u64::from(mask.pixels.width()) * u64::from(mask.pixels.height());
             }
             let mut parent = layer.parent;
             let mut child = layer;
@@ -742,20 +972,22 @@ impl Document {
                 );
                 let target = ids.get(&id).copied();
                 ensure!(
-                    target.is_some_and(|l| !l.group && !l.standalone_mask && l.filter.is_none()),
+                    target.is_some_and(|l| !l.standalone_mask && l.filter.is_none()),
                     "Missing clipping source"
                 );
                 source = target.and_then(|l| l.clip_to);
             }
         }
-        ensure!(
-            pixels <= MAX_PIXELS && mask_pixels <= MAX_PIXELS,
-            "Project exceeds the 100 megapixel asset limit"
-        );
-        ensure!(
-            raw_bytes <= crate::raw::MAX_RAW_BYTES,
-            "Project exceeds 512 MiB of RAW assets"
-        );
+        if self
+            .layers
+            .iter()
+            .any(|l| l.clip_to.is_some_and(|id| ids[&id].group))
+        {
+            ensure!(
+                self.clipping_cycle().is_none(),
+                "A layer cannot clip to a folder whose shape depends on it"
+            );
+        }
         Ok(())
     }
 }
@@ -763,6 +995,35 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_each_image_is_size_checked_so_edited_documents_always_save() {
+        // 30 layers sharing a 2,000 × 2,000 image: 120 megapixels in all, more than opening a
+        // file may bring in (100 megapixels in tests), yet each image is small.
+        let side = 2_000;
+        let pixels = Arc::new(RgbaImage::new(side, side));
+        let mut document = Document::new(side, side).unwrap();
+        for i in 0..30 {
+            let mut layer = Layer::blank(format!("Copy {i}"), side, side);
+            layer.pixels = Some(pixels.clone());
+            document.insert(layer);
+        }
+        let total: u64 = document
+            .layers
+            .iter()
+            .filter_map(|l| l.pixels.as_ref())
+            .map(|p| u64::from(p.width()) * u64::from(p.height()))
+            .sum();
+        assert!(total > crate::limits::get().project_pixels);
+        document.validate().unwrap();
+
+        // A single image past the limits is refused, naming the limit.
+        assert!(validate_size(MAX_SIDE, 1).is_ok());
+        let error = validate_size(MAX_SIDE + 1, 1).unwrap_err().to_string();
+        assert!(error.contains("65,535"), "{error}");
+        let error = validate_size(20_000, 20_000).unwrap_err().to_string();
+        assert!(error.contains("100 megapixels on this computer"), "{error}");
+    }
 
     #[test]
     fn old_layers_default_to_attached_masks_and_standalone_masks_validate() {
@@ -838,6 +1099,54 @@ mod tests {
         assert!(doc.validate().is_err());
         doc.layers[0].clip_to = None;
         doc.layers[0].parent = Some(Uuid::new_v4());
+        assert!(doc.validate().is_err());
+    }
+
+    #[test]
+    fn folders_are_clipping_bases_unless_the_shape_depends_on_the_clipped_layer() {
+        let mut doc = Document::new(8, 8).unwrap();
+        doc.layers[0].group = true;
+        let group = doc.layers[0].id;
+        let mut child = Layer::image("Child", RgbaImage::new(8, 8));
+        child.parent = Some(group);
+        let child = {
+            let id = child.id;
+            doc.layers.push(child);
+            id
+        };
+        let mut clipped = Layer::blank("Clipped", 8, 8);
+        clipped.clip_to = Some(group);
+        let clipped = {
+            let id = clipped.id;
+            doc.layers.push(clipped);
+            id
+        };
+        doc.validate().unwrap();
+        // A chain through a clipped layer reaches the folder too.
+        let mut chained = Layer::blank("Chained", 8, 8);
+        chained.clip_to = Some(clipped);
+        doc.layers.push(chained);
+        doc.validate().unwrap();
+        // A layer inside the folder cannot clip to it, directly or through a chain.
+        doc.layers[1].clip_to = Some(group);
+        assert!(doc.validate().is_err());
+        doc.layers[1].clip_to = Some(clipped);
+        assert!(doc.validate().is_err());
+        doc.layers[1].clip_to = None;
+        doc.validate().unwrap();
+        // Two folders whose layers clip to each other.
+        let mut other = Layer::blank("Other", 8, 8);
+        other.group = true;
+        let mut inside = Layer::image("Inside", RgbaImage::new(8, 8));
+        inside.parent = Some(other.id);
+        inside.clip_to = Some(group);
+        doc.layers[1].clip_to = Some(other.id);
+        doc.layers.extend([other, inside]);
+        assert!(doc.validate().is_err());
+        doc.layers[1].clip_to = None;
+        doc.validate().unwrap();
+        // A folder still cannot be clipped itself.
+        doc.layers[0].clip_to = Some(child);
         assert!(doc.validate().is_err());
     }
 
