@@ -45,6 +45,9 @@ struct FakeEditor {
     answer: AtomicBool,
     /// Methods of the requests that were withdrawn while they waited.
     withdrawn: Mutex<Vec<String>>,
+    /// The rectangle a `select_rect` edit selected, kept for later
+    /// requests until `set_selection` clears it, as Xuan keeps a selection.
+    selection: Mutex<Option<[f64; 4]>>,
 }
 
 impl FakeEditor {
@@ -58,7 +61,52 @@ impl FakeEditor {
             hold: None,
             answer: AtomicBool::new(false),
             withdrawn: Mutex::default(),
+            selection: Mutex::default(),
         })
+    }
+
+    /// Xuan's notes on the edits that paint while a selection is active,
+    /// following the selection through the request. A stroke changed
+    /// something when one of its points is within its radius of the
+    /// selected rectangle; other painting edits always do.
+    fn notes(&self, edits: &[Value]) -> Vec<Value> {
+        let mut selection = self.selection.lock().unwrap();
+        let mut notes = Vec::new();
+        for (index, edit) in edits.iter().enumerate() {
+            let number = |key: &str| edit[key].as_f64().unwrap_or(0.0);
+            let op = edit["op"].as_str().unwrap_or_default();
+            match op {
+                "select_rect" => {
+                    *selection =
+                        Some([number("x"), number("y"), number("width"), number("height")]);
+                }
+                "set_selection" => *selection = None,
+                "stroke" | "fill" | "fill_path" | "gradient" | "apply_filter"
+                | "apply_adjustment" | "auto_adjust" => {
+                    let Some([x, y, width, height]) = *selection else {
+                        continue;
+                    };
+                    let radius = edit["size"].as_f64().unwrap_or(20.0) / 2.0;
+                    let changed = op != "stroke"
+                        || edit.get("points").is_none()
+                        || (edit["points"].as_array().into_iter().flatten()).any(|point| {
+                            let (px, py) = (point[0].as_f64().unwrap(), point[1].as_f64().unwrap());
+                            px + radius > x
+                                && px - radius < x + width
+                                && py + radius > y
+                                && py - radius < y + height
+                        });
+                    // Xuan gives whole pixels.
+                    let [x, y, width, height] = [x, y, width, height].map(|v| v as u64);
+                    notes.push(json!({
+                        "edit": index + 1, "op": op, "changed": changed,
+                        "clipped_to_selection": {"x": x, "y": y, "width": width, "height": height},
+                    }));
+                }
+                _ => {}
+            }
+        }
+        notes
     }
 
     /// An editor whose `method` requests wait for the user.
@@ -169,7 +217,14 @@ impl Editor for FakeEditor {
                         code: -32603,
                         message: "Layer locked is locked".into(),
                     }),
-                    None => Ok(json!({"ok": true, "layers": ["new-layer"]})),
+                    None => {
+                        let mut answer = json!({"ok": true, "layers": ["new-layer"]});
+                        let notes = self.notes(&edits);
+                        if !notes.is_empty() {
+                            answer["notes"] = json!(notes);
+                        }
+                        Ok(answer)
+                    }
                 }
             }
             // Another plugin's action, as Xuan answers once its job runs.
@@ -179,9 +234,14 @@ impl Editor for FakeEditor {
                     "plugin_name": "Comfy\u{202E} Cloud", "action": "generate", "label": "Generate Image…",
                 }))
             }
-            "host/run" => Ok(json!({
-                "ok": true, "layers": ["new-layer"], "running": params["action"] == "remove_background",
-            })),
+            "host/run" => {
+                if params["action"] == "deselect" {
+                    *self.selection.lock().unwrap() = None;
+                }
+                Ok(json!({
+                    "ok": true, "layers": ["new-layer"], "running": params["action"] == "remove_background",
+                }))
+            }
             "plugins/actions" => Ok(plugin_actions()),
             "jobs/list" => Ok(json!({
                 "running": [{"job": "job-1", "kind": "action", "label": "Generate Image · Comfy Cloud",
@@ -1907,6 +1967,175 @@ fn a_failing_batch_step_is_named_and_nothing_is_applied() {
         text_of(&denied).contains("did not allow edits"),
         "{}",
         text_of(&denied)
+    );
+}
+
+/// The texts of a tool's answer, in order.
+fn texts_of(result: &CallToolResult) -> Vec<String> {
+    (result.content.iter())
+        .filter_map(|content| content.as_text().map(|t| t.text.clone()))
+        .collect()
+}
+
+#[test]
+fn a_stroke_the_selection_keeps_out_is_warned_about_first_naming_the_step() {
+    let editor = FakeEditor::new(false);
+    // As the session in the issue did: a selection made by an earlier step
+    // was still active when the rings were painted, and cleared only last.
+    let result = call_tool(
+        &editor,
+        "batch",
+        json!({"name": "Aperture & Orbits", "steps": [
+            {"tool": "select_shape", "arguments": {"shape": "ellipse", "x": 448, "y": 292, "width": 184, "height": 216}},
+            {"tool": "fill", "arguments": {"color": "#ffcc00"}},
+            {"tool": "paint_stroke", "arguments": {"points": [[100, 400], [300, 600]], "size": 6}},
+            {"tool": "modify_selection", "arguments": {"action": "none"}},
+        ]}),
+    );
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+    assert_eq!(edit_requests(&editor).len(), 1, "the batch is applied");
+    let [warning, answer] = &texts_of(&result)[..] else {
+        panic!("a warning, then the answer: {}", text_of(&result));
+    };
+    assert!(
+        warning.starts_with(
+            "Step 3 (paint_stroke) painted nothing inside the selection (448, 292, 184×216).\n"
+        ),
+        "{warning}"
+    );
+    assert!(
+        warning.contains("stays active") && warning.contains("clear it with modify_selection none"),
+        "{warning}"
+    );
+    let answer: Value = serde_json::from_str(answer).unwrap();
+    assert_eq!(answer["ok"], true);
+    assert_eq!(
+        answer["notes"],
+        json!([
+            "Step 2 (fill) was clipped to the selection (448, 292, 184×216).",
+            "Step 3 (paint_stroke) painted nothing inside the selection (448, 292, 184×216).",
+        ])
+    );
+    // On its own the tool says so too, before its answer, which has the
+    // selection's bounds and that nothing changed.
+    let select = json!({"shape": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10});
+    call_tool(&editor, "select_shape", select.clone());
+    let alone = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"points": [[30, 30]], "size": 4}),
+    );
+    let [warning, answer] = &texts_of(&alone)[..] else {
+        panic!("{}", text_of(&alone));
+    };
+    assert!(
+        warning.starts_with("paint_stroke painted nothing inside the selection (0, 0, 10×10). "),
+        "{warning}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(answer).unwrap(),
+        json!({"ok": true, "clipped_to_selection": {"x": 0, "y": 0, "width": 10, "height": 10}, "changed": false})
+    );
+    // Some strokes of several: those are named.
+    let some = call_tool(
+        &editor,
+        "paint_stroke",
+        json!({"size": 4, "strokes": [{"points": [[5, 5]]}, {"points": [[30, 30]]}, {"points": [[40, 40]]}]}),
+    );
+    assert!(
+        texts_of(&some)[0].starts_with(
+            "paint_stroke: strokes 2 and 3 of 3 painted nothing inside the selection (0, 0, 10×10)."
+        ),
+        "{}",
+        text_of(&some)
+    );
+    // A filter's answer keeps the layers it lists, with the clipping added.
+    let filter = call_tool(
+        &editor,
+        "apply_filter",
+        json!({"filter": {"GaussianBlur": {"radius": 2}}}),
+    );
+    let answer: Value = serde_json::from_str(texts_of(&filter).last().unwrap()).unwrap();
+    assert_eq!(answer["layers"], json!(["new-layer"]));
+    assert_eq!(answer["changed"], true);
+}
+
+#[test]
+fn a_stroke_partly_inside_the_selection_is_clipped_without_a_warning() {
+    let editor = FakeEditor::new(false);
+    let select = json!({"tool": "select_shape", "arguments": {"shape": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}});
+    let across =
+        json!({"tool": "paint_stroke", "arguments": {"points": [[5, 5], [30, 5]], "size": 4}});
+    let result = call_tool(&editor, "batch", json!({"steps": [select, across]}));
+    let [answer] = &texts_of(&result)[..] else {
+        panic!("only the answer: {}", text_of(&result));
+    };
+    let answer: Value = serde_json::from_str(answer).unwrap();
+    assert_eq!(
+        answer["notes"],
+        json!(["Step 2 (paint_stroke) was clipped to the selection (0, 0, 10×10)."])
+    );
+    let alone = call_tool(&editor, "paint_stroke", across["arguments"].clone());
+    let [answer] = &texts_of(&alone)[..] else {
+        panic!("only the answer: {}", text_of(&alone));
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(answer).unwrap(),
+        json!({"ok": true, "clipped_to_selection": {"x": 0, "y": 0, "width": 10, "height": 10}, "changed": true})
+    );
+}
+
+#[test]
+fn without_a_selection_painting_answers_as_before() {
+    let editor = FakeEditor::new(false);
+    let stroke = json!({"points": [[30, 30]], "size": 4});
+    let alone = call_tool(&editor, "paint_stroke", stroke.clone());
+    let [answer] = &texts_of(&alone)[..] else {
+        panic!("{}", text_of(&alone));
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(answer).unwrap(),
+        json!({"ok": true})
+    );
+    // Nor once a selection is cleared, by a batch step or on its own.
+    let result = call_tool(
+        &editor,
+        "batch",
+        json!({"steps": [
+            {"tool": "select_shape", "arguments": {"shape": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}},
+            {"tool": "modify_selection", "arguments": {"action": "none"}},
+            {"tool": "paint_stroke", "arguments": stroke},
+        ]}),
+    );
+    let [answer] = &texts_of(&result)[..] else {
+        panic!("{}", text_of(&result));
+    };
+    assert!(
+        serde_json::from_str::<Value>(answer)
+            .unwrap()
+            .get("notes")
+            .is_none()
+    );
+    call_tool(
+        &editor,
+        "select_shape",
+        json!({"shape": "rectangle", "x": 0, "y": 0, "width": 10, "height": 10}),
+    );
+    call_tool(&editor, "modify_selection", json!({"action": "none"}));
+    let alone = call_tool(&editor, "fill", json!({"color": "#000000"}));
+    assert_eq!(texts_of(&alone).len(), 1, "{}", text_of(&alone));
+    assert_eq!(
+        serde_json::from_str::<Value>(&text_of(&alone)).unwrap(),
+        json!({"ok": true})
+    );
+    // The batch tool says that a selection stays for the steps after it.
+    let tool = (tools::list().into_iter())
+        .find(|t| t.name == "batch")
+        .unwrap();
+    let description = tool.description.unwrap_or_default();
+    assert!(
+        description.contains("A selection a step makes stays active for the steps after it"),
+        "{description}"
     );
 }
 
