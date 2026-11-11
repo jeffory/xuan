@@ -151,18 +151,18 @@ impl EditorApp {
         }
         if pressed(Key::Escape) {
             self.cancel_gesture();
-            self.crop_rect = None;
+            self.cancel_crop();
             self.polygon.clear();
             if self.tool == Tool::Pen {
                 self.pen_escape();
             }
         }
         if pressed(Key::Enter) {
-            if let Some((start, end)) = self.crop_rect.take() {
-                self.edit(tr("Crop"), |doc| xuan::operations::crop(doc, start, end));
-                if let Some(s) = self.session_mut() {
-                    s.fit = true;
-                }
+            self.forget_crop_of_other_documents();
+            if self.tool == Tool::Crop && self.crop.perspective && self.crop.quad.is_some() {
+                self.apply_perspective_crop();
+            } else if self.crop.rect.is_some() {
+                self.apply_crop();
             } else if self.polygon.len() >= 3 {
                 self.finish_polygon();
             } else if self.pen.draft.is_some() {
@@ -186,7 +186,11 @@ impl EditorApp {
         {
             if pressed(key) {
                 let opacity = (index + 1) as f32 / 10.0;
-                if self.tool.is_brush() || self.tool == Tool::Gradient {
+                if self.tool == Tool::Dodge {
+                    // As in Photoshop, the number keys set Dodge / Burn / Sponge's exposure.
+                    self.brush.tone.exposure = opacity;
+                } else if self.tool.is_brush() || matches!(self.tool, Tool::Gradient | Tool::Bucket)
+                {
                     self.brush.opacity = opacity;
                 } else {
                     self.edit(tr("Layer Opacity"), |doc| {
@@ -216,7 +220,7 @@ impl EditorApp {
         if pressed(Key::ArrowDown) {
             dy += step;
         }
-        if dx != 0.0 || dy != 0.0 {
+        if (dx != 0.0 || dy != 0.0) && !(self.tool == Tool::Crop && self.nudge_crop(dx, dy)) {
             let mask_target = self.transforming_mask();
             self.edit(tr("Nudge"), |doc| {
                 if let Some(mut transform) = xuan::operations::transform_box(doc, mask_target) {

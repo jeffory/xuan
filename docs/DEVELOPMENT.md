@@ -4,7 +4,7 @@ Run the commands below from the repository root. For installation and editing, s
 
 ## Prerequisites
 
-Requires Rust **1.89+** and a C toolchain.
+Requires Rust **1.89+** (**1.90+** on macOS) and a C toolchain.
 
 ### Linux
 
@@ -17,7 +17,7 @@ sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
     libvulkan1 mesa-vulkan-drivers xdg-desktop-portal
 ```
 
-HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
+HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW, Canon CR2/CR3/CRW, Fujifilm RAF, and Sony ARW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import. SVG and SVGZ import (`src/io/svg.rs`) draws files with the `resvg` crate the title bar already uses, built without text shaping, bitmap decoding or file access; `cargo test --locked svg` covers sizing, sharpness, transparency, limits and that linked files and URLs are never loaded.
 
 ### Windows
 
@@ -104,6 +104,8 @@ npx --yes changelogithub@15.0.5 --dry --to HEAD --github silverling/xuan
 ```
 
 The first release uses the available commit history; subsequent notes start after the preceding release tag. To retry a failed release, rerun its workflow in GitHub Actions.
+
+Help → Check for Updates… and the daily update check (`src/update.rs`, `src/app/updates.rs`) read the latest release of `jeffory/xuan`, the repository these builds are published from: its tag must be the version (`v0.6.0`), and its notes are shown in the update dialog. A fork that publishes its own builds sets `XUAN_UPDATE_REPOSITORY=owner/name` when building so they check its releases instead. The update tests use a fake GitHub (`src/app/tests/update_check.rs`) and never reach the network; tests that do not set one get a transport that always fails.
 
 ## Application icons
 
@@ -369,11 +371,13 @@ audit](GPU_PROCESSING.md) for sample measurements and the remaining decode costs
 
 ### Localization and negative conversion checks
 
-UI text uses `xuan::i18n::tr` with the English text as its key. Simplified Chinese
-translations are UTF-8 tab-separated pairs in `assets/locales/zh-CN.tsv`. Keep UI
-IDs, command identifiers and user document content independent of translated labels.
-The UI test checks the settings shortcut, live language changes and bundled glyph
-coverage. Configuration tests use temporary directories.
+UI text uses `xuan::i18n::tr` (or `tr_args` and `tr_plural`) with the English text as its
+key. Every `assets/locales/<tag>.tsv` is built in as a language; `en.tsv` lists the English
+keys. [Translating Xuan](TRANSLATING.md) covers the file format, adding a language, adding new
+strings, `scripts/check-locales.sh` and font coverage. Keep UI IDs, command identifiers and
+user document content independent of translated labels. The tests check every locale file
+against the source and the bundled fonts, the language picker, the settings shortcut and live
+language changes. Configuration tests use temporary directories.
 
 ```sh
 cargo test --locked negative

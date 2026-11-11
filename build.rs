@@ -1,9 +1,13 @@
 //! Embeds build metadata (commit, dirty flag, date, channel) for the About dialog and
 //! `--version`. Every lookup is best-effort: without git, outside a checkout (source
 //! tarballs) or in a worktree the build still succeeds and the metadata is simply absent.
+//! Also embeds every interface language in `assets/locales` (see `src/i18n.rs`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[path = "src/i18n/locale_files.rs"]
+mod locale_files;
 
 fn git(args: &[&str]) -> Option<String> {
     let out = Command::new("git").args(args).output().ok()?;
@@ -75,11 +79,43 @@ fn watch_git(root: &Path) {
     );
 }
 
+/// Writes `locales.rs` to `OUT_DIR`: a `(tag, contents)` slice of every `<tag>.tsv`, so dropping a
+/// file into `assets/locales` adds a language on the next build.
+fn embed_locales(root: &Path) {
+    let dir = root.join("assets/locales");
+    // A directory is watched with everything in it.
+    println!("cargo:rerun-if-changed={}", dir.display());
+    println!("cargo:rerun-if-changed=src/i18n/locale_files.rs");
+    let locale_files::LocaleFiles { found, skipped } = match locale_files::locale_files(&dir) {
+        Ok(files) => files,
+        Err(error) => {
+            println!("cargo:warning=Cannot list {}: {error}", dir.display());
+            Default::default()
+        }
+    };
+    for name in skipped {
+        println!(
+            "cargo:warning=assets/locales/{name} is not named after a language tag such as uk.tsv or pt-BR.tsv, so it is not built in"
+        );
+    }
+    let mut code = String::from("&[\n");
+    for (tag, path) in found {
+        code.push_str(&format!(
+            "    ({tag:?}, include_str!({:?})),\n",
+            path.display().to_string()
+        ));
+    }
+    code.push_str("]\n");
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+    std::fs::write(out.join("locales.rs"), code).expect("cannot write locales.rs");
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     // Source archives carry the commit they were cut from in this file.
     println!("cargo:rerun-if-changed=.xuan-build-commit");
     let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
+    embed_locales(&root);
     let in_git = git(&["rev-parse", "--git-dir"]).is_some();
     if in_git {
         watch_git(&root);

@@ -33,7 +33,7 @@ fn straight(
     renderer: &mut TextRenderer,
     style: &TextStyle,
 ) -> (Vec<cosmic_text::LayoutGlyph>, f64) {
-    let buffer = renderer.shape(style).unwrap();
+    let (buffer, _) = renderer.shape(style).unwrap();
     let run = buffer.layout_runs().next().unwrap();
     (run.glyphs.to_vec(), f64::from(run.line_w))
 }

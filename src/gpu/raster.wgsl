@@ -115,5 +115,5 @@ fn lens(@builtin(global_invocation_id) id: vec3<u32>) {
     let radius = dot(uv, uv);
     let k = 1.0 + config[1].x * radius / 100.0;
     let p = sampled((uv * k + 1.0) * 0.5, size);
-    result[id.y * size.x + id.x] = packed(vec4(p.rgb * (1.0 - config[1].y * radius * 0.005), p.a));
+    result[id.y * size.x + id.x] = packed(vec4(p.rgb * (1.0 + config[1].y * radius * 0.005), p.a));
 }

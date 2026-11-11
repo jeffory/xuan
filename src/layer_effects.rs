@@ -522,7 +522,13 @@ fn spread(plane: &[f32], width: usize, height: usize, reach: usize, smallest: bo
 /// on the CPU: upstream's `effects_compose` order — the drop shadow behind, the outer glow over
 /// it, an outside stroke over that, the pixels, then the color overlay, inner glow, inner shadow
 /// and an inside stroke on top. `gpu/layer_effects.wgsl` runs the same passes.
-pub fn render_cpu(padded: &RgbaImage, effects: &LayerEffects) -> RgbaImage {
+///
+/// `fill` is the layer's Fill (0–1). As in Photoshop it fades only the pixels: every effect
+/// takes its shape from the pixels at full fill, and the color overlay still covers the
+/// layer's whole shape (it is laid over the faded pixels inside it), so at Fill 0% only the
+/// effects show. The drop shadow stays hidden under the faded pixels, as Photoshop's default
+/// "Layer Knocks Out Drop Shadow" keeps it.
+pub fn render_cpu(padded: &RgbaImage, effects: &LayerEffects, fill: f32) -> RgbaImage {
     let (width, height) = padded.dimensions();
     let plan = Plan::new(effects);
     let (w, h) = (width as usize, height as usize);
@@ -573,7 +579,11 @@ pub fn render_cpu(padded: &RgbaImage, effects: &LayerEffects) -> RgbaImage {
             let mut color = [0.0f32; 3];
             let mut alpha = 0.0f32;
             if let (Some(plane), Some((_, _, paint))) = (&drop_shadow, plan.drop_shadow) {
-                over(&mut color, &mut alpha, paint, plane[i]);
+                // Photoshop's "Layer Knocks Out Drop Shadow" (on by default): a fill below
+                // 100% does not uncover the shadow under the pixels. At 100% they cover it
+                // anyway, and drawing it keeps semi-transparent edges as they always were.
+                let knocked_out = if fill < 1.0 { 1.0 - p[3] } else { 1.0 };
+                over(&mut color, &mut alpha, paint, plane[i] * knocked_out);
             }
             if let (Some(plane), Some((_, paint))) = (&outer_glow, plan.outer_glow) {
                 over(&mut color, &mut alpha, paint, plane[i] * (1.0 - shape[i]));
@@ -589,10 +599,23 @@ pub fn render_cpu(padded: &RgbaImage, effects: &LayerEffects) -> RgbaImage {
                     face[c] = face[c] + (paint[c] - face[c]) * paint[3].clamp(0.0, 1.0);
                 }
             }
-            for c in 0..3 {
-                color[c] = face[c] * p[3] + color[c] * (1.0 - p[3]);
+            let mut cover = p[3];
+            if fill < 1.0 {
+                // Inside the shape, the pixels at `fill` with the overlay over them.
+                let overlay = plan.overlay.map_or(0.0, |paint| paint[3].clamp(0.0, 1.0));
+                let inside = overlay + fill * (1.0 - overlay);
+                if inside > 0.0 {
+                    for c in 0..3 {
+                        let paint = plan.overlay.map_or(0.0, |paint| paint[c]);
+                        face[c] = (paint * overlay + p[c] * fill * (1.0 - overlay)) / inside;
+                    }
+                }
+                cover = p[3] * inside;
             }
-            alpha = p[3] + alpha * (1.0 - p[3]);
+            for c in 0..3 {
+                color[c] = face[c] * cover + color[c] * (1.0 - cover);
+            }
+            alpha = cover + alpha * (1.0 - cover);
             if let (Some(plane), Some((_, paint))) = (&inner_glow, plan.inner_glow) {
                 over(&mut color, &mut alpha, paint, plane[i]);
             }
@@ -631,7 +654,8 @@ pub fn pad(pixels: &RgbaImage, margin: u32) -> RgbaImage {
 
 /// `pixels` with `effects` around them, and the margin added on every side. `None` when nothing
 /// would be drawn or the raster would exceed the document limits, so the layer draws as it is.
-pub fn render(pixels: &RgbaImage, effects: &LayerEffects) -> Option<(RgbaImage, u32)> {
+/// `fill` fades the pixels but not the effects ([`render_cpu`]).
+pub fn render(pixels: &RgbaImage, effects: &LayerEffects, fill: f32) -> Option<(RgbaImage, u32)> {
     let visible = effects.visible();
     if visible.is_empty() || visible.validate().is_err() {
         return None;
@@ -643,8 +667,8 @@ pub fn render(pixels: &RgbaImage, effects: &LayerEffects) -> Option<(RgbaImage, 
         return None;
     }
     let padded = pad(pixels, margin);
-    let result = crate::gpu::layer_effects(&padded, &visible)
-        .unwrap_or_else(|| render_cpu(&padded, &visible));
+    let result = crate::gpu::layer_effects(&padded, &visible, fill)
+        .unwrap_or_else(|| render_cpu(&padded, &visible, fill));
     Some((result, margin))
 }
 
@@ -679,6 +703,7 @@ struct Entry {
     pixels: Weak<RgbaImage>,
     mask: Option<(Weak<GrayImage>, Option<Transform>, Transform)>,
     effects: LayerEffects,
+    fill: f32,
     result: Arc<RgbaImage>,
     margin: u32,
 }
@@ -714,8 +739,13 @@ fn same_mask(
 }
 
 /// The layer drawn with its effects, as a layer that stands in for it: the grown raster, a
-/// transform grown by the margin, and no mask (it is already applied). `None` when the layer
-/// has no visible effects.
+/// transform grown by the margin, and no mask or fill (they are already applied). `None` when
+/// the layer has no visible effects.
+///
+/// The stand-in then blends as a whole at the layer's opacity and blend mode. In one of the
+/// eight modes Fill changes ([`crate::blend::BlendMode::fill_is_special`]) Photoshop blends the
+/// faded pixels by that rule and the effects by their own modes; here the pixels fade as in
+/// the other modes and the raster takes the layer's mode, an approximation.
 pub fn apply(layer: &Layer) -> Option<Layer> {
     let effects = layer.effects.as_ref()?;
     let pixels = layer.pixels.as_ref()?;
@@ -733,13 +763,14 @@ pub fn apply(layer: &Layer) -> Option<Layer> {
                     && e.pixels.strong_count() > 0
                     && same_mask(&e.mask, &mask)
                     && e.effects == visible
+                    && e.fill == layer.fill
             })
             .map(|e| (e.result.clone(), e.margin))
     };
     let (result, margin) = match cached {
         Some(hit) => hit,
         None => {
-            let (image, margin) = render(&shown(layer, pixels), &visible)?;
+            let (image, margin) = render(&shown(layer, pixels), &visible, layer.fill)?;
             let result = Arc::new(image);
             let mut cache = CACHE.lock().unwrap_or_else(|p| p.into_inner());
             cache.retain(|e| e.pixels.strong_count() > 0);
@@ -747,6 +778,7 @@ pub fn apply(layer: &Layer) -> Option<Layer> {
                 pixels: Arc::downgrade(pixels),
                 mask,
                 effects: visible,
+                fill: layer.fill,
                 result: result.clone(),
                 margin,
             });
@@ -778,6 +810,8 @@ pub fn apply(layer: &Layer) -> Option<Layer> {
     drawn.pixels = Some(result);
     drawn.mask = None;
     drawn.effects = None;
+    // The fill is drawn into the raster, under the effects.
+    drawn.fill = 1.0;
     Some(drawn)
 }
 

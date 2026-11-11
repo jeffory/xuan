@@ -1,3 +1,5 @@
+# 简体中文 (Simplified Chinese). See docs/TRANSLATING.md.
+@name	简体中文
 Settings	设置
 Settings…	设置…
 General	常规
@@ -108,6 +110,13 @@ Zoom Out	缩小
 Show Transform Controls	显示变换控件
 Keyboard Shortcuts	键盘快捷键
 About Xuan	关于 Xuan
+Quit Xuan	退出 Xuan
+Hide Xuan	隐藏 Xuan
+Hide Others	隐藏其他
+Show All	全部显示
+Services	服务
+Minimize	最小化
+Bring All to Front	前置全部窗口
 Close window	关闭窗口
 Minimize window	最小化窗口
 Maximize window	最大化窗口
@@ -140,7 +149,7 @@ Click to select · Click outside to deselect · Drag to move · Handles to resiz
 Drag to select · Shift add · Alt subtract · Ctrl+D deselect · Delete clears	拖动选择 · Shift 添加 · Alt 减去 · Ctrl+D 取消选择 · Delete 清除
 Draw a selection · Shift add · Alt subtract · Enter closes polygon · Escape cancels	绘制选区 · Shift 添加 · Alt 减去 · Enter 闭合多边形 · Escape 取消
 Click to select similar colours · Shift add · Alt subtract · Ctrl+D deselect	单击选择相似颜色 · Shift 添加 · Alt 减去 · Ctrl+D 取消选择
-Drag to crop · Enter applies · Escape cancels · Space to pan	拖动裁剪 · Enter 应用 · Escape 取消 · 空格平移
+Drag to crop · Drag handles to adjust · Enter applies · Escape cancels · Space to pan	拖动裁剪 · 拖动手柄调整 · Enter 应用 · Escape 取消 · 空格平移
 Drag to paint · [ ] size · Shift-click straight line · 1–0 opacity · Space to pan	拖动绘画 · [ ] 大小 · Shift 单击绘制直线 · 1–0 不透明度 · 空格平移
 Paint over blemishes · [ ] size · Space to pan	涂抹瑕疵进行修复 · [ ] 大小 · 空格平移
 Alt-click to set source · Drag to clone · [ ] size · Space to pan	Alt 单击设置来源 · 拖动仿制 · [ ] 大小 · 空格平移
@@ -171,6 +180,8 @@ Reduce hand jitter. Higher values make the brush follow farther behind the point
 Pen dynamics	数位笔动态
 Pressure: size	压力控制大小
 Pressure: opacity	压力控制不透明度
+Pressure: flow	压力控制流量
+How much paint one pass lays down. Going over the same spot in one stroke builds up to the opacity.	每次经过绘制的颜料量。在同一笔画中反复涂抹同一处会逐渐叠加，直到达到不透明度。
 Tilt: shape	倾斜控制形状
 Ellipse	椭圆
 Rectangle	矩形
@@ -179,7 +190,6 @@ Radius	半径
 Freehand	自由绘制
 Polygonal	多边形
 Polygonal Lasso	多边形套索
-Replace	替换
 Add	添加
 Subtract	减去
 Intersect	交集
@@ -189,6 +199,7 @@ Linear	线性
 Radial	径向
 Blur	模糊
 Smudge	涂抹
+Liquify	液化
 Aligned	对齐
 Sample	取样
 Current layer	当前图层
@@ -214,7 +225,6 @@ Darken	变暗
 Lighten	变亮
 Colour Dodge	颜色减淡
 Colour Burn	颜色加深
-Linear Dodge	线性减淡
 Linear Burn	线性加深
 Difference	差值
 Exclusion	排除
@@ -251,7 +261,6 @@ Invert mask	反相蒙版
 Delete mask	删除蒙版
 Link Mask	链接蒙版
 Link	链接
-Unlink	取消链接
 Edit text…	编辑文字…
 Edit adjustment…	编辑调整…
 Edit filter…	编辑滤镜…
@@ -266,7 +275,17 @@ Image size	图像大小
 Create canvas	创建画布
 Resolution	分辨率
 Anchor	锚点
+Top left	左上
+Top right	右上
+Bottom left	左下
+Bottom right	右下
 Transparent canvas · sRGB	透明画布 · sRGB
+White canvas · sRGB	白色画布 · sRGB
+Black canvas · sRGB	黑色画布 · sRGB
+Coloured canvas · sRGB	彩色画布 · sRGB
+White	白色
+Transparent	透明
+Custom colour	自定义颜色
 Change the canvas bounds and anchor your composition.	更改画布边界和内容锚点。
 Scale the composition while preserving source pixels.	缩放合成图像并保留源像素。
 Cancel	取消
@@ -282,28 +301,23 @@ Save your changes?	保存更改？
 Some projects have unsaved changes.	部分项目有未保存的更改。
 Discard changes	放弃更改
 Couldn't complete the operation	无法完成操作
+Error	错误
+Copy details	复制详细信息
+Copy the message and Xuan's version, for a bug report	复制消息和 Xuan 的版本，用于报告问题
 Export image	导出图像
-Close / Quit	关闭 / 退出
 Export…	导出…
 Format	格式
 Quality	质量
 JPEG preview · transparency is flattened onto white	JPEG 预览 · 透明区域将合成为白色
+WebP preview · transparency is kept	WebP 预览 · 保留透明区域
+Lossless	无损
+Estimated size:	预计大小：
+Estimating size…	正在估算大小…
+Scale	缩放
 sRGB · Transparent	sRGB · 透明
 Keyboard shortcuts	键盘快捷键
-New / Open / Save	新建 / 打开 / 保存
-Import image as layer	将图像导入为图层
-Undo / Redo	撤销 / 重做
-Duplicate / Merge / Group	复制 / 合并 / 编组
-Select all / Deselect	全选 / 取消选择
-Copy / Paste image	复制 / 粘贴图像
-Fit / Actual pixels	适合窗口 / 实际像素
-Move / Marquee / Lasso / Wand / Crop	移动 / 选框 / 套索 / 魔棒 / 裁剪
-Brush / Eraser / Heal / Clone / Blur	画笔 / 橡皮擦 / 修复 / 仿制 / 模糊
-Gradient / Shape / Eyedropper / Hand / Zoom	渐变 / 形状 / 吸管 / 抓手 / 缩放
-Brush size / Hardness	画笔大小 / 硬度
 Brush or layer opacity	画笔或图层不透明度
 Set clone source	设置仿制来源
-Swap / Reset colours	交换 / 重置颜色
 Pan canvas	平移画布
 Pan canvas horizontally	水平平移画布
 Horizontal wheel / Shift+wheel	水平滚轮 / Shift+滚轮
@@ -313,7 +327,10 @@ Apply crop / Cancel gesture	应用裁剪 / 取消操作
 A space for your next composition.	为下一幅创作留一方天地。
 Native image editor · Rust + egui + wgpu	原生图像编辑器 · Rust + egui + wgpu
 Ported from Compositor by Wonder Assembly LLC.	移植自 Wonder Assembly LLC 的 Compositor。
-Free and open source, under the MIT license.	基于 MIT 许可证的免费开源软件。
+Free and open source, under the MIT licence.	基于 MIT 许可证的免费开源软件。
+Project site	项目主页
+Licences and third-party notices	许可证与第三方声明
+Report a bug	报告问题
 Add text…	添加文字…
 Edit Text	编辑文字
 Font	字体
@@ -334,7 +351,6 @@ Text applied	文字已应用
 Adjustments	调整
 Adjustment	调整
 Hue / Saturation	色相 / 饱和度
-Hue & Saturation	色相与饱和度
 Levels	色阶
 Curves	曲线
 Exposure	曝光
@@ -344,11 +360,9 @@ Colour Balance	色彩平衡
 Midtones	中间调
 Preserve Luminosity	保持明度
 Default	默认值
-Film Grain	胶片颗粒
 Invert	反相
 Gaussian Blur	高斯模糊
 Motion Blur	动感模糊
-Noise	噪点
 Lens Correction	镜头校正
 Original pixels · alpha-weighted histogram	原始像素 · 按透明度加权的直方图
 Input black	输入黑场
@@ -375,6 +389,9 @@ Falloff start	衰减起点
 Falloff end	衰减终点
 Invert selected colour range	反转所选颜色范围
 Click to add a point · Drag points to reshape the curve	单击添加控制点 · 拖动控制点调整曲线
+Curve	曲线
+In	输入
+Out	输出
 Amount	数量
 Distance	距离
 Monochromatic	单色
@@ -494,7 +511,6 @@ Warmth	暖色
 Camera information	相机信息
 Source	来源
 Dimensions	尺寸
-Camera	相机
 Focal length	焦距
 Aperture	光圈
 Shutter	快门
@@ -565,6 +581,7 @@ Erase	擦除
 Add Text	添加文字
 Feather Selection	羽化选区
 Layer Opacity	图层不透明度
+Fades the layer's own pixels but not its layer effects	只淡化图层自身的像素，不淡化图层效果
 Layer Visibility	图层可见性
 Layer Mask	图层蒙版
 Add Mask	添加蒙版
@@ -579,7 +596,6 @@ Images and Xuan projects	图像和 Xuan 项目
 Open Compositor .comp package folder	打开 Compositor .comp 项目包文件夹
 Drag a crop area, then press Enter to apply	拖动选择裁剪区域，按 Enter 应用
 Click the canvas to place text	单击画布放置文字
-New canvas (Ctrl+N)	新建画布 (Ctrl+N)
 Hue/Saturation	色相/饱和度
 Grain	颗粒
 Add Noise	添加杂色
@@ -663,8 +679,6 @@ Custom	自定义
 Lines	直线
 Dashed Lines	虚线
 Dots	点线
-Rulers / Grid / Guides	标尺 / 网格 / 参考线
-Snap / Lock guides	对齐 / 锁定参考线
 Drag from a ruler	从标尺拖动
 New guide	新建参考线
 No document open	未打开文档
@@ -672,8 +686,6 @@ Imported with changes	已导入（有改动）
 Imported with changes. These parts of the Compositor project aren't supported yet:	已导入，但有改动。Compositor 项目的以下部分暂不支持：
 Layer effects on folders or adjustment layers	文件夹或调整图层上的图层效果
 Text alignment, spacing or paragraph box (kept until the text is edited)	文字对齐、间距或段落框（编辑文字前保持原样）
-Per-letter text colours (kept until the text is edited)	逐字颜色（编辑文字前保持原样）
-Per-letter fonts (kept until the text is edited)	逐字字体（编辑文字前保持原样）
 Text beyond Xuan's limits (imported as pixels)	超出 Xuan 限制的文字（以像素导入）
 Live line shapes (imported as pixels)	可编辑直线形状（以像素导入）
 Blur or noise settings adapted to Xuan	已按 Xuan 调整的模糊或杂色设置
@@ -738,7 +750,6 @@ Folder blend mode	文件夹混合模式
 passes through	按“穿透”处理
 Bevel, satin, gradient or pattern effects and other effects Xuan doesn't have (left out)	斜面、光泽、渐变或图案效果等 Xuan 不支持的效果（已省略）
 Effect blend modes, spread, noise or centered strokes (drawn approximately)	效果的混合模式、扩展、杂色或居中描边（近似绘制）
-Fill opacity on layers with effects (drawn at full fill)	带效果图层的填充不透明度（按完全填充绘制）
 Vertical, warped or transformed text (imported as pixels)	竖排、变形或经过变换的文字（以像素导入）
 Text with several styles (kept until the text is edited)	包含多种样式的文字（编辑文字前保持原样）
 Vector shapes (imported as pixels)	矢量形状（以像素导入）
@@ -747,6 +758,14 @@ Shapes saved without pixels that Xuan can't draw (left out)	未保存像素且 X
 Smart objects (imported as pixels)	智能对象（以像素导入）
 Fill layers (imported as pixels)	填充图层（以像素导入）
 Layers cropped to the canvas to fit the memory limit	为符合内存限制而裁切到画布的图层
+Artboards (each opened as its own document)	画板（各自作为单独的文档打开）
+Artboards (each imported as a folder)	画板（各自作为文件夹导入）
+Layers outside every artboard (left out)	不在任何画板内的图层（已省略）
+Artboards too large for the memory limit (left out)	超出内存限制的画板（已省略）
+Layers cropped to their artboard	裁切到所在画板的图层
+Artboard background colours (added as a layer)	画板背景色（已添加为图层）
+Artboard backgrounds Xuan can't read (left out)	Xuan 无法读取的画板背景（已省略）
+Artboard Background	画板背景
 Clipping masks on folders or left-out layers	文件夹或已省略图层上的剪贴蒙版
 Photoshop files are limited to {} on this computer	在这台电脑上，Photoshop 文件不能超过 {}
 The Photoshop file is damaged or incomplete	Photoshop 文件已损坏或不完整
@@ -1012,7 +1031,10 @@ Make Selection	建立选区
 Shape Layer from Path	从路径创建形状图层
 Rename Path	重命名路径
 Delete Path	删除路径
-This document has no paths yet.	此文档还没有路径。
+No paths yet	还没有路径
+Draw one with the Pen, or trace the selection's outline.	用钢笔绘制一条，或描摹选区的轮廓。
+Draw with Pen	用钢笔绘制
+From selection	从选区建立
 Name	名称
 Rename	重命名
 Shape Layer	形状图层
@@ -1097,3 +1119,306 @@ No recent files	没有最近的文件
 File not found	找不到文件
 Clear Recently Opened	清除最近打开的文件
 Open Most Recent File	打开最近使用的第一个文件
+Paste Layers	粘贴图层
+Copied layers:	已复制图层：
+Preset	预设
+Screens	屏幕
+Social	社交媒体
+Square post	方形帖子
+Portrait post	竖版帖子
+Landscape post	横版帖子
+Story / Reel	快拍 / 短视频
+Video thumbnail	视频缩略图
+Link preview	链接预览
+Banner	横幅
+8K Ultra HD	8K 超高清
+4K Ultra HD	4K 超高清
+Quad HD	2K 四倍高清
+Full High Definition	全高清
+High Definition	高清
+ISO A	ISO A 系列
+ISO B	ISO B 系列
+US	美国
+Photo	照片
+Letter	信纸 (Letter)
+Legal	法律文书 (Legal)
+Tabloid / Ledger	小报 / 账簿 (Tabloid / Ledger)
+Half Letter	半信纸 (Half Letter)
+Executive	行政 (Executive)
+Some canvas presets could not be read and were skipped	部分画布预设无法读取，已跳过
+Save current size as preset…	将当前尺寸存为预设…
+Delete preset	删除预设
+Manage presets…	管理预设…
+Canvas presets	画布预设
+Pixel sizes	像素尺寸
+Print sizes	打印尺寸
+No presets in this list.	此列表中没有预设。
+Move up	上移
+Move down	下移
+Group	分组
+Current size: {size}	当前尺寸：{size}
+Saving replaces the preset of this name.	保存将替换同名预设。
+Save current size	保存当前尺寸
+Delete the presets file and offer the built-in lists again	删除预设文件，恢复内置列表
+Open presets file	打开预设文件
+Swap	交换
+Swap width and height (portrait / landscape)	交换宽度和高度（竖向 / 横向）
+Keep aspect ratio	保持宽高比
+Paint Bucket	油漆桶
+Click to fill similar colours with the foreground colour · 1–0 opacity · Shift+G switches to Gradient	单击用前景色填充相似颜色 · 1–0 不透明度 · Shift+G 切换到渐变
+Switch between Gradient and Paint Bucket	在渐变与油漆桶之间切换
+Anti-alias	消除锯齿
+Current Layer	当前图层
+Stroke…	描边…
+Location	位置
+Centre	居中
+Preserve transparency	保留透明区域
+The stroke stopped unexpectedly	描边意外中止
+Ratio	比例
+Free	自由
+Ratio width	比例宽度
+Ratio height	比例高度
+Swap the ratio's width and height (portrait / landscape)	交换比例的宽度和高度（竖向 / 横向）
+Bloom / Glow	泛光 / 辉光
+Tonal Contrast	色调对比度
+Dither	仿色
+Midpoint	中点
+Roundness	圆度
+Atkinson (Classic Mac)	Atkinson（经典 Mac）
+Floyd–Steinberg	Floyd–Steinberg
+Bayer 2 × 2	Bayer 2 × 2
+Bayer 4 × 4	Bayer 4 × 4
+Bayer 8 × 8	Bayer 8 × 8
+Halftone Dots	半调网点
+Halftone Lines	半调线条
+Halftone Diamonds	半调菱形
+Mac Patterns	Mac 图案
+ASCII	ASCII 字符
+Scanlines (CRT)	扫描线（CRT）
+Pixel Size	像素大小
+Dot	圆点
+Diffusion	扩散
+Cell Size	网格大小
+Text Size	文字大小
+Characters	字符
+Line Spacing	线间距
+Glow	辉光
+Wobble	抖动
+Density	密度
+Two Colours	双色
+Dark colour	暗部颜色
+Light colour	亮部颜色
+Light on Dark	暗底亮色
+Dodge / Burn	减淡 / 加深
+Switch Dodge / Burn / Sponge	切换减淡 / 加深 / 海绵
+Switch Blur / Smudge / Liquify	切换模糊 / 涂抹 / 液化
+Dodge	减淡
+Burn	加深
+Sponge	海绵
+Range	范围
+Desaturate	去色
+Saturate	加色
+Drag to lighten, darken or change saturation · [ ] size · Shift-click straight line · 1–0 exposure · Shift+O switches Dodge / Burn / Sponge	拖动以减淡、加深或改变饱和度 · [ ] 大小 · Shift 单击绘制直线 · 1–0 曝光 · Shift+O 切换减淡 / 加深 / 海绵
+Dodge, Burn and Sponge work on layer pixels, not masks	减淡、加深和海绵只作用于图层像素，不作用于蒙版
+Liquify works on layer pixels, not masks	液化只作用于图层像素，不作用于蒙版
+The tones that change most. The effect fades out smoothly into the other tones.	变化最大的色调。效果会平滑地过渡到其他色调。
+How strong the effect is. Going over the same spot in one stroke does not add to it; start a new stroke to go further.	效果的强度。在同一笔画中反复涂抹同一处不会叠加；要加强效果，请开始新的笔画。
+Imported with changes. Xuan does not draw these parts of the SVG file:	已导入，但有改动。Xuan 不绘制 SVG 文件的以下部分：
+Text (convert it to outlines first)	文字（请先转换为轮廓）
+Bitmaps and linked images	位图和链接的图像
+This is not an OpenRaster file	这不是 OpenRaster 文件
+The OpenRaster file is damaged or incomplete	OpenRaster 文件已损坏或不完整
+The OpenRaster file's layers don't fit within {} megapixels, the most this computer opens	OpenRaster 文件的图层超出这台电脑可打开的上限（{} 百万像素）
+The OpenRaster file names an unsafe layer path: {}	OpenRaster 文件包含不安全的图层路径：{}
+The OpenRaster file has too many entries	OpenRaster 文件包含的条目过多
+This is not an OpenRaster file: its mimetype entry is missing	这不是 OpenRaster 文件：缺少 mimetype 条目
+The OpenRaster file has too many layers	OpenRaster 文件的图层过多
+The OpenRaster file's stacks are nested too deeply	OpenRaster 文件的图层组嵌套过深
+The OpenRaster file is missing the layer image {}	OpenRaster 文件缺少图层图像 {}
+An OpenRaster layer image is too large	OpenRaster 图层图像过大
+Text layers (flattened to pixels)	文字图层（已栅格化为像素）
+Shape layers (flattened to pixels)	形状图层（已栅格化为像素）
+Layer effects (drawn into their layers)	图层效果（已绘制到所在图层）
+Layer masks (applied to the layer's pixels)	图层蒙版（已应用到图层像素）
+Fill below 100% (applied to the layer's pixels)	低于 100% 的填充（已应用到图层像素）
+Scaled, rotated or warped layers (resampled to pixels)	缩放、旋转或变形的图层（已转为像素）
+Adjustments, filters and masks on a layer (applied to its pixels)	图层上的调整、滤镜和蒙版（已应用到其像素）
+Clipping masks (merged into their base layer)	剪贴蒙版（已合并到基底图层）
+Adjustment layers (merged with the layers below them)	调整图层（已与下方图层合并）
+Filter layers (merged with the layers below them)	滤镜图层（已与下方图层合并）
+Mask layers (merged with the layers below them)	蒙版图层（已与下方图层合并）
+Folders with a mask (flattened to one layer)	带蒙版的文件夹（已合并为一个图层）
+Hidden adjustment, filter or mask layers (left out)	隐藏的调整、滤镜或蒙版图层（已省略）
+RAW layers (written as their developed pixels)	RAW 图层（以冲洗后的像素写入）
+Exported with changes. OpenRaster can't hold these, so Xuan flattened them:	已导出，但有改动。OpenRaster 无法保存以下内容，Xuan 已将其合并：
+Isolated folders whose layers blend (now pass through)	内部图层使用混合模式的隔离文件夹（现按“穿透”处理）
+Filter layers and other content Xuan can't read (left out)	Xuan 无法读取的滤镜图层和其他内容（已省略）
+Imported with changes. These parts of the OpenRaster file aren't supported yet:	已导入，但有改动。OpenRaster 文件的以下部分暂不支持：
+Import OpenRaster File	导入 OpenRaster 文件
+Xuan will convert these OpenRaster features. Nothing is applied until you continue.	Xuan 将转换以下 OpenRaster 功能。继续之前不会应用任何更改。
+OpenRaster keeps layers, folders, blend modes and opacity	OpenRaster 保留图层、文件夹、混合模式和不透明度
+These are flattened:	以下内容将被合并：
+This file was changed by another program.	此文件已被其他程序更改。
+Reload	重新载入
+Keep mine	保留我的版本
+Reloaded	已重新载入
+Box	裁剪框
+Perspective	透视
+Perspective Crop	透视裁剪
+Switch Crop Box / Perspective Crop	切换裁剪框 / 透视裁剪
+Switch between a crop box and perspective corners (Shift+C)	在裁剪框和透视角点之间切换 (Shift+C)
+Width of the straightened canvas	校正后画布的宽度
+Height of the straightened canvas	校正后画布的高度
+Work the size out from the corners: the average of opposite sides	根据角点计算尺寸：取对边长度的平均值
+Click four corners, or press Reset to start from the canvas	点击四个角点，或按“重置”从画布开始
+{} of 4 corners placed	已放置 {} / 4 个角点
+Drag the corners onto the edges, then press Enter to apply	将角点拖到边缘上，然后按 Enter 应用
+Put the corners back at the selection's bounds, or inset from the canvas edges	将角点放回选区边界，或画布边缘内侧
+Perspective Crop removed {} paths that reached the vanishing line	透视裁剪移除了 {} 条到达消失线的路径
+Drag the corners onto the edges of a page, screen or sign · Drag inside to move them · Enter straightens · Escape cancels · Shift+C switches to the box	将角点拖到页面、屏幕或标牌的边缘 · 在内部拖动以移动 · Enter 校正 · Escape 取消 · Shift+C 切换到裁剪框
+The crop's sides cross. Drag the corners so they go round the shape in order.	裁剪的边相互交叉。请拖动角点，使其按顺序环绕形状。
+The crop's corners must make a convex shape, with no corner pointing inwards or lying on a straight side.	裁剪的角点必须构成凸形，不能有角点向内凹或位于直边上。
+The crop's corners are too close together to straighten.	裁剪的角点彼此太近，无法校正。
+“{}” reaches the vanishing line of the crop's perspective, so it cannot be straightened. Move the corners closer together, or make the layer smaller first.	“{}”到达了裁剪透视的消失线，因此无法校正。请将角点移近，或先缩小该图层。
+Composite	复合
+Alpha	Alpha
+Channels	通道
+Select a pixel layer to see its channels	选择像素图层以查看其通道
+Click to edit every channel	单击以编辑所有通道
+Click to edit only this channel · Shift-click adds it · Ctrl-click loads it as a selection	单击仅编辑此通道 · Shift 单击添加 · Ctrl 单击载入为选区
+Editing every channel	正在编辑所有通道
+Editing channels:	正在编辑通道：
+Select a pixel layer to load its channel	选择像素图层以载入其通道
+Load Channel Selection	载入通道选区
+Paste into Channel	粘贴到通道
+Load Channel as Selection	将通道载入为选区
+Edit All Channels	编辑所有通道
+Edit Red Channel	编辑红色通道
+Edit Green Channel	编辑绿色通道
+Edit Blue Channel	编辑蓝色通道
+Edit Alpha Channel	编辑 Alpha 通道
+Colour Lookup	颜色查找
+Colour Lookup…	颜色查找…
+Colour lookup tables	颜色查找表
+Could not load the colour lookup table	无法载入颜色查找表
+Open an image before adding a colour lookup table	请先打开图像，再添加颜色查找表
+1D table, {} entries	1D 查找表，{} 个条目
+3D table, {} points a side	3D 查找表，每边 {} 个点
+Interpolation	插值
+Tetrahedral	四面体
+Trilinear	三线性
+Load Table…	载入查找表…
+Adjustment Presets…	调整预设…
+Adjustment Presets	调整预设
+Apply Adjustment Preset	应用调整预设
+Preset saved	预设已保存
+No presets yet. Select adjustment layers and save them below.	还没有预设。请选择调整图层，然后在下方保存。
+{} adjustment layers	{} 个调整图层
+Select adjustment layers to save them as a preset.	选择调整图层以将其保存为预设。
+Save the {} selected adjustment layers as a preset.	将所选的 {} 个调整图层保存为预设。
+Replaces the preset of this name.	将替换同名预设。
+Save Preset	保存预设
+Save the selected adjustment layer as a preset.	将所选的调整图层保存为预设。
+The border and spacing leave no room for the photos	边框和间距没有给照片留下空间
+Border	边框
+Cell	单元格
+Frame	相框
+One large, two small	一大两小
+One large above three	上一大下三小
+Images	图像
+The photos add up to more than {}, the most this computer opens at once	照片总计超过 {}，即此计算机一次可打开的上限
+Collage	拼图
+New Collage	新建拼图
+Some photos could not be added to the collage.	部分照片无法添加到拼图中。
+Collage Layout	拼图布局
+Collage layout	拼图布局
+New collage	新建拼图
+Create collage	创建拼图
+Photos in a grid of cells. Each cell is a folder with its photo clipped to a frame, so everything stays editable.	照片排列在网格单元格中。每个单元格都是一个文件夹，照片剪贴到相框中，因此一切都可继续编辑。
+Layout	布局
+Columns	列数
+Rows	行数
+Corner radius	圆角半径
+Border colour	边框颜色
+Choose photos…	选择照片…
+Clear photos	清除照片
+No photos yet: drop or import images into the cells later.	尚无照片：稍后可将图像拖放或导入到单元格中。
+{} photos; the first {} fill the cells	{} 张照片；前 {} 张填入单元格
+Photos: {}	照片：{}
+Photos follow their cells. Cells the new layout does not have are removed with their photos.	照片随其单元格移动。新布局中没有的单元格会连同其照片一起移除。
+Place in Cell	放入单元格
+New Collage…	新建拼图…
+Collage Layout…	拼图布局…
+Units	单位
+Pixels	像素
+Inches	英寸
+Centimetres	厘米
+Millimetres	毫米
+Points	点
+Picas	派卡
+Percent	百分比
+Pixels/inch	像素/英寸
+Pixels/cm	像素/厘米
+Resample	重新采样
+Off, the pixels stay as they are: Width, Height and Resolution change only the print size	关闭时像素保持不变：宽度、高度和分辨率只改变打印尺寸
+Relative	相对
+Width and Height are added to the current size	宽度和高度加到当前尺寸上
+MP	百万像素
+Units & Rulers	单位与标尺
+Units for the rulers and for resolutions	标尺和分辨率的单位
+What View → Rulers measure in. Print units use the document's resolution; percent is of its width or height. Right-click a ruler to change it there.	视图 → 标尺使用的单位。打印单位按文档分辨率换算；百分比相对于文档的宽度或高度。也可右键单击标尺来更改。
+How New Canvas, Canvas Size and Image Size show resolutions. Width and Height have their own Units menu in those dialogs.	新建画布、画布大小和图像大小中分辨率的显示方式。宽度和高度在这些对话框中有各自的单位菜单。
+Camera Raw Filter…	Camera Raw 滤镜…
+Camera Raw Filter	Camera Raw 滤镜
+Camera Raw	Camera Raw
+Camera Raw Filter applied	已应用 Camera Raw 滤镜
+Camera Raw Filter cancelled	已取消 Camera Raw 滤镜
+RAW development cancelled	已取消 RAW 冲洗
+Applying the Camera Raw Filter…	正在应用 Camera Raw 滤镜…
+Reading the layer…	正在读取图层…
+Camera Raw Filter · 32-bit float processing · Apply changes this layer	Camera Raw 滤镜 · 32 位浮点处理 · 应用后修改此图层
+Unable to filter this layer	无法对此图层应用滤镜
+Opening the layer…	正在打开图层…
+Apply the Camera Raw Filter to keep your adjustments, or discard them and leave the layer as it was.	应用 Camera Raw 滤镜以保留调整，或放弃调整并保持图层不变。
+Optics	光学
+The Camera Raw Filter changes a layer's pixels, not its mask	Camera Raw 滤镜修改图层的像素，而不是蒙版
+Select an unlocked layer with pixels. RAW layers open in Develop.	请选择未锁定且有像素的图层。RAW 图层请在冲洗中打开。
+The layer is no longer available	该图层已不存在
+Check for Updates…	检查更新…
+Check for updates	检查更新
+Once a day, ask GitHub whether a newer release of Xuan is out, and show its release notes. Only that request is sent, and nothing is downloaded or installed. Help → Check for Updates… checks now.	每天询问一次 GitHub 是否发布了更新版本的 Xuan，并显示其发行说明。只发送这一个请求，也不会自动下载或安装任何内容。“帮助 → 检查更新…”可立即检查。
+Software update	软件更新
+Checking for updates…	正在检查更新…
+Xuan is up to date.	Xuan 已是最新版本。
+Couldn't check for updates.	无法检查更新。
+Check your connection and try again later.	请检查网络连接，稍后再试。
+A new version of Xuan is available.	有新版本的 Xuan 可用。
+New version	新版本
+Installed version	当前版本
+Download opens the release page in your browser. Nothing is downloaded or installed until you choose a file there.	“下载”会在浏览器中打开发布页面。在你选择文件之前，不会下载或安装任何内容。
+Later	稍后
+Skip This Version	跳过此版本
+This release has no notes.	此版本没有发行说明。
+The update check stopped unexpectedly.	更新检查意外停止。
+Font, colour, bold and italic change the {} selected letters	字体、颜色、粗体和斜体只更改所选的 {} 个字符
+Run	运行
+for	为
+asks to run another plugin's action for its client:	请求为其客户端运行另一个插件的操作：
+A run can send document data there and may use paid credits.	运行时可能会将文档数据发送到那里，并可能消耗付费额度。
+It runs as if you chose it from the menu: the other plugin's own prompts still apply, and its result is a proposal you accept or discard. Allow holds for this session's runs of that plugin until the asking plugin stops.	它会像你从菜单中选择一样运行：另一个插件自己的提示仍然适用，其结果是一个由你接受或放弃的提议。“允许”对本次会话中该插件的运行有效，直到发出请求的插件停止。
+Always Allow lets the plugin run other plugins' actions without this prompt until you turn it off in Plugins → Manage Plugins….	“始终允许”让该插件不经此提示运行其他插件的操作，直到你在“插件 → 管理插件…”中将其关闭。
+Regions:	区域：
+Result: a new layer	结果：新图层
+Result: a new document	结果：新文档
+On the layers:	作用于图层：
+Run other plugins' actions	运行其他插件的操作
+Off: the plugin cannot list or start other plugins' actions. On: it can, and Xuan asks you before its first run of each plugin in each session. The other plugin's own permission, send and model prompts still apply, and its result is a proposal you accept or discard.	关闭：该插件无法列出或启动其他插件的操作。开启：可以，且 Xuan 会在每个会话中首次运行某个插件的操作之前询问你。另一个插件自己的权限、发送和模型提示仍然适用，其结果是一个由你接受或放弃的提议。
+Run them without asking	不经询问直接运行
+On: no prompt before the plugin's runs of other plugins' actions. The other plugin's own prompts still apply.	开启：该插件运行其他插件的操作之前不再提示。另一个插件自己的提示仍然适用。
+Started by	启动者：
+started this run for its client.	为其客户端启动了此次运行。
+Started	已启动
+The plugin was stopped	插件已停止
+Colours measured in the image	从图像中测得的颜色
+The image's histogram	图像的直方图
+Unsharp Mask	USM 锐化

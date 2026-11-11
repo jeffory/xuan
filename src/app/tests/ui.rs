@@ -24,6 +24,9 @@ mod palette;
 #[path = "ui_appearance.rs"]
 mod appearance;
 
+#[path = "ui_language.rs"]
+mod language;
+
 #[path = "ui_empty_state.rs"]
 mod empty_state;
 
@@ -33,8 +36,20 @@ mod recent;
 #[path = "ui_tabs.rs"]
 mod tabs;
 
+#[path = "ui_reload.rs"]
+mod reload;
+
 #[path = "ui_dialogs.rs"]
 mod dialogs;
+
+#[path = "ui_units.rs"]
+mod units;
+
+#[path = "ui_canvas_presets.rs"]
+mod canvas_presets;
+
+#[path = "ui_updates.rs"]
+mod updates;
 
 #[path = "ui_settings_shortcuts.rs"]
 mod settings_shortcuts;
@@ -47,6 +62,45 @@ mod polish;
 
 #[path = "ui_focus.rs"]
 mod focus;
+
+#[path = "ui_crop.rs"]
+mod crop;
+
+#[path = "ui_perspective_crop.rs"]
+mod perspective_crop;
+
+#[path = "ui_liquify.rs"]
+mod liquify;
+
+#[path = "ui_channels.rs"]
+mod channels;
+
+#[path = "ui_color_lookup.rs"]
+mod color_lookup;
+
+#[path = "ui_adjustment_presets.rs"]
+mod adjustment_presets;
+
+#[path = "ui_collage.rs"]
+mod collage;
+
+#[path = "ui_camera_raw.rs"]
+mod camera_raw;
+
+#[path = "ui_text_runs.rs"]
+mod text_runs;
+
+#[path = "ui_paths.rs"]
+mod paths;
+
+#[path = "ui_mac_keys.rs"]
+mod mac_keys;
+
+#[path = "ui_anchor.rs"]
+mod anchor;
+
+#[path = "ui_curves.rs"]
+mod curves;
 
 #[cfg(target_os = "linux")]
 #[path = "ui_window_buttons.rs"]
@@ -344,6 +398,28 @@ fn file_menu_quit_with_unsaved_changes_prompts_instead_of_closing() {
     ui.click("Cancel");
     assert!(!ui.app().close_app);
     assert_eq!(ui.app().sessions.len(), 1);
+}
+
+/// Quitting with unsaved work names each project that has changes, and only those (issue 91).
+#[test]
+fn quitting_lists_the_unsaved_projects() {
+    let mut ui = dirty_document();
+    ui.app_mut().sessions[0].title = "Poster".into();
+    for (title, dirty) in [("Sketch", false), ("Banner", true)] {
+        ui.app_mut().new_document();
+        ui.app_mut().sessions.last_mut().unwrap().title = title.into();
+        if dirty {
+            ui.app_mut().command("fill_fg");
+        }
+    }
+    ui.settle();
+    ui.open_menu("File");
+    ui.click_and_stop(QUIT);
+    ui.settle();
+    assert!(ui.has("Save your changes?"));
+    assert!(ui.has("• Poster") && ui.has("• Banner"));
+    assert!(!ui.has("• Sketch"), "a saved project is not listed");
+    ui.click("Cancel");
 }
 
 #[test]
@@ -723,15 +799,54 @@ mod layer_appearance {
 
     /// Focuses the layer panel's opacity slider (the slider level with the "Opacity" label).
     fn focus_opacity(ui: &mut UiTest) {
-        let label = ui.harness.get_by_label("Opacity").rect().center().y;
+        focus_slider(ui, "Opacity");
+    }
+
+    /// Focuses the layer panel's slider level with `label`, which must be enabled.
+    fn focus_slider(ui: &mut UiTest, label: &str) {
+        assert!(slider_enabled(ui, label), "{label} is disabled");
+        let y = ui.harness.get_by_label(label).rect().center().y;
         let slider = ui
             .harness
             .get_all_by_role(Role::Slider)
-            .find(|slider| (slider.rect().center().y - label).abs() < 12.0)
-            .expect("an opacity slider");
-        assert!(!slider.accesskit_node().is_disabled());
+            .find(|slider| (slider.rect().center().y - y).abs() < 12.0)
+            .unwrap();
         slider.focus();
         ui.settle();
+    }
+
+    fn slider_enabled(ui: &UiTest, label: &str) -> bool {
+        let y = ui.harness.get_by_label(label).rect().center().y;
+        let slider = ui
+            .harness
+            .get_all_by_role(Role::Slider)
+            .find(|slider| (slider.rect().center().y - y).abs() < 12.0)
+            .unwrap_or_else(|| panic!("a {label} slider"));
+        !slider.accesskit_node().is_disabled()
+    }
+
+    /// Fill sits under Opacity and changes only the fill, one undo step per change; folders
+    /// have none.
+    #[test]
+    fn fill_is_set_apart_from_opacity_on_pixel_layers() {
+        let mut ui = UiTest::with_document();
+        let opacity = ui.harness.get_by_label("Opacity").rect().center().y;
+        assert!(ui.harness.get_by_label("Fill").rect().center().y > opacity);
+        focus_slider(&mut ui, "Fill");
+        for _ in 0..10 {
+            ui.key(Key::ArrowLeft);
+        }
+        let fill = active(&ui).fill;
+        assert!(fill < 1.0, "{fill}");
+        assert_eq!(active(&ui).opacity, 1.0);
+        ui.app_mut().command("undo");
+        ui.settle();
+        assert!(active(&ui).fill > fill);
+        ui.app_mut().command("group");
+        ui.settle();
+        assert!(active(&ui).group);
+        assert!(!slider_enabled(&ui, "Fill"));
+        assert!(slider_enabled(&ui, "Opacity"));
     }
 
     fn active(ui: &UiTest) -> &xuan::document::Layer {
@@ -986,7 +1101,7 @@ mod layer_appearance {
 
 mod window_menu {
     use super::*;
-    use xuan::panes::{LAYERS, NAVIGATOR};
+    use xuan::panes::{CHANNELS, LAYERS, NAVIGATOR};
 
     fn ids(ui: &UiTest) -> Vec<String> {
         ui.app()
@@ -1003,7 +1118,7 @@ mod window_menu {
         let directory = tempfile::tempdir().unwrap();
         let mut ui = UiTest::with_document();
         ui.isolate_config(directory.path());
-        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        assert_eq!(ids(&ui), [NAVIGATOR, CHANNELS, LAYERS]);
         // Its header is the sidebar's, and its body draws the thumbnail.
         assert!(ui.has("Navigator"));
         assert_eq!(ui.app().session().unwrap().navigator.renders, 1);
@@ -1024,11 +1139,11 @@ mod window_menu {
         assert!(saved.panes.get(NAVIGATOR).unwrap().hidden);
 
         // Reset Panel Layout brings it back above Layers.
-        ui.app_mut().config.panes.move_pane(0, 2);
-        assert_eq!(ids(&ui), [LAYERS, NAVIGATOR]);
+        ui.app_mut().config.panes.move_pane(0, 3);
+        assert_eq!(ids(&ui), [CHANNELS, LAYERS, NAVIGATOR]);
         ui.open_menu("Window");
         ui.click("Reset Panel Layout");
-        assert_eq!(ids(&ui), [NAVIGATOR, LAYERS]);
+        assert_eq!(ids(&ui), [NAVIGATOR, CHANNELS, LAYERS]);
         assert!(!ui.app().config.panes.get(NAVIGATOR).unwrap().hidden);
         assert!(ui.has("Navigator"));
     }
@@ -1147,6 +1262,62 @@ mod about {
         assert!(ui.has("Copy version"));
         ui.click("Copy version");
     }
+
+    #[test]
+    fn about_links_open_the_project_licences_and_issue_tracker() {
+        let mut ui = UiTest::new();
+        ui.app_mut().dialog = Some(Dialog::About);
+        ui.settle();
+        assert!(ui.has("Xuan"));
+        let site = format!("https://github.com/{}", xuan::update::REPOSITORY);
+        for (label, url) in [
+            ("Project site", site.clone()),
+            (
+                "Licences and third-party notices",
+                crate::app::dialogs::about_links(
+                    xuan::update::REPOSITORY,
+                    &xuan::buildinfo::current(),
+                )[1]
+                .1
+                .clone(),
+            ),
+            ("Report a bug", format!("{site}/issues/new")),
+        ] {
+            ui.click_and_stop(label);
+            let opened = ui
+                .harness
+                .output()
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::OpenUrl(open) => Some(open.url.clone()),
+                    _ => None,
+                });
+            assert_eq!(opened, Some(url), "{label}");
+            ui.settle();
+        }
+    }
+
+    #[test]
+    fn about_links_the_notices_at_the_release_tag_or_main() {
+        use crate::app::dialogs::about_links;
+        let mut build = xuan::buildinfo::current();
+        build.release = true;
+        build.version = "1.2.3";
+        let links = about_links("jeffory/xuan", &build);
+        assert_eq!(links[0].1, "https://github.com/jeffory/xuan");
+        assert_eq!(
+            links[1].1,
+            "https://github.com/jeffory/xuan/blob/v1.2.3/THIRD_PARTY.md"
+        );
+        assert_eq!(links[2].1, "https://github.com/jeffory/xuan/issues/new");
+        build.release = false;
+        assert_eq!(
+            about_links("jeffory/xuan", &build)[1].1,
+            "https://github.com/jeffory/xuan/blob/main/THIRD_PARTY.md"
+        );
+    }
 }
 
 mod color_range {
@@ -1209,6 +1380,24 @@ mod color_range {
         assert_eq!(ui.app().session().unwrap().history.revision, revision + 1);
         // The tool from before is back.
         assert_ne!(ui.app().tool, Tool::Dropper);
+    }
+
+    #[test]
+    fn the_hint_sits_inside_the_empty_matte_until_a_pick() {
+        let mut ui = halves();
+        ui.open_menu("Select");
+        ui.click("Colour Range…");
+        let hint = "Click the image to pick the colour to select.";
+        let node = ui.harness.get_by_label(hint).rect();
+        // The hint is the matte preview itself, between the mode buttons and Fuzziness.
+        let fuzziness = ui.harness.get_by_label("Fuzziness").rect();
+        let pick = ui.harness.get_by_label("Pick").rect();
+        assert!(node.height() > 100.0, "{node:?}");
+        assert!(node.top() > pick.bottom() && node.bottom() < fuzziness.top());
+        let pos = at(&ui, 3.5, 4.5);
+        ui.click_at(pos);
+        assert!(!ui.has(hint));
+        assert!(ui.has("Shift-click adds a colour, Alt-click takes one away."));
     }
 
     #[test]
@@ -1303,6 +1492,7 @@ mod status_bar {
             provider: None,
             surface: None,
             ai_boxes: Vec::new(),
+            caller: None,
         }
     }
 

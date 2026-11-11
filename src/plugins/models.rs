@@ -82,9 +82,12 @@ pub trait Transport: Send + Sync {
 /// [`Transport`] over https with rustls, checking certificates against the
 /// system's trust store. Timeouts bound connecting and the wait for the
 /// response; the body may take as long as a slow link needs for the
-/// declared size, and the user can cancel.
+/// declared size, and the user can cancel. [`Https::with_limit`] bounds the
+/// whole request instead, for small replies such as the update check's.
 pub struct Https {
     agent: ureq::Agent,
+    /// The most one request may take, body included, when set.
+    limit: Option<Duration>,
 }
 
 impl Https {
@@ -122,7 +125,15 @@ impl Https {
             .build();
         Self {
             agent: config.into(),
+            limit: None,
         }
+    }
+
+    /// Give up on any request that has not finished within `limit`,
+    /// connecting and reading the body included.
+    pub fn with_limit(mut self, limit: Duration) -> Self {
+        self.limit = Some(limit);
+        self
     }
 }
 
@@ -141,6 +152,7 @@ impl Transport for Https {
             .get(url.as_str())
             .config()
             .timeout_recv_body(Some(body_time))
+            .timeout_global(self.limit)
             .build()
             .call()
             .with_context(|| format!("Cannot download {url}"))?;
@@ -192,6 +204,46 @@ impl std::fmt::Display for Cancelled {
 
 impl std::error::Error for Cancelled {}
 
+/// GET `url` with `transport`, following at most [`MAX_REDIRECTS`]
+/// redirects, each of which must stay on https. Returns the URL that
+/// answered and its reply, whatever its status. `size` is passed on to
+/// [`Transport::get`]; `cancelled` is asked before each request.
+pub fn follow(
+    transport: &dyn Transport,
+    mut url: Url,
+    size: u64,
+    cancelled: impl Fn() -> bool,
+) -> Result<(Url, Reply)> {
+    ensure!(url.scheme() == "https", "{url} is not an https URL");
+    let start = url.clone();
+    let mut redirects = 0;
+    loop {
+        if cancelled() {
+            bail!(Cancelled);
+        }
+        let reply = transport.get(&url, size)?;
+        if !matches!(reply.status, 301 | 302 | 303 | 307 | 308) {
+            return Ok((url, reply));
+        }
+        redirects += 1;
+        ensure!(
+            redirects <= MAX_REDIRECTS,
+            "{start} redirected more than {MAX_REDIRECTS} times"
+        );
+        let location = reply
+            .location
+            .with_context(|| format!("{url} redirected without a location"))?;
+        let next = url
+            .join(&location)
+            .with_context(|| format!("{url} redirected to an invalid location"))?;
+        ensure!(
+            next.scheme() == "https",
+            "{url} redirected to {next}, which is not https; Xuan only downloads over https"
+        );
+        url = next;
+    }
+}
+
 /// Download `model` into `dir` and verify it. On success the verified file
 /// is at [`model_path`], replacing any earlier one; on any failure, or when
 /// cancelled, the partial file is removed and an earlier file is untouched.
@@ -216,35 +268,8 @@ fn fetch(
     part: &Path,
     progress: &Progress,
 ) -> Result<PathBuf> {
-    let mut url = Url::parse(&model.url).context("The model URL is invalid")?;
-    ensure!(url.scheme() == "https", "{url} is not an https URL");
-    let mut redirects = 0;
-    let reply = loop {
-        if progress.cancelled() {
-            bail!(Cancelled);
-        }
-        let reply = transport.get(&url, model.size)?;
-        if !matches!(reply.status, 301 | 302 | 303 | 307 | 308) {
-            break reply;
-        }
-        redirects += 1;
-        ensure!(
-            redirects <= MAX_REDIRECTS,
-            "{} redirected more than {MAX_REDIRECTS} times",
-            model.url
-        );
-        let location = reply
-            .location
-            .with_context(|| format!("{url} redirected without a location"))?;
-        let next = url
-            .join(&location)
-            .with_context(|| format!("{url} redirected to an invalid location"))?;
-        ensure!(
-            next.scheme() == "https",
-            "{url} redirected to {next}, which is not https; Xuan only downloads models over https"
-        );
-        url = next;
-    };
+    let url = Url::parse(&model.url).context("The model URL is invalid")?;
+    let (url, reply) = follow(transport, url, model.size, || progress.cancelled())?;
     ensure!(
         reply.status == 200,
         "{url} answered with HTTP status {}",

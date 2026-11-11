@@ -4,7 +4,7 @@ use super::theme::PaletteExt as _;
 use egui::RichText;
 use serde_json::Value;
 use xuan::{
-    i18n::tr,
+    i18n::{tr, tr_args, tr_plural},
     plugins::{
         manifest::{Input, InputKind, Manifest, ResultInto, Surface},
         sandbox,
@@ -35,6 +35,15 @@ pub(super) fn input_id(input: &Input, salt: impl std::hash::Hash) -> egui::Id {
 }
 
 /// Draw one input and update its JSON value. Returns whether it changed.
+/// The most whole numbers a slider offers: an integer input with a wider range, such as a port
+/// (0–65535), gets a number field, where a value can be typed rather than hunted for.
+pub(super) const SLIDER_MAX_STEPS: f64 = 10_000.0;
+
+/// Whether an input with this range is a slider rather than a number field.
+pub(super) fn slider_fits(integer: bool, min: f64, max: f64) -> bool {
+    !integer || max - min <= SLIDER_MAX_STEPS
+}
+
 pub(super) fn input_widget(
     ui: &mut egui::Ui,
     input: &Input,
@@ -106,7 +115,9 @@ pub(super) fn input_widget(
                 let max = input
                     .max
                     .unwrap_or(if integer { i64::MAX as f64 } else { f64::MAX });
-                let response = if let (Some(min), Some(max)) = (input.min, input.max) {
+                let response = if let (Some(min), Some(max)) = (input.min, input.max)
+                    && slider_fits(integer, min, max)
+                {
                     ui.spacing_mut().slider_width = 140.0;
                     let mut slider = widgets::Slider::new(&mut number, min..=max);
                     if integer {
@@ -496,6 +507,8 @@ impl EditorApp {
         let mut ask_again: Option<String> = None;
         let mut auto_mode: Option<(String, bool)> = None;
         let mut save_mode: Option<(String, bool)> = None;
+        let mut run_mode: Option<(String, bool)> = None;
+        let mut run_auto: Option<(String, bool)> = None;
         let mut offline = self.config.disable_network_plugins;
         let mut block = self.config.block_undeclared_network();
         let plugin_dir = self
@@ -591,14 +604,18 @@ impl EditorApp {
                         ui.add_space(4.0);
                         let folder = grant_folder_text(&super::plugins::grant_for(manifest).dir, &manifest.dir);
                         ui.label(RichText::new(folder).small().color(ui.palette().muted));
-                        let status = if self.plugin_offline(&id) {
-                            tr("Off: plugins that use the network are disabled")
+                        let (status, dot) = if self.plugin_offline(&id) {
+                            (tr("Off: plugins that use the network are disabled"), ui.palette().warning)
                         } else if self.plugins.running(&id) {
-                            tr("Running")
+                            (tr("Running"), ui.palette().accent)
                         } else {
-                            tr("Not running")
+                            (tr("Not running"), ui.palette().muted)
                         };
-                        ui.label(RichText::new(status).small().color(ui.palette().muted));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            widgets::status_dot(ui, dot);
+                            ui.label(RichText::new(status).small().color(ui.palette().muted));
+                        });
                         ui.add_space(8.0);
                         {
                             widgets::subheading(ui, tr("Permissions"));
@@ -649,6 +666,31 @@ impl EditorApp {
                                     save_mode = Some((id.clone(), save));
                                 }
                             }
+                            // Running other plugins' actions, offered like
+                            // saving without asking.
+                            if self.plugin_granted(&id)
+                                && (self.asks_before_edits(&id) || self.runs_other_actions(&id))
+                            {
+                                let mut run = self.runs_other_actions(&id);
+                                if widgets::checkbox(ui, &mut run, tr("Run other plugins' actions"))
+                                    .on_hover_text(tr("Off: the plugin cannot list or start other plugins' actions. On: it can, and Xuan asks you before its first run of each plugin in each session. The other plugin's own permission, send and model prompts still apply, and its result is a proposal you accept or discard."))
+                                    .changed()
+                                {
+                                    run_mode = Some((id.clone(), run));
+                                }
+                                if run {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(18.0);
+                                        let mut always = self.runs_without_asking(&id);
+                                        if widgets::checkbox(ui, &mut always, tr("Run them without asking"))
+                                            .on_hover_text(tr("On: no prompt before the plugin's runs of other plugins' actions. The other plugin's own prompts still apply."))
+                                            .changed()
+                                        {
+                                            run_auto = Some((id.clone(), always));
+                                        }
+                                    });
+                                }
+                            }
                             ui.add_space(8.0);
                         }
                         if !manifest.settings.is_empty() {
@@ -685,9 +727,9 @@ impl EditorApp {
                         self.plugin_models_section(ui, manifest);
                         let summary = format!(
                             "{} · {} · {}",
-                            counted(manifest.actions.len(), "action", "actions"),
-                            counted(manifest.panes.len(), "pane", "panes"),
-                            counted(manifest.formats.len(), "format", "formats")
+                            tr_plural("{n} actions", manifest.actions.len() as u64),
+                            tr_plural("{n} panes", manifest.panes.len() as u64),
+                            tr_plural("{n} formats", manifest.formats.len() as u64)
                         );
                         ui.label(RichText::new(summary).small().color(ui.palette().muted));
                         let log = self.plugins.log(&id);
@@ -771,6 +813,12 @@ impl EditorApp {
         if let Some((id, on)) = save_mode {
             self.set_save_without_asking(&id, on);
         }
+        if let Some((id, on)) = run_mode {
+            self.set_run_other_actions(&id, on);
+        }
+        if let Some((id, on)) = run_auto {
+            self.set_run_without_asking(&id, on);
+        }
         if offline != self.config.disable_network_plugins {
             self.set_network_plugins_disabled(offline);
         }
@@ -832,6 +880,10 @@ impl EditorApp {
             progress: job.progress,
             message: job.message.clone(),
             document: Some(job.document),
+            started_by: job
+                .caller
+                .as_ref()
+                .map(|caller| self.plugins.source(caller)),
         });
         let formats = self.plugins.formats.iter().map(|job| RunningJob {
             id: job.id,
@@ -839,6 +891,7 @@ impl EditorApp {
             progress: None,
             message: String::new(),
             document: None,
+            started_by: None,
         });
         let models = self.plugins.model_jobs.iter().map(|job| RunningJob {
             id: job.id,
@@ -850,6 +903,7 @@ impl EditorApp {
                 super::plugin_models::format_size(job.size)
             ),
             document: None,
+            started_by: None,
         });
         actions.chain(formats).chain(models).collect()
     }
@@ -864,15 +918,21 @@ impl EditorApp {
         }
     }
 
+    /// Which of the running jobs the status bar shows: the first one for
+    /// the current document, else the oldest.
+    pub(super) fn shown_job(&self, jobs: &[RunningJob]) -> usize {
+        let current = self.session().map(|s| s.document.id);
+        (jobs.iter())
+            .position(|job| current.is_some() && job.document == current)
+            .unwrap_or(0)
+    }
+
     /// The running jobs at the right of the status bar, laid out right to
     /// left: Cancel, progress, a count that lists every job when there are
     /// several, then the job's name and message. The job shown is the first
     /// one for the current document, else the oldest.
     pub(super) fn job_status(&mut self, ui: &mut egui::Ui, jobs: &[RunningJob]) {
-        let current = self.session().map(|s| s.document.id);
-        let index = (jobs.iter())
-            .position(|job| current.is_some() && job.document == current)
-            .unwrap_or(0);
+        let index = self.shown_job(jobs);
         let Some(job) = jobs.get(index) else {
             return;
         };
@@ -883,9 +943,13 @@ impl EditorApp {
         }
         progress_indicator(ui, job.progress, 120.0);
         if jobs.len() > 1 {
-            let count = tr("{index} of {count}")
-                .replace("{index}", &(index + 1).to_string())
-                .replace("{count}", &jobs.len().to_string());
+            let count = tr_args(
+                "{index} of {count}",
+                &[
+                    ("index", &(index + 1).to_string()),
+                    ("count", &jobs.len().to_string()),
+                ],
+            );
             let button = widgets::button(ui, count).on_hover_text(tr("Show all running jobs"));
             egui::Popup::menu(&button).show(|ui| {
                 ui.set_min_width(280.0);
@@ -899,6 +963,16 @@ impl EditorApp {
                         });
                     });
                     progress_indicator(ui, job.progress, 280.0);
+                    if let Some(started_by) = &job.started_by {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{} {started_by}", tr("Started by")))
+                                    .small()
+                                    .color(muted),
+                            )
+                            .wrap(),
+                        );
+                    }
                     if !job.message.is_empty() {
                         ui.add(
                             egui::Label::new(RichText::new(&job.message).small().color(muted))
@@ -914,7 +988,11 @@ impl EditorApp {
         } else {
             format!("{} · {}", job.label, job.message)
         };
-        ui.add(egui::Label::new(RichText::new(text).size(11.0)).truncate());
+        let label = ui.add(egui::Label::new(RichText::new(text).size(11.0)).truncate());
+        // A job another plugin started says which, as the user did not.
+        if let Some(started_by) = &job.started_by {
+            label.on_hover_text(format!("{} {started_by}", tr("Started by")));
+        }
         if let Some(id) = cancel {
             self.cancel_running_job(id);
         }
@@ -981,11 +1059,6 @@ impl EditorApp {
             self.resolve_proposal(false);
         }
     }
-}
-
-/// "1 pane" or "2 panes".
-fn counted(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", tr(if count == 1 { one } else { many }))
 }
 
 /// Width of the bullet column, so wrapped lines hang under the first.
@@ -1131,6 +1204,9 @@ pub(super) struct RunningJob {
     pub message: String,
     /// The document a plugin action works on.
     pub document: Option<uuid::Uuid>,
+    /// The plugin that started it with `host/run`, as the status bar names
+    /// it, or `None` when the user did.
+    pub started_by: Option<String>,
 }
 
 /// A progress bar once the job reports a fraction, a spinner until then.
@@ -1152,6 +1228,18 @@ fn progress_indicator(ui: &mut egui::Ui, progress: Option<f32>, width: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_integer_ranges_get_a_number_field() {
+        // Percentages, pixel padding and timeouts stay sliders.
+        assert!(slider_fits(true, 0.0, 100.0));
+        assert!(slider_fits(true, 30.0, 3600.0));
+        assert!(slider_fits(true, 0.0, SLIDER_MAX_STEPS));
+        // A port does not.
+        assert!(!slider_fits(true, 0.0, 65535.0));
+        // Fractional numbers slide smoothly whatever their range.
+        assert!(slider_fits(false, 0.0, 65535.0));
+    }
 
     #[test]
     fn settings_values_convert_to_toml() {

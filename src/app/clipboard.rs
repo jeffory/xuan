@@ -4,7 +4,8 @@ use xuan::i18n::tr;
 use anyhow::{Context, Result, ensure};
 use image::RgbaImage;
 use url::Url;
-use xuan::{document::validate_size, io};
+use uuid::Uuid;
+use xuan::{document::validate_size, io, operations};
 
 use super::{Document, EditorApp, Layer, Point, Session};
 
@@ -13,6 +14,24 @@ pub(super) enum ClipboardContent {
     Files(Vec<PathBuf>),
     Empty,
     Unavailable,
+}
+
+/// Layers copied whole (Ctrl+C without a selection): the document as it was then, and the
+/// copied layers that no other copied layer contains.
+#[derive(Clone)]
+pub(super) struct CopiedLayers {
+    pub(super) document: Document,
+    pub(super) roots: Vec<Uuid>,
+}
+
+/// Whether the system clipboard still holds the pixels Xuan last put there, so the copy kept
+/// within Xuan (their position, or the whole layers) is newer than anything another app copied.
+fn holds_own_copy(cached: Option<&RgbaImage>, content: &ClipboardContent) -> bool {
+    match content {
+        ClipboardContent::Image(pixels) => cached == Some(pixels),
+        ClipboardContent::Unavailable => cached.is_some(),
+        ClipboardContent::Files(_) | ClipboardContent::Empty => false,
+    }
 }
 
 /// File managers can offer URI lists, GNOME copy/cut lists, or absolute paths.
@@ -112,6 +131,26 @@ impl EditorApp {
         }
     }
 
+    /// The size of the image on the clipboard, for File → New's Clipboard preset: the system
+    /// clipboard's, or the pixels last copied within Xuan when there is no system clipboard.
+    pub(super) fn clipboard_image_size(&mut self) -> Option<[u32; 2]> {
+        // Tests never read the developer's own clipboard.
+        #[cfg(not(test))]
+        {
+            self.connect_clipboard();
+            if let Some(clipboard) = &mut self.system_clipboard {
+                let image = clipboard.get_image().ok()?;
+                let size = [
+                    u32::try_from(image.width).ok()?,
+                    u32::try_from(image.height).ok()?,
+                ];
+                return validate_size(size[0], size[1]).is_ok().then_some(size);
+            }
+        }
+        let (pixels, _) = self.clipboard.as_ref()?;
+        Some([pixels.width(), pixels.height()])
+    }
+
     pub(super) fn paste_clipboard(&mut self, text: Option<&str>) {
         self.connect_clipboard();
         match read_clipboard(self.system_clipboard.as_mut(), text) {
@@ -181,6 +220,19 @@ impl EditorApp {
     }
 
     pub(super) fn paste_content(&mut self, content: ClipboardContent) {
+        if !holds_own_copy(self.clipboard.as_ref().map(|(pixels, _)| pixels), &content) {
+            self.copied_layers = None;
+        } else if let Some(copied) = self.copied_layers.clone() {
+            if self.sessions.is_empty() {
+                self.dimensions = [copied.document.width, copied.document.height];
+                self.new_document();
+            }
+            self.edit(tr("Paste Layers"), |doc| {
+                operations::paste_layers(&copied.document, &copied.roots, doc)
+            });
+            self.mask_target = false;
+            return;
+        }
         let images = match content {
             ClipboardContent::Image(pixels) => {
                 let point = self
@@ -195,10 +247,12 @@ impl EditorApp {
             }
             ClipboardContent::Files(paths) => {
                 self.clipboard = None;
-                if paths
-                    .iter()
-                    .any(|p| xuan::raw::is_raw(p) || io::is_photoshop(p))
-                {
+                if paths.iter().any(|p| {
+                    xuan::raw::is_raw(p)
+                        || io::is_photoshop(p)
+                        || io::is_openraster(p)
+                        || io::is_svg(p)
+                }) {
                     for path in paths {
                         self.open_path(&path, true);
                     }
@@ -256,6 +310,26 @@ impl EditorApp {
             ];
             self.new_document();
         }
+        // One image pasted while one channel is targeted goes into that channel.
+        let channel = self
+            .session()
+            .filter(|s| s.document.active().is_some_and(xuan::channels::editable))
+            .and_then(|s| s.channel_targets.single())
+            .filter(|_| images.len() == 1 && !self.mask_target);
+        if let Some(channel) = channel {
+            let (_, pixels, point) = images.into_iter().next().expect("one image");
+            self.edit(tr("Paste into Channel"), |doc| {
+                let point = point.unwrap_or_else(|| {
+                    // Centred on whole pixels, so each pixel lands on one.
+                    Point::new(
+                        ((doc.width as f32 - pixels.width() as f32) * 0.5).floor(),
+                        ((doc.height as f32 - pixels.height() as f32) * 0.5).floor(),
+                    )
+                });
+                xuan::channels::paste(doc, channel, &pixels, point)
+            });
+            return;
+        }
         self.edit(tr("Paste"), |doc| {
             for (name, pixels, point) in images {
                 let mut layer = Layer::image(name, pixels);
@@ -297,6 +371,24 @@ mod tests {
             file_paths("cut\n/tmp/a b.png\n/tmp/c.jpg").unwrap(),
             [PathBuf::from("/tmp/a b.png"), PathBuf::from("/tmp/c.jpg")]
         );
+    }
+
+    #[test]
+    fn own_copies_are_newer_only_while_the_system_clipboard_holds_their_pixels() {
+        let ours = RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]));
+        let theirs = RgbaImage::from_pixel(2, 2, image::Rgba([3, 2, 1, 255]));
+        let image = |pixels: &RgbaImage| ClipboardContent::Image(pixels.clone());
+        assert!(holds_own_copy(Some(&ours), &image(&ours)));
+        assert!(!holds_own_copy(Some(&ours), &image(&theirs)));
+        assert!(!holds_own_copy(None, &image(&ours)));
+        // Without a system clipboard, only Xuan's own copy is there to paste.
+        assert!(holds_own_copy(Some(&ours), &ClipboardContent::Unavailable));
+        assert!(!holds_own_copy(None, &ClipboardContent::Unavailable));
+        assert!(!holds_own_copy(Some(&ours), &ClipboardContent::Empty));
+        assert!(!holds_own_copy(
+            Some(&ours),
+            &ClipboardContent::Files(vec![PathBuf::from("/tmp/a.png")])
+        ));
     }
 
     #[test]

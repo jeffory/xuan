@@ -1,16 +1,18 @@
 use super::widgets;
-use std::{io::Cursor, sync::Arc};
+use std::sync::Arc;
+use xuan::canvas_presets as presets;
 use xuan::i18n::tr;
 
-use egui::{RichText, Stroke, vec2};
+use egui::{RichText, vec2};
 use xuan::{
-    document::{Adjustment, Layer, Point},
+    document::{Adjustment, Layer},
     effects::{self, Filter},
     io, operations, render,
+    units::{self, Unit},
 };
 
 use super::{
-    Dialog, EditorApp,
+    Dialog, EditorApp, size_units,
     surfaces::{SurfaceRun, SurfaceStart},
     theme::PaletteExt,
 };
@@ -106,6 +108,7 @@ impl EditorApp {
                 Dialog::PluginConsent => self.plugin_consent_dialog(ctx),
                 Dialog::PluginFile => self.plugin_file_dialog(ctx),
                 Dialog::PluginEditSession => self.plugin_edit_session_dialog(ctx),
+                Dialog::PluginRun => self.plugin_run_dialog(ctx),
                 Dialog::Plugins => self.plugin_manager_dialog(ctx),
                 Dialog::PluginInstall => self.plugin_install_dialog(ctx),
                 Dialog::PluginModels => self.plugin_models_dialog(ctx),
@@ -114,32 +117,14 @@ impl EditorApp {
                 Dialog::LayerEffects => self.layer_effects_dialog(ctx),
                 Dialog::SelectionAmount => self.selection_amount_dialog(ctx),
                 Dialog::Trim => self.trim_dialog(ctx),
+                Dialog::Stroke => self.stroke_dialog(ctx),
+                Dialog::Collage => self.collage_dialog(ctx),
                 Dialog::Paths => self.paths_dialog(ctx),
+                Dialog::AdjustmentPresets => self.presets_dialog(ctx),
+                Dialog::CanvasPresets => self.canvas_presets_dialog(ctx),
                 Dialog::Shortcuts => self.shortcuts_dialog(ctx),
-                Dialog::About => {
-                    let mut open = true;
-                    widgets::Window::new(tr("About Xuan"))
-                        .open(&mut open)
-                        .show(ctx, |ui| {
-                            ui.heading("Xuan");
-                            ui.label(tr("A space for your next composition."));
-                            ui.add_space(12.0);
-                            ui.label(tr("Native image editor · Rust + egui + wgpu"));
-                            let build = xuan::buildinfo::current();
-                            ui.horizontal(|ui| {
-                                ui.label(build.display_with(|text| tr(text).to_owned()));
-                                if ui.small_button(tr("Copy version")).clicked() {
-                                    ui.ctx().copy_text(build.cli());
-                                }
-                            });
-                            ui.add_space(12.0);
-                            ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
-                            ui.label(tr("Free and open source, under the MIT license."));
-                        });
-                    if !open {
-                        self.dialog = None;
-                    }
-                }
+                Dialog::Update => self.update_dialog(ctx),
+                Dialog::About => self.about_dialog(ctx),
             }
         }
         self.close_dialog(ctx);
@@ -174,13 +159,26 @@ impl EditorApp {
                 .show_with_footer(
                     ctx,
                     |ui| {
-                        ui.label(error);
+                        ui.horizontal_top(|ui| {
+                            widgets::alert_icon(ui);
+                            ui.add_space(4.0);
+                            ui.add(egui::Label::new(&error).wrap());
+                        });
                     },
                     |ui, ()| {
                         dismiss = widgets::dialog_footer(
                             ui,
                             widgets::FooterButtons::single(tr("OK")),
-                            |_| {},
+                            |ui| {
+                                if widgets::button(ui, tr("Copy details"))
+                                    .on_hover_text(tr(
+                                        "Copy the message and Xuan's version, for a bug report",
+                                    ))
+                                    .clicked()
+                                {
+                                    ui.ctx().copy_text(error_details(&error));
+                                }
+                            },
                         )
                         .commit;
                     },
@@ -188,6 +186,55 @@ impl EditorApp {
             if dismiss {
                 self.error = None;
             }
+        }
+    }
+
+    /// Help → About: the icon, name and version as a header, then the credits and links to the
+    /// project, its licences and its issue tracker.
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let build = xuan::buildinfo::current();
+        widgets::Window::new(tr("About Xuan"))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let icon = app_icon(ui.ctx());
+                    ui.add(egui::Image::new(&icon).fit_to_exact_size(vec2(64.0, 64.0)));
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Xuan").size(24.0).strong());
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            let muted = ui.palette().muted;
+                            ui.label(
+                                RichText::new(build.display_with(|text| tr(text).to_owned()))
+                                    .color(muted),
+                            );
+                            if ui.small_button(tr("Copy version")).clicked() {
+                                ui.ctx().copy_text(build.cli());
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.label(tr("A space for your next composition."));
+                    });
+                });
+                ui.add_space(16.0);
+                ui.label(tr("Native image editor · Rust + egui + wgpu"));
+                ui.add_space(4.0);
+                ui.label(tr("Ported from Compositor by Wonder Assembly LLC."));
+                ui.add_space(4.0);
+                ui.label(tr("Free and open source, under the MIT licence."));
+                ui.add_space(12.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    for (label, url) in about_links(xuan::update::REPOSITORY, &build) {
+                        ui.hyperlink_to(tr(label), url);
+                    }
+                });
+            });
+        if !open {
+            self.dialog = None;
         }
     }
 
@@ -260,79 +307,125 @@ impl EditorApp {
                         .color(ui.palette().muted),
                     );
                     ui.add_space(16.0);
+                    if dialog == Dialog::New {
+                        self.preset_menu(ui);
+                        ui.add_space(12.0);
+                    }
+                    let before = self.dimensions;
+                    let resolution = self.resolution;
+                    // Image Size without Resample keeps the pixels: Width and Height then set
+                    // the print size, through the resolution, and only in print units.
+                    let fixed_pixels = dialog == Dialog::ImageSize && !self.size_units.resample;
+                    let sides_enabled = !fixed_pixels || self.size_units.unit.is_physical();
                     ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(tr("Width"));
-                            let width = ui.add(
-                                widgets::Number::new(&mut self.dimensions[0])
-                                    .range(1..=xuan::document::MAX_SIDE)
-                                    .suffix(" px")
-                                    .speed(1.0),
-                            );
-                            if focus_width {
-                                if width.has_focus() {
-                                    // The field is editing now: select its text so typing
-                                    // replaces it, and stop asking for focus.
-                                    let end = self.dimensions[0].to_string().chars().count();
-                                    let mut state = egui::TextEdit::load_state(ui.ctx(), width.id)
-                                        .unwrap_or_default();
-                                    state.cursor.set_char_range(Some(
-                                        egui::text::CCursorRange::two(
-                                            egui::text::CCursor::new(0),
-                                            egui::text::CCursor::new(end),
-                                        ),
-                                    ));
-                                    state.store(ui.ctx(), width.id);
-                                    ui.ctx().data_mut(|d| {
-                                        d.insert_temp(focused, Some((dialog, false)))
-                                    });
-                                } else {
-                                    width.request_focus();
-                                }
+                        for axis in 0..2 {
+                            if axis == 1 {
+                                ui.add_space(15.0);
                             }
-                        });
+                            ui.vertical(|ui| {
+                                ui.label(tr(if axis == 0 { "Width" } else { "Height" }));
+                                let field = ui.add_enabled_ui(sides_enabled, |ui| {
+                                    self.size_field(ui, axis, fixed_pixels)
+                                });
+                                let field = field.inner;
+                                if axis == 0 && focus_width {
+                                    if field.has_focus() {
+                                        // The field is editing now: select its text so typing
+                                        // replaces it, and stop asking for focus.
+                                        let mut state =
+                                            egui::TextEdit::load_state(ui.ctx(), field.id)
+                                                .unwrap_or_default();
+                                        state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::two(
+                                                egui::text::CCursor::new(0),
+                                                egui::text::CCursor::new(usize::MAX),
+                                            ),
+                                        ));
+                                        state.store(ui.ctx(), field.id);
+                                        ui.ctx().data_mut(|d| {
+                                            d.insert_temp(focused, Some((dialog, false)))
+                                        });
+                                    } else {
+                                        field.request_focus();
+                                    }
+                                }
+                            });
+                        }
                         ui.add_space(15.0);
                         ui.vertical(|ui| {
-                            ui.label(tr("Height"));
-                            ui.add(
-                                widgets::Number::new(&mut self.dimensions[1])
-                                    .range(1..=xuan::document::MAX_SIDE)
-                                    .suffix(" px")
-                                    .speed(1.0),
-                            );
+                            ui.label(tr("Units"));
+                            let choices: &[Unit] = if dialog == Dialog::New {
+                                &Unit::LENGTHS
+                            } else {
+                                &Unit::ALL
+                            };
+                            if size_units::unit_menu(ui, &mut self.size_units.unit, choices) {
+                                self.size_units.size_edited();
+                                self.remember_units();
+                            }
                         });
                     });
+                    if self.dimensions != before {
+                        self.size_units.size_edited();
+                    }
+                    if dialog == Dialog::New {
+                        self.keep_ratio_edit(before);
+                        ui.add_space(8.0);
+                        self.swap_and_link(ui);
+                    } else if dialog == Dialog::ImageSize && !fixed_pixels {
+                        self.keep_ratio_edit(before);
+                        ui.add_space(8.0);
+                        let was = self.keep_ratio;
+                        widgets::checkbox(ui, &mut self.keep_ratio, tr("Keep aspect ratio"));
+                        if self.keep_ratio && !was {
+                            self.ratio = self.dimensions;
+                        }
+                    }
                     ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        ui.label(tr("Resolution"));
-                        ui.add(
-                            widgets::Number::new(&mut self.resolution)
-                                .range(1.0..=9600.0)
-                                .suffix(" ppi"),
-                        );
+                    // Labels sit above their fields, as Width and Height's do.
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(tr("Resolution"));
+                            ui.horizontal(|ui| self.resolution_field(ui));
+                        });
+                        if dialog == Dialog::New && !generating {
+                            ui.add_space(15.0);
+                            ui.vertical(|ui| {
+                                ui.label(tr("Background"));
+                                self.background_menu(ui);
+                            });
+                        }
                     });
+                    let keeps_print_size = dialog == Dialog::New
+                        || (dialog == Dialog::ImageSize && self.size_units.resample);
+                    self.size_units.resolution_changed(
+                        &mut self.dimensions,
+                        resolution,
+                        self.resolution,
+                        keeps_print_size,
+                    );
+                    if dialog == Dialog::ImageSize {
+                        ui.add_space(8.0);
+                        let was = self.size_units.resample;
+                        widgets::checkbox(ui, &mut self.size_units.resample, tr("Resample"))
+                            .on_hover_text(tr(
+                                "Off, the pixels stay as they are: Width, Height and Resolution change only the print size",
+                            ));
+                        if was && !self.size_units.resample {
+                            self.dimensions = self.size_units.original;
+                            self.size_units.size_edited();
+                        }
+                    } else if dialog == Dialog::CanvasSize {
+                        ui.add_space(8.0);
+                        widgets::checkbox(ui, &mut self.size_units.relative, tr("Relative"))
+                            .on_hover_text(tr(
+                                "Width and Height are added to the current size",
+                            ));
+                    }
                     if dialog == Dialog::CanvasSize {
                         ui.add_space(12.0);
                         ui.label(tr("Anchor"));
-                        egui::Grid::new("anchor_grid")
-                            .spacing(vec2(3.0, 3.0))
-                            .show(ui, |ui| {
-                                for y in 0..3 {
-                                    for x in 0..3 {
-                                        let anchor = [x as f32 * 0.5, y as f32 * 0.5];
-                                        if ui
-                                            .selectable_label(
-                                                self.anchor == anchor,
-                                                if self.anchor == anchor { "●" } else { "·" },
-                                            )
-                                            .clicked()
-                                        {
-                                            self.anchor = anchor;
-                                        }
-                                    }
-                                    ui.end_row();
-                                }
-                            });
+                        super::anchor_picker::anchor_picker(ui, &mut self.anchor);
                     }
                     let mut ready = true;
                     if let Some((plugin, action)) = chosen.clone().filter(|_| generating) {
@@ -385,11 +478,20 @@ impl EditorApp {
                     ui.add_space(12.0);
                     if let Err(error) = &valid {
                         ui.colored_label(ui.palette().error, error.to_string());
-                    } else if !generating {
+                    } else {
                         ui.label(
-                            RichText::new(tr("Transparent canvas · sRGB"))
-                                .color(ui.palette().muted),
+                            RichText::new(size_units::summary(
+                                self.dimensions,
+                                dialog == Dialog::ImageSize,
+                            ))
+                            .color(ui.palette().muted),
                         );
+                        if dialog == Dialog::New && !generating {
+                            ui.label(
+                                RichText::new(canvas_summary(self.new_canvas_background))
+                                    .color(ui.palette().muted),
+                            );
+                        }
                     }
                     valid.is_ok() && ready
                 },
@@ -434,10 +536,13 @@ impl EditorApp {
                 let [width, height] = self.dimensions;
                 let anchor = self.anchor;
                 let resolution = self.resolution;
+                // Without Resample, or at the same size, only the resolution changes.
+                let resample =
+                    self.size_units.resample && self.dimensions != self.size_units.original;
                 self.edit(title, |doc| {
                     if dialog == Dialog::CanvasSize {
                         operations::canvas_size(doc, width, height, anchor)?;
-                    } else {
+                    } else if resample {
                         operations::image_size(doc, width, height)?;
                     }
                     doc.resolution = resolution;
@@ -454,6 +559,145 @@ impl EditorApp {
         if self.dialog != Some(dialog) {
             ctx.data_mut(|d| d.remove_temp::<Option<(Dialog, bool)>>(focused));
         }
+    }
+
+    /// With Keep aspect ratio, the side not edited follows the one that was.
+    fn keep_ratio_edit(&mut self, before: [u32; 2]) {
+        let [width, height] = self.dimensions;
+        let [ratio_width, ratio_height] = self.ratio;
+        if !self.keep_ratio || self.dimensions == before {
+            return;
+        }
+        if width != before[0] {
+            self.dimensions[1] = presets::linked_side(ratio_width, ratio_height, width, height);
+        } else {
+            self.dimensions[0] = presets::linked_side(ratio_height, ratio_width, height, width);
+        }
+    }
+
+    /// Width (`axis` 0) or Height (1) in the dialog's unit. A value typed with another unit
+    /// (`10cm`) is converted. With `fixed_pixels` (Image Size without Resample) a print size
+    /// sets the resolution instead of the pixels.
+    fn size_field(&mut self, ui: &mut egui::Ui, axis: usize, fixed_pixels: bool) -> egui::Response {
+        let units = &self.size_units;
+        let (unit, ppi, relative) = (units.unit, self.resolution, units.relative);
+        let reference = f64::from(units.original[axis]);
+        let mut value = units.shown(self.dimensions[axis], axis, ppi);
+        let suffix = if unit == Unit::Percent {
+            "%".to_owned()
+        } else {
+            format!(" {}", unit.suffix())
+        };
+        let response = ui.add(
+            widgets::Number::new(&mut value)
+                .range(units.range(axis, ppi))
+                .speed(units.step(axis, ppi))
+                .max_decimals(unit.decimals())
+                .suffix(suffix)
+                .parser(move |text| size_units::parse_size(text, unit, ppi, reference, relative)),
+        );
+        if response.changed() {
+            if fixed_pixels {
+                if let Some(resolution) = self.size_units.resolution_for(value, axis) {
+                    self.resolution = resolution;
+                }
+            } else if let Some(pixels) = self.size_units.pixels(value, axis, ppi) {
+                self.dimensions[axis] = pixels;
+            }
+        }
+        response
+    }
+
+    /// The size dialogs' Resolution field and its unit.
+    fn resolution_field(&mut self, ui: &mut egui::Ui) {
+        let unit = self.size_units.resolution_unit;
+        let mut shown = unit.from_ppi(f64::from(self.resolution));
+        let range = unit.from_ppi(f64::from(units::MIN_RESOLUTION))
+            ..=unit.from_ppi(f64::from(units::MAX_RESOLUTION));
+        let changed = ui
+            .add(
+                widgets::Number::new(&mut shown)
+                    .range(range)
+                    .max_decimals(2)
+                    .suffix(format!(" {}", unit.suffix()))
+                    .parser(move |text| unit.parse(text)),
+            )
+            .changed();
+        let ppi = unit.to_ppi(shown);
+        if changed && units::valid_resolution(ppi) {
+            self.resolution = ppi as f32;
+        }
+        if size_units::resolution_unit_menu(ui, &mut self.size_units.resolution_unit) {
+            self.remember_units();
+        }
+    }
+
+    /// New canvas: White, Black, Transparent or a custom colour, which starts as the
+    /// background colour swatch and is changed in the well beside the menu.
+    fn background_menu(&mut self, ui: &mut egui::Ui) {
+        use xuan::config::CanvasBackground as Background;
+        let custom = match self.new_canvas_background {
+            Background::Custom(rgb) => Background::Custom(rgb),
+            _ => {
+                let [r, g, b, _] = self.background;
+                Background::Custom([r, g, b])
+            }
+        };
+        ui.horizontal(|ui| {
+            widgets::PopUp::from_id_salt("new_canvas_background")
+                .selected_text(background_name(self.new_canvas_background))
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for choice in [
+                        Background::White,
+                        Background::Black,
+                        Background::Transparent,
+                        custom,
+                    ] {
+                        widgets::menu_choice(
+                            ui,
+                            &mut self.new_canvas_background,
+                            choice,
+                            background_name(choice),
+                        );
+                    }
+                });
+            if let Background::Custom([r, g, b]) = self.new_canvas_background {
+                let mut color = [r, g, b, 255];
+                if widgets::color_well(ui, &mut color).changed() {
+                    self.new_canvas_background = Background::Custom([color[0], color[1], color[2]]);
+                }
+            }
+        });
+    }
+
+    /// Saves the size and resolution units chosen in a size dialog for next time.
+    pub(super) fn remember_units(&mut self) {
+        let mut units = self.config.units;
+        units.size = self.size_units.unit;
+        units.resolution = self.size_units.resolution_unit;
+        if units != self.config.units {
+            self.config.units = units;
+            self.save_config();
+        }
+    }
+
+    /// New canvas: Swap turns portrait into landscape; Keep aspect ratio ties Width to Height.
+    fn swap_and_link(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if widgets::button(ui, tr("Swap"))
+                .on_hover_text(tr("Swap width and height (portrait / landscape)"))
+                .clicked()
+            {
+                self.dimensions = presets::swapped(self.dimensions);
+                self.ratio = presets::swapped(self.ratio);
+            }
+            let was = self.keep_ratio;
+            widgets::checkbox(ui, &mut self.keep_ratio, tr("Keep aspect ratio"));
+            if self.keep_ratio && !was {
+                self.ratio = self.dimensions;
+            }
+        });
     }
 
     fn effect_dialog(&mut self, ctx: &egui::Context) {
@@ -584,7 +828,15 @@ impl EditorApp {
                             }
                             Adjustment::CurvesChannels { channels } => {
                                 channel_picker(ui, &mut edit.channel);
-                                changed |= curve_editor(ui, &mut channels[edit.channel]);
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                changed |= super::curves_controls::editor(
+                                    ui,
+                                    &mut channels[edit.channel],
+                                    source,
+                                    edit.channel,
+                                );
                             }
                             Adjustment::HueSaturation {
                                 hue,
@@ -636,7 +888,10 @@ impl EditorApp {
                                 [*black, *gamma, *white, *output_black, *output_white] = range;
                             }
                             Adjustment::Curves { points } => {
-                                changed |= curve_editor(ui, points);
+                                let source = edit.levels_source.get_or_insert_with(|| {
+                                    render::render_scaled(&edit.original, 256, 192)
+                                });
+                                changed |= super::curves_controls::editor(ui, points, source, 0);
                             }
                             Adjustment::Exposure {
                                 exposure,
@@ -720,6 +975,14 @@ impl EditorApp {
                                     .changed();
                             }
                             Adjustment::Invert => {}
+                            Adjustment::ColorLookup {
+                                name,
+                                interpolation,
+                                table,
+                            } => {
+                                changed |=
+                                    super::color_lookup::controls(ui, name, interpolation, table);
+                            }
                             Adjustment::BlackWhite {
                                 weights,
                                 tint,
@@ -874,6 +1137,7 @@ impl EditorApp {
                                     )
                                     .changed();
                             }
+                            other => changed |= super::filter_controls::show(ui, other),
                         });
                     }
                     if edit.as_layer {
@@ -984,7 +1248,7 @@ impl EditorApp {
         }
         if apply {
             if let Some(s) = self.session_mut() {
-                s.history.commit();
+                s.commit();
             }
             self.dialog = None;
         } else {
@@ -998,43 +1262,44 @@ impl EditorApp {
             return;
         }
         let plugin_formats = self.plugin_export_formats();
-        let formats: Vec<(String, String)> = ["png", "jpg", "tiff", "webp"]
+        let formats: Vec<(String, String)> = ["png", "jpg", "tiff", "webp", "ora"]
             .iter()
             .map(|f| (f.to_string(), f.to_uppercase()))
             .chain(
                 plugin_formats
                     .iter()
                     .filter(|(extension, ..)| {
-                        !["png", "jpg", "tiff", "webp"].contains(&extension.as_str())
+                        !["png", "jpg", "tiff", "webp", "ora"].contains(&extension.as_str())
                     })
                     .map(|(extension, label, ..)| (extension.clone(), label.clone())),
             )
             .collect();
-        if self.export_changed {
-            let doc = &self.session().unwrap().document;
-            let factor = (700.0 / doc.width.max(doc.height) as f32).min(1.0);
-            let image = render::render_scaled(
-                doc,
-                (doc.width as f32 * factor).max(1.0) as u32,
-                (doc.height as f32 * factor).max(1.0) as u32,
-            );
-            let mut preview = image.clone();
-            let mut bytes = Vec::new();
-            if self.export_format == "jpg" {
-                let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                    &mut bytes,
-                    self.jpeg_quality,
-                );
-                if encoder.encode_image(&render::flatten_white(&image)).is_ok()
-                    && let Ok(decoded) = image::load_from_memory(&bytes)
-                {
-                    preview = decoded.to_rgba8();
-                }
-            } else {
-                let _ = image::DynamicImage::ImageRgba8(image)
-                    .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png);
-            }
-            self.export_bytes = bytes.len();
+        let session = self.session().unwrap();
+        let settings = super::export_preview::Settings {
+            document: session.document.id,
+            revision: session.history.revision,
+            format: self.export_format.clone(),
+            options: self.export_options,
+        };
+        let (width, height) = io::export_size(
+            session.document.width,
+            session.document.height,
+            self.export_options.scale,
+        );
+        // OpenRaster keeps layers at the document's size; plugins write their own files.
+        let scalable = ["png", "jpg", "tiff", "webp"].contains(&self.export_format.as_str());
+        let estimated = scalable.then(|| self.export_preview.bytes(&settings));
+        let document = &self.sessions[self.current].document;
+        let preview_size = super::export_preview::shown_size(if scalable {
+            (width, height)
+        } else {
+            (document.width, document.height)
+        });
+        // A Scale past what an image may be is refused before choosing a file.
+        let too_large = (scalable && (width, height) != (document.width, document.height))
+            .then(|| xuan::document::validate_size(width, height).err())
+            .flatten();
+        if let Some(preview) = self.export_preview.poll(ctx, settings, document) {
             self.export_texture = Some(ctx.load_texture(
                 "export_preview",
                 egui::ColorImage::from_rgba_unmultiplied(
@@ -1043,7 +1308,6 @@ impl EditorApp {
                 ),
                 egui::TextureOptions::LINEAR,
             ));
-            self.export_changed = false;
         }
         let mut open = true;
         let mut export = false;
@@ -1054,13 +1318,18 @@ impl EditorApp {
             .show_with_footer(
                 ctx,
                 |ui| {
-                    if let Some(texture) = &self.export_texture {
-                        let size = texture.size_vec2();
-                        let factor = (600.0 / size.x).min(350.0 / size.y).min(1.0);
-                        ui.vertical_centered(|ui| {
-                            ui.image((texture.id(), size * factor));
-                        });
-                    }
+                    // The preview arrives from a worker, after the dialog has shown: its
+                    // place is kept from the settings, so nothing moves when it lands.
+                    ui.vertical_centered(|ui| match &self.export_texture {
+                        Some(texture) => {
+                            ui.image((texture.id(), preview_size));
+                        }
+                        None => {
+                            let (rect, _) =
+                                ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 4.0, ui.palette().faint);
+                        }
+                    });
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         ui.label(tr("Format"));
@@ -1068,41 +1337,97 @@ impl EditorApp {
                             .selected_text(self.export_format.to_uppercase())
                             .show_ui(ui, |ui| {
                                 for (format, label) in &formats {
-                                    self.export_changed |= widgets::menu_choice(
+                                    widgets::menu_choice(
                                         ui,
                                         &mut self.export_format,
                                         format.clone(),
                                         label,
-                                    )
-                                    .changed();
+                                    );
                                 }
                             });
-                        if self.export_format == "jpg" {
+                        if self.export_format == "webp" {
+                            widgets::checkbox(
+                                ui,
+                                &mut self.export_options.webp_lossless,
+                                tr("Lossless"),
+                            );
+                        }
+                        let quality = match self.export_format.as_str() {
+                            "jpg" => Some(&mut self.export_options.jpeg_quality),
+                            "webp" if !self.export_options.webp_lossless => {
+                                Some(&mut self.export_options.webp_quality)
+                            }
+                            _ => None,
+                        };
+                        if let Some(quality) = quality {
                             ui.spacing_mut().slider_width =
                                 (ui.available_width() - widgets::SLIDER_FIELD_WIDTH).max(90.0);
-                            self.export_changed |= ui
-                                .add(
-                                    widgets::Slider::new(&mut self.jpeg_quality, 1..=100)
-                                        .text(tr("Quality"))
-                                        .suffix("%"),
-                                )
-                                .changed();
+                            ui.add(
+                                widgets::Slider::new(quality, io::EXPORT_QUALITY)
+                                    .text(tr("Quality"))
+                                    .suffix("%"),
+                            );
                         }
                     });
-                    if self.export_format == "jpg" {
-                        ui.label(
-                            RichText::new(tr(
-                                "JPEG preview · transparency is flattened onto white",
-                            ))
-                            .small()
-                            .color(ui.palette().muted),
-                        );
+                    if scalable {
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            ui.label(tr("Scale"));
+                            ui.add(
+                                widgets::Number::new(&mut self.export_options.scale)
+                                    .range(io::EXPORT_SCALE)
+                                    .suffix(" %"),
+                            );
+                            ui.label(
+                                RichText::new(format!("{width} × {height} px"))
+                                    .color(ui.palette().muted),
+                            );
+                        });
+                    }
+                    let lossy = self.export_format == "jpg"
+                        || (self.export_format == "webp" && !self.export_options.webp_lossless);
+                    if self.export_format == "ora" {
+                        let report = io::ora::export_report(&self.session().unwrap().document);
+                        let mut note =
+                            tr("OpenRaster keeps layers, folders, blend modes and opacity")
+                                .to_owned();
+                        if !report.is_empty() {
+                            note.push_str(" · ");
+                            note.push_str(tr("These are flattened:"));
+                            for line in report.lines() {
+                                note.push_str(&format!("\n• {line}"));
+                            }
+                        }
+                        ui.label(RichText::new(note).small().color(ui.palette().muted));
+                    }
+                    if lossy {
+                        let note = if self.export_format == "jpg" {
+                            tr("JPEG preview · transparency is flattened onto white")
+                        } else {
+                            tr("WebP preview · transparency is kept")
+                        };
+                        ui.label(RichText::new(note).small().color(ui.palette().muted));
+                    }
+                    // Made in the background: until it is ready, say so.
+                    let size = match estimated {
+                        Some(Some(Some(bytes))) => Some(format!(
+                            "{} ≈ {}",
+                            tr("Estimated size:"),
+                            estimated_size(bytes as usize)
+                        )),
+                        Some(None) => Some(tr("Estimating size…").to_owned()),
+                        _ => None,
+                    };
+                    if let Some(error) = &too_large {
+                        ui.colored_label(ui.palette().error, error.to_string());
+                    } else if let Some(size) = size {
+                        ui.label(RichText::new(size).small().color(ui.palette().muted));
                     }
                 },
                 |ui, ()| {
                     let response = widgets::dialog_footer(
                         ui,
-                        widgets::FooterButtons::commit(tr("Export…")),
+                        widgets::FooterButtons::commit(tr("Export…")).enabled(too_large.is_none()),
                         |_| {},
                     );
                     export = response.commit;
@@ -1132,13 +1457,10 @@ impl EditorApp {
                             Err(error) => self.error = Some(format!("{error:#}")),
                         }
                     }
-                    None => match io::export(
-                        &self.session().unwrap().document,
-                        &path,
-                        self.jpeg_quality,
-                    ) {
-                        Ok(()) => {
+                    None => match self.export_to(&path) {
+                        Ok(notice) => {
                             self.status = format!("{} {}", tr("Exported"), path.display());
+                            self.notice = notice;
                             self.dialog = None;
                         }
                         Err(error) => self.error = Some(format!("{error:#}")),
@@ -1148,6 +1470,17 @@ impl EditorApp {
         }
         if !open || cancel {
             self.dialog = None;
+        }
+    }
+
+    /// Export the current document in Xuan's own encoders, returning what an OpenRaster
+    /// export flattened, for the notice.
+    pub(super) fn export_to(&self, path: &std::path::Path) -> anyhow::Result<Option<String>> {
+        let document = &self.session().unwrap().document;
+        if io::is_openraster(path) {
+            Ok(io::ora::export(document, path)?.summary())
+        } else {
+            io::export(document, path, &self.export_options).map(|()| None)
         }
     }
 
@@ -1181,10 +1514,30 @@ impl EditorApp {
                 tr("Unsaved changes")
             )
         };
+        // Quitting: name the projects Save would save and Discard would lose.
+        let unsaved: Vec<&str> = if self.close_app {
+            (self.sessions.iter())
+                .filter(|session| session.history.dirty())
+                .map(|session| session.title.as_str())
+                .collect()
+        } else {
+            Vec::new()
+        };
         widgets::Window::new(tr("Save your changes?")).show_with_footer(
             ctx,
             |ui| {
                 ui.label(message);
+                if !unsaved.is_empty() {
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("unsaved_projects")
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            for title in &unsaved {
+                                ui.label(format!("• {title}"));
+                            }
+                        });
+                }
             },
             |ui, ()| {
                 let response = widgets::dialog_footer(
@@ -1252,81 +1605,88 @@ fn channel_picker(ui: &mut egui::Ui, channel: &mut usize) {
         });
 }
 
-fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
-    let mut changed = false;
+/// A New canvas background as its menu names it.
+fn background_name(background: xuan::config::CanvasBackground) -> &'static str {
+    use xuan::config::CanvasBackground as Background;
+    match background {
+        Background::White => tr("White"),
+        Background::Black => tr("Black"),
+        Background::Transparent => tr("Transparent"),
+        Background::Custom(_) => tr("Custom colour"),
+    }
+}
 
-    ui.label(
-        RichText::new(tr(
-            "Click to add a point · Drag points to reshape the curve",
-        ))
-        .color(ui.palette().muted),
-    );
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(360.0, 220.0), egui::Sense::click_and_drag());
-    let palette = ui.palette();
-    ui.painter().rect_filled(rect, 4.0, palette.plot);
-    for i in 1..4 {
-        let t = i as f32 / 4.0;
-        ui.painter().line_segment(
-            [
-                rect.left_top() + vec2(rect.width() * t, 0.0),
-                rect.left_bottom() + vec2(rect.width() * t, 0.0),
-            ],
-            Stroke::new(1.0_f32, palette.plot_grid),
-        );
-        ui.painter().line_segment(
-            [
-                rect.left_top() + vec2(0.0, rect.height() * t),
-                rect.right_top() + vec2(0.0, rect.height() * t),
-            ],
-            Stroke::new(1.0_f32, palette.plot_grid),
-        );
+/// The line under New canvas's size, and on the welcome screen: what Create canvas makes.
+pub(super) fn canvas_summary(background: xuan::config::CanvasBackground) -> &'static str {
+    use xuan::config::CanvasBackground as Background;
+    match background {
+        Background::Transparent => tr("Transparent canvas · sRGB"),
+        Background::White => tr("White canvas · sRGB"),
+        Background::Black => tr("Black canvas · sRGB"),
+        Background::Custom(_) => tr("Coloured canvas · sRGB"),
     }
-    let map = |p: Point| {
-        egui::pos2(
-            rect.left() + p.x * rect.width(),
-            rect.bottom() - p.y * rect.height(),
-        )
+}
+
+/// What the error dialog's Copy details puts on the clipboard: the message, then the version
+/// and platform, as a bug report needs them.
+pub(super) fn error_details(error: &str) -> String {
+    format!(
+        "{}\n\n{}\n\n{} · {} {}",
+        tr("Couldn't complete the operation"),
+        error.trim_end(),
+        xuan::buildinfo::current().cli(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+}
+
+/// An estimated file size for the Export dialog: "12 KiB", "1.4 MiB".
+pub(super) fn estimated_size(bytes: usize) -> String {
+    const KIB: f64 = 1024.0;
+    let bytes = bytes as f64;
+    if bytes < KIB * KIB {
+        format!("{} KiB", (bytes / KIB).ceil().max(1.0))
+    } else {
+        format!("{:.1} MiB", bytes / (KIB * KIB))
+    }
+}
+
+/// Xuan's icon for About, decoded from the bundled 128 px PNG once per context.
+fn app_icon(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("about_app_icon");
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return texture;
+    }
+    let icon = image::load_from_memory(include_bytes!(
+        "../../assets/icons/hicolor/128x128/apps/me.silverl.xuan.png"
+    ))
+    .expect("bundled application icon")
+    .to_rgba8();
+    let size = [icon.width() as usize, icon.height() as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, icon.as_raw());
+    let texture = ctx.load_texture("about_app_icon", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    texture
+}
+
+/// About's links: the project page, the licence notices and a new issue, on `repository`'s
+/// GitHub. A release links the notices at its own tag, other builds at the main branch.
+pub(super) fn about_links(
+    repository: &str,
+    build: &xuan::buildinfo::BuildInfo,
+) -> [(&'static str, String); 3] {
+    let site = format!("https://github.com/{repository}");
+    let tree = if build.release {
+        format!("v{}", build.version)
+    } else {
+        "main".to_owned()
     };
-    ui.painter().line_segment(
-        [rect.left_bottom(), rect.right_top()],
-        Stroke::new(1.0_f32, palette.plot_diagonal),
-    );
-    ui.painter().add(egui::Shape::line(
-        (0..=255)
-            .map(|i| {
-                let x = i as f32 / 255.0;
-                map(Point::new(x, effects::curve_value(points, x)))
-            })
-            .collect(),
-        Stroke::new(1.5_f32, palette.text),
-    ));
-    for p in points.iter() {
-        ui.painter().circle_filled(map(*p), 3.0, palette.text);
-    }
-    if let Some(p) = response.interact_pointer_pos() {
-        let point = Point::new(
-            ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
-            ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0),
-        );
-        if response.clicked()
-            && points.len() < 32
-            && !points.iter().any(|v| (v.x - point.x).abs() < 0.025)
-        {
-            points.push(point);
-            points.sort_by(|a, b| a.x.total_cmp(&b.x));
-            changed = true;
-        }
-        if response.dragged()
-            && let Some(index) = points
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| (a.x - point.x).abs().total_cmp(&(b.x - point.x).abs()))
-                .map(|(i, _)| i)
-        {
-            points[index].y = point.y;
-            changed = true;
-        }
-    }
-    changed
+    [
+        ("Project site", site.clone()),
+        (
+            "Licences and third-party notices",
+            format!("{site}/blob/{tree}/THIRD_PARTY.md"),
+        ),
+        ("Report a bug", format!("{site}/issues/new")),
+    ]
 }

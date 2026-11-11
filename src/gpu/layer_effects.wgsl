@@ -139,7 +139,7 @@ fn over(current: vec4<f32>, paint: vec4<f32>, coverage: f32) -> vec4<f32> {
 // the stroke's ring, the drop shadow, the inner shadow, the outer glow and the inner glow.
 // config[1..7]: stroke, drop shadow, overlay, inner shadow, outer glow and inner glow colors
 // with their opacity; config[7]: has stroke, inside stroke, has drop shadow, has inner shadow;
-// config[8]: has overlay, has outer glow, has inner glow.
+// config[8]: has overlay, has outer glow, has inner glow, the layer's fill.
 @compute @workgroup_size(8, 8)
 fn fx_compose(@builtin(global_invocation_id) id: vec3<u32>) {
     if !inside_image(id) { return; }
@@ -150,13 +150,28 @@ fn fx_compose(@builtin(global_invocation_id) id: vec3<u32>) {
     let flags = config[7];
     let more = config[8];
     var current = vec4(0.0);
-    if flags.z > 0.0 { current = over(current, config[2], second_plane(count + index)); }
+    let fill = more.w;
+    // Below 100% fill the drop shadow stays knocked out under the pixels, as `render_cpu`.
+    if flags.z > 0.0 {
+        let knocked_out = select(1.0, 1.0 - shape, fill < 1.0);
+        current = over(current, config[2], second_plane(count + index) * knocked_out);
+    }
     if more.y > 0.0 { current = over(current, config[5], second_plane(3u * count + index) * (1.0 - shape)); }
     if flags.x > 0.0 && flags.y == 0.0 { current = over(current, config[1], second_plane(index)); }
     // A color overlay recolors the layer's own pixels and keeps their alpha.
     var face = pixel.rgb;
     if more.x > 0.0 { face = mix(face, config[3].rgb, clamp(config[3].a, 0.0, 1.0)); }
-    current = vec4(face * pixel.a + current.rgb * (1.0 - pixel.a), pixel.a + current.a * (1.0 - pixel.a));
+    var cover = pixel.a;
+    // Fill fades the pixels; inside the shape the overlay lies over them, as `render_cpu`.
+    if fill < 1.0 {
+        let overlay = select(0.0, clamp(config[3].a, 0.0, 1.0), more.x > 0.0);
+        let inside = overlay + fill * (1.0 - overlay);
+        if inside > 0.0 {
+            face = (config[3].rgb * overlay + pixel.rgb * fill * (1.0 - overlay)) / inside;
+        }
+        cover = pixel.a * inside;
+    }
+    current = vec4(face * cover + current.rgb * (1.0 - cover), cover + current.a * (1.0 - cover));
     if more.z > 0.0 { current = over(current, config[6], second_plane(4u * count + index)); }
     if flags.w > 0.0 { current = over(current, config[4], second_plane(2u * count + index)); }
     if flags.x > 0.0 && flags.y > 0.0 { current = over(current, config[1], second_plane(index)); }
