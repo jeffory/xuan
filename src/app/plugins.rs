@@ -195,7 +195,6 @@ pub(super) struct PluginMenuItem {
     pub label: String,
     pub plugin: String,
     pub action: String,
-    pub shortcut: String,
     /// The plugin's name, id and folder, shown on hover.
     pub source: String,
     /// Whether the registry lets it run now (see `command_enabled`).
@@ -1543,7 +1542,6 @@ impl EditorApp {
                     label,
                     plugin: manifest.plugin.id.clone(),
                     action: action.id.clone(),
-                    shortcut: self.keymap.shortcut(&id),
                     source: source.clone(),
                     enabled: self.command_enabled(&id),
                 });

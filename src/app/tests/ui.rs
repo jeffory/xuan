@@ -93,6 +93,9 @@ mod text_runs;
 #[path = "ui_paths.rs"]
 mod paths;
 
+#[path = "ui_mac_keys.rs"]
+mod mac_keys;
+
 #[path = "ui_anchor.rs"]
 mod anchor;
 

@@ -79,6 +79,10 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Input_Pointer", "Win32_U
 wgpu = { version = "27.0.1", default-features = false, features = ["metal"] }
 # Asking before macOS quits (src/app/macos.rs). Already built for arboard and rfd.
 objc2 = "0.6"
+# The native menu bar (src/app/macos_menu.rs). Pinned: review the code before any bump.
+muda = { version = "=0.20.0", default-features = false }
+# The event behind a menu action (src/app/macos_menu.rs). Already built for winit and muda.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder"] }
 
 [target.'cfg(unix)'.dependencies]
 # Killing a plugin's process group.
