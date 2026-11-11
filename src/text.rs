@@ -1264,6 +1264,42 @@ mod tests {
         );
     }
 
+    /// macOS's private system fonts are named with a leading dot (".SF NS"). The font list
+    /// hides them (`app::font_picker`), but text that already names one must still draw in it
+    /// rather than in the fallback (issue 130).
+    #[test]
+    fn dot_named_system_families_still_resolve() {
+        const HIDDEN: &str = ".Droid Sans Fallback";
+        let mut db = cosmic_text::fontdb::Database::new();
+        db.load_font_data(include_bytes!("../assets/fonts/InterVariable.ttf").to_vec());
+        db.load_font_data(include_bytes!("../assets/fonts/DroidSansFallbackFull.ttf").to_vec());
+        // The same face again under a dot name, as macOS names its system fonts.
+        let mut hidden = db
+            .faces()
+            .find(|face| face.families.iter().any(|(name, _)| name == DROID))
+            .unwrap()
+            .clone();
+        hidden.families = vec![(
+            HIDDEN.into(),
+            cosmic_text::fontdb::Language::English_UnitedStates,
+        )];
+        hidden.post_script_name = "DotDroidSansFallback".into();
+        db.push_face_info(hidden);
+        let mut renderer =
+            TextRenderer::with_fonts(FontSystem::new_with_locale_and_db("en-US".into(), db));
+        assert!(renderer.families().iter().any(|name| name == HIDDEN));
+        assert!(renderer.has_family(HIDDEN));
+        let style = |family: &str| TextStyle {
+            content: "APP le".into(),
+            family: family.into(),
+            size: 40.0,
+            ..Default::default()
+        };
+        let hidden = renderer.render(&style(HIDDEN)).unwrap();
+        assert_eq!(hidden, renderer.render(&style(DROID)).unwrap());
+        assert_ne!(hidden, renderer.render(&style(FALLBACK_FAMILY)).unwrap());
+    }
+
     #[test]
     fn font_discovery_includes_installed_families_and_bundled_fallback() {
         let renderer = TextRenderer::default();
