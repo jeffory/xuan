@@ -1259,12 +1259,14 @@ impl EditorApp {
                 // Text is drawn with the editor's renderer, whose fonts are
                 // loaded once.
                 let mut reader = edits::Reader::new(self.plugins.access(plugin), edits::MAX_LAYERS)
-                    .with_text_renderer(self.text_renderer.take());
+                    .with_text_renderer(self.text_renderer.take())
+                    .with_notes();
                 let session = self.session_mut().expect("checked above");
                 let mut document = session.document.clone();
                 let applied = edits::apply(&mut document, &edits, &mut reader);
                 self.text_renderer = reader.take_text_renderer();
                 let added = applied.map_err(internal)?;
+                let notes = reader.take_notes();
                 let session = self.session_mut().expect("checked above");
                 session.history.begin(&name, &session.document);
                 session.fit |= (document.width, document.height)
@@ -1283,7 +1285,12 @@ impl EditorApp {
                 }) {
                     self.mask_target = false;
                 }
-                Ok(json!({"ok": true, "layers": added}))
+                let mut answer = json!({"ok": true, "layers": added});
+                // Only while a selection limited painting, so other answers stay as they were.
+                if !notes.is_empty() {
+                    answer["notes"] = json!(notes);
+                }
+                Ok(answer)
             }
             "host/run" => {
                 let action = string("action")

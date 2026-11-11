@@ -1175,7 +1175,7 @@ wait for the user's answer (see [Network](#network)).
 | `document/sample` | `{points: [[x, y]], radius?, layer?}` | `{width, height, radius, samples: [{x, y, color, rgba, luminance}]}`: the colour at each point in document pixels (at most 1,000), averaged by alpha over the pixels within `radius` (0–50) of it; `color` is `null` off the canvas. With `layer`, that layer alone as it sits in the document |
 | `document/histogram` | `{region?, layer?}` | `{region, pixels, transparent, mean_alpha, luminance, red, green, blue}`: for each channel `{bins: [256 counts], mean, min, max, median, p1, p99, clipped_low, clipped_high}` over the pixels that are not fully transparent |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
-| `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
+| `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id], notes?}` (the layers it added, and `notes` when a selection limited painting; see [Edits a selection clipped](#edits-a-selection-clipped)); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
 | `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto, run_actions, run_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)), and whether it may run other plugins' actions, and without asking (see [Running other plugins' actions](#running-other-plugins-actions)) |
 | `plugins/actions` | — | `{actions: [{plugin, plugin_name, network, allowed, available, id, action, label, description, kind, source, surfaces, result, inputs}]}`: the other plugins' actions, once the user turned on **Run other plugins' actions** for this plugin (see [Running other plugins' actions](#running-other-plugins-actions)) |
@@ -1618,6 +1618,29 @@ layer (from `"$1"`) the request has added so far, in the order the answer's
 `[{"op": "add_text_layer", "text": "A"}, {"op": "transform", "layer": "$1",
 "rotation": 15}]`. A reference to a layer not yet added fails the request;
 text that starts with `$` in other fields is just text.
+
+#### Edits a selection clipped
+
+A selection stays active for the later edits of a request, and for later
+requests, until it is replaced or cleared (`set_selection` without a mask).
+While one is active, `fill`, `fill_path`, `gradient`, `stroke`, and
+`apply_filter`, `apply_adjustment` and `auto_adjust` on a layer's pixels change
+only what is inside it, and the answer to `document/edit` adds `notes`, one for
+each such edit in order:
+
+```json
+{"ok": true, "layers": [], "notes": [
+  {"edit": 2, "op": "stroke", "clipped_to_selection": {"x": 448, "y": 292, "width": 184, "height": 216}, "changed": false}]}
+```
+
+`edit` counts from 1, as errors do. `clipped_to_selection` is the selection's
+bounds in document pixels (all 0 when it is empty), given whether or not it cut
+anything off. `changed` is `false` when the edit changed no pixel of the layer
+(of its mask, for a `mask` edit), for example because it lay outside the
+selection; pixels that stay fully transparent count as unchanged. Such an edit
+is applied all the same. Without a selection there are no `notes`, so the answer
+is `{ok, layers}` as before. Edits returned in a result have no answer, and
+keep no notes.
 
 ### Files the user chooses
 
