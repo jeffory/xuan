@@ -90,7 +90,7 @@ the document takes effect on the next frame and is drawn at once.
 | apply filters and adjustments | `document/edit` `apply_filter`, `apply_adjustment` (new) |
 | merge / group | `document/edit` `merge_layers`, `group_layers`, `ungroup_layers` (new); `host/run` `flatten` |
 | reorder layers | `document/edit` `move_layer` (new) |
-| crop / resize / rotate / trim canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas`, `rotate_canvas`, `trim`; `host/run` `crop_to_selection` |
+| crop / resize / rotate / trim canvas | `document/edit` `crop`, `resize_canvas`, `resize_image` (new), `extend_canvas`, `rotate_canvas` (any angle, `expand`), `crop_to` (ratio, straighten), `trim`; `host/run` `crop_to_selection` |
 | several edits as one undo step (#61) | one `document/edit` with every edit; `"$n"` names a layer added earlier in the request (new) |
 | undo / redo | `host/run` `undo`, `redo` (already allowed) |
 | resources: manifest, thumbnails, preview, selection mask | `document/get`; `layer/export` with `max_side`; `document/export`; `selection/export` |

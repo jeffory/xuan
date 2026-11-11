@@ -221,6 +221,25 @@ const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=�
 fn sends_the_image(method: &str) -> bool {
     method.ends_with("/export") || matches!(method, "document/sample" | "document/histogram")
 }
+/// A ratio as "4:5", "4/5", "4x5" or [4, 5]: two numbers above 0.
+fn parse_ratio(value: &Value) -> Result<[f64; 2], String> {
+    let bad = || "`ratio` must be width to height, such as \"4:5\"".to_string();
+    let terms: Vec<f64> = match value {
+        Value::Array(terms) => terms.iter().filter_map(Value::as_f64).collect(),
+        Value::String(text) => text
+            .split([':', '/', 'x', '×'])
+            .map(|term| term.trim().parse::<f64>())
+            .collect::<Result<_, _>>()
+            .map_err(|_| bad())?,
+        _ => return Err(bad()),
+    };
+    match terms.as_slice() {
+        &[width, height] if width > 0.0 && height > 0.0 && (width + height).is_finite() => {
+            Ok([width, height])
+        }
+        _ => Err(bad()),
+    }
+}
 fn region() -> Value {
     json!({"description": "A rectangle as [x, y, width, height] in document pixels; what lies outside the canvas is left out", "oneOf": [{"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}, {"type": "string"}]})
 }
@@ -464,13 +483,13 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees clockwise). `rotation` turns the layer about its own centre, or about `pivot` [x, y] in document pixels when given, which keeps that point of the picture where it is (to straighten about the subject, say). `cover: true` then scales the layer up about its centre just enough to cover the whole canvas, so a turned or moved layer leaves no corner empty; a layer that already covers it is left as it is. x and y are the top-left of the box before it is turned. Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "fill": number("0–1; pixel, text and shape layers only"),
                 "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
-                "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees"),
+                "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees clockwise"), "pivot": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "The point [x, y] in document pixels the rotation turns about"}, "cover": {"type": "boolean", "description": "Scale the layer up just enough to cover the canvas"},
                 "text": {"type": "string", "description": "A text layer's new text"},
                 "runs": text_runs(),
                 "path": {"type": ["string", "null"], "description": "A text layer's path, SVG path data in document pixels; null puts the text back in a box"},
@@ -495,6 +514,8 @@ fn specs() -> Vec<Spec> {
                         "width",
                         "height",
                         "rotation",
+                        "pivot",
+                        "cover",
                         "text",
                         "runs",
                         "path",
@@ -546,7 +567,9 @@ fn specs() -> Vec<Spec> {
                 let transform = op(
                     "transform",
                     &args,
-                    &["layer", "x", "y", "width", "height", "rotation"],
+                    &[
+                        "layer", "x", "y", "width", "height", "rotation", "pivot", "cover",
+                    ],
                 );
                 if transform.len() > 2 {
                     edits.push(Value::Object(transform));
@@ -1202,18 +1225,54 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "crop_canvas",
             title: "Crop",
-            description: "Crop the canvas to the rectangle x, y, width, height in document pixels.",
-            properties: json!({"x": number("Left"), "y": number("Top"), "width": integer("Width"), "height": integer("Height")}),
-            required: &["x", "y", "width", "height"],
+            description: "Crop the canvas. Give the rectangle x, y, width, height in document pixels to crop to exactly that. Or let Xuan work the box out: `ratio` (\"4:5\", \"16:9\", \"1:1\", width to height) crops to the largest box of that shape, inside the rectangle when one is given and inside the whole canvas otherwise, centred, or centred on `center` [x, y] as nearly as fits (put it on the subject). `straighten` turns the whole image that many degrees clockwise (-45 to 45; to level a horizon that drops to the right by 2°, pass -2) and crops to the largest upright box with no empty corners, of `ratio` if given and of the canvas's own shape otherwise; layers are turned in place, not resampled, and it takes no rectangle or `center`. Returns the new canvas size.",
+            properties: json!({
+                "x": number("Left"), "y": number("Top"), "width": number("Width"), "height": number("Height"),
+                "ratio": {"type": "string", "description": "Width to height, e.g. \"4:5\""},
+                "center": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "Where to centre a `ratio` crop, [x, y] in document pixels"},
+                "straighten": number("Degrees clockwise to turn the image before cropping, -45 to 45"),
+            }),
+            required: &[],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
                 let keys = ["x", "y", "width", "height"];
-                let args = pick(args, &keys)?;
-                Ok(Plan::new(
-                    "Crop",
-                    vec![Value::Object(op("crop", &args, &keys))],
-                    Reply::Size,
-                ))
+                let args = pick(
+                    args,
+                    &["x", "y", "width", "height", "ratio", "center", "straighten"],
+                )?;
+                let rectangle = keys
+                    .iter()
+                    .filter(|key| given(&args, key).is_some())
+                    .count();
+                if rectangle != 0 && rectangle != 4 {
+                    return Err("Give all of x, y, width and height, or none of them".into());
+                }
+                let computed = ["ratio", "center", "straighten"]
+                    .iter()
+                    .any(|key| given(&args, key).is_some());
+                if !computed {
+                    if rectangle == 0 {
+                        return Err(
+                            "Give x, y, width and height, a `ratio` or a `straighten` angle".into(),
+                        );
+                    }
+                    return Ok(Plan::new(
+                        "Crop",
+                        vec![Value::Object(op("crop", &args, &keys))],
+                        Reply::Size,
+                    ));
+                }
+                let mut edit = op("crop_to", &args, &["center", "straighten"]);
+                if let Some(ratio) = given(&args, "ratio") {
+                    edit.insert("ratio".into(), json!(parse_ratio(&ratio)?));
+                }
+                if rectangle == 4 {
+                    edit.insert(
+                        "bounds".into(),
+                        json!([args["x"], args["y"], args["width"], args["height"]]),
+                    );
+                }
+                Ok(Plan::new("Crop", vec![Value::Object(edit)], Reply::Size))
             }),
         },
         Spec {
@@ -1242,12 +1301,12 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "rotate_canvas",
             title: "Rotate canvas",
-            description: "Rotate the whole document `degrees` clockwise: 90, 180 or 270 (-90 also turns counter-clockwise). Layers, masks, guides, paths and the selection turn with it, and a quarter turn swaps the width and height.",
-            properties: json!({"degrees": {"type": "integer", "enum": [90, 180, 270, -90]}}),
+            description: "Rotate the whole document `degrees` clockwise, by any angle (negative turns counter-clockwise). Layers, masks, paths and the selection turn with it about the canvas centre; layers are turned in place, not resampled, so nothing is lost and turning back restores the picture. With `expand` (the default) the canvas grows to hold all of the turned image, so a quarter turn swaps the width and height and any other angle leaves transparent corners; with `expand: false` the canvas keeps its size and the corners that turn out of it are hidden. To level a tilted photo and remove the empty corners in one step, use crop_canvas with `straighten` instead. Guides survive only 90, 180 and 270. Returns the new canvas size.",
+            properties: json!({"degrees": number("Degrees clockwise"), "expand": {"type": "boolean", "description": "Grow the canvas to fit the turned image (default true)"}}),
             required: &["degrees"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let keys = ["degrees"];
+                let keys = ["degrees", "expand"];
                 let args = pick(args, &keys)?;
                 Ok(Plan::new(
                     "Rotate Canvas",

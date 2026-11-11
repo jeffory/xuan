@@ -269,7 +269,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `get_histogram` | Luminance and RGB histograms with mean, median, range and clipped share; of the image, a `region` or one `layer` | `document/histogram` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
-| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation; a text layer's `text`, `runs`, `path` and `path_options` | `set`, `set_text`, `transform` |
+| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation (about the centre or a `pivot`), `cover` to scale up until no canvas corner is empty; a text layer's `text`, `runs`, `path` and `path_options` | `set`, `set_text`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
 | `create_text_layer` | Editable text in a box, or with `path` along an SVG path | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
@@ -288,8 +288,8 @@ larger tool arguments with a tool error saying the request is too large.
 | `apply_filter` | Blur, motion blur, noise, lens correction; or a filter layer | `apply_filter`, `add_adjustment_layer` |
 | `apply_adjustment` | Levels, curves, hue/saturation, exposure, …; or an adjustment layer | `apply_adjustment`, `add_adjustment_layer` |
 | `set_adjustment` | Change an existing adjustment or filter layer's settings in place; `get_document` lists the current ones under `adjustment` and `filter` | `set_adjustment` |
-| `crop_canvas`, `resize_canvas`, `resize_image` | Crop, Canvas Size, Image Size | `crop`, `resize_canvas`, `resize_image` |
-| `rotate_canvas`, `trim_canvas` | Rotate Canvas (90, 180, 270 degrees clockwise), Trim (transparent, top-left or bottom-right colour margins, per side); `run_command` `crop_to_selection` crops to the selection | `rotate_canvas`, `trim` |
+| `crop_canvas`, `resize_canvas`, `resize_image` | Crop to a rectangle, to the largest box of a `ratio` (around a `center`), or `straighten` by an angle and crop the empty corners away; Canvas Size; Image Size | `crop`, `crop_to`, `resize_canvas`, `resize_image` |
+| `rotate_canvas`, `trim_canvas` | Rotate Canvas (any angle clockwise; `expand` grows the canvas to fit, the default), Trim (transparent, top-left or bottom-right colour margins, per side); `run_command` `crop_to_selection` crops to the selection | `rotate_canvas`, `trim` |
 | `undo`, `redo` | Up to 20 steps | `host/run` |
 | `batch` | Several edit tools' steps as one undo step, all or nothing | one `document/edit` |
 | `run_command` | Flatten, duplicate, flip, rotate canvas, crop to selection, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |

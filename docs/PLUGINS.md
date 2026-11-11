@@ -1266,10 +1266,14 @@ Layers and their properties:
   `above`/`below` it must be that layer's group. A layer cannot be moved
   into or next to itself or its own children. The layer becomes the active
   layer.
-- `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?}`:
-  move, scale or rotate a layer (a group with its layers) to this box in
-  document units, as **Free Transform** does; missing fields keep their value.
-  The layer must not be locked.
+- `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?,
+  "pivot"?, "cover"?}`: move, scale or rotate a layer (a group with its
+  layers) to this box in document units, as **Free Transform** does; missing
+  fields keep their value. The layer must not be locked. `rotation` (degrees
+  clockwise) turns the layer about its centre, or about `pivot` (`[x, y]` in
+  document pixels) when given. `cover: true` then scales the layer up about
+  its centre just enough to cover the whole canvas, so no corner is empty; a
+  layer that already covers it is left alone.
 - `{"op": "add_empty_layer", "name"?, "above"?}` and `{"op": "add_mask_layer",
   "name"?, "above"?}`: an empty pixel layer, or a mask layer made from the
   selection (all white without one), the size of the canvas.
@@ -1447,14 +1451,26 @@ placed on the canvas as it was sent; the selection is cleared or rescaled as
 the menu commands do):
 
 - `{"op": "crop", "x", "y", "width", "height"}`: as the Crop tool.
+- `{"op": "crop_to", "ratio"?, "bounds"?, "center"?, "straighten"?}`: a crop
+  whose box Xuan works out. `ratio` (`[width, height]`, such as `[4, 5]`)
+  gives the largest box of that shape inside `bounds` (`[x, y, width,
+  height]`, the canvas by default), centred on `center` (`[x, y]`) as nearly
+  as the bounds allow. `straighten` (-45 to 45 degrees, clockwise) first turns
+  the image as `rotate_canvas` does and then crops to the largest upright box
+  with no empty corners, of `ratio` or of the canvas's own shape; it takes no
+  `bounds` or `center`.
 - `{"op": "resize_canvas", "width", "height", "anchor"?}`: **Image → Canvas
   Size…**, which may also shrink; `anchor` `[0, 0]` keeps the top-left corner,
   `[0.5, 0.5]` (the default) the centre.
 - `{"op": "resize_image", "width", "height"}`: **Image → Image Size…**.
-- `{"op": "rotate_canvas", "degrees"}`: **Image → Rotate Canvas**, `degrees`
-  clockwise: 90, 180 or 270 (-90 is 270). Layers, masks, guides, document
-  paths and the selection turn with the canvas; a quarter turn swaps the
-  width and height.
+- `{"op": "rotate_canvas", "degrees", "expand"?}`: **Image → Rotate Canvas**,
+  `degrees` clockwise, by any angle. Layers, masks, document paths and the
+  selection turn about the canvas centre; layers change their placement and
+  keep their pixels, so nothing is resampled. With `expand` (the default) the
+  canvas grows to hold the turned image: a quarter turn swaps the width and
+  height, and another angle leaves transparent corners. With `expand: false`
+  it keeps its size. Guides turn with quarter turns and are removed by other
+  angles.
 - `{"op": "trim", "based_on"?, "top"?, "bottom"?, "left"?, "right"?}`:
   **Image → Trim…**. `based_on` is `transparent` (the default), `top_left` or
   `bottom_right`, the pixel whose colour the margins have; the sides default

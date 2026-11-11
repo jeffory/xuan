@@ -2929,3 +2929,88 @@ fn pixels_and_histograms_are_measured_as_numbers_and_regions_are_forwarded() {
         }
     }
 }
+
+#[test]
+fn canvas_turns_by_any_angle_and_crops_work_out_ratio_and_straighten_boxes() {
+    let editor = FakeEditor::new(false);
+    let sent = |editor: &FakeEditor| edit_requests(editor).pop().unwrap()["edits"].clone();
+    call_tool(&editor, "rotate_canvas", json!({"degrees": -2.5}));
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "rotate_canvas", "degrees": -2.5}])
+    );
+    call_tool(
+        &editor,
+        "rotate_canvas",
+        json!({"degrees": 90, "expand": false}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "rotate_canvas", "degrees": 90, "expand": false}])
+    );
+
+    // A plain rectangle is the crop it always was.
+    call_tool(
+        &editor,
+        "crop_canvas",
+        json!({"x": 1, "y": 2, "width": 8, "height": 6}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "crop", "x": 1, "y": 2, "width": 8, "height": 6}])
+    );
+    for (arguments, expected) in [
+        (
+            json!({"ratio": "4:5"}),
+            json!({"op": "crop_to", "ratio": [4.0, 5.0]}),
+        ),
+        (
+            json!({"ratio": " 16 x 9 ", "center": [10, 20]}),
+            json!({"op": "crop_to", "ratio": [16.0, 9.0], "center": [10, 20]}),
+        ),
+        (
+            json!({"ratio": "1:1", "x": 1, "y": 2, "width": 8, "height": 6}),
+            json!({"op": "crop_to", "ratio": [1.0, 1.0], "bounds": [1, 2, 8, 6]}),
+        ),
+        (
+            json!({"straighten": -2}),
+            json!({"op": "crop_to", "straighten": -2}),
+        ),
+    ] {
+        let result = call_tool(&editor, "crop_canvas", arguments.clone());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "{arguments}: {}",
+            text_of(&result)
+        );
+        assert_eq!(sent(&editor), json!([expected]), "{arguments}");
+    }
+    let before = edit_requests(&editor).len();
+    for (bad, says) in [
+        (json!({}), "Give x, y"),
+        (json!({"x": 1, "ratio": "1:1"}), "all of x"),
+        (json!({"ratio": "wide"}), "`ratio`"),
+        (json!({"ratio": "4:0"}), "`ratio`"),
+    ] {
+        let result = call_tool(&editor, "crop_canvas", bad.clone());
+        assert_eq!(result.is_error, Some(true), "{bad}");
+        assert!(
+            text_of(&result).contains(says),
+            "{bad}: {}",
+            text_of(&result)
+        );
+    }
+    assert_eq!(edit_requests(&editor).len(), before, "nothing more sent");
+
+    // A pivot and cover go with the placement.
+    call_tool(
+        &editor,
+        "set_layer",
+        json!({"layer": "base", "rotation": 3, "pivot": [100, 80], "cover": true}),
+    );
+    assert_eq!(
+        sent(&editor),
+        json!([{"op": "transform", "layer": "base", "rotation": 3, "pivot": [100, 80], "cover": true}])
+    );
+}

@@ -781,6 +781,14 @@ pub enum Edit {
         height: Option<f32>,
         #[serde(default)]
         rotation: Option<f32>,
+        /// The document point `rotation` turns the layer about, instead of
+        /// the layer's own centre.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pivot: Option<[f32; 2]>,
+        /// Afterwards, scale the layer up about its centre just enough to
+        /// cover the whole canvas, leaving no corner empty.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cover: bool,
     },
     /// A rectangle or ellipse combined with the selection, its edge
     /// softened by `feather` pixels first.
@@ -1113,7 +1121,27 @@ pub enum Edit {
     /// Image → Rotate Canvas: turn the whole document `degrees` clockwise (90, 180 or 270; -90
     /// is 270). Layers, masks, guides, paths and the selection turn with it.
     RotateCanvas {
-        degrees: i32,
+        degrees: f32,
+        /// Grow the canvas to hold all of the turned image (the default), or
+        /// keep its size and lose the corners.
+        #[serde(default = "yes")]
+        expand: bool,
+    },
+    /// Crop the canvas to a box worked out for the caller: the largest box of
+    /// `ratio` (width : height) inside `bounds` (`[x, y, width, height]`,
+    /// the canvas by default), centred on `center` as nearly as the bounds
+    /// allow. With `straighten`, the image is first turned that many degrees
+    /// clockwise and the crop is the largest upright box (of `ratio`, or of
+    /// the canvas's own shape) with no empty corners.
+    CropTo {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ratio: Option<[f32; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bounds: Option<[f32; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center: Option<[f32; 2]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        straighten: Option<f32>,
     },
     /// Image → Trim: crop the canvas to the visible composite's content, as Trim does.
     /// `based_on` is `transparent` (the default), `top_left` or `bottom_right`; the sides
@@ -1591,9 +1619,12 @@ pub fn cost(document: &Document, edits: &[Edit]) -> Cost {
                 height = u64::from(*h);
                 (0, 0)
             }
-            Edit::RotateCanvas { degrees } => {
-                if degrees.rem_euclid(180) == 90 {
-                    std::mem::swap(&mut width, &mut height);
+            Edit::RotateCanvas { degrees, expand } => {
+                if *expand && degrees.is_finite() {
+                    let side = |side: u64| u32::try_from(side).unwrap_or(u32::MAX);
+                    let (w, h) =
+                        crate::operations::rotated_canvas_size(side(width), side(height), *degrees);
+                    (width, height) = (u64::from(w), u64::from(h));
                 }
                 (0, 0)
             }
@@ -1654,6 +1685,7 @@ impl Edit {
                 | Self::ResizeCanvas { .. }
                 | Self::ResizeImage { .. }
                 | Self::RotateCanvas { .. }
+                | Self::CropTo { .. }
                 | Self::Trim { .. }
         )
     }
@@ -1798,6 +1830,7 @@ macro_rules! layer_ids {
             | Edit::ResizeCanvas { .. }
             | Edit::ResizeImage { .. }
             | Edit::RotateCanvas { .. }
+            | Edit::CropTo { .. }
             | Edit::Trim { .. } => Vec::new(),
         }
     };
@@ -2122,12 +2155,15 @@ fn apply_each(
                 width,
                 height,
                 rotation,
+                pivot,
+                cover,
             } => {
                 let target = find(document, *layer)?;
                 ensure!(!target.locked, "Layer {} is locked", target.name);
                 document.select(*layer, false);
                 let mut transform = crate::operations::transform_box(document, false)
                     .context("The layer cannot be transformed")?;
+                let turned_from = transform.rotation;
                 for (value, field) in [
                     (x, &mut transform.x),
                     (y, &mut transform.y),
@@ -2137,6 +2173,42 @@ fn apply_each(
                 ] {
                     if let Some(value) = value {
                         *field = *value;
+                    }
+                }
+                if let Some([px, py]) = pivot {
+                    ensure!(
+                        px.is_finite() && py.is_finite(),
+                        "`pivot` must be [x, y] in document pixels"
+                    );
+                    // Turning about a point moves the centre round it by the same angle.
+                    let (sin, cos) = (transform.rotation - turned_from).to_radians().sin_cos();
+                    let center = transform.center();
+                    let (dx, dy) = (center.x - px, center.y - py);
+                    transform.x = px + cos * dx - sin * dy - transform.width * 0.5;
+                    transform.y = py + sin * dx + cos * dy - transform.height * 0.5;
+                }
+                if *cover {
+                    // How far each canvas corner lies from the layer's centre along the
+                    // layer's own axes, against half its width and height.
+                    let (sin, cos) = transform.rotation.to_radians().sin_cos();
+                    let center = transform.center();
+                    let (w, h) = (document.width as f32, document.height as f32);
+                    let scale = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+                        .into_iter()
+                        .map(|(x, y)| {
+                            let (dx, dy) = (x - center.x, y - center.y);
+                            let along = (cos * dx + sin * dy).abs() / (transform.width * 0.5);
+                            let across = (-sin * dx + cos * dy).abs() / (transform.height * 0.5);
+                            along.max(across)
+                        })
+                        .fold(1.0_f32, f32::max);
+                    if scale > 1.0 {
+                        // A hair over, so rounding leaves no transparent edge pixel.
+                        let scale = scale * 1.0005;
+                        transform.x = center.x - transform.width * scale * 0.5;
+                        transform.y = center.y - transform.height * scale * 0.5;
+                        transform.width *= scale;
+                        transform.height *= scale;
                     }
                 }
                 ensure!(transform.valid(), "Invalid layer placement");
@@ -2785,10 +2857,85 @@ fn apply_each(
             Edit::ResizeImage { width, height } => {
                 crate::operations::image_size(document, *width, *height)?;
             }
-            Edit::RotateCanvas { degrees } => {
-                let rotation = crate::operations::CanvasRotation::from_degrees(*degrees)
-                    .context("The rotation must be 90, 180 or 270 degrees")?;
-                crate::operations::rotate_canvas(document, rotation);
+            Edit::RotateCanvas { degrees, expand } => {
+                crate::operations::rotate_canvas_by(document, *degrees, *expand)?;
+            }
+            Edit::CropTo {
+                ratio,
+                bounds,
+                center,
+                straighten,
+            } => {
+                let finite = |numbers: &[f32]| numbers.iter().all(|number| number.is_finite());
+                let ratio = match ratio {
+                    Some([w, h]) => {
+                        ensure!(
+                            finite(&[*w, *h]) && *w > 0.0 && *h > 0.0,
+                            "`ratio` must be two numbers above 0, such as [4, 5]"
+                        );
+                        Some(w / h)
+                    }
+                    None => None,
+                };
+                let (canvas_width, canvas_height) = (document.width as f32, document.height as f32);
+                let (x, y, width, height) = if let Some(degrees) = straighten {
+                    ensure!(
+                        bounds.is_none() && center.is_none(),
+                        "`straighten` crops about the canvas centre: leave out `bounds` and `center`"
+                    );
+                    ensure!(
+                        degrees.is_finite() && degrees.abs() <= 45.0 && *degrees != 0.0,
+                        "`straighten` must be an angle from -45 to 45 degrees, and not 0"
+                    );
+                    let (width, height) = crate::operations::inscribed_size(
+                        canvas_width,
+                        canvas_height,
+                        *degrees,
+                        ratio.unwrap_or(canvas_width / canvas_height),
+                    );
+                    crate::operations::rotate_canvas_by(document, *degrees, true)?;
+                    // Whole pixels, inside the turned image: never an empty edge.
+                    let (width, height) = (
+                        (width - 1.0).floor().max(1.0),
+                        (height - 1.0).floor().max(1.0),
+                    );
+                    (
+                        (document.width as f32 - width) / 2.0,
+                        (document.height as f32 - height) / 2.0,
+                        width,
+                        height,
+                    )
+                } else {
+                    let [bx, by, bw, bh] =
+                        bounds.unwrap_or([0.0, 0.0, canvas_width, canvas_height]);
+                    ensure!(
+                        finite(&[bx, by, bw, bh]) && bw >= 1.0 && bh >= 1.0,
+                        "`bounds` must be [x, y, width, height] with a width and height of at least 1"
+                    );
+                    ensure!(
+                        ratio.is_some() || bounds.is_some(),
+                        "Give a `ratio`, `bounds` or `straighten` to crop to"
+                    );
+                    let (width, height) = match ratio {
+                        Some(ratio) if bw / bh > ratio => ((bh * ratio).floor().max(1.0), bh),
+                        Some(ratio) => (bw, (bw / ratio).floor().max(1.0)),
+                        None => (bw, bh),
+                    };
+                    let [cx, cy] = center.unwrap_or([bx + bw / 2.0, by + bh / 2.0]);
+                    ensure!(finite(&[cx, cy]), "`center` must be [x, y]");
+                    (
+                        (cx - width / 2.0).clamp(bx, bx + bw - width),
+                        (cy - height / 2.0).clamp(by, by + bh - height),
+                        width,
+                        height,
+                    )
+                };
+                let (x, y) = (x.round(), y.round());
+                crate::operations::crop(
+                    document,
+                    Point::new(x, y),
+                    Point::new(x + width.round(), y + height.round()),
+                )?;
             }
             Edit::Trim {
                 based_on,
@@ -5196,6 +5343,221 @@ mod tests {
         }
     }
 
+    /// Whether every pixel of the flattened image is opaque: no corner is empty.
+    fn covered(document: &Document) -> bool {
+        crate::render::render(document)
+            .pixels()
+            .all(|p| p.0[3] == 255)
+    }
+
+    #[test]
+    fn the_canvas_turns_by_any_angle_growing_to_fit_or_keeping_its_size() {
+        let (mut document, id) = grey_document();
+        document.selection = Some(Arc::new(image::GrayImage::from_pixel(
+            40,
+            30,
+            image::Luma([255]),
+        )));
+        let turn = edit(json!({"op": "rotate_canvas", "degrees": 30}));
+        assert!(turn.direct_only());
+        run(&mut document, &[turn]).unwrap();
+        // 40 cos 30° + 30 sin 30° = 49.6, 40 sin 30° + 30 cos 30° = 45.98.
+        assert_eq!((document.width, document.height), (50, 46));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.rotation, 30.0);
+        assert_eq!(
+            (layer.transform.width, layer.transform.height),
+            (40.0, 30.0),
+            "the pixels are not resampled"
+        );
+        let center = layer.transform.center();
+        assert!((center.x - 25.0).abs() < 0.01 && (center.y - 23.0).abs() < 0.01);
+        assert!(!covered(&document), "the corners are empty");
+        let selection = document.selection.as_deref().unwrap();
+        assert_eq!(selection.dimensions(), (50, 46));
+        assert_eq!(selection.get_pixel(25, 23).0, [255]);
+        assert_eq!(selection.get_pixel(0, 0).0, [0]);
+
+        // Turning back gives the picture back, on the larger canvas.
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "rotate_canvas", "degrees": -30, "expand": false}),
+            )],
+        )
+        .unwrap();
+        assert_eq!((document.width, document.height), (50, 46));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert!(layer.transform.rotation.abs() < 0.001);
+
+        // Without expanding, even a quarter turn keeps the canvas.
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "rotate_canvas", "degrees": 90, "expand": false}),
+            )],
+        )
+        .unwrap();
+        assert_eq!((document.width, document.height), (40, 30));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.rotation, 90.0);
+        assert_eq!(layer.transform.center(), Point::new(20.0, 15.0));
+        let nan = Edit::RotateCanvas {
+            degrees: f32::NAN,
+            expand: true,
+        };
+        assert!(run(&mut document, &[nan]).is_err());
+    }
+
+    #[test]
+    fn crop_to_finds_the_box_for_a_ratio_and_straightens_without_empty_corners() {
+        let size = |document: &Document| (document.width, document.height);
+        let (mut document, id) = grey_document();
+        let square = edit(json!({"op": "crop_to", "ratio": [1, 1]}));
+        assert!(square.direct_only());
+        run(&mut document, &[square]).unwrap();
+        assert_eq!(size(&document), (30, 30));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.x, -5.0, "centred");
+
+        // The centre is honoured as far as the canvas allows.
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "crop_to", "ratio": [4, 5], "center": [0, 15]}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(size(&document), (24, 30));
+        let layer = document.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(layer.transform.x, 0.0);
+
+        // Inside bounds, the ratio's largest box.
+        let (mut document, _) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "crop_to", "ratio": [2, 1], "bounds": [10, 10, 20, 20]}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(size(&document), (20, 10));
+
+        for degrees in [7.5, -12.0, 45.0] {
+            let (mut document, _) = grey_document();
+            run(
+                &mut document,
+                &[edit(json!({"op": "crop_to", "straighten": degrees}))],
+            )
+            .unwrap();
+            assert!(covered(&document), "{degrees}: {:?}", size(&document));
+            let (width, height) = size(&document);
+            assert!(width < 40 && height < 30 && width > 10, "{degrees}");
+            let shape = width as f32 / height as f32;
+            assert!((shape - 4.0 / 3.0).abs() < 0.15, "{degrees}: {shape}");
+        }
+        let (mut document, _) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "crop_to", "straighten": 5, "ratio": [1, 1]}),
+            )],
+        )
+        .unwrap();
+        assert!(covered(&document));
+        assert_eq!(document.width, document.height);
+
+        for (bad, says) in [
+            (json!({"op": "crop_to"}), "Give a `ratio`"),
+            (json!({"op": "crop_to", "ratio": [0, 1]}), "`ratio`"),
+            (json!({"op": "crop_to", "straighten": 60}), "-45 to 45"),
+            (
+                json!({"op": "crop_to", "straighten": 5, "center": [1, 1]}),
+                "leave out",
+            ),
+            (
+                json!({"op": "crop_to", "ratio": [1, 1], "bounds": [0, 0, 0, 5]}),
+                "`bounds`",
+            ),
+        ] {
+            let (mut document, _) = grey_document();
+            let error = run(&mut document, &[edit(bad.clone())]).unwrap_err();
+            assert!(error.to_string().contains(says), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn layers_turn_about_a_pivot_and_grow_to_cover_the_canvas() {
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": id, "rotation": 90, "pivot": [0, 0]}),
+            )],
+        )
+        .unwrap();
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == id)
+            .unwrap()
+            .transform;
+        // The centre (20, 15) goes round the corner to (-15, 20).
+        assert!((transform.x + 35.0).abs() < 0.001 && (transform.y - 5.0).abs() < 0.001);
+        assert_eq!((transform.width, transform.height), (40.0, 30.0));
+
+        // A turned layer leaves corners empty until it is asked to cover.
+        let (mut document, id) = grey_document();
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": id, "rotation": 8}))],
+        )
+        .unwrap();
+        assert!(!covered(&document));
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": id, "cover": true}))],
+        )
+        .unwrap();
+        assert!(covered(&document));
+        let transform = document
+            .layers
+            .iter()
+            .find(|l| l.id == id)
+            .unwrap()
+            .transform;
+        assert!(transform.width > 40.0 && transform.width < 60.0);
+        assert!((transform.width / transform.height - 4.0 / 3.0).abs() < 0.001);
+        assert_eq!(transform.center(), Point::new(20.0, 15.0));
+
+        // A layer that already covers is left alone; one moved off centre grows more.
+        let before = transform;
+        run(
+            &mut document,
+            &[edit(json!({"op": "transform", "layer": id, "cover": true}))],
+        )
+        .unwrap();
+        assert_eq!(
+            document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .unwrap()
+                .transform,
+            before
+        );
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": id, "x": before.x + 6.0, "cover": true}),
+            )],
+        )
+        .unwrap();
+        assert!(covered(&document));
+    }
+
     #[test]
     fn rotate_canvas_and_trim_edits_work_and_reject_bad_angles() {
         let mut document = Document::new(6, 4).unwrap();
@@ -5217,7 +5579,7 @@ mod tests {
         run(&mut document, &[trim]).unwrap();
         // Left, right and bottom trimmed; the top margin stays.
         assert_eq!((document.width, document.height), (1, 2));
-        for bad in [45, 0, 360] {
+        for bad in [0, 360] {
             let edit = edit(json!({"op": "rotate_canvas", "degrees": bad}));
             assert!(run(&mut document.clone(), &[edit]).is_err(), "{bad}");
         }
