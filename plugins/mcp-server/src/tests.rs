@@ -3181,10 +3181,17 @@ fn set_layer_sets_a_layers_effects_whole_or_removes_them() {
     let schema = &set.input_schema["properties"]["effects"];
     assert_eq!(schema["type"], json!(["object", "null"]));
     let effect = |name: &str| &schema["properties"][name]["properties"];
-    assert_eq!(effect("outer_glow")["size"]["maximum"], 500);
-    assert_eq!(effect("drop_shadow")["distance"]["maximum"], 5000);
-    assert_eq!(effect("inner_shadow")["angle"]["minimum"], -360);
+    // The ranges of the Layer Effects dialog, in whole numbers but for opacities.
+    assert_eq!(effect("outer_glow")["size"]["maximum"], 250);
+    assert_eq!(effect("drop_shadow")["distance"]["maximum"], 1000);
+    assert_eq!(effect("drop_shadow")["blur"]["maximum"], 250);
+    assert_eq!(effect("inner_shadow")["angle"]["minimum"], -180);
+    assert_eq!(effect("stroke")["size"]["minimum"], 1);
+    assert_eq!(effect("stroke")["size"]["type"], "integer");
+    assert_eq!(effect("stroke")["opacity"]["type"], "number");
     assert_eq!(effect("stroke")["color"]["maxItems"], 3);
+    let get = tools.iter().find(|t| t.name == "get_document").unwrap();
+    assert!(get.description.as_deref().unwrap().contains("`effects`"));
     assert!(
         schema["description"]
             .as_str()

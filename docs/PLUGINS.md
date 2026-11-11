@@ -1248,11 +1248,17 @@ its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
   the shape `document/get` reports, and `null` (or `{}`) removes them; left
   out, they do not change. Each effect it names starts from the settings
   **Layer Effects** gives a new one, so settings left out keep those (a black
-  stroke or colour overlay). Colours are `[r, g, b]`. The ranges are those of
-  the file format: a stroke's or glow's `size` 0–500, a shadow's `angle`
-  −360–360, `distance` 0–5000 and `blur` 0–500, every `opacity` 0–1. An
-  unknown effect or setting is refused, and so are effects on groups, mask,
-  adjustment and filter layers. For example `{"op": "set", "layer": id,
+  stroke or colour overlay). Colours are `[r, g, b]`. Settings are held to
+  what the **Layer Effects** dialog offers, so it shows them unchanged: a
+  stroke's `size` 1–500, a glow's 0–250, a shadow's `angle` −180–180,
+  `distance` 0–1000 and `blur` 0–250, all in whole numbers (pixels and
+  degrees), and every `opacity` 0–1. A shadow's angle past ±180 is taken a
+  whole turn round (270 is −90); it is in the layer's own pixels, so the
+  shadow turns and flips with the layer. Anything else out of range is
+  refused, naming the setting, as are an unknown effect or setting and
+  effects on groups, mask, adjustment and filter layers. Files may hold
+  larger values ([FORMAT.md](FORMAT.md)), but plugins cannot set them. For
+  example `{"op": "set", "layer": id,
   "effects": {"outer_glow": {"size": 24, "color": [255, 217, 120],
   "opacity": 0.8}}}`.
 - `{"op": "remove_layer", "layer"}`

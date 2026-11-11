@@ -1,6 +1,7 @@
 //! What plugins see of a document and how they change it: JSON descriptions,
 //! PNG exports and batched edits that the editor records as one undo step.
 use std::{
+    ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -1890,15 +1891,67 @@ fn effects_from(value: &Value) -> Result<LayerEffects> {
         }
         effects.insert(name.clone(), Value::Object(merged));
     }
-    let effects: LayerEffects = serde_json::from_value(Value::Object(effects))
+    let mut effects: LayerEffects = serde_json::from_value(Value::Object(effects))
         .map_err(|error| anyhow::anyhow!("Invalid layer effects: {error}"))?;
-    ensure!(
-        effects.validate().is_ok(),
-        "Layer effect settings out of range: a stroke's or glow's `size` is 0–500 pixels, a \
-         shadow's `angle` −360–360 degrees, `distance` 0–5000 and `blur` 0–500 pixels, and \
-         every `opacity` 0–1"
-    );
+    hold_to_dialog_ranges(&mut effects)?;
+    effects.validate()?;
     Ok(effects)
+}
+
+/// Keep plugin effects to what Layer → Layer Effects… offers (see
+/// [`layer_effects::ranges`](crate::layer_effects::ranges)), whose sliders would otherwise change
+/// a value outside them, or one with more decimals than they keep, as soon as the dialog shows
+/// it. A shadow's light angle is brought into range by whole turns, which changes nothing;
+/// anything else outside is refused.
+fn hold_to_dialog_ranges(effects: &mut LayerEffects) -> Result<()> {
+    use crate::layer_effects::ranges;
+    // Opacities keep every decimal; the dialog's other sliders keep `ranges::DECIMALS`.
+    fn check(effect: &str, setting: &str, value: f32, range: RangeInclusive<f32>) -> Result<()> {
+        let opacity = setting == "opacity";
+        let scale = 10f32.powi(ranges::DECIMALS as i32);
+        let kept = opacity || (value * scale).round() / scale == value;
+        let what = match (opacity, ranges::DECIMALS) {
+            (true, _) => String::new(),
+            (false, 0) => "a whole number ".into(),
+            (false, decimals) => format!("a number with at most {decimals} decimals "),
+        };
+        ensure!(
+            kept && range.contains(&value),
+            "`{effect}` `{setting}` must be {what}from {} to {}, as Layer Effects offers, not {value}",
+            range.start(),
+            range.end()
+        );
+        Ok(())
+    }
+    if let Some(stroke) = &effects.stroke {
+        check("stroke", "size", stroke.size, ranges::STROKE_SIZE)?;
+        check("stroke", "opacity", stroke.opacity, ranges::OPACITY)?;
+    }
+    for (name, shadow) in [
+        ("drop_shadow", &mut effects.drop_shadow),
+        ("inner_shadow", &mut effects.inner_shadow),
+    ] {
+        let Some(shadow) = shadow else { continue };
+        if !ranges::SHADOW_ANGLE.contains(&shadow.angle) {
+            shadow.angle = crate::document::normalized_degrees(shadow.angle);
+        }
+        check(name, "angle", shadow.angle, ranges::SHADOW_ANGLE)?;
+        check(name, "distance", shadow.distance, ranges::SHADOW_DISTANCE)?;
+        check(name, "blur", shadow.blur, ranges::SHADOW_BLUR)?;
+        check(name, "opacity", shadow.opacity, ranges::OPACITY)?;
+    }
+    if let Some(overlay) = &effects.color_overlay {
+        check("color_overlay", "opacity", overlay.opacity, ranges::OPACITY)?;
+    }
+    for (name, glow) in [
+        ("outer_glow", &effects.outer_glow),
+        ("inner_glow", &effects.inner_glow),
+    ] {
+        let Some(glow) = glow else { continue };
+        check(name, "size", glow.size, ranges::GLOW_SIZE)?;
+        check(name, "opacity", glow.opacity, ranges::OPACITY)?;
+    }
+    Ok(())
 }
 
 /// The ids `"$n"` references are parsed to until [`apply`] resolves them:
@@ -6266,8 +6319,48 @@ mod tests {
             (json!({"OuterGlow": {"size": 24}}), "not a layer effect"),
             (json!({"outer_glow": {"radius": 24}}), "no setting `radius`"),
             (json!({"outer_glow": {"color": "#ffd978"}}), "[r, g, b]"),
-            (json!({"outer_glow": {"size": 900}}), "out of range"),
-            (json!({"drop_shadow": {"opacity": 2}}), "out of range"),
+            // Held to what the Layer Effects dialog offers, which would change anything else.
+            (
+                json!({"outer_glow": {"size": 400}}),
+                "`outer_glow` `size` must be a whole number from 0 to 250, as Layer Effects offers, not 400",
+            ),
+            (
+                json!({"inner_glow": {"size": 251}}),
+                "`inner_glow` `size` must be a whole number from 0 to 250",
+            ),
+            (
+                json!({"drop_shadow": {"distance": 3000}}),
+                "`drop_shadow` `distance` must be a whole number from 0 to 1000",
+            ),
+            (
+                json!({"inner_shadow": {"blur": 400}}),
+                "`inner_shadow` `blur` must be a whole number from 0 to 250",
+            ),
+            (
+                json!({"stroke": {"size": 0}}),
+                "`stroke` `size` must be a whole number from 1 to 500",
+            ),
+            (
+                json!({"drop_shadow": {"opacity": 2}}),
+                "`drop_shadow` `opacity` must be from 0 to 1",
+            ),
+            // The dialog shows these as whole numbers and would round them.
+            (
+                json!({"drop_shadow": {"blur": 12.25}}),
+                "`drop_shadow` `blur` must be a whole number from 0 to 250, as Layer Effects offers, not 12.25",
+            ),
+            (
+                json!({"inner_shadow": {"angle": 37.5}}),
+                "`inner_shadow` `angle` must be a whole number from -180 to 180",
+            ),
+            (
+                json!({"outer_glow": {"size": 0.75}}),
+                "`outer_glow` `size` must be a whole number",
+            ),
+            (
+                json!({"color_overlay": {"opacity": -0.5}}),
+                "`color_overlay` `opacity` must be from 0 to 1",
+            ),
             (json!({"stroke": 4}), "object of its settings"),
             (json!([{"outer_glow": {}}]), "an object such as"),
             (
@@ -6279,6 +6372,23 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(error.contains(says), "{bad}: {error}");
+        }
+        // A light angle past the dialog's −180–180 is the same angle a whole turn round.
+        for (sent, kept) in [
+            (270.0, -90.0),
+            (-270.0, 90.0),
+            (540.0, 180.0),
+            (-180.0, -180.0),
+            (725.0, 5.0),
+        ] {
+            set(
+                &mut document,
+                json!({"drop_shadow": {"angle": sent}, "inner_shadow": {"angle": sent}}),
+            )
+            .unwrap();
+            for shadow in ["drop_shadow", "inner_shadow"] {
+                assert_eq!(effects(&document)[shadow]["angle"], kept, "{sent}");
+            }
         }
         // Groups, masks, adjustment and filter layers take none, though null is harmless.
         let invert = run(

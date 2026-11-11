@@ -216,7 +216,8 @@ fn path_options() -> Value {
     })
 }
 /// A layer's effects for set_layer, in the shape `.xuan` files store them (Xuan's
-/// `LayerEffects`) and get_document reports them, with the ranges Xuan accepts.
+/// `LayerEffects`) and get_document reports them, with the ranges Xuan takes from plugins: those
+/// of the Layer Effects dialog (`layer_effects::ranges`), in whole numbers but for opacities.
 fn layer_effects() -> Value {
     let enabled = json!({"type": "boolean", "description": "Shown (default true); false keeps the settings and draws nothing"});
     let rgb = |default: &str| {
@@ -224,16 +225,16 @@ fn layer_effects() -> Value {
                "description": format!("[r, g, b], each 0–255 (default {default})")})
     };
     let opacity = |default: f32| json!({"type": "number", "minimum": 0, "maximum": 1, "description": format!("0–1 (default {default})")});
-    let pixels = |max: u32, default: u32| json!({"type": "number", "minimum": 0, "maximum": max, "description": format!("Layer pixels, 0–{max} (default {default})")});
+    let pixels = |min: u32, max: u32, default: u32| json!({"type": "integer", "minimum": min, "maximum": max, "description": format!("Whole layer pixels, {min}–{max} (default {default})")});
     let shadow = |description: &str, distance: u32, blur: u32| {
         json!({
             "type": "object",
             "description": description,
             "properties": {
                 "enabled": enabled,
-                "angle": {"type": "number", "minimum": -360, "maximum": 360, "description": "Where the light comes from, in degrees counterclockwise from the right: 90 (the default) is from above, which drops the shadow straight down"},
-                "distance": pixels(5000, distance),
-                "blur": pixels(500, blur),
+                "angle": {"type": "integer", "minimum": -180, "maximum": 180, "description": "Where the light comes from, in whole degrees counterclockwise from the right of the layer's own pixels, so it turns and flips with the layer: 90 (the default) is from the layer's top, which drops the shadow towards its bottom. An angle past ±180 is taken a whole turn round (270 is -90)"},
+                "distance": pixels(0, 1000, distance),
+                "blur": pixels(0, 250, blur),
                 "color": rgb("[0, 0, 0]"),
                 "opacity": opacity(0.5),
             },
@@ -244,7 +245,7 @@ fn layer_effects() -> Value {
         json!({
             "type": "object",
             "description": description,
-            "properties": {"enabled": enabled, "size": pixels(500, size), "color": rgb("[255, 255, 255]"), "opacity": opacity(0.75)},
+            "properties": {"enabled": enabled, "size": pixels(0, 250, size), "color": rgb("[255, 255, 255]"), "opacity": opacity(0.75)},
             "additionalProperties": false,
         })
     };
@@ -255,7 +256,7 @@ fn layer_effects() -> Value {
             "stroke": {
                 "type": "object",
                 "description": "A line around what the layer shows",
-                "properties": {"enabled": enabled, "size": pixels(500, 4), "color": rgb("[0, 0, 0]"), "opacity": opacity(1.0), "inside": {"type": "boolean", "description": "Inside the edge instead of outside it (default false)"}},
+                "properties": {"enabled": enabled, "size": pixels(1, 500, 4), "color": rgb("[0, 0, 0]"), "opacity": opacity(1.0), "inside": {"type": "boolean", "description": "Inside the edge instead of outside it (default false)"}},
                 "additionalProperties": false,
             },
             "drop_shadow": shadow("A shadow behind the layer", 20, 20),
@@ -272,7 +273,7 @@ fn layer_effects() -> Value {
         "additionalProperties": false,
     })
 }
-const EFFECTS: &str = r##"The layer's effects (Layer → Layer Effects… in Xuan), ALL of them as one object, as .xuan files store them and get_document reports them under `effects`: any of "stroke", "drop_shadow", "color_overlay", "inner_shadow", "outer_glow" and "inner_glow", each an object of its settings. It replaces every effect the layer had, so to change one, read them with get_document, change it and send them all back; null (or {}) removes them all. Settings left out take the defaults a new effect gets in Xuan. Colours are [r, g, b] lists, not "#rrggbb". Only pixel, text and shape layers take effects. Example, a warm glow: {"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}. The same JSON sent as a string is accepted too."##;
+const EFFECTS: &str = r##"The layer's effects (Layer → Layer Effects… in Xuan), ALL of them as one object, as .xuan files store them and get_document reports them under `effects`: any of "stroke", "drop_shadow", "color_overlay", "inner_shadow", "outer_glow" and "inner_glow", each an object of its settings. It replaces every effect the layer had, so to change one, read them with get_document, change it and send them all back; null (or {}) removes them all. Settings left out take the defaults a new effect gets in Xuan. Sizes, distances, blurs and angles are whole numbers within the ranges the Layer Effects dialog offers (a stroke 1–500 pixels; a glow 0–250; a shadow's distance 0–1000 and blur 0–250), so the dialog shows them unchanged; anything else is refused, naming the setting. Colours are [r, g, b] lists, not "#rrggbb". Only pixel, text and shape layers take effects. Example, a warm glow: {"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}."##;
 const TEXT_PATH: &str = "Set the text along this path instead of in a box: SVG path data in document pixels, as in an SVG <path d=…>, e.g. \"M 100 400 Q 300 200 500 400\". Only the first subpath is followed; letters past the end of an open path are hidden, and on a closed path the text wraps around";
 const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
 /// Requests that hand over what is in the image, which the user may refuse.
@@ -380,7 +381,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_document",
             title: "Describe the document",
-            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, for generated layers their provenance, and for RAW layers under `raw` the camera file, camera, lens, ISO, aperture, shutter and focal length, and the Develop `settings` develop_raw changes). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
+            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, its layer `effects` (null when it has none, else as set_layer takes them), for generated layers their provenance, and for RAW layers under `raw` the camera file, camera, lens, ISO, aperture, shutter and focal length, and the Develop `settings` develop_raw changes). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
             properties: json!({"document": {"type": "string", "description": "A document id from list_documents"}}),
             required: &[],
             kind: Kind::Read,

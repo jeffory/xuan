@@ -406,7 +406,11 @@ layer's under `effects` (`null` when it has none), in the shape `.xuan` files
 store them, and `set_layer` `effects` takes that object back whole: it
 replaces all the layer's effects, so read them, change one and send them all.
 Settings left out take the defaults a new effect gets; colours are
-`[r, g, b]`; `null` removes them. For a warm glow on a layer:
+`[r, g, b]`; `null` removes them. Settings are held to what the Layer Effects
+dialog offers, in whole numbers but for opacities: a stroke 1–500 pixels, a
+glow 0–250, a shadow's distance 0–1000, blur 0–250 and light angle −180–180
+(in the layer's own pixels, so the shadow turns and flips with the layer).
+For a warm glow on a layer:
 
 ```json
 {"layer": "<id>", "effects": {"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}}
