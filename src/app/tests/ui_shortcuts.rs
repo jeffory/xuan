@@ -73,6 +73,35 @@ fn app_effect(id: &str) -> Option<Effect> {
             |app| app.tool == Tool::Pencil,
         ),
         "switch_brush" => State(|app| app.tool = Tool::Brush, |app| app.tool == Tool::Pencil),
+        "tool_gradient" => State(
+            |app| app.gradient_variant = Tool::Bucket,
+            |app| app.tool == Tool::Bucket,
+        ),
+        "switch_gradient" => State(
+            |app| app.tool = Tool::Gradient,
+            |app| app.tool == Tool::Bucket,
+        ),
+        "switch_tone" => State(
+            |app| {
+                app.tool = Tool::Dodge;
+                app.tone_mode = PaintMode::Burn;
+            },
+            |app| app.tool == Tool::Dodge && app.tone_mode == PaintMode::Sponge,
+        ),
+        "switch_blur" => State(
+            |app| {
+                app.tool = Tool::Blur;
+                app.blur_mode = PaintMode::Smudge;
+            },
+            |app| app.tool == Tool::Blur && app.blur_mode == PaintMode::Liquify,
+        ),
+        "crop_mode" => State(
+            |app| {
+                app.tool = Tool::Crop;
+                app.crop.perspective = false;
+            },
+            |app| app.tool == Tool::Crop && app.crop.perspective && app.crop.quad.is_some(),
+        ),
         "marquee_shape" => State(
             |app| app.ellipse = false,
             |app| app.tool == Tool::Marquee && app.ellipse,
@@ -140,12 +169,12 @@ fn other_effect(chord: &str) -> Option<Effect> {
     Some(match chord {
         // Applies a crop, or abandons one, when a crop rectangle is waiting.
         "Enter" => State(
-            |app| app.crop_rect = Some((Point::new(2.0, 2.0), Point::new(10.0, 10.0))),
-            |app| app.crop_rect.is_none() && app.session().unwrap().document.width == 8,
+            |app| app.crop.rect = Some(xuan::crop::CropBox::new(2, 2, 8, 8)),
+            |app| app.crop.rect.is_none() && app.session().unwrap().document.width == 8,
         ),
         "Escape" => State(
-            |app| app.crop_rect = Some((Point::new(2.0, 2.0), Point::new(10.0, 10.0))),
-            |app| app.crop_rect.is_none(),
+            |app| app.crop.rect = Some(xuan::crop::CropBox::new(2, 2, 8, 8)),
+            |app| app.crop.rect.is_none(),
         ),
         _ => return None,
     })
@@ -272,9 +301,20 @@ fn documented_shortcuts_trigger_their_commands() {
                 ui.app_mut().command_trace = None;
                 ui.app_mut().command("select_all");
             }
+            // The Camera Raw Filter needs a layer with pixels.
+            if command.id == "camera_raw_filter" {
+                let session = ui.app_mut().session_mut().unwrap();
+                session.document.active_mut().unwrap().pixels =
+                    Some(Arc::new(RgbaImage::new(20, 16)));
+            }
             // An open palette would take the next chord.
             ui.app_mut().palette = None;
             press_and_check(&mut ui, command.id, chord, &effect);
+            // A workspace of its own would take the next chord.
+            if ui.app().develop.is_some() {
+                ui.app_mut().cancel_develop();
+                ui.settle();
+            }
             pressed += 1;
         }
     }

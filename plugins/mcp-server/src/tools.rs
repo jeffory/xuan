@@ -126,11 +126,15 @@ enum Kind {
     Edit,
     /// Goes through the user: a save dialog or an open prompt.
     File,
+    /// Runs another plugin's action: the first run of each plugin in a
+    /// session asks the user, and that plugin's own prompts apply.
+    Run,
 }
 
 /// Said in the description of every tool that may wait for the user.
 const EDIT_WAITS: &str = "The first edit of a session waits until the user answers Xuan's prompt to allow edits from this session. If they do not answer in time, the call fails without changing anything: then ask the user to answer the prompt in Xuan instead of retrying.";
 const FILE_WAITS: &str = "The call waits until the user answers in Xuan. If they do not answer in time, it fails without doing anything: then ask the user instead of retrying.";
+const RUN_WAITS: &str = "The first run of each plugin in a session waits until the user answers Xuan's prompt to allow it, and a plugin that uses the network also asks before the image is sent. If they do not answer in time, the call fails without running anything: then ask the user instead of retrying.";
 
 const LAYER: &str = "A layer id from get_document";
 const MODE: &str = "How it combines with the current selection";
@@ -171,6 +175,27 @@ fn fill_rule() -> Value {
     json!({"type": "string", "enum": ["nonzero", "evenodd"],
            "description": "Which parts of the path are inside, as SVG's fill-rule (default nonzero); with evenodd an inner subpath always cuts a hole"})
 }
+/// Letters of a text layer with their own style, for create_text_layer and set_layer.
+fn text_runs() -> Value {
+    json!({
+        "type": "array",
+        "description": "Letters with their own font, colour, bold or italic: sorted, not overlapping. `start` and `end` count Unicode code points (not UTF-16 units) from the start of the text, `end` excluded; what a run leaves out is the layer's",
+        "items": {
+            "type": "object",
+            "properties": {
+                "start": {"type": "integer", "minimum": 0},
+                "end": {"type": "integer", "minimum": 1},
+                "family": {"type": "string", "description": "Font family name"},
+                "color": color("The letters' colour"),
+                "bold": {"type": "boolean"},
+                "italic": {"type": "boolean"},
+            },
+            "required": ["start", "end"],
+            "additionalProperties": false,
+        },
+    })
+}
+
 /// How text follows its path, for create_text_layer and set_layer.
 fn path_options() -> Value {
     json!({
@@ -192,6 +217,36 @@ fn path_options() -> Value {
 }
 const TEXT_PATH: &str = "Set the text along this path instead of in a box: SVG path data in document pixels, as in an SVG <path d=…>, e.g. \"M 100 400 Q 300 200 500 400\". Only the first subpath is followed; letters past the end of an open path are hidden, and on a closed path the text wraps around";
 const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
+/// Requests that hand over what is in the image, which the user may refuse.
+fn sends_the_image(method: &str) -> bool {
+    method.ends_with("/export") || matches!(method, "document/sample" | "document/histogram")
+}
+/// A ratio as "4:5", "4/5", "4x5" or [4, 5]: two numbers above 0.
+fn parse_ratio(value: &Value) -> Result<[f64; 2], String> {
+    let bad = || "`ratio` must be width to height, such as \"4:5\"".to_string();
+    let terms: Vec<f64> = match value {
+        Value::Array(terms) => terms.iter().filter_map(Value::as_f64).collect(),
+        Value::String(text) => text
+            .split([':', '/', 'x', '×'])
+            .map(|term| term.trim().parse::<f64>())
+            .collect::<Result<_, _>>()
+            .map_err(|_| bad())?,
+        _ => return Err(bad()),
+    };
+    match terms.as_slice() {
+        &[width, height] if width > 0.0 && height > 0.0 && (width + height).is_finite() => {
+            Ok([width, height])
+        }
+        _ => Err(bad()),
+    }
+}
+fn region() -> Value {
+    json!({"description": "A rectangle as [x, y, width, height] in document pixels; what lies outside the canvas is left out", "oneOf": [{"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}, {"type": "string"}]})
+}
+/// An argument that was given and is not null.
+fn given(args: &Map<String, Value>, key: &str) -> Option<Value> {
+    args.get(key).filter(|value| !value.is_null()).cloned()
+}
 fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
 }
@@ -204,8 +259,11 @@ fn effect(description: &str) -> Value {
     json!({"oneOf": [{"type": "string"}, {"type": "object"}], "description": description})
 }
 
-const FILTERS: &str = "A filter as Xuan's .xuan files store it, an object with one key: {\"GaussianBlur\": {\"radius\": 0–100}}, {\"MotionBlur\": {\"distance\": 0–200, \"angle\": -180–180}}, {\"Noise\": {\"amount\": 0–100, \"monochrome\": bool}} or {\"LensCorrection\": {\"distortion\": -50–50, \"vignette\": -100–100}} (a positive vignette darkens the corners, a negative one brightens them). The same JSON sent as a string is accepted too.";
-const ADJUSTMENTS: &str = r#"An adjustment as Xuan's .xuan files store it, every field given: the string "Invert", or an object with one key: {"HueSaturation": {"hue": -360–360, "saturation": -100–100, "lightness": -100–100, "colorize": bool}}; {"HueRanges": {"settings": {"range": 0–6, "colorize": bool, "invert_range": bool, "adjustments": 7 × [hue -360–360, saturation -100–100, lightness -100–100] for master, reds, yellows, greens, cyans, blues and magentas, "bands": 7 × [4 hue degrees where each range ramps in, is full, is full until, ramps out]}}}; {"Levels": {"black": 0–255, "gamma": 0.01–10, "white": 0–255 and above black, "output_black": 0–255, "output_white": 0–255}}; {"LevelsChannels": {"ranges": 4 × [black, gamma, white, output_black, output_white] for master, red, green and blue}}; {"Curves": {"points": [{"x": 0–1, "y": 0–1}, …] (2–32 points, x rising from 0 to 1)}}; {"CurvesChannels": {"channels": 4 point lists for master, red, green and blue}}; {"Exposure": {"exposure": -20–20, "offset": -1–1, "gamma": 0.01–10}}; {"GradientMap": {"shadows": [r,g,b,a], "highlights": [r,g,b,a]}} (0–255); {"Grain": {"amount": 0–100 (2 is visible, 8 is heavy), "monochrome": bool, "seed": integer}}; {"FilmGrain": {"amount": 0–100, "size": 0.1–100, "roughness": 0–100, "seed": integer}}; {"BlackWhite": {"weights": [6 numbers, -200–300], "tint": bool, "tint_hue": 0–360, "tint_saturation": 0–100}}; or {"ColorBalance": {"shadows": [3 numbers, -100–100], "midtones": […], "highlights": […], "preserve_luminosity": bool}}. The same JSON sent as a string is accepted too."#;
+const FILTERS: &str = "A filter as Xuan's .xuan files store it, an object with one key: {\"GaussianBlur\": {\"radius\": 0–100}}, {\"MotionBlur\": {\"distance\": 0–200, \"angle\": -180–180}}, {\"Noise\": {\"amount\": 0–100, \"monochrome\": bool}} or {\"LensCorrection\": {\"distortion\": -50–50, \"vignette\": -100–100}} (as in Photoshop, a negative vignette darkens the corners, a positive one brightens them), {\"Vignette\": {\"amount\": 0–100, \"color\": [r, g, b], \"midpoint\": 0–100, \"roundness\": -100–100, \"feather\": 0–100, \"highlights\": 0–100}} (Compositor's defaults 35, [0, 0, 0], 50, 100, 60, 25), {\"Bloom\": {\"amount\": 0–100, \"radius\": 1–150}} (Bloom / Glow, defaults 40 and 24), {\"TonalContrast\": {\"amount\": 0–100, \"radius\": 1–100, \"shadows\": -100–100, \"midtones\": -100–100, \"highlights\": -100–100}} (defaults 50, 16, 40, 60, 30), {\"UnsharpMask\": {\"amount\": 0–500, \"radius\": 0.1–100, \"threshold\": 0–255}} (sharpening: adds back `amount` percent of the detail finer than `radius` pixels, where it differs by at least `threshold` levels so grain is left alone; defaults 100, 1.5, 0; about 80–150 at radius 1–2 crisps a photo or an upscaled layer, and a radius of 20–60 at 15–30 adds local contrast) or {\"Dither\": {…}}, whose settings may be left out for Compositor's defaults: \"style\" (\"Atkinson\" by default, \"FloydSteinberg\", \"Bayer2\", \"Bayer4\", \"Bayer8\", \"HalftoneDots\", \"HalftoneLines\", \"HalftoneDiamonds\", \"MacPatterns\", \"Ascii\" or \"Scanlines\"), \"pixel_size\" 1–32 (2), \"pixel_shape\" (\"Square\" or \"Dot\"), \"levels\" 2–8 (2), \"diffusion\" 0–100 (100), \"cell_size\" 4–64 (8) and \"angle\" -90–90 (45) for halftones, \"text_size\" 6–64 (14) and \"characters\" for ASCII, \"line_spacing\" 2–32 (4), \"glow\" 0–100 (35), \"dots\" 0–100 and \"wobble\" 0–64 for scanlines, \"density\" and \"contrast\" -100–100 (0), \"colors\" (\"BlackWhite\", \"TwoColors\" with \"dark\" and \"light\" as [r, g, b], or \"Original\") and \"light_on_dark\" (true). The same JSON sent as a string is accepted too.";
+const ADJUSTMENTS: &str = r#"An adjustment as Xuan's .xuan files store it, every field given: the string "Invert", or an object with one key: {"HueSaturation": {"hue": -360–360, "saturation": -100–100, "lightness": -100–100, "colorize": bool}}; {"HueRanges": {"settings": {"range": 0–6, "colorize": bool, "invert_range": bool, "adjustments": 7 × [hue -360–360, saturation -100–100, lightness -100–100] for master, reds, yellows, greens, cyans, blues and magentas, "bands": 7 × [4 hue degrees where each range ramps in, is full, is full until, ramps out]}}}; {"Levels": {"black": 0–255, "gamma": 0.01–10, "white": 0–255 and above black, "output_black": 0–255, "output_white": 0–255}}; {"LevelsChannels": {"ranges": 4 × [black, gamma, white, output_black, output_white] for master, red, green and blue}}; {"Curves": {"points": [{"x": 0–1, "y": 0–1}, …] (2–32 points, x rising from 0 to 1)}}; {"CurvesChannels": {"channels": 4 point lists for master, red, green and blue}}; {"Exposure": {"exposure": -20–20, "offset": -1–1, "gamma": 0.01–10}}; {"GradientMap": {"shadows": [r,g,b,a], "highlights": [r,g,b,a]}} (0–255); {"Grain": {"amount": 0–100 (2 is visible, 8 is heavy), "monochrome": bool, "seed": integer}}; {"FilmGrain": {"amount": 0–100, "size": 0.1–100, "roughness": 0–100, "seed": integer}}; {"BlackWhite": {"weights": [6 numbers, -200–300], "tint": bool, "tint_hue": 0–360, "tint_saturation": 0–100}}; or {"ColorBalance": {"shadows": [3 numbers, -100–100], "midtones": […], "highlights": […], "preserve_luminosity": bool}}. The same JSON sent as a string is accepted too. A "ColorLookup" adjustment needs a .cube file opened in Xuan, so it cannot be given here."#;
+
+const RAW_DEVELOP: &str = "Develop a camera RAW layer again from its camera file with new settings, as Xuan's Develop workspace does: white balance, exposure, tone, colour, detail, lens corrections, crop and rotation. RAW layers come from opening a camera file (.nef, .nrw, .cr2, .cr3, .crw, .raf, .arw) with open_document, which opens it developed with the default settings; get_document lists each RAW layer's camera, lens, exposure data and current `settings` under `raw`. Only the settings you give change; the rest keep the layer's values (or the defaults with `reset`). The whole image is developed again at full size, which takes a few seconds for a large file; it is one undo step. Look at the result with get_preview. Returns the layer as get_document describes it.";
+const RAW_SETTINGS: &str = r#"Develop settings to change, by name, e.g. {"exposure": 0.7, "white_balance": "Temperature", "temperature": 5200, "tint": 8, "highlights": -40, "shadows": 30, "vibrance": 15}. white_balance: "AsShot" (the camera's), "Temperature" (with temperature 2000–25000 K and tint -150–150) or "Custom" (custom_wb: [r, g, b] multipliers 0.01–100). exposure -10–10 EV. -100–100: brightness, contrast, highlights, shadows, whites, blacks, saturation, vibrance, clarity, texture, dehaze, tone_balance, distortion, chromatic_red, chromatic_blue, vignette (negative darkens the corners). 0–100: luminance_noise, color_noise (default 20), defringe. sharpen 0–200 (default 25), sharpen_radius 0.3–5, sharpen_threshold 0–1. Geometry: crop [left, top, right, bottom] 0–1 of the uncropped image, keeping at least 1% each way; rotation -45–45 degrees (straighten, before the crop); quarter_turns 0–3 (clockwise, after the crop); perspective [horizontal, vertical] -100–100. Colour: curves (4 lists of 5 knots 0–1 for master, red, green, blue, evenly spaced from 0 to 1; [0, 0.25, 0.5, 0.75, 1] is unchanged), hsl (8 hue bands red, orange, yellow, green, aqua, blue, purple, magenta, each [hue, saturation, lightness] -100–100), monochrome (bool) with bw_mix [r, g, b] -1–2, shadow_tone and highlight_tone ([hue 0–360, saturation 0–100], split toning). negative (film negative inversion) takes {"enabled": true} and its own settings. A misspelt or out-of-range setting is refused with its name. The same JSON sent as a string is accepted too."#;
 
 /// `run_command` commands that start a job and return before it ends.
 const BACKGROUND: [&str; 3] = [
@@ -264,7 +322,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_document",
             title: "Describe the document",
-            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, and for generated layers their provenance). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
+            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, for generated layers their provenance, and for RAW layers under `raw` the camera file, camera, lens, ISO, aperture, shutter and focal length, and the Develop `settings` develop_raw changes). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
             properties: json!({"document": {"type": "string", "description": "A document id from list_documents"}}),
             required: &[],
             kind: Kind::Read,
@@ -297,33 +355,100 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_preview",
             title: "See the image",
-            description: "The current document flattened, as a PNG image, so you can see the result. `max_side` is the longest side in pixels (default 1024, 64–4096). The first preview may wait while Xuan asks the user to allow sending the image.",
-            properties: json!({"max_side": integer("Longest side in pixels")}),
+            description: "The current document flattened, as a PNG image, so you can see the result. `max_side` is the longest side in pixels (default 1024, 64–4096). `region` [x, y, width, height] in document pixels shows only that rectangle, so a detail can be seen at full size without the whole image. The image comes back in this conversation; to measure it, sample_pixels and get_histogram return numbers instead, and export_document with `path` and `max_side` or `region` writes the PNG to a file. The first preview may wait while Xuan asks the user to allow sending the image.",
+            properties: json!({"max_side": integer("Longest side in pixels"), "region": region()}),
             required: &[],
             kind: Kind::Read,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["max_side"])?;
+                let args = pick(args, &["max_side", "region"])?;
                 let side = max_side(&args, DEFAULT_PREVIEW)?;
-                let export = cx.call("document/export", json!({"max_side": side}))?;
+                let mut params = json!({"max_side": side});
+                if let Some(region) = given(&args, "region") {
+                    params["region"] = region;
+                }
+                let export = cx.call("document/export", params)?;
                 image_result(&export, "Flattened preview")
             }),
         },
         Spec {
             name: "get_layer_image",
             title: "See a layer",
-            description: "A layer's own pixels (`what` = \"pixels\", the default) or its mask (\"mask\") as a PNG, with where it sits in the document. Pixels are as stored, before the layer's flip_x and flip_y. For an image, the mask is read from its attached mask layer (`mask_layer` says which); with several, ask for one of them. `max_side` is the longest side (default 512).",
-            properties: json!({"layer": layer(), "what": {"type": "string", "enum": ["pixels", "mask"]}, "max_side": integer("Longest side in pixels")}),
+            description: "A layer's own pixels (`what` = \"pixels\", the default) or its mask (\"mask\") as a PNG, with where it sits in the document. Pixels are as stored, before the layer's flip_x and flip_y. For an image, the mask is read from its attached mask layer (`mask_layer` says which); with several, ask for one of them. `max_side` is the longest side (default 512). With `region` [x, y, width, height] in document pixels you get that rectangle of the layer alone as it sits in the document instead: moved, scaled, rotated, flipped and masked, on transparency, which shows for example whether a rotated layer leaves the canvas corners empty (`what` does not apply).",
+            properties: json!({"layer": layer(), "what": {"type": "string", "enum": ["pixels", "mask"]}, "max_side": integer("Longest side in pixels"), "region": region()}),
             required: &["layer"],
             kind: Kind::Read,
             run: Action::Run(|cx, args| {
-                let args = pick(args, &["layer", "what", "max_side"])?;
+                let args = pick(args, &["layer", "what", "max_side", "region"])?;
                 let side = max_side(&args, 512)?;
                 let what = args.get("what").cloned().unwrap_or(json!("pixels"));
-                let export = cx.call(
-                    "layer/export",
-                    json!({"layer": string(&args, "layer")?, "what": what, "max_side": side}),
-                )?;
+                let mut params =
+                    json!({"layer": string(&args, "layer")?, "what": what, "max_side": side});
+                if let Some(region) = given(&args, "region") {
+                    params["region"] = region;
+                }
+                let export = cx.call("layer/export", params)?;
                 image_result(&export, "Layer")
+            }),
+        },
+        Spec {
+            name: "sample_pixels",
+            title: "Measure colours",
+            description: "The colours at points of the image, as numbers: for each [x, y] in document pixels, `color` (#rrggbbaa), `rgba` (0–255) and `luminance` (0–255, Rec. 709). `radius` averages the pixels within that many pixels of each point (0, the default, is the one pixel; 2 is a 5 × 5 average, which steadies a reading on noise or grain), weighted by their alpha. With `layer`, that layer alone is read as it sits in the document, transparent where it does not reach; without, the visible image. A point off the canvas has `color` null. Use it to measure a colour cast on something that should be neutral, to check for clipping, or to see whether a corner is empty, without loading an image. At most 1000 points.",
+            properties: json!({
+                "points": {"type": "array", "minItems": 1, "maxItems": 1000, "description": "Points as [x, y] in document pixels", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
+                "radius": {"type": "integer", "minimum": 0, "maximum": 50, "description": "Average the pixels within this many pixels of each point"},
+                "layer": optional_layer(),
+            }),
+            required: &["points"],
+            kind: Kind::Read,
+            run: Action::Run(|cx, args| {
+                let args = unquote(pick(args, &["points", "radius", "layer"])?, "points");
+                text(cx.call("document/sample", Value::Object(args))?)
+            }),
+        },
+        Spec {
+            name: "get_histogram",
+            title: "Measure tones",
+            description: "Histograms of the image as numbers, over the pixels that are not fully transparent: for `luminance`, `red`, `green` and `blue`, the `mean`, `median`, `min`, `max`, `p1` and `p99` (the levels 1% and 99% of the pixels lie below), `clipped_low` and `clipped_high` (the share of pixels at 0 and at 255: crushed shadows and blown highlights) and `bins`, the counts from dark to light. `bins` is how many bins to return (default 32; 0 for none, up to 256). `region` [x, y, width, height] in document pixels measures only that rectangle, and `layer` one layer alone as it sits in the document. `pixels` is how many were counted and `transparent` how many were skipped. Use it to judge exposure, contrast, clipping and colour casts (compare the red, green and blue means of something neutral).",
+            properties: json!({
+                "region": region(),
+                "layer": optional_layer(),
+                "bins": {"type": "integer", "enum": [0, 8, 16, 32, 64, 128, 256], "description": "How many bins each histogram has"},
+            }),
+            required: &[],
+            kind: Kind::Read,
+            run: Action::Run(|cx, args| {
+                let mut args = unquote(pick(args, &["region", "layer", "bins"])?, "region");
+                let bins = match args.remove("bins") {
+                    None | Some(Value::Null) => 32,
+                    Some(bins) => bins
+                        .as_u64()
+                        .filter(|bins| [0, 8, 16, 32, 64, 128, 256].contains(bins))
+                        .ok_or("`bins` must be 0, 8, 16, 32, 64, 128 or 256")?,
+                };
+                let mut answer = cx.call("document/histogram", Value::Object(args))?;
+                for channel in ["luminance", "red", "green", "blue"] {
+                    let Some(described) = answer.get_mut(channel).and_then(Value::as_object_mut)
+                    else {
+                        continue;
+                    };
+                    let counts: Vec<u64> = described
+                        .get("bins")
+                        .and_then(Value::as_array)
+                        .map(|counts| counts.iter().filter_map(Value::as_u64).collect())
+                        .unwrap_or_default();
+                    if bins == 0 || counts.is_empty() {
+                        described.remove("bins");
+                    } else {
+                        let width = (counts.len() / bins as usize).max(1);
+                        let merged: Vec<u64> = counts
+                            .chunks(width)
+                            .map(|chunk| chunk.iter().sum())
+                            .collect();
+                        described.insert("bins".into(), json!(merged));
+                    }
+                }
+                text(answer)
             }),
         },
         Spec {
@@ -345,7 +470,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_edit_permission",
             title: "Check edit permission",
-            description: "Whether this session may edit: \"allowed\", \"denied\" or \"ask\" (the next edit asks the user in Xuan), and whether the user turned on auto mode.",
+            description: "Whether this session may edit: \"allowed\", \"denied\" or \"ask\" (the next edit asks the user in Xuan), whether the user turned on auto mode, and whether the user lets this server run other plugins' actions (`run_actions`) and without asking (`run_auto`).",
             properties: json!({}),
             required: &[],
             kind: Kind::Read,
@@ -358,13 +483,15 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees). Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text, `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees clockwise). `rotation` turns the layer about its own centre, or about `pivot` [x, y] in document pixels when given, which keeps that point of the picture where it is (to straighten about the subject, say). `cover: true` then scales the layer up about its centre just enough to cover the whole canvas, so a turned or moved layer leaves no corner empty; a layer that already covers it is left as it is. x and y are the top-left of the box before it is turned. Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
-                "opacity": number("0–1"), "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
+                "opacity": number("0–1"), "fill": number("0–1; pixel, text and shape layers only"),
+                "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
-                "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees"),
+                "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees clockwise"), "pivot": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "The point [x, y] in document pixels the rotation turns about"}, "cover": {"type": "boolean", "description": "Scale the layer up just enough to cover the canvas"},
                 "text": {"type": "string", "description": "A text layer's new text"},
+                "runs": text_runs(),
                 "path": {"type": ["string", "null"], "description": "A text layer's path, SVG path data in document pixels; null puts the text back in a box"},
                 "path_options": path_options(),
             }),
@@ -379,6 +506,7 @@ fn specs() -> Vec<Spec> {
                         "visible",
                         "locked",
                         "opacity",
+                        "fill",
                         "blend",
                         "clip_to",
                         "x",
@@ -386,12 +514,15 @@ fn specs() -> Vec<Spec> {
                         "width",
                         "height",
                         "rotation",
+                        "pivot",
+                        "cover",
                         "text",
+                        "runs",
                         "path",
                         "path_options",
                     ],
                 )?;
-                let args = unquote(args, "path_options");
+                let args = unquote(unquote(args, "path_options"), "runs");
                 // Locks protect layers from the agent: it may lock, but only
                 // the user unlocks.
                 if args.get("locked") == Some(&json!(false)) {
@@ -404,7 +535,9 @@ fn specs() -> Vec<Spec> {
                 let mut set = op(
                     "set",
                     &args,
-                    &["layer", "name", "visible", "locked", "opacity", "blend"],
+                    &[
+                        "layer", "name", "visible", "locked", "opacity", "fill", "blend",
+                    ],
                 );
                 // `null` releases the clipping, so it is passed on, unlike other nulls.
                 if let Some(clip_to) = args.get("clip_to") {
@@ -417,7 +550,11 @@ fn specs() -> Vec<Spec> {
                     edits.push(Value::Object(set));
                 }
                 // Text and its path; `null` for the path puts the text back in a box.
-                let mut text = op("set_text", &args, &["layer", "text", "path_options"]);
+                let mut text = op(
+                    "set_text",
+                    &args,
+                    &["layer", "text", "runs", "path_options"],
+                );
                 if let Some(path) = args.get("path") {
                     if !(path.is_null() || path.is_string()) {
                         return Err("`path` must be SVG path data or null".into());
@@ -430,7 +567,9 @@ fn specs() -> Vec<Spec> {
                 let transform = op(
                     "transform",
                     &args,
-                    &["layer", "x", "y", "width", "height", "rotation"],
+                    &[
+                        "layer", "x", "y", "width", "height", "rotation", "pivot", "cover",
+                    ],
                 );
                 if transform.len() > 2 {
                     edits.push(Value::Object(transform));
@@ -465,11 +604,12 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "create_text_layer",
             title: "Create a text layer",
-            description: "An editable text layer with its top-left corner at x, y; or, with `path` (SVG path data in document pixels, which also places it: give no x or y), text set along that path, each letter moved to its distance along it and turned to its direction. `path_options` sets where it starts, alignment, side, letter spacing, whether letters turn, and size and opacity ramps from the first letter to the last. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa.",
+            description: "An editable text layer with its top-left corner at x, y; or, with `path` (SVG path data in document pixels, which also places it: give no x or y), text set along that path, each letter moved to its distance along it and turned to its direction. `path_options` sets where it starts, alignment, side, letter spacing, whether letters turn, and size and opacity ramps from the first letter to the last. `size` is in pixels (1–1024, default 48); `family` is a font family name; `color` is #rrggbb or #rrggbbaa. `runs` gives letters their own font, colour, bold or italic, e.g. \"APPle\" with [{\"start\": 0, \"end\": 3, \"family\": \"Georgia\", \"color\": \"#ff0000\"}] for a red \"APP\" in Georgia.",
             properties: json!({
                 "text": {"type": "string"}, "x": number("Left"), "y": number("Top"), "family": {"type": "string"},
                 "size": number("Font size in pixels"), "color": color("Text colour"), "bold": {"type": "boolean"},
                 "italic": {"type": "boolean"}, "underline": {"type": "boolean"}, "strikethrough": {"type": "boolean"},
+                "runs": text_runs(),
                 "path": svg_path(TEXT_PATH), "path_options": path_options(),
                 "name": name(), "above": above(),
             }),
@@ -489,10 +629,11 @@ fn specs() -> Vec<Spec> {
                     "italic",
                     "underline",
                     "strikethrough",
+                    "runs",
                     "name",
                     "above",
                 ];
-                let args = unquote(pick(args, &keys)?, "path_options");
+                let args = unquote(unquote(pick(args, &keys)?, "path_options"), "runs");
                 let given = |key: &str| args.get(key).is_some_and(|v| !v.is_null());
                 if given("path") {
                     if let Some(key) = ["x", "y"].into_iter().find(|k| given(k)) {
@@ -906,7 +1047,9 @@ fn specs() -> Vec<Spec> {
             description: "Paint (or with `erase`, erase) brush strokes on a pixel layer, inside the selection if there is one. For one stroke give `points`, the path it follows (a single point paints one round dab), or `path`, SVG path data such as \"M 0 700 C 120 640 380 640 512 700\" whose curves Xuan flattens to points (one subpath; `taper_in`/`taper_out` taper its ends). For several strokes or dabs give `strokes` instead: a list of {points, color, size, …}, where what a stroke leaves out comes from the top-level arguments. All the strokes are one undo step, e.g. a field of stars as one-point strokes. `size` is the brush diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (default 0.8 and 1), `color` default black. \
 A point may be [x, y, pressure] with pressure 0–1 (default 1), as from a pen: it scales the size along the stroke, and the opacity too with `pressure_opacity`, e.g. [[10, 50, 0.1], [60, 40, 1], [110, 50, 0.1]] for a blade thin at both ends. \
 Symmetry paints each stroke again as one coat with it: `symmetry` {\"mode\": \"vertical\"} mirrors it left↔right across a vertical axis (x → 2·cx − x), \"horizontal\" top↔bottom, and {\"mode\": \"radial\", \"segments\": 12} turns it into 12 copies around the centre, e.g. a starburst's rays from one ray. `center` [x, y] (on the canvas, default its middle) is where the axis or the turns go through. Scatter and jitter are mirrored with the stroke, and every copy counts against the limits. \
-Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
+Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink the stroke over that many pixels at its start and end (size, and opacity with `pressure_opacity`); `spacing` paints separate dabs that far apart as a fraction of the size (e.g. 1.5 for a dotted trail, 0 for a continuous stroke); `scatter` (fraction of the size, 0–10) moves each dab randomly off the path and `scatter_count` (1–16) paints that many at each step; `size_jitter`, `opacity_jitter` and `hue_jitter` (0–1) vary each dab randomly. Scatter or jitter without `spacing` paint dabs at 0.25. `seed` picks the random pattern: the same seed repeats a stroke exactly. `flow` (0–1, default 1) is how much paint one pass lays down: below 1, going back over the same spot within a stroke builds up to `opacity`. \
+`mode` \"dodge\" lightens and \"burn\" darkens the pixels under the brush instead of painting a colour, most in the `range` of tones named (shadows, midtones or highlights) and by `exposure` (0–1, default 0.5; going over a spot again within one stroke does not add to it, so use a second stroke to go further); \"sponge\" desaturates, or saturates with `saturate`. A large, soft brush (hardness 0) at a low exposure gives the gradual result retouchers want, e.g. dodging a face or burning the edges of the frame. These change pixels, so paint them on a copy (run_command duplicate) to keep the original. \
+`mask: true` paints the layer's mask instead of its pixels, with the colour's lightness: white shows the layer and black hides it. On an adjustment or filter layer this is how to apply it locally, e.g. fill the mask black and paint white with a soft brush where a Curves layer should lighten; on an image it paints the mask layer attached to it, adding one when it has none. One call takes at most 1000 strokes, 10,000 points a stroke and 200,000 pixels of stroke length in all.",
             properties: {
                 let mut properties = brush_properties();
                 properties.insert(SYMMETRY.into(), symmetry_schema());
@@ -940,21 +1083,27 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "fill",
             title: "Fill",
-            description: "Fill the selection (or the whole layer without one) of a pixel layer with a colour. With `path`, fill only the inside of that SVG path (and of the selection, if there is one), with antialiased edges.",
+            description: "Fill the selection (or the whole layer without one) of a pixel layer with a colour. With `path`, fill only the inside of that SVG path (and of the selection, if there is one), with antialiased edges. With `mask: true`, fill the layer's mask instead of its pixels, with the colour's lightness: black hides the whole layer (or an adjustment layer's whole effect), ready for paint_stroke or fill_gradient with `mask` to bring it back locally; white shows it all again.",
             properties: json!({
                 "layer": optional_layer(), "color": color("Fill colour"),
+                "mask": {"type": "boolean", "description": "Fill the layer's mask instead of its pixels"},
                 "path": svg_path(SVG_PATH), "fill_rule": fill_rule(),
             }),
             required: &["color"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = pick(args, &["layer", "color", "path", "fill_rule"])?;
-                let edit = if args.get("path").is_some_and(|v| !v.is_null()) {
+                let args = pick(args, &["layer", "color", "path", "fill_rule", "mask"])?;
+                let masked = args.get("mask") == Some(&json!(true));
+                let edit = if masked && args.get("path").is_some_and(|v| !v.is_null()) {
+                    return Err(
+                        "`mask` fills the whole mask or the selection: it takes no `path`".into(),
+                    );
+                } else if args.get("path").is_some_and(|v| !v.is_null()) {
                     op("fill_path", &args, &["layer", "color", "path", "fill_rule"])
                 } else if args.get("fill_rule").is_some_and(|v| !v.is_null()) {
                     return Err("`fill_rule` goes only with `path`".into());
                 } else {
-                    op("fill", &args, &["layer", "color"])
+                    op("fill", &args, &["layer", "color", "mask"])
                 };
                 Ok(Plan::new("Fill", vec![Value::Object(edit)], Reply::Ok))
             }),
@@ -998,7 +1147,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 },
                 "radial": {"type": "boolean", "description": "Circular instead of linear"},
                 "opacity": number("0–1"),
-                "mask": {"type": "boolean", "description": "Paint the layer's mask instead of its pixels"},
+                "mask": {"type": "boolean", "description": "Paint the layer's mask instead of its pixels: white shows the layer, black hides it. On an adjustment or filter layer a soft gradient applies it gradually across the image; an image's attached mask layer is painted, or one is added"},
             }),
             required: &["start", "end", "stops"],
             kind: Kind::Edit,
@@ -1017,7 +1166,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "apply_filter",
             title: "Apply a filter",
-            description: "Apply a filter to a pixel layer inside the selection, or with `as_layer` add it as a non-destructive filter layer (masked by the selection).",
+            description: "Apply a filter to a pixel layer inside the selection, or with `as_layer` add it as a non-destructive filter layer (masked by the selection). A filter layer changes everything below it, so to sharpen the finished image add an UnsharpMask filter layer at the top of the stack, above the colour adjustments.",
             properties: json!({"filter": effect(FILTERS), "layer": optional_layer(), "as_layer": {"type": "boolean", "description": "Add a non-destructive filter layer instead"}}),
             required: &["filter"],
             kind: Kind::Edit,
@@ -1059,22 +1208,103 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
                 ))
             }),
         },
+        Spec {
+            name: "auto_adjust",
+            title: "Auto contrast, tone or white balance",
+            description: "An adjustment Xuan works out from the picture. `kind` \"contrast\" stretches the lightness to the full range and keeps the colours (0.5% clipped at each end); \"tone\" stretches red, green and blue each on their own, which also takes a colour cast out of the darkest and lightest tones; \"white_balance\" makes the image's average colour grey (a grey-world balance, right for a scene with a mix of colours), or with `neutral` [x, y] makes the colour at that point grey: point it at something that should be white or grey, such as a wall, a shirt or a cloud, for a far more reliable balance. With `as_layer` the visible image is measured and the result is added as an adjustment layer (masked by the selection), so it can be seen, weakened with set_layer opacity, or changed with set_adjustment; get_document shows the numbers it chose. Without, it is applied to a pixel layer's own pixels inside the selection, measured from that layer.",
+            properties: json!({
+                "kind": {"type": "string", "enum": ["contrast", "tone", "white_balance"]},
+                "layer": optional_layer(),
+                "as_layer": {"type": "boolean", "description": "Add a non-destructive adjustment layer instead"},
+                "neutral": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "White balance: a point [x, y] in document pixels that should be grey"},
+                "name": name(),
+                "above": above(),
+            }),
+            required: &["kind"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["kind", "layer", "as_layer", "neutral", "name", "above"];
+                let args = pick(args, &keys)?;
+                Ok(Plan::new(
+                    "Auto Adjust",
+                    vec![Value::Object(op("auto_adjust", &args, &keys))],
+                    Reply::Added,
+                ))
+            }),
+        },
+        Spec {
+            name: "set_adjustment",
+            title: "Change an adjustment or filter layer",
+            description: "Change the settings of an adjustment or filter layer that is already there, in place: give `adjustment` for an adjustment layer or `filter` for a filter layer, written whole as apply_adjustment and apply_filter take them. get_document lists each such layer's current settings under `adjustment` or `filter`, so read them, change the numbers and send them back. The layer keeps its place, mask, opacity and blend mode.",
+            properties: json!({"layer": layer(), "adjustment": effect(ADJUSTMENTS), "filter": effect(FILTERS)}),
+            required: &["layer"],
+            kind: Kind::Edit,
+            run: Action::Edit(|_, args| {
+                let keys = ["layer", "adjustment", "filter"];
+                let args = effect_args(effect_args(pick(args, &keys)?, "adjustment"), "filter");
+                if args.contains_key("adjustment") == args.contains_key("filter") {
+                    return Err("Give either `adjustment` or `filter`".into());
+                }
+                let layer = args.get("layer").cloned().unwrap_or(Value::Null);
+                Ok(Plan::new(
+                    "Change Adjustment",
+                    vec![Value::Object(op("set_adjustment", &args, &keys))],
+                    Reply::Layer(layer),
+                ))
+            }),
+        },
         // The canvas.
         Spec {
             name: "crop_canvas",
             title: "Crop",
-            description: "Crop the canvas to the rectangle x, y, width, height in document pixels.",
-            properties: json!({"x": number("Left"), "y": number("Top"), "width": integer("Width"), "height": integer("Height")}),
-            required: &["x", "y", "width", "height"],
+            description: "Crop the canvas. Give the rectangle x, y, width, height in document pixels to crop to exactly that. Or let Xuan work the box out: `ratio` (\"4:5\", \"16:9\", \"1:1\", width to height) crops to the largest box of that shape, inside the rectangle when one is given and inside the whole canvas otherwise, centred, or centred on `center` [x, y] as nearly as fits (put it on the subject). `straighten` turns the whole image that many degrees clockwise (-45 to 45; to level a horizon that drops to the right by 2°, pass -2) and crops to the largest upright box with no empty corners, of `ratio` if given and of the canvas's own shape otherwise; layers are turned in place, not resampled, and it takes no rectangle or `center`. Returns the new canvas size.",
+            properties: json!({
+                "x": number("Left"), "y": number("Top"), "width": number("Width"), "height": number("Height"),
+                "ratio": {"type": "string", "description": "Width to height, e.g. \"4:5\""},
+                "center": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "Where to centre a `ratio` crop, [x, y] in document pixels"},
+                "straighten": number("Degrees clockwise to turn the image before cropping, -45 to 45"),
+            }),
+            required: &[],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
                 let keys = ["x", "y", "width", "height"];
-                let args = pick(args, &keys)?;
-                Ok(Plan::new(
-                    "Crop",
-                    vec![Value::Object(op("crop", &args, &keys))],
-                    Reply::Size,
-                ))
+                let args = pick(
+                    args,
+                    &["x", "y", "width", "height", "ratio", "center", "straighten"],
+                )?;
+                let rectangle = keys
+                    .iter()
+                    .filter(|key| given(&args, key).is_some())
+                    .count();
+                if rectangle != 0 && rectangle != 4 {
+                    return Err("Give all of x, y, width and height, or none of them".into());
+                }
+                let computed = ["ratio", "center", "straighten"]
+                    .iter()
+                    .any(|key| given(&args, key).is_some());
+                if !computed {
+                    if rectangle == 0 {
+                        return Err(
+                            "Give x, y, width and height, a `ratio` or a `straighten` angle".into(),
+                        );
+                    }
+                    return Ok(Plan::new(
+                        "Crop",
+                        vec![Value::Object(op("crop", &args, &keys))],
+                        Reply::Size,
+                    ));
+                }
+                let mut edit = op("crop_to", &args, &["center", "straighten"]);
+                if let Some(ratio) = given(&args, "ratio") {
+                    edit.insert("ratio".into(), json!(parse_ratio(&ratio)?));
+                }
+                if rectangle == 4 {
+                    edit.insert(
+                        "bounds".into(),
+                        json!([args["x"], args["y"], args["width"], args["height"]]),
+                    );
+                }
+                Ok(Plan::new("Crop", vec![Value::Object(edit)], Reply::Size))
             }),
         },
         Spec {
@@ -1103,12 +1333,12 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "rotate_canvas",
             title: "Rotate canvas",
-            description: "Rotate the whole document `degrees` clockwise: 90, 180 or 270 (-90 also turns counter-clockwise). Layers, masks, guides, paths and the selection turn with it, and a quarter turn swaps the width and height.",
-            properties: json!({"degrees": {"type": "integer", "enum": [90, 180, 270, -90]}}),
+            description: "Rotate the whole document `degrees` clockwise, by any angle (negative turns counter-clockwise). Layers, masks, paths and the selection turn with it about the canvas centre; layers are turned in place, not resampled, so nothing is lost and turning back restores the picture. With `expand` (the default) the canvas grows to hold all of the turned image, so a quarter turn swaps the width and height and any other angle leaves transparent corners; with `expand: false` the canvas keeps its size and the corners that turn out of it are hidden. To level a tilted photo and remove the empty corners in one step, use crop_canvas with `straighten` instead. Guides survive only 90, 180 and 270. Returns the new canvas size.",
+            properties: json!({"degrees": number("Degrees clockwise"), "expand": {"type": "boolean", "description": "Grow the canvas to fit the turned image (default true)"}}),
             required: &["degrees"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let keys = ["degrees"];
+                let keys = ["degrees", "expand"];
                 let args = pick(args, &keys)?;
                 Ok(Plan::new(
                     "Rotate Canvas",
@@ -1205,7 +1435,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter or apply_adjustment with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1224,6 +1454,43 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             required: &["steps"],
             kind: Kind::Edit,
             run: Action::Run(batch),
+        },
+        // Other plugins' actions.
+        Spec {
+            name: "list_plugin_actions",
+            title: "List plugin actions",
+            description: "The actions of the other plugins installed in Xuan that run_plugin_action can start, such as generating or editing images with a cloud service: for each, `plugin` and `action` (the ids to pass), its label and description, `kind` (generate, edit or command), what it sends (`source`: the active layer, the flattened image, the selection or nothing), where its result goes (`result`; with \"ask\", run_plugin_action needs `into`), whether the plugin uses the `network` (it may send the image to a third party and cost money), whether the user has `allowed` the plugin and whether it is `available` (offline mode stops network plugins), and `inputs`, a JSON schema of the inputs to pass. Inputs that are files the user chooses are left out: they cannot be set. `plugin` keeps one plugin's actions. Needs the user to turn on \"Run other plugins' actions\" for the MCP Server in Xuan (Plugins → Manage Plugins…).",
+            properties: json!({"plugin": {"type": "string", "description": "Only this plugin's actions"}}),
+            required: &[],
+            kind: Kind::Read,
+            run: Action::Run(list_plugin_actions),
+        },
+        Spec {
+            name: "run_plugin_action",
+            title: "Run a plugin action",
+            description: "Run another plugin's action as its menu item would, without its dialog: `plugin` and `action` from list_plugin_actions, `inputs` as its schema says (left out, they take their defaults), `into` (\"layer\": a new layer in the current document, or \"document\": a new document) for actions whose result is \"ask\", and `layers` to select first, the last one active, for actions that work on the active layer. Xuan asks the user before the first run of each plugin in a session, and the plugin's own prompts apply too: its permission, sending the image to a plugin that uses the network, model downloads. The call returns as soon as the job runs, with its `job` id; the job itself can take minutes, and other edits keep working meanwhile. Follow it with get_jobs. When it finishes, its result is shown to the user as a proposal to accept or discard; it is in the document only once accepted. Needs the user to turn on \"Run other plugins' actions\" for the MCP Server in Xuan.",
+            properties: json!({
+                "plugin": {"type": "string", "description": "A plugin id from list_plugin_actions"},
+                "action": {"type": "string", "description": "The action's id from list_plugin_actions"},
+                "inputs": {"type": "object", "description": "The action's inputs, as list_plugin_actions describes them"},
+                "into": {"type": "string", "enum": ["layer", "document"], "description": "Where the result goes, for actions whose result is \"ask\""},
+                "layers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Layer ids to select first, the last one active (default: the layers selected now)"},
+            }),
+            required: &["plugin", "action"],
+            kind: Kind::Run,
+            run: Action::Run(run_plugin_action),
+        },
+        Spec {
+            name: "get_jobs",
+            title: "Follow jobs",
+            description: "What Xuan's status bar shows, to wait for a job without guessing: `running`, the running jobs (plugin actions, imports, exports, model downloads) with their progress (0–1, or null before the plugin reports any), latest message and the plugin that `started_by` them, and `status_bar`, the bar's text with its count such as \"1 of 2\"; `results_waiting`, finished results waiting for the editor; `proposal`, the result the user is asked to accept or discard now; and `finished`, what became of the jobs run_plugin_action started, newest first: waiting (finished, shown when the editor is free), proposed (shown to the user), done (nothing to accept: a new document or a message), accepted, discarded, failed (with the error) or cancelled. Cloud jobs often take 30–120 seconds: call it every 10 seconds or so. Needs \"Run other plugins' actions\", like run_plugin_action.",
+            properties: json!({}),
+            required: &[],
+            kind: Kind::Read,
+            run: Action::Run(|cx, args| {
+                pick(args, &[])?;
+                text(cx.call("jobs/list", json!({}))?)
+            }),
         },
         // Documents and files.
         Spec {
@@ -1296,40 +1563,94 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             name: "export_document",
             title: "Export an image",
             description: concat!(
-                "Export a document (the current one by default) as png (default), jpg, tiff or webp. ",
-                "With an absolute `path` (ending in .png, .jpg, .jpeg, .tif, .tiff or .webp, which picks the format, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
+                "Export a document (the current one by default) as png (default), jpg, tiff, webp or ora (layered OpenRaster, which Krita, GIMP and MyPaint open). ",
+                "With an absolute `path` (ending in .png, .jpg, .jpeg, .tif, .tiff, .webp or .ora, which picks the format, in a folder that exists), Xuan asks the user in its own prompt that names the file and folder; ",
                 "the user may answer Always Allow, and then later saves and exports to a path happen without asking. ",
                 "Without `path`, Xuan shows its save dialog with `suggested_name` and the user chooses where. ",
                 "An existing file is replaced only with `overwrite: true`, and even with Always Allow, replacing a file this server did not write since Xuan started (such as one the user saved) asks the user.",
+                " `quality` (1-100) sets jpg and lossy webp quality, and webp is lossy when `quality` is given unless `lossless: true`; what is left out follows Xuan's Export dialog.",
+                " With `path` ending in .png, `layer`, `region` and `max_side` export a part instead of the whole image at full size: `max_side` a copy no longer than that on its longest side, `region` [x, y, width, height] in document pixels that rectangle, and `layer` one layer (its own pixels as stored, or with `region` the layer alone as it sits in the document). This is how to hand an image to a program of your own, such as an analysis script, without it passing through this conversation; the answer then also says the image's `width`, `height`, `scale` (export pixels per document pixel) and the document `x`, `y` of its corner.",
                 " Returns the file name (never the folder), with `asked: false` when it was written without asking."
             ),
             properties: json!({
                 "document": {"type": "string"},
-                "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp"]},
+                "layer": optional_layer(),
+                "region": region(),
+                "max_side": integer("With `path`: the longest side in pixels of a smaller copy"),
+                "format": {"type": "string", "enum": ["png", "jpg", "tiff", "webp", "ora"]},
                 "suggested_name": {"type": "string", "description": "The name the save dialog suggests, without `path`"},
                 "path": {"type": "string", "description": "Where to export, an absolute path with an image extension"},
                 "overwrite": {"type": "boolean", "description": "Allow replacing an existing file at `path`"},
+                "quality": {"type": "integer", "minimum": 1, "maximum": 100, "description": "jpg and lossy webp quality; Xuan's Export dialog setting when left out"},
+                "lossless": {"type": "boolean", "description": "webp only: lossless (true) or lossy (false); lossy when `quality` is given, else Xuan's Export dialog setting"},
             }),
             required: &[],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
                 let args = pick(
                     args,
-                    &["document", "format", "suggested_name", "path", "overwrite"],
+                    &[
+                        "document",
+                        "format",
+                        "suggested_name",
+                        "path",
+                        "overwrite",
+                        "quality",
+                        "lossless",
+                        "layer",
+                        "region",
+                        "max_side",
+                    ],
                 )?;
+                let args = unquote(args, "region");
                 text(cx.call("file/export", Value::Object(args))?)
             }),
         },
         Spec {
             name: "open_document",
             title: "Open a file",
-            description: "Ask the user to open the image or .xuan project at the absolute `path` as a new document; Xuan shows the path and opens it only if the user agrees.",
+            description: "Ask the user to open the image or .xuan project at the absolute `path` as a new document; Xuan shows the path and opens it only if the user agrees. A camera RAW file opens as a RAW layer developed with the default settings; change them with develop_raw.",
             properties: json!({"path": {"type": "string"}}),
             required: &["path"],
             kind: Kind::File,
             run: Action::Run(|cx, args| {
                 let args = pick(args, &["path"])?;
                 text(cx.call("file/open", Value::Object(args))?)
+            }),
+        },
+        // Camera RAW.
+        Spec {
+            name: "develop_raw",
+            title: "Develop a camera RAW layer",
+            description: RAW_DEVELOP,
+            properties: json!({
+                "layer": {"type": "string", "description": "A RAW layer id (kind \"raw\" in get_document); the active layer when left out"},
+                "settings": {"type": "object", "description": RAW_SETTINGS},
+                "reset": {"type": "boolean", "description": "Start from Develop's default settings instead of the layer's own"},
+                "auto_exposure": {"type": "boolean", "description": "Set the exposure from the image, as Develop's Auto button does"},
+                "neutral_point": {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 2, "maxItems": 2,
+                    "description": "[x, y], each 0–1 across the layer as it looks now: a spot that should be neutral grey or white. Sets a Custom white balance from it"},
+                "document": {"type": "string", "description": "A document id from list_documents; made current first"},
+            }),
+            required: &[],
+            kind: Kind::Edit,
+            run: Action::Run(|cx, args| {
+                let mut args = pick(
+                    args,
+                    &[
+                        "layer",
+                        "settings",
+                        "reset",
+                        "auto_exposure",
+                        "neutral_point",
+                        "document",
+                    ],
+                )?;
+                if let Some(document) = args.remove("document") {
+                    cx.call("document/activate", json!({"document": document}))?;
+                }
+                let args = unquote(args, "settings");
+                text(cx.call("raw/develop", Value::Object(args))?)
             }),
         },
     ]
@@ -1361,11 +1682,13 @@ pub fn list() -> Vec<Tool> {
                         | "run_command"
                         | "batch"
                 ))
-                .open_world(false);
+                // Another plugin's action may reach a service on the internet.
+                .open_world(spec.kind == Kind::Run);
             let description = match spec.kind {
                 Kind::Read => spec.description.to_owned(),
                 Kind::Edit => format!("{} {EDIT_WAITS}", spec.description),
                 Kind::File => format!("{} {FILE_WAITS}", spec.description),
+                Kind::Run => format!("{} {RUN_WAITS}", spec.description),
             };
             Tool::new(spec.name, description, Arc::new(schema))
                 .with_title(spec.title)
@@ -1384,6 +1707,7 @@ pub fn waiting_message(name: &str) -> &'static str {
     {
         Some(Kind::Edit) => "Waiting for the user to allow edits in Xuan",
         Some(Kind::File) => "Waiting for the user to answer in Xuan",
+        Some(Kind::Run) => "Waiting for the user to allow the run in Xuan",
         _ => "Waiting for Xuan",
     }
 }
@@ -1400,9 +1724,38 @@ pub fn written(name: &str, result: &CallToolResult) -> Option<String> {
     if result.is_error == Some(true) {
         return None;
     }
+    let answer = answer_of(result)?;
+    let file = plain(answer.get("name")?.as_str()?);
+    Some(if answer.get("asked") == Some(&Value::Bool(false)) {
+        format!("{verb} {file} without asking")
+    } else {
+        format!("{verb} {file}")
+    })
+}
+
+/// For the pane's activity: what run_plugin_action started, such as
+/// "started Generate Image… from Comfy Cloud". The action's label and the
+/// plugin's name as Xuan answered with them, cleaned like file names.
+pub fn started(name: &str, result: &CallToolResult) -> Option<String> {
+    if name != "run_plugin_action" || result.is_error == Some(true) {
+        return None;
+    }
+    let answer = answer_of(result)?;
+    let label = plain(answer.get("label")?.as_str()?);
+    let plugin = plain(answer.get("plugin_name")?.as_str()?);
+    Some(format!("started {label} from {plugin}"))
+}
+
+/// The JSON a tool answered with.
+fn answer_of(result: &CallToolResult) -> Option<Value> {
     let text = (result.content.iter()).find_map(|content| content.as_text())?;
-    let answer: Value = serde_json::from_str(&text.text).ok()?;
-    let file: String = (answer.get("name")?.as_str()?.chars())
+    serde_json::from_str(&text.text).ok()
+}
+
+/// Text from Xuan for the pane: without control and bidi characters, at
+/// most 120 characters.
+fn plain(text: &str) -> String {
+    text.chars()
         .filter(|&c| {
             !c.is_control()
                 && !matches!(
@@ -1415,12 +1768,7 @@ pub fn written(name: &str, result: &CallToolResult) -> Option<String> {
                 )
         })
         .take(120)
-        .collect();
-    Some(if answer.get("asked") == Some(&Value::Bool(false)) {
-        format!("{verb} {file} without asking")
-    } else {
-        format!("{verb} {file}")
-    })
+        .collect()
 }
 
 /// Run a tool. Errors from Xuan or from the arguments become a tool error
@@ -1443,18 +1791,23 @@ pub fn call(cx: &Context, name: &str, args: Map<String, Value>) -> CallToolResul
 impl Context<'_> {
     /// A request, with Xuan's error turned into a message for the model.
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
-        // Refused here with a clear message rather than sent: Xuan would
-        // stop the whole plugin over a message that large.
-        let size = serde_json::to_vec(&params).map_or(0, |bytes| bytes.len());
-        if size > MAX_REQUEST_BYTES {
-            return Err(format!(
-                "The request is too large for Xuan ({} MiB of JSON; at most 16 MiB). Send less at once, for example fewer points or a shorter text",
-                size.div_ceil(1024 * 1024)
-            ));
+        if let Some(error) = too_large(&params) {
+            return Err(error);
         }
         self.editor
             .request(self.session, method, params, self.cancel)
             .map_err(|error| explain(method, &error))
+    }
+
+    /// `host/run` of another plugin's action, with Xuan's refusals
+    /// explained for a run rather than an edit.
+    fn run_action(&self, params: Value) -> Result<Value, String> {
+        if let Some(error) = too_large(&params) {
+            return Err(error);
+        }
+        self.editor
+            .request(self.session, "host/run", params, self.cancel)
+            .map_err(|error| explain_run(&error))
     }
 
     fn edit(&self, name: &str, edits: Vec<Value>) -> Result<Value, String> {
@@ -1625,6 +1978,194 @@ fn blame(error: String, owners: &[usize], plans: &[(&str, Plan)]) -> String {
     }
 }
 
+/// `list_plugin_actions`: Xuan's `plugins/actions`, each action's inputs
+/// as a JSON schema.
+fn list_plugin_actions(
+    cx: &Context,
+    args: Map<String, Value>,
+) -> Result<Vec<ContentBlock>, String> {
+    let args = pick(args, &["plugin"])?;
+    let plugin = match args.get("plugin") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(string(&args, "plugin")?),
+    };
+    let listed = cx.call("plugins/actions", json!({}))?;
+    let actions: Vec<Value> = (listed["actions"].as_array().into_iter().flatten())
+        .filter(|action| plugin.is_none_or(|plugin| action["plugin"] == plugin))
+        .map(|action| {
+            let mut entry = json!({
+                "plugin": action["plugin"],
+                "plugin_name": action["plugin_name"],
+                "action": action["id"],
+                "label": action["label"],
+                "description": action["description"],
+                "kind": action["kind"],
+                "source": action["source"],
+                "result": action["result"],
+                "surfaces": action["surfaces"],
+                "network": action["network"],
+                "allowed": action["allowed"],
+                "available": action["available"],
+                "inputs": input_schema(action["inputs"].as_array().map_or(&[], Vec::as_slice)),
+            });
+            if action["result"] == "ask" {
+                entry["into"] = json!(["layer", "document"]);
+            }
+            entry
+        })
+        .collect();
+    text(json!({"actions": actions}))
+}
+
+/// A JSON schema for an action's declared inputs, as `plugins/actions`
+/// lists them. `path` inputs are left out: only the user sets them.
+fn input_schema(inputs: &[Value]) -> Value {
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+    for input in inputs {
+        let (Some(id), Some(kind)) = (input["id"].as_str(), input["type"].as_str()) else {
+            continue;
+        };
+        let Some(mut schema) = input_type(kind, input) else {
+            continue;
+        };
+        let label = input["label"].as_str().filter(|label| !label.is_empty());
+        if let Some(label) = label {
+            schema["title"] = json!(label);
+        }
+        let mut description: Vec<String> = Vec::new();
+        if let Some(help) = input["help"].as_str().filter(|help| !help.is_empty()) {
+            description.push(help.to_owned());
+        }
+        if kind == "enum" {
+            let choices: Vec<String> = (input["values"].as_array().into_iter().flatten())
+                .filter_map(|choice| {
+                    let (id, label) = (choice["id"].as_str()?, choice["label"].as_str()?);
+                    Some(if id == label {
+                        id.to_owned()
+                    } else {
+                        format!("{id} ({label})")
+                    })
+                })
+                .collect();
+            description.push(format!("One of {}", choices.join(", ")));
+        }
+        if let Some(placeholder) = (input["placeholder"].as_str()).filter(|text| !text.is_empty()) {
+            description.push(format!("For example: {placeholder}"));
+        }
+        if !description.is_empty() {
+            schema["description"] = json!(description.join(". "));
+        }
+        if let Some(default) = input.get("default").filter(|value| !value.is_null()) {
+            schema["default"] = default.clone();
+        }
+        if kind == "regions" && input["min"].as_f64().is_some_and(|min| min >= 1.0) {
+            required.push(id.to_owned());
+        }
+        properties.insert(id.to_owned(), schema);
+    }
+    let mut schema =
+        json!({"type": "object", "properties": properties, "additionalProperties": false});
+    if !required.is_empty() {
+        schema["required"] = json!(required);
+    }
+    schema
+}
+
+/// The JSON schema of one input's type, or `None` for inputs a client
+/// cannot set.
+fn input_type(kind: &str, input: &Value) -> Option<Value> {
+    // Whole numbers as integers, so an integer input's bounds read as such.
+    let bound = |key: &str| {
+        input[key].as_f64().map(|value| {
+            if value.fract() == 0.0 && value.abs() < 9.0e15 {
+                json!(value as i64)
+            } else {
+                json!(value)
+            }
+        })
+    };
+    let bounded = |mut schema: Value| {
+        if let Some(min) = bound("min") {
+            schema["minimum"] = min;
+        }
+        if let Some(max) = bound("max") {
+            schema["maximum"] = max;
+        }
+        schema
+    };
+    Some(match kind {
+        "text" | "multiline" => json!({"type": "string"}),
+        "integer" | "seed" => bounded(json!({"type": "integer"})),
+        "number" => bounded(json!({"type": "number"})),
+        "bool" => json!({"type": "boolean"}),
+        "enum" => {
+            let ids: Vec<&Value> = (input["values"].as_array().into_iter().flatten())
+                .map(|choice| &choice["id"])
+                .collect();
+            json!({"type": "string", "enum": ids})
+        }
+        "color" => json!({"type": "string", "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"}),
+        "regions" => {
+            let fields = input_schema(input["fields"].as_array().map_or(&[], Vec::as_slice));
+            let mut schema = json!({
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "description": "A box in document pixels, with its fields",
+                    "properties": {
+                        "x": {"type": "number"}, "y": {"type": "number"},
+                        "width": {"type": "number", "exclusiveMinimum": 0},
+                        "height": {"type": "number", "exclusiveMinimum": 0},
+                        "fields": fields,
+                    },
+                    "required": ["x", "y", "width", "height"],
+                    "additionalProperties": false,
+                },
+            });
+            if let Some(min) = bound("min") {
+                schema["minItems"] = min;
+            }
+            schema["maxItems"] = bound("max").unwrap_or(json!(256));
+            schema
+        }
+        _ => return None,
+    })
+}
+
+/// `run_plugin_action`: `host/run` of `<plugin>/<action>`, answered once the
+/// job runs.
+fn run_plugin_action(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, String> {
+    let args = unquote(
+        pick(args, &["plugin", "action", "inputs", "into", "layers"])?,
+        "inputs",
+    );
+    let mut ids = Vec::new();
+    for key in ["plugin", "action"] {
+        let id = string(&args, key)?;
+        if id.is_empty() || id.contains('/') {
+            return Err(format!("`{key}` must be an id from list_plugin_actions"));
+        }
+        ids.push(id);
+    }
+    let mut params = json!({"action": format!("{}/{}", ids[0], ids[1])});
+    match args.get("inputs") {
+        None | Some(Value::Null) => {}
+        Some(inputs @ Value::Object(_)) => params["inputs"] = inputs.clone(),
+        Some(_) => return Err("`inputs` must be an object".into()),
+    }
+    for key in ["into", "layers"] {
+        if let Some(value) = args.get(key).filter(|value| !value.is_null()) {
+            params[key] = value.clone();
+        }
+    }
+    let mut answer = cx.run_action(params)?;
+    answer["note"] = json!(
+        "The job is running in Xuan. Follow it with get_jobs; when it finishes, the user accepts or discards its result."
+    );
+    text(answer)
+}
+
 /// `modify_selection`'s arguments; `layer` goes only with `layer_pixels`.
 fn selection_args(args: Map<String, Value>) -> Result<Map<String, Value>, String> {
     let args = pick(args, &["action", "amount", "layer"])?;
@@ -1657,7 +2198,12 @@ fn selection_edit(args: &Map<String, Value>) -> Result<Plan, String> {
 }
 
 /// `paint_stroke`'s arguments.
-const STROKE_ARGS: [&str; 19] = [
+const STROKE_ARGS: [&str; 25] = [
+    "mode",
+    "range",
+    "exposure",
+    "saturate",
+    "mask",
     "layer",
     "points",
     "path",
@@ -1666,6 +2212,7 @@ const STROKE_ARGS: [&str; 19] = [
     "size",
     "hardness",
     "opacity",
+    "flow",
     "erase",
     "pressure_opacity",
     "spacing",
@@ -1679,11 +2226,17 @@ const STROKE_ARGS: [&str; 19] = [
     "seed",
 ];
 /// What each stroke of `strokes` may set, the top-level value otherwise.
-const BRUSH: [&str; 15] = [
+const BRUSH: [&str; 21] = [
+    "mode",
+    "range",
+    "exposure",
+    "saturate",
+    "mask",
     "color",
     "size",
     "hardness",
     "opacity",
+    "flow",
     "erase",
     "pressure_opacity",
     "spacing",
@@ -1724,7 +2277,13 @@ fn brush_properties() -> Map<String, Value> {
         "size": number("Brush diameter, 1–2000 (default 20)"),
         "hardness": number("0–1 (default 0.8)"),
         "opacity": number("0–1 (default 1)"),
+        "flow": {"type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "How much paint one pass lays down (default 1); below 1 paint builds up to `opacity` where the stroke goes back over itself"},
         "erase": {"type": "boolean"},
+        "mode": {"type": "string", "enum": ["paint", "erase", "dodge", "burn", "sponge"], "description": "What the brush does (default paint): dodge lightens, burn darkens and sponge desaturates the pixels under it"},
+        "range": {"type": "string", "enum": ["shadows", "midtones", "highlights"], "description": "Dodge and burn: the tones that change most (default midtones)"},
+        "exposure": {"type": "number", "minimum": 0, "maximum": 1, "description": "Dodge, burn and sponge: strength (default 0.5); one stroke at 1 moves a tone halfway to white or black"},
+        "saturate": {"type": "boolean", "description": "Sponge: saturate instead of desaturate"},
+        "mask": {"type": "boolean", "description": "Paint the layer's mask instead of its pixels: white shows the layer, black hides it"},
         "pressure_opacity": {"type": "boolean", "description": "Point pressure and taper also scale the opacity"},
         "spacing": {"type": "number", "minimum": 0, "maximum": 10, "description": "Distance between dabs as a fraction of the size, e.g. 0.25; 0 (default) is continuous"},
         "taper_in": {"type": "number", "minimum": 0, "description": "Pixels over which the stroke grows from nothing at its start"},
@@ -1817,9 +2376,31 @@ fn explain(method: &str, error: &EditorError) -> String {
     match method {
         "document/edit" | "host/run" => "The user did not allow edits from this session in Xuan. Ask the user before trying again.".into(),
         "file/save_as" | "file/export" | "file/save" | "file/open" => "The user cancelled.".into(),
-        _ if method.ends_with("/export") => "The user did not allow sending the image to this MCP server.".into(),
+        _ if sends_the_image(method) => "The user did not allow sending the image to this MCP server.".into(),
         _ => format!("Xuan: {}", error.message),
     }
+}
+
+/// What the model is told when Xuan refuses a run of another plugin's
+/// action, or the user did not answer.
+fn explain_run(error: &EditorError) -> String {
+    match error.code {
+        WITHDRAWN | TIMED_OUT => "The user has not yet answered Xuan's prompt to run this action, so the request was withdrawn and nothing was run. Do not retry right away: ask the user whether they want this, and try again once they say so.".into(),
+        CANCELLED => format!("Xuan: {}. Ask the user before trying again.", error.message),
+        _ => format!("Xuan: {}", error.message),
+    }
+}
+
+/// A request Xuan would not take, refused here with a clear message rather
+/// than sent: Xuan stops a plugin that writes a message that large.
+fn too_large(params: &Value) -> Option<String> {
+    let size = serde_json::to_vec(params).map_or(0, |bytes| bytes.len());
+    (size > MAX_REQUEST_BYTES).then(|| {
+        format!(
+            "The request is too large for Xuan ({} MiB of JSON; at most 16 MiB). Send less at once, for example fewer points or a shorter text",
+            size.div_ceil(1024 * 1024)
+        )
+    })
 }
 
 /// What the model is told when the server stopped waiting for the user: the
@@ -1833,7 +2414,7 @@ pub fn not_answered(method: &str) -> String {
         "file/save_as" | "file/export" | "file/save" | "file/open" => {
             "The user has not yet answered Xuan's dialog for this request"
         }
-        _ if method.ends_with("/export") => {
+        _ if sends_the_image(method) => {
             "The user has not yet answered Xuan's prompt to allow sending the image to this MCP server"
         }
         _ => "Xuan did not answer in time",
@@ -1852,13 +2433,13 @@ fn pick(args: Map<String, Value>, allowed: &[&str]) -> Result<Map<String, Value>
 }
 
 /// The arguments with `key` read as JSON when a client sent it as a string,
-/// as some send `"\"Invert\""` or an object in quotes.
+/// as some send `"\"Invert\""` or an object or list in quotes.
 fn unquote(mut args: Map<String, Value>, key: &str) -> Map<String, Value> {
     if let Some(Value::String(text)) = args.get(key) {
         let text = text.trim();
         let value = serde_json::from_str::<Value>(text)
             .ok()
-            .filter(|value| value.is_string() || value.is_object())
+            .filter(|value| value.is_string() || value.is_object() || value.is_array())
             .unwrap_or_else(|| json!(text));
         args.insert(key.into(), value);
     }

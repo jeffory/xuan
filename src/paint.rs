@@ -30,14 +30,41 @@ mod dynamics_tests;
 #[path = "paint/symmetry_tests.rs"]
 mod symmetry_tests;
 
+#[cfg(test)]
+#[path = "paint/bucket_tests.rs"]
+mod bucket_tests;
+
+#[cfg(test)]
+#[path = "paint/flow_tests.rs"]
+mod flow_tests;
+
+mod bucket;
+pub use bucket::{BucketOptions, bucket, bucket_coverage};
+
+#[cfg(test)]
+#[path = "paint/outline_tests.rs"]
+mod outline_tests;
+
 pub mod dynamics;
 pub use dynamics::Dynamics;
+pub mod outline;
 mod pencil;
 pub use pencil::tip_offsets;
 mod stroke;
 pub use stroke::Stroke;
 pub mod symmetry;
 pub use symmetry::{Symmetry, SymmetryMode};
+pub mod tone;
+pub use tone::{Tone, ToneRange};
+pub mod liquify;
+
+#[cfg(test)]
+#[path = "paint/liquify_tests.rs"]
+mod liquify_tests;
+
+#[cfg(test)]
+#[path = "paint/tone_tests.rs"]
+mod tone_tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintMode {
@@ -49,6 +76,14 @@ pub enum PaintMode {
     Smudge,
     /// Hard-edged, non-antialiased dabs on whole pixels.
     Pencil,
+    /// Dodge lightens, Burn darkens and Sponge (de)saturates the pixels
+    /// under the brush, by [`Brush::tone`]; see [`tone::apply`]. Not on masks.
+    Dodge,
+    Burn,
+    Sponge,
+    /// Forward warp: the pixels under the brush move with it, by the
+    /// brush's opacity as its strength; see [`liquify`]. Not on masks.
+    Liquify,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +91,11 @@ pub struct Brush {
     pub diameter: f32,
     pub hardness: f32,
     pub opacity: f32,
+    /// How much paint one pass lays down, 0 to 1, building up to `opacity`
+    /// where the stroke goes over the same spot. The Brush and Eraser (on
+    /// pixels or a mask) use it through [`Stroke`]; 1 paints the whole
+    /// opacity at once, and other tools ignore it.
+    pub flow: f32,
     pub color: [u8; 4],
     /// Pen tilt in degrees; zero produces the usual circular brush.
     pub tilt: [f32; 2],
@@ -67,6 +107,9 @@ pub struct Brush {
     /// Mirror or radial copies of the stroke, for the same tools as the
     /// dynamics. Off by default.
     pub symmetry: Symmetry,
+    /// Range, exposure and Sponge direction for Dodge, Burn and Sponge.
+    /// Other tools ignore it.
+    pub tone: Tone,
 }
 
 impl Default for Brush {
@@ -75,11 +118,13 @@ impl Default for Brush {
             diameter: 40.0,
             hardness: 0.8,
             opacity: 1.0,
+            flow: 1.0,
             color: [0, 0, 0, 255],
             tilt: [0.0; 2],
             square: false,
             dynamics: Dynamics::default(),
             symmetry: Symmetry::default(),
+            tone: Tone::default(),
         }
     }
 }
@@ -242,10 +287,33 @@ fn stroke_segment(
         source,
         clone_offset,
     } = options;
+    // Flow builds up dab by dab; swept segments take the strongest coverage.
+    let flow = if stroke::flows(mode) && from == to {
+        brush.flow
+    } else {
+        1.0
+    };
     let selection = document.selection.clone();
     let Some(layer) = document.active_mut() else {
         bail!("Select a layer first");
     };
+    if mask_target && tone::is_tone(mode) {
+        // As upstream: a mask has no tones or colours to change.
+        bail!("Dodge, Burn and Sponge work on layer pixels, not masks");
+    }
+    if mode == PaintMode::Liquify {
+        if mask_target {
+            bail!("Liquify works on layer pixels, not masks");
+        }
+        // At zero strength nothing moves: leave text and shapes live.
+        let dabs = liquify::dabs(from, to, from_brush, brush);
+        if dabs.is_empty() {
+            return Ok(());
+        }
+        ensure_pixels(layer)?;
+        liquify::segment(layer, selection.as_deref(), &dabs);
+        return Ok(());
+    }
     if mask_target {
         prepare_mask(layer)?;
     } else {
@@ -291,7 +359,8 @@ fn stroke_segment(
     let bottom = (local.iter().map(|p| p.y).fold(f32::MIN, f32::max) * height as f32)
         .ceil()
         .min(height as f32) as u32;
-    if right <= left || bottom <= top {
+    // Nothing to change: leave the pixels (and their buffer) alone.
+    if right <= left || bottom <= top || (tone::is_tone(mode) && brush.tone.exposure <= 0.0) {
         return Ok(());
     }
     if let Some(stroke) = &mut stroke {
@@ -328,6 +397,7 @@ fn stroke_segment(
             endpoints: [from, to],
             from_brush,
             brush,
+            flow,
             options: StrokeOptions {
                 mode,
                 mask_target,
@@ -375,15 +445,16 @@ fn stroke_segment(
             if amount <= 0.0 {
                 continue;
             }
-            let original = if let Some(stroke) = &mut stroke {
+            let (amount, original) = if let Some(stroke) = &mut stroke {
                 let sample = stroke.pixel_mut(x, y);
+                let amount = build_up(sample.amount, amount, flow);
                 if amount <= sample.amount {
                     continue;
                 }
                 sample.amount = amount;
-                Some(sample.original)
+                (amount, Some(sample.original))
             } else {
-                None
+                (amount, None)
             };
             if mask_target {
                 let pixels = Arc::make_mut(&mut layer.mask.as_mut().unwrap().pixels);
@@ -404,6 +475,11 @@ fn stroke_segment(
             let old = original.unwrap_or(pixel.0).map(|v| v as f32 / 255.0);
             let mut color = brush.color.map(|v| v as f32 / 255.0);
             match mode {
+                PaintMode::Dodge | PaintMode::Burn | PaintMode::Sponge => {
+                    pixel.0 = tone::apply(old, mode, brush.tone, amount)
+                        .map(|v| (v * 255.0).round() as u8);
+                    continue;
+                }
                 PaintMode::Erase => {
                     pixel[3] = (old[3] * (1.0 - amount) * 255.0).round() as u8;
                     continue;
@@ -467,6 +543,8 @@ fn stroke_segment(
                         continue;
                     }
                 }
+                // Warped above, before the brush's coverage is worked out.
+                PaintMode::Liquify => continue,
                 PaintMode::Paint | PaintMode::Pencil => {}
             }
             color[3] *= amount;
@@ -475,6 +553,18 @@ fn stroke_segment(
         }
     }
     Ok(())
+}
+
+/// A pixel's stroke coverage after a dab covers it with `amount` at `flow`.
+/// The dab moves the coverage `flow` of the way up to `amount`, so where
+/// dabs overlap the paint builds up, but never past the strongest of them
+/// (the opacity). Flow 1 takes the strongest coverage at once.
+pub(crate) fn build_up(previous: f32, amount: f32, flow: f32) -> f32 {
+    if flow >= 1.0 {
+        previous.max(amount)
+    } else {
+        previous + (amount - previous).max(0.0) * flow.max(0.0)
+    }
 }
 
 pub fn fill(document: &mut Document, color: [u8; 4], erase: bool, mask_target: bool) -> Result<()> {

@@ -22,6 +22,12 @@ fn smooth(value: f32) -> f32 {
 
 /// Planckian-locus approximation in CIE xy, converted through the camera matrix.
 fn temperature_wb(raw: &DecodedRaw, temperature: f32) -> [f32; 3] {
+    temperature_gains(raw.xyz_to_camera, temperature)
+}
+
+/// The white-balance multipliers that neutralize light of `temperature` for a camera with
+/// the colour matrix `xyz_to_camera`.
+pub(super) fn temperature_gains(xyz_to_camera: [[f32; 3]; 3], temperature: f32) -> [f32; 3] {
     let t = temperature.clamp(2000.0, 25_000.0);
     let x = if t <= 4000.0 {
         -0.2661239e9 / t.powi(3) - 0.2343589e6 / t.powi(2) + 0.8776956e3 / t + 0.179910
@@ -35,7 +41,7 @@ fn temperature_wb(raw: &DecodedRaw, temperature: f32) -> [f32; 3] {
     } else {
         3.081758 * x.powi(3) - 5.8733864 * x.powi(2) + 3.7511299 * x - 0.37001483
     };
-    let neutral = matrix(raw.xyz_to_camera, [x / y, 1.0, (1.0 - x - y) / y]);
+    let neutral = matrix(xyz_to_camera, [x / y, 1.0, (1.0 - x - y) / y]);
     neutral.map(|v| (neutral[1] / v.max(0.001)).clamp(0.01, 100.0))
 }
 

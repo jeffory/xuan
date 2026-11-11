@@ -238,12 +238,13 @@ from connecting either. Install plugins you trust.
 
 | | `document = "read"` (default) | `document = "edit"` |
 | --- | --- | --- |
-| `document/get`, `layer/export`, `document/export`, `selection/export` | yes | yes |
+| `document/get`, `layer/export`, `document/export`, `selection/export`, `document/sample`, `document/histogram` | yes | yes |
 | Action results that only change the selection or open a new document: `mask`, `document` (and an `image` with `result.into = "document"`), a `set_selection` edit, `text`; always a proposal the user accepts or discards | yes | yes |
 | Action results that change the open document's pixels or layers: an `image` placed as a layer or replacing the source, any other `edit` op, `extend_canvas` | no | yes |
 | `document/edit`, including its `set_selection` op | no | yes |
 | `extend_canvas`, in `document/edit` or in a result's `edit` output | no | yes |
 | `host/run` commands that edit the document | no | yes |
+| `raw/develop` | no | yes |
 | `document/list`, `document/activate`, and `file/save_as`, `file/export` and `file/open` after the user's choice | yes | yes |
 
 A plugin with `document = "read"` can read the document and propose
@@ -299,6 +300,107 @@ loaded. Leave `result` out for an action that returns only masks, or use
 `"document"`. Because a grant is bound to the permissions it was given for,
 changing `document` in a manifest asks the user to review the plugin again.
 
+### Running other plugins' actions
+
+A plugin starts only its own actions. A plugin that works for someone else,
+such as the MCP server for its clients, may also list and run other plugins'
+actions once the user turns on **Run other plugins' actions** for it in
+**Plugins → Manage Plugins…** (offered to plugins that ask before edits, and
+shown for any plugin while it is on). It is stored as `run_other_actions =
+true` in the plugin's grant and, like auto mode, goes away when the plugin's
+folder, command or permissions change. Without it, `plugins/actions`,
+`jobs/list` and a `host/run` of another plugin's action fail with `-32600`
+and a message that names the setting.
+
+`plugins/actions` lists the actions of the installed, enabled plugins other
+than the one asking: for each, `plugin` and `plugin_name`, whether the plugin
+uses the `network`, whether the user has `allowed` it to run and whether it
+is `available` (not held back by offline mode), and the action's `id`, its
+`action` (`<plugin>/<id>`, for `host/run`), `label`, `description`, `kind`,
+`source` (what it sends: `layer`, `composite`, `selection` or `none`),
+`surfaces`, `result` (`layer`, `replace`, `document` or `ask`) and `inputs`,
+as the manifest declares them (type, label, help, default, `min`, `max`,
+`values`, region `fields`).
+
+`host/run` with `{action: "<plugin>/<action>", inputs?, into?, layers?}`
+starts one. It is checked before anything waits, and refused with an error
+that says why:
+
+- The plugin must be installed and enabled, not held back by offline mode,
+  and have the action.
+- `inputs` are checked against the action's inputs as given, not adjusted:
+  an unknown input, a value of the wrong type, an `enum` value not among its
+  `values`, a number outside `min`/`max` or not whole for an `integer` or
+  `seed`, a colour that is not `#rrggbb` or `#rrggbbaa`, a text over 64 KiB,
+  or a malformed region or too few or too many regions fail at once, naming
+  the input. Inputs left out (or `null`) take their defaults, except
+  `regions` an action needs. `path` inputs cannot be set: the user chooses
+  their own files, so a plugin cannot have another one read a file the user
+  never picked.
+- An action with `result.into = "ask"` needs `into`: `"layer"` (a new layer
+  in the current document) or `"document"` (a new document), the choices its
+  dialog offers. Other actions take no `into`.
+- `layers` are layer ids to select first, the last one active, as clicking
+  them would. They stay selected only if the action starts or asks to send.
+
+The first run of each other plugin in a session then waits for the user:
+**Run “Generate Image” for *Plugin (plugin id)*?** names the action with the
+plugin it belongs to, the texts and options it runs with, where its result
+goes, the layers it selects and the session, and for a plugin that declares
+network hosts, those hosts and that a run can send document data there and
+use paid credits.
+
+- **Allow** runs it, and that session's later runs of the same plugin's
+  actions, until the asking plugin stops.
+- **Always Allow** also stores `run_without_asking = true` in the asking
+  plugin's grant: its runs of other plugins' actions no longer wait for this
+  prompt. **Plugins → Manage Plugins…** shows it as **Run them without
+  asking** under **Run other plugins' actions**; turning either off forgets
+  the sessions already allowed. It goes away with the grant like the other
+  answers stored there.
+- **Cancel** fails the request with `-32800`. For 30 seconds the plugin's new
+  runs are refused at once, without a prompt.
+
+A plugin has at most one run waiting for this prompt; a second fails at once,
+so runs that may cost money cannot stack up behind one answer. The prompt
+waits until no other dialog, editor job or plugin action is open; it comes
+back after another dialog replaced it, and `request/cancel` closes it (see
+[Withdrawing a request](#withdrawing-a-request)).
+
+Once allowed, the action runs under its own plugin's rules, as its menu item
+would but without its dialog: the editor must not be busy (a dialog, an
+editor job, an open plugin action or Develop); a plugin that is not allowed
+yet shows its permission prompt, and the request fails (run it again once
+the user allowed it); an action that needs an image layer or a selection is
+refused as its menu item would be; missing models are offered for download
+(once they are ready, the action's dialog opens with these inputs for the
+user to run); and a plugin that declares network hosts asks **Send to
+*Plugin*?**, which also says which plugin started the run. The request waits
+for that answer: **Cancel** fails it with `-32800`. Once the job runs, the
+answer is `{ok: true, running: true, job, plugin, plugin_name, action,
+label}`. The job is shown in the status bar like any other, with Cancel and
+the plugin that started it, the asking plugin's log notes it, and its result
+is a proposal the user accepts or discards. A run never uses the asking
+plugin's grant: the other plugin's own grant, secrets, send prompt and
+offline mode apply.
+
+`jobs/list` reports what the status bar shows, so the asking plugin can wait
+for a long job without guessing: `running`, every running action, import,
+export and model download in the status bar's order, each with its `job`
+id, `kind` (`action`, `file` or `model`), `label`, `plugin` and `action`,
+`document`, `progress` (0–1, or `null` before the plugin reports any),
+latest `message`, `started_by` (the plugin that started it with `host/run`,
+or `null` for the user) and whether it is the one the status bar `shown`;
+`status_bar`, the bar's text with its count, such as `Echo Source · Mock ·
+copying (1 of 2)`; `results_waiting`, finished jobs whose results wait for
+the editor to be free; the open `proposal` (`job`, `name`, `source`,
+`document`); and `finished`, the latest jobs this plugin started that no
+longer run, newest first, with their `outcome`: `waiting` (its result waits
+for the editor), `proposed` (shown, for the user to accept or discard),
+`done` (it needed no answer: a new document or a message), `accepted`,
+`discarded`, `failed` (with the error as `message`) or `cancelled`, and
+`seconds_ago`. Other plugins' finished jobs are not listed.
+
 ### Network
 
 A plugin that lists hosts under `permissions.network` is treated as one that
@@ -333,8 +435,8 @@ Until the user chose "Don't ask again", `action/estimate` reaches such a
 plugin with `source: null` and without its regions and `text`, `multiline`,
 `path` or `secret` inputs, since it is sent as soon as the dialog opens.
 
-**Exports outside an action.** `layer/export`, `document/export` and
-`selection/export` from a plugin that declares network hosts are answered at
+**Exports outside an action.** `layer/export`, `document/export`,
+`selection/export`, `document/sample` and `document/histogram` from a plugin that declares network hosts are answered at
 once while one of its confirmed jobs runs or after "Don't ask again".
 Otherwise, for example from a pane, the request is held unanswered and Xuan
 asks once, as soon as no other dialog is open, naming what was asked for.
@@ -539,7 +641,10 @@ where it is stored as `"<plugin>/<action>"`.
 Inputs become a dialog, drawn by the host. Types: `text`, `multiline`,
 `integer`, `number` (with `min`, `max`, `step`), `seed`, `bool`, `enum`,
 `color`, `path` and `regions`. Each has `label`, optional `help`, `default` and
-`placeholder`.
+`placeholder`. An `integer` or `number` with both `min` and `max` is a slider,
+except an `integer` whose range spans more than 10,000 values, such as a port
+(0–65535), which is a number field; typed values are kept within the range.
+Settings are drawn the same way.
 
 `regions` opens the **Region** tool while the dialog is open: the user drags
 numbered boxes over the image, or turns the current selection into a region, and
@@ -1064,20 +1169,25 @@ wait for the user's answer (see [Network](#network)).
 
 | Request (plugin → host) | Params | Result |
 | --- | --- | --- |
-| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
-| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips; an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
-| `document/export` | `{max_side?, dir?}` | `{path, width, height, scale}` |
+| `document/get` | — | `{id, width, height, resolution, active, selection: {x, y, width, height} \| null, paths: [{id, name, path}], layers: [{id, name, kind, visible, locked, opacity, fill, blend, parent, clip_to, x, y, width, height, rotation, flip_x, flip_y, pixel_width, pixel_height, has_mask, masks, attached_to, shape, raw, generated?, provenance?}]}`; see [Layer descriptions](#layer-descriptions) |
+| `layer/export` | `{layer, what: "pixels" \| "mask", max_side?, region?, dir?}` (`dir`: one of the plugin's folders) | `{path, width, height, x, y, scale, mask_layer?}`: pixels as stored, before the layer's flips (with `region`, `[x, y, width, height]` in document pixels, that rectangle of the layer alone as it sits in the document instead); an image's mask is read from its attached mask layer, named in `mask_layer` (an error lists them when it has several) |
+| `document/export` | `{max_side?, region?, dir?}` | `{path, width, height, scale}`; with `region` (`[x, y, width, height]` in document pixels, cut to the canvas) only that rectangle, and `x`, `y` and `region` say what was written |
+| `document/sample` | `{points: [[x, y]], radius?, layer?}` | `{width, height, radius, samples: [{x, y, color, rgba, luminance}]}`: the colour at each point in document pixels (at most 1,000), averaged by alpha over the pixels within `radius` (0–50) of it; `color` is `null` off the canvas. With `layer`, that layer alone as it sits in the document |
+| `document/histogram` | `{region?, layer?}` | `{region, pixels, transparent, mean_alpha, luminance, red, green, blue}`: for each channel `{bins: [256 counts], mean, min, max, median, p1, p99, clipped_low, clipped_high}` over the pixels that are not fully transparent |
 | `selection/export` | `{dir?}` | `{path, x, y, width, height}` or `null` |
 | `document/edit` | `{name, edits: [ … ]}` | `{ok: true, layers: [id]}` (the layers it added); needs `document = "edit"` |
 | `document/list` | — | `{documents: [{id, title, width, height, layers, current, modified, saved}]}`: the open tabs, without their paths |
-| `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), and whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)) |
+| `session/status` | `{session?}` | `{edit_prompt, edits, auto, save_auto, run_actions, run_auto}`: how direct edits are handled in the session (see [Edit sessions](#edit-sessions)), whether the plugin saves and exports to paths without asking (see [Files the user chooses](#files-the-user-chooses)), and whether it may run other plugins' actions, and without asking (see [Running other plugins' actions](#running-other-plugins-actions)) |
+| `plugins/actions` | — | `{actions: [{plugin, plugin_name, network, allowed, available, id, action, label, description, kind, source, surfaces, result, inputs}]}`: the other plugins' actions, once the user turned on **Run other plugins' actions** for this plugin (see [Running other plugins' actions](#running-other-plugins-actions)) |
+| `jobs/list` | — | `{running: [{job, kind, label, plugin, action, document, progress, message, started_by, shown}], status_bar, results_waiting, proposal, finished: [{job, plugin, action, label, outcome, message, seconds_ago}]}`: the jobs the status bar shows, and what became of the ones this plugin started, with the same setting (see [Running other plugins' actions](#running-other-plugins-actions)) |
 | `document/activate` | `{document}` | makes an open document the current one, as clicking its tab does; a plugin may switch at most once a second (`-32003` with `retry_after` otherwise; naming the current document always succeeds) |
-| `host/run` | `{action, inputs?, layers?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
+| `host/run` | `{action, inputs?, layers?, into?}` | runs an allowed host command, or one of the plugin's own actions as `<plugin>/<action>` with `inputs` pre-filled. With **Run other plugins' actions**, another plugin's action as `<plugin>/<action>`, after the user allowed it, answered with `{ok: true, running: true, job, …}` once its job runs (see [Running other plugins' actions](#running-other-plugins-actions)). For a built-in command that edits, `layers` (ids) are selected first, the last one active, as clicking them would; if the command is greyed out for them the selection is left as it was. A built-in command answers `{ok: true, layers: [id], running}`: the layers it added, and whether it started a job that is still running (then other edits fail with "The editor is busy" until it ends) |
 | `host/open` | `{path}` or `{url}` | opens a file as a document or a URL in the browser |
 | `file/save_as` | `{document?, suggested_name?}` or `{document?, path, overwrite?}` | `{name}` (the file's name, not its folder) once the user saved the document as a project in the save dialog; with `path`, `{name, asked}` once it was saved there after Xuan's prompt (`asked: true`) or without asking (`asked: false`); see [Files the user chooses](#files-the-user-chooses) |
-| `file/export` | `{document?, format?, suggested_name?}` or `{document?, format?, path, overwrite?}` | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff` or `webp`); with `path`, `{name, asked}` as for `file/save_as` |
+| `file/export` | `{document?, format?, suggested_name?, quality?, lossless?}` or `{document?, format?, path, overwrite?, quality?, lossless?, layer?, region?, max_side?}` (the last three write a part of the document as a PNG, and the answer adds `width`, `height`, `x`, `y` and `scale`) | `{name}` once the user exported the document as an image (`png`, the default, `jpg`, `tiff`, `webp` or layered OpenRaster `ora`); with `path`, `{name, asked}` as for `file/save_as` |
 | `file/save` | `{document?}` | `{name, asked}` once the document was saved back to its own `.xuan` file, as **File → Save**, after Xuan's prompt or without asking |
-| `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path` |
+| `file/open` | `{path}` | `{ok: true, document}` once the user agreed to open the file named by the absolute `path`; a camera RAW file opens as a document with one RAW layer developed with the default settings, not in a Develop tab |
+| `raw/develop` | `{layer?, settings?, reset?, auto_exposure?, neutral_point?, name?}` | `{ok: true, layer}` (the layer as `document/get` describes it) once the RAW layer (the active one by default) was developed again from its camera file; see [Camera RAW layers](#camera-raw-layers). Needs `document = "edit"`, waits for the session's answer like `document/edit`, and runs in the background like a `host/run` job: other edits fail with "The editor is busy" until it ends |
 
 ### Layer descriptions
 
@@ -1112,8 +1222,13 @@ its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
 
 - `{"op": "add_layer", "image": path, "name"?, "x"?, "y"?, "mask"?, "above"?, "opacity"?, "blend"?}`
 - `{"op": "replace_pixels", "layer", "image", "x"?, "y"?}`
-- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "blend"?, "clip_to"?: id | null}`:
-  `clip_to` clips the layer to a base below it in the same folder, as
+- `{"op": "set", "layer", "name"?, "visible"?, "locked"?, "opacity"?, "fill"?, "blend"?, "clip_to"?: id | null}`:
+  `fill` (0–1) is Photoshop's Fill, on pixel, text and shape layers only: it
+  fades the layer's own pixels but not its layer effects, where `opacity`
+  fades both; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid
+  Light, Linear Light, Hard Mix and Difference it weakens the blend instead
+  (see [USAGE.md](USAGE.md)). A fill below 1 saves the project as `.xuan`
+  version 13. `clip_to` clips the layer to a base below it in the same folder, as
   **Layer → Clipping Mask** does, and `null` releases it (left out, it does
   not change). The base can be a pixel layer or a group: a group's shape is
   its visible layers together, mask layers inside it and its own opacity and
@@ -1151,25 +1266,35 @@ Layers and their properties:
   `above`/`below` it must be that layer's group. A layer cannot be moved
   into or next to itself or its own children. The layer becomes the active
   layer.
-- `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?}`:
-  move, scale or rotate a layer (a group with its layers) to this box in
-  document units, as **Free Transform** does; missing fields keep their value.
-  The layer must not be locked.
+- `{"op": "transform", "layer", "x"?, "y"?, "width"?, "height"?, "rotation"?,
+  "pivot"?, "cover"?}`: move, scale or rotate a layer (a group with its
+  layers) to this box in document units, as **Free Transform** does; missing
+  fields keep their value. The layer must not be locked. `rotation` (degrees
+  clockwise) turns the layer about its centre, or about `pivot` (`[x, y]` in
+  document pixels) when given. `cover: true` then scales the layer up about
+  its centre just enough to cover the whole canvas, so no corner is empty; a
+  layer that already covers it is left alone.
 - `{"op": "add_empty_layer", "name"?, "above"?}` and `{"op": "add_mask_layer",
   "name"?, "above"?}`: an empty pixel layer, or a mask layer made from the
   selection (all white without one), the size of the canvas.
 - `{"op": "add_text_layer", "text", "x"?, "y"?, "family"?, "size"?, "color"?,
-  "bold"?, "italic"?, "underline"?, "strikethrough"?, "name"?, "above"?}`: an
-  editable text layer with its top-left corner at `x`, `y`. `size` is in pixels
-  (1–1024, default 48), the text at most 16 KiB; an unknown `family` falls back
-  to Xuan's bundled font.
+  "bold"?, "italic"?, "underline"?, "strikethrough"?, "runs"?, "name"?,
+  "above"?}`: an editable text layer with its top-left corner at `x`, `y`.
+  `size` is in pixels (1–1024, default 48), the text at most 16 KiB; an unknown
+  `family` falls back to Xuan's bundled font. `runs` gives letters their own
+  font, colour, bold or italic; see [Text style runs](#text-style-runs).
 - `{"op": "add_text_layer", "text", "path", "path_options"?, …}`: text set
   along `path`, [SVG path data](#svg-path-data) in document coordinates, which
   also places the layer (give no `x` or `y`); the other fields are as above.
   See [Text on a path](#text-on-a-path).
 - `{"op": "set_text", "layer", "text"?, "family"?, "size"?, "color"?, "bold"?,
-  "italic"?, "underline"?, "strikethrough"?, "path"?: d | null,
-  "path_options"?}`: change a text layer, keeping what is left out. `path`
+  "italic"?, "underline"?, "strikethrough"?, "runs"?, "path"?: d | null,
+  "path_options"?}`: change a text layer, keeping what is left out. New `text`
+  keeps each unchanged letter's own style (letters typed in take the style of
+  the letter before them). `family`, `color`, `bold` and `italic` are the whole
+  layer's, as in the Text window with nothing selected: every letter takes them,
+  and runs stop changing them. `runs`, applied after those, replaces the
+  letters' styles (`[]` clears them). `path`
   (document coordinates) sets the text along a path, `null` returns it to a
   box at the layer's top-left corner, and `path_options` changes how it
   follows the path, keeping the options it leaves out. The layer must not be
@@ -1191,12 +1316,30 @@ Layers and their properties:
 - `{"op": "add_adjustment_layer", "adjustment" | "filter", "name"?,
   "above"?}`: a non-destructive adjustment or filter layer, masked by the
   selection when there is one.
+- `{"op": "auto_adjust", "kind", "layer"?, "as_layer"?, "neutral"?, "name"?,
+  "above"?}`: an adjustment worked out from the picture. `kind` is
+  `contrast` (the lightness stretched to the full range, 0.5% clipped at each
+  end, as the Levels dialog's Auto), `tone` (red, green and blue each
+  stretched on their own) or `white_balance` (per-channel levels that make
+  the image's average colour grey, or the colour at `neutral`, `[x, y]` in
+  document pixels, averaged over 5 × 5 pixels). With `as_layer` the visible
+  image is measured and an adjustment layer is added (`name`, `above`),
+  masked by the selection; without, the adjustment is applied to the pixels
+  of `layer` (or the active layer) inside the selection, measured from that
+  layer.
+- `{"op": "set_adjustment", "layer", "adjustment" | "filter"}`: new settings
+  for an adjustment or filter layer that is already there, as its own dialog
+  sets them: an adjustment for an adjustment layer, a filter for a filter
+  layer. The layer keeps its place, mask, opacity and blend mode.
+  `document/get` lists each such layer's current settings under `adjustment`
+  or `filter`, in the shape this op takes.
 
 Pixels, inside the selection when there is one (on the given `layer`, which
 becomes the active layer, or the active layer; it must be an unlocked pixel
 layer, so text and shape layers become pixel layers):
 
-- `{"op": "fill", "layer"?, "color"}`.
+- `{"op": "fill", "layer"?, "color", "mask"?}`. With `mask: true` the layer's
+  mask is filled (with the colour's lightness) instead of its pixels.
 - `{"op": "fill_path", "layer"?, "path", "color", "fill_rule"?}`: fill the
   inside of `path` ([SVG path data](#svg-path-data)), within the selection when
   there is one, with antialiased edges. The selection does not change.
@@ -1209,10 +1352,23 @@ layer, so text and shape layers become pixel layers):
   `mask` paints the layer's mask with the gradient's brightness instead of its
   pixels. `start` and `end` must differ.
 - `{"op": "stroke", "layer"?, "points": [[x, y], …], "color"?, "size"?,
-  "hardness"?, "opacity"?, "erase"?, …dynamics, "symmetry"?}`: one brush stroke through the
+  "hardness"?, "opacity"?, "flow"?, "erase"?, "mode"?, "range"?, "exposure"?,
+  "saturate"?, "mask"?, …dynamics, "symmetry"?}`: `mode` is `paint` (the
+  default), `erase`, or the tone tools `dodge`, `burn` and `sponge`, which
+  change the pixels under the brush: most in `range` (`shadows`, `midtones`,
+  the default, or `highlights`) and by `exposure` (0–1, default 0.5), with
+  `saturate` for a sponge that saturates. `mask: true` paints the layer's mask
+  with the colour's lightness instead of its pixels (not with the tone
+  tools). A `mask` edit on an image paints the one mask layer attached to it;
+  with none, the image gets one; with several, name the mask layer itself.
+  Otherwise one brush stroke through the
   points (at most 10,000) in document coordinates; `size` is the brush
   diameter (1–2000, default 20), `hardness` and `opacity` 0–1 (defaults 0.8
-  and 1), and `erase` erases instead of painting. A single point paints one
+  and 1), and `erase` erases instead of painting. `flow` (above 0, at most 1;
+  default 1) is the Brush's **Flow**: how much paint one pass lays down.
+  Below 1, where the stroke goes back over itself the paint builds up toward
+  `opacity`, never past it, and the stroke is painted as dabs 0.1 of the size
+  apart (or at `spacing`); at 1 it paints exactly as without it. A single point paints one
   round dab the size of the brush. The layer grows to hold the stroke, as with
   the Brush tool. Several strokes in one request are one undo step.
 
@@ -1262,8 +1418,16 @@ layer, so text and shape layers become pixel layers):
 Filters and adjustments are written as `.xuan` files store them on filter and
 adjustment layers. Filters: `{"GaussianBlur": {"radius"}}` (0–100),
 `{"MotionBlur": {"distance", "angle"}}` (0–200, ±180°), `{"Noise": {"amount",
-"monochrome"}}` (0–100) and `{"LensCorrection": {"distortion", "vignette"}}`
-(±50, ±100). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",
+"monochrome"}}` (0–100), `{"LensCorrection": {"distortion", "vignette"}}`
+(±50, ±100; as in Photoshop, a negative vignette darkens the corners and a positive one
+brightens them), and upstream Compositor's `{"Vignette": {"amount", "color": [r, g, b],
+"midpoint", "roundness", "feather", "highlights"}}`, `{"Bloom": {"amount", "radius"}}`,
+`{"TonalContrast": {"amount", "radius", "shadows", "midtones", "highlights"}}`,
+`{"UnsharpMask": {"amount", "radius", "threshold"}}` (sharpening: 0–500%, 0.1–100 px,
+0–255 levels; [format 18](FORMAT.md#unsharp-mask-version-18)) and
+`{"Dither": {…}}` (any Dither setting left out takes upstream's default, so `{"Dither":
+{}}` is Atkinson in black and white); their ranges and defaults are in
+[FORMAT.md](FORMAT.md#compositor-filters-version-14). Adjustments: `"Invert"`, `{"HueSaturation": {"hue", "saturation",
 "lightness", "colorize"}}`, `{"Levels": {"black", "gamma", "white",
 "output_black", "output_white"}}` (levels 0–255), `{"Curves": {"points": [{"x",
 "y"}, …]}}` (0–1), `{"Exposure": {"exposure", "offset", "gamma"}}`,
@@ -1272,7 +1436,9 @@ adjustment layers. Filters: `{"GaussianBlur": {"radius"}}` (0–100),
 "roughness", "seed"}}`, `{"BlackWhite": {"weights": [6 numbers], "tint",
 "tint_hue", "tint_saturation"}}`, `{"ColorBalance": {"shadows": [3 numbers],
 "midtones", "highlights", "preserve_luminosity"}}`, and the per-channel
-`{"LevelsChannels": …}`, `{"CurvesChannels": …}` and `{"HueRanges": …}`. Every
+`{"LevelsChannels": …}`, `{"CurvesChannels": …}` and `{"HueRanges": …}`. A Color Lookup needs a
+`.cube` file, so plugins cannot add or apply one; its layers are still described like any
+adjustment layer. Every
 field must be given; values outside the ranges the dialogs allow are refused.
 Colours are `"#rrggbb"` or `"#rrggbbaa"` (default black).
 
@@ -1308,18 +1474,51 @@ placed on the canvas as it was sent; the selection is cleared or rescaled as
 the menu commands do):
 
 - `{"op": "crop", "x", "y", "width", "height"}`: as the Crop tool.
+- `{"op": "crop_to", "ratio"?, "bounds"?, "center"?, "straighten"?}`: a crop
+  whose box Xuan works out. `ratio` (`[width, height]`, such as `[4, 5]`)
+  gives the largest box of that shape inside `bounds` (`[x, y, width,
+  height]`, the canvas by default), centred on `center` (`[x, y]`) as nearly
+  as the bounds allow. `straighten` (-45 to 45 degrees, clockwise) first turns
+  the image as `rotate_canvas` does and then crops to the largest upright box
+  with no empty corners, of `ratio` or of the canvas's own shape; it takes no
+  `bounds` or `center`.
 - `{"op": "resize_canvas", "width", "height", "anchor"?}`: **Image → Canvas
   Size…**, which may also shrink; `anchor` `[0, 0]` keeps the top-left corner,
   `[0.5, 0.5]` (the default) the centre.
 - `{"op": "resize_image", "width", "height"}`: **Image → Image Size…**.
-- `{"op": "rotate_canvas", "degrees"}`: **Image → Rotate Canvas**, `degrees`
-  clockwise: 90, 180 or 270 (-90 is 270). Layers, masks, guides, document
-  paths and the selection turn with the canvas; a quarter turn swaps the
-  width and height.
+- `{"op": "rotate_canvas", "degrees", "expand"?}`: **Image → Rotate Canvas**,
+  `degrees` clockwise, by any angle. Layers, masks, document paths and the
+  selection turn about the canvas centre; layers change their placement and
+  keep their pixels, so nothing is resampled. With `expand` (the default) the
+  canvas grows to hold the turned image: a quarter turn swaps the width and
+  height, and another angle leaves transparent corners. With `expand: false`
+  it keeps its size. Guides turn with quarter turns and are removed by other
+  angles.
 - `{"op": "trim", "based_on"?, "top"?, "bottom"?, "left"?, "right"?}`:
   **Image → Trim…**. `based_on` is `transparent` (the default), `top_left` or
   `bottom_right`, the pixel whose colour the margins have; the sides default
   to `true`. Nothing changes when there is nothing to trim.
+
+### Camera RAW layers
+
+A layer of kind `raw` keeps its camera file and develops it nondestructively.
+Its description has `raw`: `{filename, camera, lens, iso, aperture, shutter,
+focal_length, width, height, bits, settings}`, where `settings` are the
+Develop settings as `.xuan` files store them (`exposure`, `white_balance`,
+`temperature`, `tint`, `custom_wb`, `contrast`, `highlights`, `shadows`, …,
+`crop`, `quarter_turns`, `overlays`). Other layers have `raw: null`.
+
+`raw/develop` develops such a layer again at full size. `settings` holds only
+the settings to change, laid over the layer's own (or over Develop's defaults
+with `reset: true`); nested objects such as `negative` merge key by key. A
+setting the settings do not have is refused with the list of those they have,
+and one out of range with its name and range, before anything runs.
+`auto_exposure: true` sets the exposure from the image as Develop's **Auto**
+button does, and `neutral_point: [x, y]` (0–1 across the layer as it looks
+before the request) sets a `Custom` white balance that makes that spot
+neutral, as Develop's white balance picker does. The answer comes when the
+job ends; the user can cancel it (`-32800`). It is one undo step, named
+`name` or **Develop RAW**.
 
 ### SVG path data
 
@@ -1361,8 +1560,30 @@ first, a line height further from the path each.
 | `size_end` | none | Font size of the last letter (1–1024), ramping from `size` at the first; the letters close up as they shrink |
 | `opacity_start`, `opacity_end` | `1` | Opacity of the first and last letter (0–1), blending between them and multiplying the colour's alpha |
 
+### Text style runs
+
+A text layer's `runs` are letters drawn with another font family, colour,
+weight or slant than the layer's own (saved in `.xuan` format 17):
+
+```json
+{"op": "add_text_layer", "text": "APPle", "color": "#000000", "runs": [
+  {"start": 0, "end": 3, "family": "Georgia", "color": "#ff0000"}]}
+```
+
+draws "APP" red in Georgia and "le" black in the layer's font. Each run has
+`start` and `end` (excluded), counted in Unicode code points from the start of
+the text, not UTF-16 units: in JavaScript, index `[...text]`, not `text`.
+`family`, `color` (`#rrggbb` or `#rrggbbaa`), `bold` and `italic` are each
+optional; what a run leaves out is the layer's. Size, underline and
+strikethrough belong to the whole layer. Runs must be sorted, not overlap, not
+be empty and end inside the text, at most 4,096 of them, or the edit fails;
+unknown keys fail too. Runs that change nothing are dropped and neighbours that
+change the same things merged, so a description may list fewer runs than were
+sent. Text on a path keeps each letter's style.
+
 A text layer's description has `text`: `{text, family, size, color, bold,
-italic, underline, strikethrough}`, and for text on a path also `path` (where
+italic, underline, strikethrough, runs}` (`runs` as above, `[]` without any),
+and for text on a path also `path` (where
 the path is now, in document coordinates; `null` once the layer is warped),
 `path_options`, and `local_path` and `local_size`, the path as stored in the
 layer's own box. Other layers have `text: null`.
@@ -1416,10 +1637,18 @@ for the answer:
   the dialog opens again in that folder with the extension added, and if the
   second answer lacks it too nothing is written (`-32602`). The project is
   saved there and from then on lives there, as with **File → Save As…**.
-- `file/export` does the same for an image in `format` (`png`, `jpg`, `tiff`
-  or `webp`); the document itself is not changed. The name the user confirms
-  must end in `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff` or `.webp` (which picks
-  the format written), with the same second dialog otherwise.
+- `file/export` does the same for an image in `format` (`png`, `jpg`, `tiff`,
+  `webp` or `ora`, layered OpenRaster as **File → Export Image…** writes it);
+  the document itself is not changed. The name the user confirms must end in
+  `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.webp` or `.ora` (which picks the
+  format written), with the same second dialog otherwise. `quality` (a
+  whole number from 1 to 100) sets JPEG and lossy WebP quality; `lossless`
+  (`true` or `false`) chooses lossless or lossy WebP, and other formats ignore
+  it. WebP is lossy when `quality` is given without `lossless`. What a request
+  leaves out follows the user's choices in the **Export image** dialog (JPEG
+  quality 90 and lossless WebP until the user changes them), and a request
+  never changes those choices. Other values fail with `-32602`, as do
+  `quality` or `lossless` on `file/save_as` and `file/save`.
 - With a `path`, `file/save_as` and `file/export` write there instead of
   showing the system dialog (which an LLM behind a plugin cannot operate),
   once the user agreed in Xuan's own prompt, **Save a file?** or **Export an
@@ -1502,8 +1731,9 @@ verified or deleted, with the same map as `initialize`.
 
 A request that waits for the user (a direct edit held by the [edit
 session](#edit-sessions) prompt, an export held by the [send
-prompt](#network), or a [file request](#files-the-user-chooses)) can wait
-for minutes. A plugin that no longer wants the answer, because the client it
+prompt](#network), a [file request](#files-the-user-chooses), or a [run of
+another plugin's action](#running-other-plugins-actions) waiting for its
+prompt or for that plugin's send prompt) can wait for minutes. A plugin that no longer wants the answer, because the client it
 serves gave up, sends the notification `request/cancel` with the request's
 `id`:
 
@@ -1512,7 +1742,8 @@ serves gave up, sends the notification `request/cancel` with the request's
 ```
 
 Xuan drops the request and answers it with `-32800`. Its prompt is closed,
-not just hidden, so it does not come back after another dialog and a late
+not just hidden (a run waiting for another plugin's send prompt closes that
+prompt and the run), so it does not come back after another dialog and a late
 **Allow**, **Send**, **Open** or **Save** does nothing; if other requests still wait,
 Xuan asks about the first of them instead. Withdrawing is not a refusal: no
 answer is recorded for the session and the plugin may ask again at once. A
@@ -1617,7 +1848,7 @@ request](#withdrawing-a-request)).
 - Running jobs are shown in the status bar, with Cancel: the job's label and
   its latest `job/progress` message, a progress bar once it reports a
   `fraction` (a spinner until then), and a count such as **1 of 3** that lists
-  every running job. A plugin that cannot measure its progress should send
+  every running job. A job another plugin started names that plugin. A plugin that cannot measure its progress should send
   messages without a `fraction` rather than a made-up one.
 - Wherever a plugin's own words appear, Xuan says which plugin they come
   from: menu items and the shortcut list show `Action label · Plugin name`
@@ -1648,4 +1879,6 @@ request](#withdrawing-a-request)).
   example `merge` with a single layer, is refused. Commands that open, save, export or
   close files, use the clipboard, change settings or manage plugins are
   refused (see [Files the user chooses](#files-the-user-chooses) for saving
-  and opening), and a plugin can start only its own actions.
+  and opening), and a plugin can start only its own actions unless the user
+  lets it run other plugins' actions (see [Running other plugins'
+  actions](#running-other-plugins-actions)).

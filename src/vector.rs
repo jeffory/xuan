@@ -114,6 +114,23 @@ impl VectorPath {
         Self(affine * &self.0)
     }
 
+    /// Every point, control points included, moved by `f`. Exact for straight segments under a
+    /// projective map (Perspective Crop); a curve's ends land exactly and its middle closely.
+    pub fn mapped(&self, mut f: impl FnMut(kurbo::Point) -> kurbo::Point) -> Self {
+        Self(
+            self.0
+                .iter()
+                .map(|element| match element {
+                    PathEl::MoveTo(p) => PathEl::MoveTo(f(p)),
+                    PathEl::LineTo(p) => PathEl::LineTo(f(p)),
+                    PathEl::QuadTo(a, p) => PathEl::QuadTo(f(a), f(p)),
+                    PathEl::CurveTo(a, b, p) => PathEl::CurveTo(f(a), f(b), f(p)),
+                    PathEl::ClosePath => PathEl::ClosePath,
+                })
+                .collect(),
+        )
+    }
+
     /// The exact bounds of the curves (not their control points), or `None` for a path with
     /// no points.
     pub fn bounds(&self) -> Option<kurbo::Rect> {

@@ -20,7 +20,12 @@ heic-rs = "0.1.1"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
 # Bézier paths (src/vector.rs): flattening, bounds and SVG arcs. The version usvg already uses.
 kurbo = { version = "0.11.3", default-features = false, features = ["std"] }
+# Reloading open projects that change on disk (src/watch.rs): inotify, ReadDirectoryChangesW and
+# FSEvents. CC0-1.0. Only the FSEvents backend of the default features, so macOS does not poll.
+notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }
 png = "0.18"
+# TIFF export with its print resolution (src/io.rs). The version `image` already uses.
+tiff = { version = "0.11.3", default-features = false }
 # Model downloads (src/plugins/models.rs): a small blocking HTTPS client on
 # rustls with ring, so no OpenSSL; certificates are checked against the
 # system's trust store.
@@ -32,6 +37,12 @@ rawler = "=0.8.0"
 rayon = "1.11"
 raw-window-handle = "0.6"
 rfd = "0.15.4"
+# SVG import (src/io/svg.rs), and SVG window buttons through egui_extras (the version
+# egui_extras already uses).
+resvg = { version = "0.45", default-features = false }
+# OpenRaster's stack.xml (src/io/ora.rs): the version usvg already uses, with its node limit and
+# no DTDs.
+roxmltree = "0.20"
 semver = "1.0.28"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
@@ -39,12 +50,13 @@ tempfile = "3"
 toml = "0.8"
 url = "2.5"
 uuid = { version = "1.18", features = ["v4", "serde"] }
+# Lossy WebP export (src/io.rs): libwebp, built by libwebp-sys from its bundled C
+# source, so no system libwebp is needed. Lossless WebP stays with `image`.
+webp = { version = "0.3.1", default-features = false }
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Rasterising SVG window buttons through egui_extras (the version egui_extras already uses).
-resvg = { version = "0.45", default-features = false }
 # The desktop portal's appearance settings (src/app/system_theme/linux.rs). Already built for
 # rfd's portal dialogs; only the blocking API is added.
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
@@ -61,12 +73,16 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "27.0.1", default-features = false, features = ["dx12"] }
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Console", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wgpu = { version = "27.0.1", default-features = false, features = ["metal"] }
 # Asking before macOS quits (src/app/macos.rs). Already built for arboard and rfd.
 objc2 = "0.6"
+# The native menu bar (src/app/macos_menu.rs). Pinned: review the code before any bump.
+muda = { version = "=0.20.0", default-features = false }
+# The event behind a menu action (src/app/macos_menu.rs). Already built for winit and muda.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder"] }
 
 [target.'cfg(unix)'.dependencies]
 # Killing a plugin's process group.

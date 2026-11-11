@@ -429,6 +429,16 @@ fn raw_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|l| l.raw.is_some() && !l.locked)
 }
+/// Filter → Camera Raw Filter… needs an unlocked pixel layer whose pixels (not its mask) are
+/// being edited.
+fn camera_raw_target(app: &EditorApp) -> bool {
+    editing(app)
+        && !app.editing_mask()
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(xuan::raw::can_filter)
+}
 fn effects_layer(app: &EditorApp) -> bool {
     editing(app)
         && app
@@ -450,6 +460,13 @@ fn image_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|l| l.pixels.is_some() && !l.group)
 }
+/// Exactly one channel of the active layer is targeted.
+fn single_channel(app: &EditorApp) -> bool {
+    editing(app)
+        && app
+            .session()
+            .is_some_and(|s| s.channel_targets.single().is_some())
+}
 fn masked_layer(app: &EditorApp) -> bool {
     editing(app)
         && app
@@ -457,11 +474,31 @@ fn masked_layer(app: &EditorApp) -> bool {
             .and_then(|s| s.document.active())
             .is_some_and(|l| l.mask.is_some())
 }
+/// The document was made as a collage.
+fn collage_document(app: &EditorApp) -> bool {
+    editing(app) && app.session().is_some_and(|s| s.document.collage.is_some())
+}
 fn has_selection(app: &EditorApp) -> bool {
     editing(app)
         && app
             .session()
             .is_some_and(|s| s.document.selection.is_some())
+}
+/// Edit → Stroke… needs a selection and an unlocked pixel layer whose pixels (not its mask)
+/// are being edited: not a folder, adjustment, filter, mask, text, shape or RAW layer.
+fn stroke_target(app: &EditorApp) -> bool {
+    has_selection(app)
+        && !app.editing_mask()
+        && app
+            .session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|l| {
+                l.can_attach_effects()
+                    && !l.locked
+                    && l.text.is_none()
+                    && l.shape.is_none()
+                    && l.raw.is_none()
+            })
 }
 fn has_guides(app: &EditorApp) -> bool {
     editing(app) && app.session().is_some_and(|s| !s.document.guides.is_empty())
@@ -477,6 +514,52 @@ fn switch_brush(app: &mut EditorApp) {
         Tool::Brush
     };
     app.set_tool(tool);
+}
+/// Shift+O: with the Dodge / Burn tool, the next of Dodge, Burn and Sponge;
+/// from another tool, the Dodge / Burn tool as it was last used.
+fn switch_tone(app: &mut EditorApp) {
+    use xuan::paint::PaintMode;
+    if app.tool == Tool::Dodge {
+        app.tone_mode = match app.tone_mode {
+            PaintMode::Dodge => PaintMode::Burn,
+            PaintMode::Burn => PaintMode::Sponge,
+            _ => PaintMode::Dodge,
+        };
+    }
+    app.set_tool(Tool::Dodge);
+}
+/// Shift+R: with the Blur / Smudge tool, the next of Blur, Smudge and Liquify;
+/// from another tool, the Blur / Smudge tool as it was last used.
+fn switch_blur(app: &mut EditorApp) {
+    use xuan::paint::PaintMode;
+    if app.tool == Tool::Blur {
+        app.blur_mode = match app.blur_mode {
+            PaintMode::Blur => PaintMode::Smudge,
+            PaintMode::Smudge => PaintMode::Liquify,
+            _ => PaintMode::Blur,
+        };
+    }
+    app.set_tool(Tool::Blur);
+}
+fn gradient_tool(app: &mut EditorApp) {
+    app.set_tool(app.gradient_variant);
+}
+fn switch_gradient(app: &mut EditorApp) {
+    let tool = if app.tool == Tool::Gradient {
+        Tool::Bucket
+    } else {
+        Tool::Gradient
+    };
+    app.set_tool(tool);
+}
+/// Shift+C: with the Crop tool, the other of its box and perspective modes; from another tool,
+/// the Crop tool in the mode used last.
+fn crop_mode(app: &mut EditorApp) {
+    if app.tool == Tool::Crop {
+        app.set_crop_mode(!app.crop.perspective);
+    } else {
+        app.set_tool(Tool::Crop);
+    }
 }
 fn marquee_shape(app: &mut EditorApp) {
     app.ellipse = !app.ellipse;
@@ -598,6 +681,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .when(always)
         .aliases(&["document", "create"]),
+    cmd("new_collage", "New Collage…", C::File)
+        .when(not_developing)
+        .aliases(&["photos", "grid", "layout", "montage"]),
     cmd("open", "Open…", C::File)
         .keys(&[ctrl(Key::O)])
         .both()
@@ -625,7 +711,7 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("save_as", "Save As…", C::File).keys(&[ctrl_shift(Key::S)]),
     cmd("export", "Export Image…", C::File)
         .keys(&[chord(CTRL.plus(ALT).plus(SHIFT), Key::S)])
-        .aliases(&["png", "jpeg", "webp"]),
+        .aliases(&["png", "jpeg", "webp", "ora", "openraster"]),
     cmd("close", "Close Project", C::File)
         .keys(&[ctrl(Key::W)])
         .both()
@@ -668,6 +754,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[bare(Key::Delete), bare(Key::Backspace)])
         .host(Edit)
         .aliases(&["delete", "erase"]),
+    cmd("stroke", "Stroke…", C::Edit)
+        .when(stroke_target)
+        .aliases(&["outline", "border", "selection edge"]),
     cmd("content_fill", "Content-Aware Fill", C::Edit)
         .keys(&[shift(Key::F5)])
         .host(Edit)
@@ -710,6 +799,9 @@ pub(super) const COMMANDS: &[Command] = &[
         .when(has_selection)
         .host(Edit)
         .aliases(&["crop"]),
+    cmd("collage_layout", "Collage Layout…", C::Image)
+        .when(collage_document)
+        .aliases(&["spacing", "borders", "grid"]),
     cmd("trim", "Trim…", C::Image).aliases(&["crop", "remove margins", "borders"]),
     // Layer
     cmd("new_layer", "New Layer", C::Layer)
@@ -735,6 +827,8 @@ pub(super) const COMMANDS: &[Command] = &[
         .keys(&[ctrl(Key::E)])
         .host(Edit),
     cmd("flatten", "Flatten Image", C::Layer).host(Edit),
+    cmd("adjustment_presets", "Adjustment Presets…", C::Layer)
+        .aliases(&["preset", "look", "grade", "lut"]),
     cmd("new_mask_layer", "New Mask Layer", C::Layer).host(Edit),
     cmd("mask", "Add Mask from Selection", C::Layer).host(Edit),
     cmd("disable_mask", "Enable / Disable Mask", C::Layer).host(Edit),
@@ -764,6 +858,13 @@ pub(super) const COMMANDS: &[Command] = &[
     cmd("select_mask_black", "Select Mask's Black Areas", C::Select)
         .when(masked_layer)
         .host(Edit),
+    cmd(
+        "load_channel_selection",
+        "Load Channel as Selection",
+        C::Select,
+    )
+    .when(single_channel)
+    .aliases(&["channel", "mask map"]),
     cmd("select_subject", "Select Subject", C::Select)
         .keys(&[ctrl_alt(Key::A)])
         .host(Edit)
@@ -792,6 +893,17 @@ pub(super) const COMMANDS: &[Command] = &[
     .when(image_layer)
     .host(Edit)
     .aliases(&["cutout", "transparent", "white background"]),
+    cmd("camera_raw_filter", "Camera Raw Filter…", C::Filter)
+        .keys(&[ctrl_shift(Key::A)])
+        .when(camera_raw_target)
+        .aliases(&[
+            "develop",
+            "acr",
+            "white balance",
+            "exposure",
+            "tone curve",
+            "hsl",
+        ]),
     // View
     cmd("fit", "Fit Canvas", C::View)
         .keys(&[ctrl(Key::Num0)])
@@ -814,6 +926,22 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .host(View)
         .when(can_view),
+    // Channel targets, as Photoshop's Ctrl+2…6.
+    cmd("channel_composite", "Edit All Channels", C::View)
+        .keys(&[ctrl(Key::Num2)])
+        .aliases(&["rgb", "rgba", "composite"]),
+    cmd("channel_red", "Edit Red Channel", C::View)
+        .keys(&[ctrl(Key::Num3)])
+        .aliases(&["channels"]),
+    cmd("channel_green", "Edit Green Channel", C::View)
+        .keys(&[ctrl(Key::Num4)])
+        .aliases(&["channels"]),
+    cmd("channel_blue", "Edit Blue Channel", C::View)
+        .keys(&[ctrl(Key::Num5)])
+        .aliases(&["channels"]),
+    cmd("channel_alpha", "Edit Alpha Channel", C::View)
+        .keys(&[ctrl(Key::Num6)])
+        .aliases(&["channels", "transparency"]),
     cmd("toggle_pixel_grid", "Pixel Grid", C::View)
         .both()
         .run(Run::App(toggle_pixel_grid))
@@ -926,7 +1054,15 @@ pub(super) const COMMANDS: &[Command] = &[
         &[bare(Key::W)],
         Run::Tool(Tool::Wand),
     ),
+    // C selects the Crop tool in the mode used last.
     tool("tool_crop", "Crop", &[bare(Key::C)], Run::Tool(Tool::Crop)),
+    tool(
+        "crop_mode",
+        "Switch Crop Box / Perspective Crop",
+        &[shift(Key::C)],
+        Run::App(crop_mode),
+    )
+    .aliases(&["perspective crop", "straighten", "rectify", "keystone"]),
     // B selects whichever of Brush and Pencil was used last.
     tool("tool_brush", "Brush", &[bare(Key::B)], Run::App(brush_tool)),
     tool(
@@ -958,13 +1094,41 @@ pub(super) const COMMANDS: &[Command] = &[
         "Blur / Smudge",
         &[bare(Key::R)],
         Run::Tool(Tool::Blur),
+    )
+    .aliases(&["smudge", "liquify", "warp", "push"]),
+    tool(
+        "switch_blur",
+        "Switch Blur / Smudge / Liquify",
+        &[shift(Key::R)],
+        Run::App(switch_blur),
     ),
+    tool(
+        "tool_dodge",
+        "Dodge / Burn",
+        &[bare(Key::O)],
+        Run::Tool(Tool::Dodge),
+    )
+    .aliases(&["dodge", "burn", "sponge", "lighten", "darken", "saturate"]),
+    tool(
+        "switch_tone",
+        "Switch Dodge / Burn / Sponge",
+        &[shift(Key::O)],
+        Run::App(switch_tone),
+    ),
+    // G selects whichever of Gradient and Paint Bucket was used last.
     tool(
         "tool_gradient",
         "Gradient",
         &[bare(Key::G)],
-        Run::Tool(Tool::Gradient),
+        Run::App(gradient_tool),
     ),
+    tool(
+        "switch_gradient",
+        "Switch between Gradient and Paint Bucket",
+        &[shift(Key::G)],
+        Run::App(switch_gradient),
+    )
+    .aliases(&["paint bucket", "bucket", "flood fill"]),
     tool(
         "tool_shape",
         "Shape",
@@ -1068,6 +1232,10 @@ pub(super) const COMMANDS: &[Command] = &[
         .both()
         .when(always)
         .aliases(&["keys", "hotkeys"]),
+    cmd("check_updates", "Check for Updates…", C::Help)
+        .both()
+        .when(always)
+        .aliases(&["update", "upgrade", "new version", "release notes"]),
     cmd("about", "About Xuan", C::Help)
         .both()
         .when(always)
@@ -1115,7 +1283,9 @@ pub(super) fn tool_command(tool: Tool) -> Option<&'static str> {
         Tool::Heal => "tool_heal",
         Tool::Clone => "tool_clone",
         Tool::Blur => "tool_blur",
+        Tool::Dodge => "tool_dodge",
         Tool::Gradient => "tool_gradient",
+        Tool::Bucket => "switch_gradient",
         Tool::Shape => "tool_shape",
         Tool::Pen => "tool_pen",
         Tool::Text => "tool_text",

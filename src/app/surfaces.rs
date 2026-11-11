@@ -150,6 +150,7 @@ impl EditorApp {
             consented: false,
             provider: None,
             surface: Some(run),
+            caller: None,
         });
         let jobs = self.plugins.jobs.len();
         self.run_plugin_action();

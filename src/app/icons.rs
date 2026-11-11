@@ -71,6 +71,8 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
         Tool::Heal => egui::include_image!("../../assets/svg/bandage.svg"),
         Tool::Clone => egui::include_image!("../../assets/svg/stamp.svg"),
         Tool::Blur => egui::include_image!("../../assets/svg/smudge.svg"),
+        Tool::Dodge => egui::include_image!("../../assets/svg/dodge.svg"),
+        Tool::Bucket => egui::include_image!("../../assets/svg/bucket.svg"),
         Tool::Shape => egui::include_image!("../../assets/svg/shape.svg"),
         Tool::Pen => egui::include_image!("../../assets/svg/pen.svg"),
         Tool::Text => egui::include_image!("../../assets/svg/text.svg"),
@@ -144,14 +146,14 @@ pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
 }
 
 pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
+    eye_labelled(ui, visible, tr("Toggle visibility"))
+}
+
+/// The visibility eye, named `label` for assistive technology and its tooltip.
+pub fn eye_labelled(ui: &mut Ui, visible: bool, label: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::Checkbox,
-            ui.is_enabled(),
-            visible,
-            tr("Toggle visibility"),
-        )
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, label)
     });
     if response.hovered() {
         ui.painter().rect_filled(rect, 4.0, ui.palette().icon_hover);
@@ -168,7 +170,7 @@ pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
     };
     svg(ui, source, rect, color);
     focus_ring(ui, &response, 4.0);
-    response.on_hover_text(tr("Toggle visibility"))
+    response.on_hover_text(label)
 }
 
 /// A layer action icon (new layer, group, mask, …), named `label` for assistive technology

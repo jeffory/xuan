@@ -40,8 +40,9 @@ const UNPLAIN_NAME: &str = "The file name in `path` must be a plain name: no con
 pub(super) const FILE_METHODS: [&str; 4] =
     ["file/save_as", "file/export", "file/save", "file/open"];
 
-/// Image formats `file/export` writes, by the extension Xuan gives them.
-const EXPORT_FORMATS: [&str; 4] = ["png", "jpg", "tiff", "webp"];
+/// Image formats `file/export` writes, by the extension Xuan gives them (`ora` is layered
+/// OpenRaster).
+const EXPORT_FORMATS: [&str; 5] = ["png", "jpg", "tiff", "webp", "ora"];
 
 /// What a plugin asked for.
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +52,7 @@ pub(super) enum FileAction {
     Save {
         document: Uuid,
         export: Option<String>,
+        encoding: Encoding,
         name: String,
     },
     /// Write a document to a path the plugin named, after Xuan's own
@@ -78,6 +80,70 @@ pub(super) struct Write {
     pub path: PathBuf,
     /// Whether a file was there when the request was checked.
     pub replaces: bool,
+    /// How an exported image is encoded.
+    pub encoding: Encoding,
+    /// Export only this much of the document, as a PNG.
+    pub part: Option<Part>,
+}
+
+/// What `file/export` writes instead of the whole document at full size: one
+/// layer, a rectangle, or a smaller copy.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Part {
+    pub layer: Option<Uuid>,
+    pub region: Option<xuan::plugins::inspect::Region>,
+    pub max_side: Option<u32>,
+}
+
+/// The params of `file/export` that ask for a part of the document.
+const PART_KEYS: [&str; 3] = ["layer", "region", "max_side"];
+
+/// The `quality` and `lossless` a plugin gave `file/export`. What it leaves
+/// out follows the Export dialog, and the dialog keeps the user's choices.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Encoding {
+    /// JPEG and lossy WebP quality, 1–100. Given for WebP without
+    /// `lossless`, it means lossy.
+    pub quality: Option<u8>,
+    /// Lossless WebP; other formats ignore it.
+    pub lossless: Option<bool>,
+}
+
+impl Encoding {
+    /// Read `quality` and `lossless` from a request's params.
+    fn parse(params: &Value) -> Result<Self, RpcError> {
+        let quality = match params.get("quality") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                (value.as_u64())
+                    .and_then(|quality| u8::try_from(quality).ok())
+                    .filter(|quality| io::EXPORT_QUALITY.contains(quality))
+                    .ok_or_else(|| {
+                        RpcError::invalid_params("`quality` must be a whole number from 1 to 100")
+                    })?,
+            ),
+        };
+        let lossless = match params.get("lossless") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(lossless)) => Some(*lossless),
+            Some(_) => {
+                return Err(RpcError::invalid_params("`lossless` must be true or false"));
+            }
+        };
+        Ok(Self { quality, lossless })
+    }
+
+    /// The Export dialog's options with this request's choices on top. A plugin's export is
+    /// always at the document's size, whatever the dialog's Scale.
+    pub(super) fn options(self, dialog: io::ExportOptions) -> io::ExportOptions {
+        let quality = self.quality;
+        io::ExportOptions {
+            jpeg_quality: quality.unwrap_or(dialog.jpeg_quality),
+            webp_quality: quality.unwrap_or(dialog.webp_quality),
+            webp_lossless: (self.lossless).unwrap_or(quality.is_none() && dialog.webp_lossless),
+            scale: 100,
+        }
+    }
 }
 
 /// The user's answer to Xuan's own file prompt.
@@ -185,7 +251,7 @@ fn plain_file_name(name: &str) -> Option<String> {
 }
 
 /// Image extensions `file/export` accepts in the name the user chose.
-const EXPORT_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "tif", "tiff", "webp"];
+const EXPORT_EXTENSIONS: [&str; 7] = ["png", "jpg", "jpeg", "tif", "tiff", "webp", "ora"];
 
 /// Whether a path the user chose names the kind of file being written: a
 /// `.xuan` project, or an image with an extension Xuan exports.
@@ -236,6 +302,7 @@ fn export_format(extension: &str) -> Option<&'static str> {
         "jpg" | "jpeg" => Some("jpg"),
         "tif" | "tiff" => Some("tiff"),
         "webp" => Some("webp"),
+        "ora" => Some("ora"),
         _ => None,
     }
 }
@@ -304,7 +371,7 @@ fn write_target(
         Some(format) => {
             let Some(found) = export_format(extension) else {
                 return Err(invalid(format!(
-                    "Cannot export as {name}; the name must end in .png, .jpg, .jpeg, .tif, .tiff or .webp. Nothing was written"
+                    "Cannot export as {name}; the name must end in .png, .jpg, .jpeg, .tif, .tiff, .webp or .ora. Nothing was written"
                 )));
             };
             if let Some(format) = format
@@ -384,6 +451,43 @@ fn still_the_shown_file(requested: &Path, shown: &Path) -> bool {
         && std::fs::metadata(shown).is_ok_and(|m| m.is_file() || m.is_dir())
 }
 
+/// The pixels a part export writes, and where they sit in the document: a
+/// region in document space (of the image, or of one layer as it sits there),
+/// one layer's own pixels as stored, or the whole image scaled down.
+fn part_image(
+    document: &xuan::document::Document,
+    part: Part,
+) -> anyhow::Result<(image::RgbaImage, Value)> {
+    use anyhow::Context as _;
+    use xuan::plugins::{edits, inspect};
+    if let Some(region) = part.region {
+        let (image, scale) = inspect::part(document, part.layer, region, part.max_side)?;
+        let described = json!({
+            "width": image.width(), "height": image.height(),
+            "x": region.x, "y": region.y, "scale": scale,
+        });
+        return Ok((image, described));
+    }
+    let (image, x, y, scale) = match part.layer {
+        Some(id) => {
+            let layer = (document.layers.iter().find(|layer| layer.id == id))
+                .with_context(|| format!("No layer {id}"))?;
+            let pixels = (layer.pixels.as_deref())
+                .with_context(|| format!("Layer {} has no pixels", layer.name))?;
+            let (image, scale) = edits::fit(pixels, part.max_side);
+            (image, layer.transform.x, layer.transform.y, scale)
+        }
+        None => {
+            let (image, scale) = edits::fit(&xuan::render::render(document), part.max_side);
+            (image, 0.0, 0.0, scale)
+        }
+    };
+    let described = json!({
+        "width": image.width(), "height": image.height(), "x": x, "y": y, "scale": scale,
+    });
+    Ok((image, described))
+}
+
 impl EditorApp {
     /// Check a file request's params before it waits for the user.
     fn file_action(&self, request: &Request) -> Result<FileAction, RpcError> {
@@ -430,9 +534,16 @@ impl EditorApp {
                 let document = session.document.id;
                 let given = |key: &str| params.get(key).is_some_and(|value| !value.is_null());
                 if method == "file/save" {
-                    if let Some(key) = ["path", "suggested_name", "format", "overwrite"]
-                        .into_iter()
-                        .find(|key| given(key))
+                    if let Some(key) = [
+                        "path",
+                        "suggested_name",
+                        "format",
+                        "overwrite",
+                        "quality",
+                        "lossless",
+                    ]
+                    .into_iter()
+                    .find(|key| given(key))
                     {
                         return Err(RpcError::invalid_params(format!(
                             "`file/save` takes no `{key}`: it saves to the document's own file; use `file/save_as` for another file"
@@ -450,9 +561,76 @@ impl EditorApp {
                         in_place: true,
                         path,
                         replaces: true,
+                        encoding: Encoding::default(),
+                        part: None,
                     }));
                 }
                 let format = string("format").map(requested_format).transpose()?;
+                let encoding = if method == "file/export" {
+                    Encoding::parse(params)?
+                } else if let Some(key) = ["quality", "lossless"].into_iter().find(|key| given(key))
+                {
+                    return Err(RpcError::invalid_params(format!(
+                        "`{method}` takes no `{key}`: it saves a project; use `file/export` for an image"
+                    )));
+                } else {
+                    Encoding::default()
+                };
+                let part = match PART_KEYS.into_iter().find(|key| given(key)) {
+                    None => None,
+                    Some(key) if method != "file/export" => {
+                        return Err(RpcError::invalid_params(format!(
+                            "`{method}` takes no `{key}`: it saves a project; use `file/export` for an image"
+                        )));
+                    }
+                    Some(key) if !given("path") => {
+                        return Err(RpcError::invalid_params(format!(
+                            "`{key}` needs `path`: a layer, a region or a smaller copy is written to a path, not through the save dialog"
+                        )));
+                    }
+                    Some(_) => {
+                        let invalid =
+                            |error: anyhow::Error| RpcError::invalid_params(format!("{error:#}"));
+                        let layer = match string("layer") {
+                            Some(id) => Some(Uuid::parse_str(id).map_err(|_| {
+                                RpcError::invalid_params("`layer` must be a layer id")
+                            })?),
+                            None if given("layer") => {
+                                return Err(RpcError::invalid_params("`layer` must be a layer id"));
+                            }
+                            None => None,
+                        };
+                        if let Some(id) = layer
+                            && !session.document.layers.iter().any(|l| l.id == id)
+                        {
+                            return Err(RpcError::invalid_params(format!("No layer {id}")));
+                        }
+                        let max_side = match params.get("max_side") {
+                            None | Some(Value::Null) => None,
+                            Some(value) => Some(
+                                value
+                                    .as_u64()
+                                    .map(|side| {
+                                        side.clamp(16, u64::from(xuan::document::MAX_SIDE)) as u32
+                                    })
+                                    .ok_or_else(|| {
+                                        RpcError::invalid_params(
+                                            "`max_side` must be a whole number of pixels",
+                                        )
+                                    })?,
+                            ),
+                        };
+                        Some(Part {
+                            layer,
+                            region: xuan::plugins::inspect::Region::parse(
+                                &session.document,
+                                params.get("region"),
+                            )
+                            .map_err(invalid)?,
+                            max_side,
+                        })
+                    }
+                };
                 if given("path") {
                     let path = string("path")
                         .ok_or_else(|| RpcError::invalid_params("`path` must be a string"))?;
@@ -468,12 +646,19 @@ impl EditorApp {
                     let export = (method == "file/export").then_some(format.as_deref());
                     let (path, export, replaces) =
                         write_target(Path::new(path), export, overwrite)?;
+                    if part.is_some() && export.as_deref() != Some("png") {
+                        return Err(RpcError::invalid_params(
+                            "A layer, a region or a smaller copy is written as a PNG: end `path` in .png",
+                        ));
+                    }
                     return Ok(FileAction::Write(Write {
                         document,
                         export,
                         in_place: false,
                         path,
                         replaces,
+                        encoding,
+                        part,
                     }));
                 }
                 let export =
@@ -481,6 +666,7 @@ impl EditorApp {
                 Ok(FileAction::Save {
                     document,
                     export,
+                    encoding,
                     name: suggested_name(string("suggested_name"), &session.title),
                 })
             }
@@ -513,6 +699,11 @@ impl EditorApp {
         } else {
             self.file_action(&request)
         };
+        // Without a window nobody sees a dialog or a prompt.
+        let action = action.and_then(|action| match self.headless_file_refusal(&action) {
+            Some(error) => Err(error),
+            None => Ok(action),
+        });
         match action {
             Ok(action) => self.plugins.file_requests.push_back(FileRequest {
                 plugin: plugin.to_owned(),
@@ -523,7 +714,12 @@ impl EditorApp {
         }
     }
 
-    fn respond_to_plugin(&mut self, plugin: &str, id: Id, result: Result<Value, RpcError>) {
+    pub(super) fn respond_to_plugin(
+        &mut self,
+        plugin: &str,
+        id: Id,
+        result: Result<Value, RpcError>,
+    ) {
         if let Some(process) = self.plugins.process_mut(plugin) {
             let _ = process.respond(id, result);
         }
@@ -567,10 +763,16 @@ impl EditorApp {
             FileAction::Save {
                 document,
                 export,
+                encoding,
                 name,
             } => {
-                let result =
-                    self.save_for_plugin(&request.plugin, *document, export.as_deref(), name);
+                let result = self.save_for_plugin(
+                    &request.plugin,
+                    *document,
+                    export.as_deref(),
+                    *encoding,
+                    name,
+                );
                 self.respond_to_plugin(&request.plugin, request.id, result);
             }
         }
@@ -583,6 +785,7 @@ impl EditorApp {
         plugin: &str,
         document: Uuid,
         export: Option<&str>,
+        encoding: Encoding,
         name: &str,
     ) -> Result<Value, RpcError> {
         let Some(index) = self.sessions.iter().position(|s| s.document.id == document) else {
@@ -629,7 +832,7 @@ impl EditorApp {
                 let name = again.file_name().unwrap_or_default().to_string_lossy();
                 return Err(RpcError::invalid_params(match export {
                     Some(_) => format!(
-                        "Cannot export as {name}; choose a name ending in .png, .jpg, .tiff or .webp. Nothing was written"
+                        "Cannot export as {name}; choose a name ending in .png, .jpg, .tiff, .webp or .ora. Nothing was written"
                     ),
                     None => format!(
                         "Cannot save the project as {name}; choose a name ending in .xuan. Nothing was written"
@@ -647,19 +850,15 @@ impl EditorApp {
         let session = &mut self.sessions[index];
         match export {
             Some(_) => {
-                io::export(&session.document, &path, self.jpeg_quality).map_err(failed)?;
+                let options = encoding.options(self.export_options);
+                io::export(&session.document, &path, &options).map_err(failed)?;
                 self.status = format!("{} {} · {source}", tr("Exported"), path.display());
             }
             None => {
-                io::save(&session.document, &path).map_err(failed)?;
                 // Saved as the user chose, the project now lives there.
-                session.title = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into();
-                session.path = Some(path.clone());
-                session.history.mark_saved();
+                session
+                    .save_project(&path, &mut self.file_watch)
+                    .map_err(failed)?;
                 self.status = format!("{} · {source}", tr("Project saved"));
             }
         }
@@ -743,9 +942,17 @@ impl EditorApp {
         };
         let source = self.plugins.source(plugin);
         let session = &mut self.sessions[index];
+        let mut placed = None;
         let done = match write.export {
             Some(_) => {
-                io::export(&session.document, path, self.jpeg_quality).map_err(failed)?;
+                if let Some(part) = write.part {
+                    let (image, described) = part_image(&session.document, part).map_err(failed)?;
+                    xuan::plugins::edits::write_png(&image, path).map_err(failed)?;
+                    placed = Some(described);
+                } else {
+                    let options = write.encoding.options(self.export_options);
+                    io::export(&session.document, path, &options).map_err(failed)?;
+                }
                 if asked {
                     tr("Exported")
                 } else {
@@ -753,16 +960,11 @@ impl EditorApp {
                 }
             }
             None => {
-                io::save(&session.document, path).map_err(failed)?;
                 // Saved as the plugin named it and the user allowed, the
                 // project now lives there, as with Save As.
-                session.title = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into();
-                session.path = Some(path.clone());
-                session.history.mark_saved();
+                session
+                    .save_project(path, &mut self.file_watch)
+                    .map_err(failed)?;
                 if asked {
                     tr("Saved")
                 } else {
@@ -777,7 +979,12 @@ impl EditorApp {
         if !asked && let Some(process) = self.plugins.process_mut(plugin) {
             process.note(format!("{done} {}", path.display()));
         }
-        Ok(json!({"name": name, "asked": asked}))
+        let mut answer = json!({"name": name, "asked": asked});
+        if let (Some(placed), Some(answer)) = (placed, answer.as_object_mut()) {
+            // Where the pixels sit in the document, as the export requests say.
+            answer.extend(placed.as_object().cloned().unwrap_or_default());
+        }
+        Ok(answer)
     }
 
     /// Apply the answer to the open file prompt: `file/open`, or a write to
@@ -825,7 +1032,15 @@ impl EditorApp {
                 } else {
                     let before = self.sessions.len();
                     let error = self.error.take();
-                    self.open_path(path, false);
+                    // A camera file opens developed, not in a Develop tab
+                    // waiting for Apply.
+                    if xuan::raw::is_raw(path) {
+                        if let Err(failure) = self.open_raw_developed(path) {
+                            self.error = Some(format!("{failure:#}"));
+                        }
+                    } else {
+                        self.open_path(path, false);
+                    }
                     match self.error.clone() {
                         Some(message) if self.sessions.len() == before => {
                             // The plugin named the file, but not where its
@@ -1123,5 +1338,86 @@ mod tests {
         }
         assert!(!saves_as(Path::new("/a/b.bmp"), Some("png")));
         assert!(!saves_as(Path::new("/a/b"), Some("png")));
+    }
+
+    #[test]
+    fn export_quality_and_lossless_are_checked_and_default_to_the_dialog() {
+        use super::Encoding;
+        use serde_json::json;
+        use xuan::io::ExportOptions;
+        let parse = |params| Encoding::parse(&params);
+        assert_eq!(parse(json!({})).unwrap(), Encoding::default());
+        let nulls = json!({"quality": null, "lossless": null});
+        assert_eq!(parse(nulls).unwrap(), Encoding::default());
+        assert_eq!(
+            parse(json!({"quality": 80, "lossless": false})).unwrap(),
+            Encoding {
+                quality: Some(80),
+                lossless: Some(false)
+            }
+        );
+        for quality in [json!(1), json!(100)] {
+            assert!(parse(json!({ "quality": quality })).is_ok(), "{quality}");
+        }
+        for quality in [
+            json!(0),
+            json!(101),
+            json!(256),
+            json!(-5),
+            json!(80.5),
+            json!("80"),
+            json!(true),
+        ] {
+            let error = parse(json!({ "quality": quality })).unwrap_err();
+            assert!(error.message.contains("1 to 100"), "{quality}: {error:?}");
+        }
+        for lossless in [json!(1), json!("true")] {
+            let error = parse(json!({ "lossless": lossless })).unwrap_err();
+            assert!(error.message.contains("true or false"), "{error:?}");
+        }
+
+        // What a request leaves out follows the dialog.
+        let dialog = ExportOptions {
+            jpeg_quality: 70,
+            webp_quality: 60,
+            webp_lossless: true,
+            scale: 100,
+        };
+        assert_eq!(Encoding::default().options(dialog), dialog);
+        // The dialog's Scale is not the plugin's.
+        let scaled = ExportOptions {
+            scale: 50,
+            ..dialog
+        };
+        assert_eq!(Encoding::default().options(scaled), dialog);
+        let lossy_dialog = ExportOptions {
+            webp_lossless: false,
+            ..dialog
+        };
+        assert_eq!(Encoding::default().options(lossy_dialog), lossy_dialog);
+        // A quality means lossy WebP, unless `lossless` says otherwise.
+        let quality = Encoding {
+            quality: Some(80),
+            lossless: None,
+        };
+        assert_eq!(
+            quality.options(dialog),
+            ExportOptions {
+                jpeg_quality: 80,
+                webp_quality: 80,
+                webp_lossless: false,
+                scale: 100,
+            }
+        );
+        let exact = Encoding {
+            lossless: Some(true),
+            ..quality
+        };
+        assert!(exact.options(lossy_dialog).webp_lossless);
+        let lossy = Encoding {
+            quality: None,
+            lossless: Some(false),
+        };
+        assert_eq!(lossy.options(dialog), lossy_dialog);
     }
 }

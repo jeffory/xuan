@@ -1,7 +1,7 @@
 use super::theme::PaletteExt as _;
 use super::{EditorApp, widgets};
 use xuan::{
-    config::{Config, Language, PIXEL_GRID_PERCENT_RANGE, Theme, TitleBar},
+    config::{Config, PIXEL_GRID_PERCENT_RANGE, Theme, TitleBar},
     i18n::{self, tr},
     plugins::{manifest::Capability, sandbox},
 };
@@ -14,6 +14,8 @@ pub(super) enum SettingsPage {
     Appearance,
     /// Which algorithm Select Subject, Remove Background and Object mode use.
     Selection,
+    /// What the rulers measure in, and how resolutions are shown.
+    Units,
     Keyboard,
 }
 
@@ -95,8 +97,9 @@ impl EditorApp {
                 self.error = Some(format!("{}\n\n{error:#}", tr("Could not load settings")))
             }
         }
+        self.load_adjustment_presets();
         self.apply_move_options();
-        i18n::set_language(self.config.language);
+        i18n::set_language(&self.config.language);
         for note in super::commands::override_problems(&self.config.keybindings) {
             eprintln!("Xuan: {note}");
         }
@@ -180,6 +183,11 @@ impl EditorApp {
                                 tr("Choose the algorithm behind Select Subject and Remove Background"),
                             ),
                             (
+                                SettingsPage::Units,
+                                tr("Units & Rulers"),
+                                tr("Units for the rulers and for resolutions"),
+                            ),
+                            (
                                 SettingsPage::Keyboard,
                                 tr("Keyboard Shortcuts"),
                                 tr("Change the keys that run commands"),
@@ -216,6 +224,7 @@ impl EditorApp {
                                 SettingsPage::Appearance => {
                                     editing = self.appearance_settings(ui, &mut config);
                                 }
+                                SettingsPage::Units => unit_settings(ui, &mut config),
                                 _ => selection_settings(ui, &mut config, &providers),
                             });
                     });
@@ -226,12 +235,13 @@ impl EditorApp {
             });
         ctx.data_mut(|d| d.insert_temp(page_id, page));
         if config != self.config {
-            i18n::set_language(config.language);
+            i18n::set_language(&config.language);
             let keys_changed = config.keybindings != self.config.keybindings;
             let network_changed =
                 config.disable_network_plugins != self.config.disable_network_plugins;
             let blocking_changed =
                 config.block_undeclared_network() != self.config.block_undeclared_network();
+            let updates_turned_on = config.updates.check && !self.config.updates.check;
             self.config = config;
             if keys_changed {
                 self.rebuild_keymap();
@@ -241,6 +251,9 @@ impl EditorApp {
             }
             if blocking_changed {
                 self.apply_block_network_setting();
+            }
+            if updates_turned_on {
+                self.start_daily_update_check();
             }
             self.config_dirty = true;
             ctx.request_repaint();
@@ -493,8 +506,9 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
                     .selected_text(config.language.name())
                     .width(180.0)
                     .show_ui(ui, |ui| {
-                        for option in [Language::English, Language::SimplifiedChinese] {
-                            widgets::menu_choice(ui, &mut config.language, option, option.name());
+                        for option in i18n::languages() {
+                            let name = option.name().to_owned();
+                            widgets::menu_choice(ui, &mut config.language, option, name);
                         }
                     });
             },
@@ -539,6 +553,16 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
         if changed {
             config.block_undeclared_network = Some(block);
         }
+        settings_row(
+            ui,
+            "",
+            |ui| {
+                widgets::checkbox(ui, &mut config.updates.check, tr("Check for updates"));
+            },
+            Some(tr(
+                "Once a day, ask GitHub whether a newer release of Xuan is out, and show its release notes. Only that request is sent, and nothing is downloaded or installed. Help → Check for Updates… checks now.",
+            )),
+        );
         if let Ok(path) = Config::path() {
             settings_row(
                 ui,
@@ -549,5 +573,57 @@ fn general_settings(ui: &mut egui::Ui, config: &mut Config) {
                 None,
             );
         }
+    });
+}
+
+/// Settings → Units & Rulers.
+fn unit_settings(ui: &mut egui::Ui, config: &mut Config) {
+    ui.heading(tr("Units & Rulers"));
+    ui.add_space(16.0);
+    settings_grid(ui, "settings_units", |ui| {
+        settings_row(
+            ui,
+            tr("Rulers"),
+            |ui| {
+                widgets::PopUp::from_id_salt("settings_ruler_unit")
+                    .selected_text(tr(config.units.rulers.name()))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for option in xuan::units::Unit::ALL {
+                            widgets::menu_choice(
+                                ui,
+                                &mut config.units.rulers,
+                                option,
+                                tr(option.name()),
+                            );
+                        }
+                    });
+            },
+            Some(tr(
+                "What View → Rulers measure in. Print units use the document's resolution; percent is of its width or height. Right-click a ruler to change it there.",
+            )),
+        );
+        settings_row(
+            ui,
+            tr("Resolution"),
+            |ui| {
+                widgets::PopUp::from_id_salt("settings_resolution_unit")
+                    .selected_text(tr(config.units.resolution.name()))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for option in xuan::units::ResolutionUnit::ALL {
+                            widgets::menu_choice(
+                                ui,
+                                &mut config.units.resolution,
+                                option,
+                                tr(option.name()),
+                            );
+                        }
+                    });
+            },
+            Some(tr(
+                "How New Canvas, Canvas Size and Image Size show resolutions. Width and Height have their own Units menu in those dialogs.",
+            )),
+        );
     });
 }
