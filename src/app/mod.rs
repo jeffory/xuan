@@ -61,6 +61,7 @@ mod plugin_install;
 mod plugin_models;
 mod plugin_panes;
 mod plugin_raw;
+mod plugin_runs;
 mod plugin_sessions;
 mod plugins;
 mod presets_dialog;
@@ -495,6 +496,8 @@ enum Dialog {
     PluginFile,
     /// Allow a plugin's direct edits for its session.
     PluginEditSession,
+    /// Allow a plugin to run another plugin's action.
+    PluginRun,
     Plugins,
     /// Plugins → Install from Folder or Zip…: choose, review and install.
     PluginInstall,

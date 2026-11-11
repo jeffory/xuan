@@ -1492,6 +1492,7 @@ mod status_bar {
             provider: None,
             surface: None,
             ai_boxes: Vec::new(),
+            caller: None,
         }
     }
 

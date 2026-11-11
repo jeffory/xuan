@@ -32,6 +32,7 @@ use xuan::{
 use super::{
     Dialog, EditorApp, Session, Tool,
     commands::{self, HostRun},
+    plugin_runs::RunOutcome,
 };
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -142,6 +143,23 @@ pub(super) struct PluginState {
     /// others (not the user's own saves, nor another plugin's files).
     /// Forgotten when its grant is revoked or changes.
     pub written_files: HashMap<String, std::collections::HashSet<PathBuf>>,
+    /// Runs of other plugins' actions waiting for the user's answer, at
+    /// most one per calling plugin; see `plugin_runs.rs`.
+    pub run_held: Vec<(String, Request)>,
+    /// The prompt asking about one of them, while it is open.
+    pub run_prompt: Option<super::plugin_runs::RunPrompt>,
+    /// Sessions the user allowed to run another plugin's actions: the
+    /// calling plugin, its session and the plugin whose actions run. Kept
+    /// until the caller stops.
+    pub run_answers: std::collections::HashSet<(String, String, String)>,
+    /// When the user last cancelled a plugin's run; see `COOLDOWN`.
+    pub run_refused_at: HashMap<String, std::time::Instant>,
+    /// A run whose request waits for the send prompt of the plugin it runs;
+    /// the open action carries it too.
+    pub run_waiting: Option<super::plugin_runs::CallerRun>,
+    /// What became of the latest jobs other plugins started, for
+    /// `jobs/list`, oldest first.
+    pub finished_runs: std::collections::VecDeque<super::plugin_runs::FinishedRun>,
 }
 
 enum Pending {
@@ -188,6 +206,9 @@ pub(super) struct PluginJob {
     /// The AI Region boxes it sends, hidden while it runs and put back on
     /// their document if it fails, is cancelled or its result is refused.
     pub ai_boxes: Vec<super::ai_regions::AiBox>,
+    /// The plugin that started it with `host/run` (see `plugin_runs.rs`),
+    /// or `None` when the user did.
+    pub caller: Option<String>,
 }
 
 /// A plugin action in a menu.
@@ -219,6 +240,8 @@ enum FormatKind {
 
 /// Layers a job added that the user has not accepted yet.
 pub(super) struct Proposal {
+    /// The job whose result it is.
+    pub job: Uuid,
     pub document: Uuid,
     pub name: String,
     /// The plugin it comes from, as [`PluginState::source`] shows it.
@@ -255,6 +278,10 @@ pub(super) struct ActionEdit {
     /// Set when a surface (Layers panel, AI Region, New Image) started it
     /// instead of the dialog.
     pub surface: Option<super::surfaces::SurfaceRun>,
+    /// Set when another plugin started it with `host/run`: it runs without
+    /// its dialog, and the request is answered once its job starts or the
+    /// user refuses it. See `plugin_runs.rs`.
+    pub caller: Option<super::plugin_runs::CallerRun>,
 }
 
 #[derive(Default)]
@@ -324,6 +351,11 @@ impl PluginState {
         self.edits_refused.remove(plugin);
         if (self.edit_prompt.as_ref()).is_some_and(|prompt| prompt.plugin == plugin) {
             self.edit_prompt = None;
+        }
+        self.run_answers.retain(|(caller, ..)| caller != plugin);
+        self.run_held.retain(|(caller, _)| caller != plugin);
+        if (self.run_prompt.as_ref()).is_some_and(|prompt| prompt.caller == plugin) {
+            self.run_prompt = None;
         }
     }
 
@@ -589,9 +621,13 @@ impl EditorApp {
             new.send_without_asking = old.send_without_asking;
             new.edit_without_asking = old.edit_without_asking;
             new.save_without_asking = old.save_without_asking;
+            new.run_other_actions = old.run_other_actions;
+            new.run_without_asking = old.run_without_asking;
         } else {
             self.plugins.forget_session(plugin);
             self.plugins.written_files.remove(plugin);
+            // Sessions allowed to run this plugin's actions allowed it as it was.
+            (self.plugins.run_answers).retain(|(_, _, target)| target != plugin);
         }
         // Secrets were entered for the folder the user allowed before; never
         // hand them to a plugin with the same id from another folder.
@@ -622,6 +658,7 @@ impl EditorApp {
             .partition(|job| job.plugin == plugin);
         self.plugins.jobs = running;
         for job in stopped {
+            self.note_run(&job, RunOutcome::Cancelled, tr("The plugin was stopped"));
             self.restore_ai_boxes(job);
         }
         self.fail_format_jobs(plugin, None);
@@ -821,6 +858,7 @@ impl EditorApp {
         self.release_held_requests();
         self.release_held_edits();
         self.release_file_requests();
+        self.release_held_runs();
         self.check_starting_plugins();
         self.check_format_jobs();
         self.apply_completed_results();
@@ -850,6 +888,11 @@ impl EditorApp {
                     self.queue_file_request(plugin, request);
                     return;
                 }
+                // Another plugin's action is checked, then waits for the
+                // session's answer, and is answered once its job starts.
+                let Some(request) = self.hold_plugin_run(plugin, request) else {
+                    return;
+                };
                 // Direct edits wait for the session's answer when the plugin
                 // asked for the prompt.
                 let Some(request) = self.hold_edit(plugin, request) else {
@@ -1000,6 +1043,8 @@ impl EditorApp {
         }
         match request.method.as_str() {
             "session/status" => Ok(self.edit_session_status(plugin, request)),
+            "plugins/actions" => self.list_plugin_actions(plugin),
+            "jobs/list" => self.list_jobs(plugin),
             "document/get" => Ok(self
                 .session()
                 .map_or(Value::Null, |session| edits::describe(&session.document))),
@@ -1204,7 +1249,10 @@ impl EditorApp {
                 }
                 let mut answer = json!({"ok": true});
                 match action.split_once('/') {
-                    // A plugin may start its own actions, never another plugin's.
+                    // A plugin may start its own actions. Another plugin's
+                    // actions run only through `hold_plugin_run`, which
+                    // checks them and asks the user first (see
+                    // `plugin_runs.rs`); a request that gets here is refused.
                     Some((owner, id)) if owner == plugin => {
                         let id = id.to_owned();
                         self.start_plugin_action_with(plugin, &id, params.get("inputs"));
@@ -1625,6 +1673,7 @@ impl EditorApp {
                 consented: false,
                 provider,
                 surface: None,
+                caller: None,
             });
             self.run_plugin_action();
             return;
@@ -1646,6 +1695,7 @@ impl EditorApp {
             consented: false,
             provider: None,
             surface: None,
+            caller: None,
         });
         if spec.regions_input().is_some() {
             self.set_tool(Tool::Region);
@@ -1720,18 +1770,21 @@ impl EditorApp {
         }
     }
 
-    /// Whether the open action shows its dialog: surface runs never do.
+    /// Whether the open action shows its dialog: surface runs and runs
+    /// another plugin started never do.
     pub(super) fn plugin_action_dialog_shown(&self) -> bool {
         self.plugins
             .action
             .as_ref()
-            .is_some_and(|edit| edit.surface.is_none())
+            .is_some_and(|edit| edit.surface.is_none() && edit.caller.is_none())
     }
 
     pub(super) fn close_plugin_action(&mut self) {
-        // A surface run keeps the tool it was started from (AI Region).
+        // A surface run keeps the tool it was started from (AI Region), and
+        // a run another plugin started never changed it.
         if let Some(edit) = self.plugins.action.take()
             && edit.surface.is_none()
+            && edit.caller.is_none()
             && self.tool == Tool::Region
         {
             self.set_tool(if edit.previous_tool == Tool::Region {
@@ -1933,6 +1986,9 @@ impl EditorApp {
         let document = self.session().map(|s| s.document.id);
         let provider = (self.plugins.action.as_ref()).and_then(|edit| edit.provider.clone());
         let surface = (self.plugins.action.as_ref()).and_then(|edit| edit.surface.clone());
+        let caller = (self.plugins.action.as_ref())
+            .and_then(|edit| edit.caller.as_ref())
+            .map(|run| run.plugin.clone());
         let job = Uuid::new_v4();
         let result = (|| -> Result<()> {
             let work_dir = plugins::private_dir("xuan-job-")?;
@@ -1962,6 +2018,7 @@ impl EditorApp {
                 provider,
                 surface: surface.clone(),
                 ai_boxes: Vec::new(),
+                caller,
             });
             Ok(())
         })();
@@ -2026,19 +2083,23 @@ impl EditorApp {
             Ok(value) if !job.cancelled => value,
             Ok(_) => {
                 self.status = tr("Cancelled").into();
+                self.note_run(&job, RunOutcome::Cancelled, "");
                 self.restore_ai_boxes(job);
                 return;
             }
             Err(error) => {
                 if job.cancelled || error == tr("Cancelled") {
                     self.status = tr("Cancelled").into();
+                    self.note_run(&job, RunOutcome::Cancelled, "");
                 } else {
+                    self.note_run(&job, RunOutcome::Failed, &error);
                     self.error = Some(error);
                 }
                 self.restore_ai_boxes(job);
                 return;
             }
         };
+        self.note_run(&job, RunOutcome::Waiting, "");
         if !self.ready_for_plugin_result() {
             self.status = format!(
                 "{} {}",
@@ -2085,9 +2146,18 @@ impl EditorApp {
         while self.ready_for_plugin_result()
             && let Some((job, value)) = self.plugins.completed.pop_front()
         {
-            if let Err(error) = self.apply_job_result(&job, value) {
-                self.error = Some(format!("{}: {error:#}", job.label));
-                self.restore_ai_boxes(job);
+            match self.apply_job_result(&job, value) {
+                Err(error) => {
+                    self.error = Some(format!("{}: {error:#}", job.label));
+                    self.note_run(&job, RunOutcome::Failed, &format!("{error:#}"));
+                    self.restore_ai_boxes(job);
+                }
+                // Shown as a proposal for the user, or applied without one
+                // (a new document, a message).
+                Ok(()) if (self.plugins.proposal.as_ref()).is_some_and(|p| p.job == job.id) => {
+                    self.note_run(&job, RunOutcome::Proposed, "");
+                }
+                Ok(()) => self.note_run(&job, RunOutcome::Done, ""),
             }
         }
     }
@@ -2483,6 +2553,7 @@ impl EditorApp {
         session.document = document;
         session.invalidate();
         self.plugins.proposal = Some(Proposal {
+            job: job.id,
             document: job.document,
             name,
             source: self.plugins.source(&job.plugin),
@@ -2499,6 +2570,7 @@ impl EditorApp {
         let Some(proposal) = self.plugins.proposal.take() else {
             return;
         };
+        self.note_proposal_answer(proposal.job, accept);
         if let Some(session) = self
             .sessions
             .iter_mut()
@@ -3070,6 +3142,8 @@ pub(super) fn grant_for(manifest: &Manifest) -> PluginGrant {
         send_without_asking: false,
         edit_without_asking: false,
         save_without_asking: false,
+        run_other_actions: false,
+        run_without_asking: false,
     }
 }
 
@@ -3115,7 +3189,7 @@ fn regions_to_value(regions: &[Region]) -> Value {
     )
 }
 
-fn regions_from_value(value: &Value) -> Vec<Region> {
+pub(super) fn regions_from_value(value: &Value) -> Vec<Region> {
     value
         .as_array()
         .map(|items| {
@@ -3240,10 +3314,11 @@ mod tests {
         let source = include_str!("plugins.rs");
         let source = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
         let source = format!(
-            "{source}{}{}{}",
+            "{source}{}{}{}{}",
             include_str!("plugin_models.rs"),
             include_str!("plugin_files.rs"),
-            include_str!("plugin_sessions.rs")
+            include_str!("plugin_sessions.rs"),
+            include_str!("plugin_runs.rs")
         );
         let source = source.as_str();
         let docs = include_str!("../../docs/PLUGINS.md");
