@@ -55,12 +55,33 @@ def same_server(url, base):
     return bool(target.hostname) and _origin(target) == _origin(urllib.parse.urlsplit(base))
 
 
+def over_https(url, base):
+    """``url`` moved to https when it is a plain-http link to an https server
+    (same host, default port); anything else is returned unchanged. Comfy Cloud
+    lists job outputs as ``http://cloud.comfy.org/api/v2/assets/<id>/content``."""
+    target = urllib.parse.urlsplit(url)
+    server = urllib.parse.urlsplit(base)
+    if (
+        target.scheme == "http"
+        and server.scheme == "https"
+        and target.username is None
+        and target.password is None
+        and target.hostname
+        and target.hostname.lower() == (server.hostname or "").lower()
+        and target.port in (None, 80)
+    ):
+        return urllib.parse.urlunsplit(("https", server.netloc, target.path, target.query, target.fragment))
+    return url
+
+
 def download_target(url, base, patterns=NETWORK):
     """Resolve an output URL. Returns ``(url, send_key)``: the API key goes only
     to the configured server over https; other https hosts the manifest declares
-    get no key; anything else (other hosts, http, file:, …) is refused."""
+    get no key; anything else (other hosts, http, file:, …) is refused. A plain
+    http link to an https server is fetched over https instead."""
     if url.startswith("/") and not url.startswith("//"):
         url = base + url
+    url = over_https(url, base)
     target = urllib.parse.urlsplit(url)
     if same_server(url, base) and target.scheme in ("https", "http"):
         return url, target.scheme == "https"

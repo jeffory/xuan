@@ -58,6 +58,24 @@ class DownloadTargets(unittest.TestCase):
             ("https://cloud.comfy.org:443/a", True),
         )
 
+    def test_a_plain_http_link_to_the_https_server_is_fetched_over_https(self):
+        # Comfy Cloud lists job outputs as http://cloud.comfy.org/api/v2/assets/<id>/content.
+        self.assertEqual(
+            comfy_api.download_target("http://cloud.comfy.org/api/v2/assets/1/content?x=1", BASE),
+            (BASE + "/api/v2/assets/1/content?x=1", True),
+        )
+        self.assertEqual(
+            comfy_api.download_target("http://CLOUD.comfy.org:80/a", BASE), (BASE + "/a", True)
+        )
+        self.assertEqual(
+            comfy_api.download_target("http://deploy.example:80/a", "https://deploy.example:8443"),
+            ("https://deploy.example:8443/a", True),
+        )
+
+    def test_an_http_server_is_never_sent_the_key(self):
+        local = "http://127.0.0.1:8188"
+        self.assertEqual(comfy_api.download_target(local + "/view", local), (local + "/view", False))
+
     def test_declared_hosts_are_downloaded_without_the_key(self):
         for url in ("https://abc.run.comfy.app/out.png", "https://storage.googleapis.com/comfy-cloud-assets/x.png?X-Goog-Signature=1"):
             self.assertEqual(comfy_api.download_target(url, BASE), (url, False))
@@ -69,7 +87,8 @@ class DownloadTargets(unittest.TestCase):
             "https://user:pw@cloud.comfy.org/x",
             "https://evil.com/cloud.comfy.org/x",
             "//evil.com/x",
-            "http://cloud.comfy.org/x",
+            "http://cloud.comfy.org:8080/x",
+            "http://user:pw@cloud.comfy.org/x",
             "http://abc.run.comfy.app/out.png",
             "http://storage.googleapis.com/x",
             "https://run.comfy.app.evil.com/x",
@@ -108,13 +127,16 @@ class Requests(unittest.TestCase):
     def test_downloads_attach_the_key_only_for_the_server(self):
         request = self.download("/api/v2/assets/1/content")
         self.assertEqual(request.get_header("Authorization"), "Bearer sk-secret")
+        request = self.download("http://cloud.comfy.org/api/v2/assets/1/content")
+        self.assertEqual(request.full_url, BASE + "/api/v2/assets/1/content")
+        self.assertEqual(request.get_header("Authorization"), "Bearer sk-secret")
         request = self.download("https://abc.run.comfy.app/out.png")
         self.assertIsNone(request.get_header("Authorization"))
         with self.assertRaises(main.RpcError):
             self.download("https://cloud.comfy.org.evil.com/steal")
         with self.assertRaises(main.RpcError):
             self.download("file:///etc/passwd")
-        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(len(self.sent), 3)
 
     def test_templates_are_fetched_without_the_key(self):
         self.client.template("api_ideogram_v4_5_t2i")
