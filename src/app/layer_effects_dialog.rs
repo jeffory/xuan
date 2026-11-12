@@ -8,7 +8,7 @@ use egui::RichText;
 use uuid::Uuid;
 use xuan::{
     i18n::tr,
-    layer_effects::{EffectKind, GlowEffect, LayerEffects, ShadowEffect},
+    layer_effects::{EffectKind, GlowEffect, LayerEffects, ShadowEffect, ranges},
 };
 
 use super::{Dialog, EditorApp, widgets};
@@ -40,7 +40,7 @@ fn color_row(ui: &mut egui::Ui, color: &mut [u8; 3], opacity: &mut f32) -> bool 
     });
     changed |= ui
         .add(
-            widgets::Slider::new(opacity, 0.0..=1.0)
+            widgets::Slider::new(opacity, ranges::OPACITY)
                 .text(tr("Opacity"))
                 .percentage(),
         )
@@ -52,26 +52,26 @@ fn shadow_controls(ui: &mut egui::Ui, shadow: &mut ShadowEffect) -> bool {
     let mut changed = false;
     changed |= ui
         .add(
-            widgets::Slider::new(&mut shadow.angle, -180.0..=180.0)
+            widgets::Slider::new(&mut shadow.angle, ranges::SHADOW_ANGLE)
                 .text(tr("Angle"))
                 .suffix("°")
-                .max_decimals(0),
+                .max_decimals(ranges::DECIMALS),
         )
         .changed();
     changed |= ui
         .add(
-            widgets::Slider::new(&mut shadow.distance, 0.0..=1000.0)
+            widgets::Slider::new(&mut shadow.distance, ranges::SHADOW_DISTANCE)
                 .text(tr("Distance"))
                 .suffix(" px")
-                .max_decimals(0),
+                .max_decimals(ranges::DECIMALS),
         )
         .changed();
     changed |= ui
         .add(
-            widgets::Slider::new(&mut shadow.blur, 0.0..=250.0)
+            widgets::Slider::new(&mut shadow.blur, ranges::SHADOW_BLUR)
                 .text(tr("Blur"))
                 .suffix(" px")
-                .max_decimals(0),
+                .max_decimals(ranges::DECIMALS),
         )
         .changed();
     changed | color_row(ui, &mut shadow.color, &mut shadow.opacity)
@@ -80,10 +80,10 @@ fn shadow_controls(ui: &mut egui::Ui, shadow: &mut ShadowEffect) -> bool {
 fn glow_controls(ui: &mut egui::Ui, glow: &mut GlowEffect) -> bool {
     let changed = ui
         .add(
-            widgets::Slider::new(&mut glow.size, 0.0..=250.0)
+            widgets::Slider::new(&mut glow.size, ranges::GLOW_SIZE)
                 .text(tr("Size"))
                 .suffix(" px")
-                .max_decimals(0),
+                .max_decimals(ranges::DECIMALS),
         )
         .changed();
     changed | color_row(ui, &mut glow.color, &mut glow.opacity)
@@ -95,11 +95,11 @@ fn controls(ui: &mut egui::Ui, effects: &mut LayerEffects, kind: EffectKind) -> 
         EffectKind::Stroke => effects.stroke.as_mut().is_some_and(|stroke| {
             let mut changed = ui
                 .add(
-                    widgets::Slider::new(&mut stroke.size, 1.0..=500.0)
+                    widgets::Slider::new(&mut stroke.size, ranges::STROKE_SIZE)
                         .logarithmic(true)
                         .text(tr("Size"))
                         .suffix(" px")
-                        .max_decimals(0),
+                        .max_decimals(ranges::DECIMALS),
                 )
                 .changed();
             ui.horizontal(|ui| {

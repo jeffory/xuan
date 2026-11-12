@@ -74,15 +74,16 @@ the document takes effect on the next frame and is drawn at once.
 | open a document | `file/open` (new): the user confirms the file |
 | save / export a document | `file/save_as`, `file/export` (new): the system save dialog, or with `path` Xuan's own prompt (#54); `file/save` saves in place |
 | switch document | `document/activate` (new) |
-| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, fill, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
+| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, fill, blend, parent, placement, flips, layer effects, masks, the image an effect is attached to, shape style, text and its path, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
 | get/set layer properties: name, visibility, lock, opacity, fill, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
-| … transform | `document/edit` `transform` (new) |
+| … transform, flip | `document/edit` `transform` (new; `flip_x` and `flip_y` set a layer's flips, MCP `set_layer`) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
 | create text / shape layer | `document/edit` `add_text_layer` (with an SVG `path` for text on a path), `add_shape_layer` (new) |
 | edit text, set it on a path (#64) | `document/edit` `set_text` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
 | auto contrast, tone and white balance | `document/edit` `auto_adjust` (MCP `auto_adjust`) |
+| read and set layer effects (stroke, shadows, colour overlay, glows) | `document/get` lists them under `effects`; `document/edit` `set` `effects` replaces them, `null` removes them (MCP `set_layer`) |
 | read and change an adjustment / filter layer's settings | `document/get` lists them under `adjustment` and `filter`; `document/edit` `set_adjustment` (MCP `set_adjustment`) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
 | paint via strokes, fills and gradients | `document/edit` `stroke` (with `points` or an SVG `path`), `fill`, `fill_path`, `gradient` (new) |

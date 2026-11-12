@@ -1007,6 +1007,100 @@ mod layer_appearance {
         ui.click("Cancel");
     }
 
+    /// Applies `edits` to the active document as a plugin's `document/edit` would.
+    fn plugin_edit(ui: &mut UiTest, edits: serde_json::Value) {
+        use xuan::plugins::edits;
+        let edits = edits::parse_edits(edits).unwrap();
+        let session = ui.app_mut().session_mut().unwrap();
+        let mut reader = edits::Reader::new(edits::Access::anywhere(), edits::MAX_LAYERS);
+        edits::apply(&mut session.document, &edits, &mut reader).unwrap();
+        session.invalidate();
+        ui.settle();
+    }
+
+    #[test]
+    fn effects_a_plugin_sets_are_kept_as_they_are_when_layer_effects_shows_them() {
+        use xuan::layer_effects::EffectKind;
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        let id = active(&ui).id;
+        // Every setting the dialog shows, at the ends of its ranges and in between, opacities
+        // with more decimals than the dialog shows, and a light angle given past its range.
+        plugin_edit(
+            &mut ui,
+            serde_json::json!([{"op": "set", "layer": id, "effects": {
+                "stroke": {"size": 500, "opacity": 0.37, "inside": true, "color": [1, 2, 3]},
+                "drop_shadow": {"angle": 270, "distance": 1000, "blur": 250, "opacity": 0.25},
+                "color_overlay": {"opacity": 0.6, "color": [9, 8, 7]},
+                "inner_shadow": {"angle": -180, "distance": 0, "blur": 13, "opacity": 1},
+                "outer_glow": {"size": 250, "opacity": 0.123},
+                "inner_glow": {"size": 0, "opacity": 0, "enabled": false},
+            }}]),
+        );
+        let set = active(&ui).effects.clone().unwrap();
+        assert_eq!(set.drop_shadow.unwrap().angle, -90.0);
+        let steps = ui.app().session().unwrap().history.names().count();
+        ui.open_menu("Layer");
+        ui.click("Layer Effects…");
+        // Each effect's sliders are drawn in turn; none of them moves a value.
+        for kind in EffectKind::ALL {
+            ui.click_role(Role::Button, xuan::i18n::tr(kind.name()));
+            let edit = ui.app().layer_effects.as_ref().unwrap();
+            assert_eq!(edit.selected, kind);
+            assert_eq!(edit.effects, set, "{}", kind.name());
+            assert_eq!(active(&ui).effects.as_ref(), Some(&set), "{}", kind.name());
+        }
+        ui.click("Apply");
+        assert_eq!(active(&ui).effects.as_ref(), Some(&set));
+        assert_eq!(ui.app().session().unwrap().history.names().count(), steps);
+    }
+
+    #[test]
+    fn a_mask_flipped_with_its_turned_image_is_not_turned_by_selecting_it() {
+        let mut ui = UiTest::with_document();
+        ui.app_mut().command("fill_fg");
+        ui.settle();
+        // An image turned 200°, with an unturned, canvas-sized mask layer attached to it.
+        let image = active(&ui).id;
+        {
+            let document = &mut ui.app_mut().session_mut().unwrap().document;
+            document.layers[0].transform.rotation = 200.0;
+            let mut mask = xuan::document::Layer::mask("Attached mask", 20, 16);
+            mask.parent = Some(image);
+            document.layers.push(mask);
+            document.select(image, false);
+            document.validate().unwrap();
+        }
+        ui.settle();
+        ui.app_mut().command("flip_h");
+        ui.settle();
+        let mask = |ui: &UiTest| {
+            let document = &ui.app().session().unwrap().document;
+            (document.layers.iter())
+                .find(|l| l.name == "Attached mask")
+                .unwrap()
+                .transform
+        };
+        let flipped = mask(&ui);
+        assert!(flipped.flip_x);
+        // 2 × 200° − 0°, a whole turn less, so the Angle field can show it as it is.
+        assert!(
+            (flipped.rotation - 40.0).abs() < 1e-3,
+            "{}",
+            flipped.rotation
+        );
+        // Selecting it with the Move tool shows its placement and changes nothing.
+        ui.app_mut().tool = Tool::Move;
+        ui.settle();
+        let steps = ui.app().session().unwrap().history.names().count();
+        ui.click("Attached mask");
+        assert_eq!(active(&ui).name, "Attached mask");
+        assert!(ui.has("Angle"));
+        assert_eq!(mask(&ui), flipped);
+        assert_eq!(ui.app().session().unwrap().history.names().count(), steps);
+    }
+
     #[test]
     fn generated_layers_show_their_model_provenance_read_only_with_a_copy_button() {
         let mut ui = UiTest::with_document();

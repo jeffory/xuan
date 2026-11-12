@@ -1,6 +1,7 @@
 //! What plugins see of a document and how they change it: JSON descriptions,
 //! PNG exports and batched edits that the editor records as one undo step.
 use std::{
+    ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -16,6 +17,7 @@ use crate::{
     blend::BlendMode,
     document::{Adjustment, Document, Layer, MAX_SIDE, Mask, Point, Transform},
     effects::Filter,
+    layer_effects::{EffectKind, LayerEffects},
     paint::ShapeKind,
     selection::SelectionMode,
     text::{PathTextOptions, RunStyle, TextPath, TextRenderer, TextRun, TextStyle},
@@ -155,6 +157,8 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         // An adjustment or filter layer's settings, as `set_adjustment` takes them.
         "adjustment": layer.adjustment,
         "filter": layer.filter,
+        // The layer's effects, as the `set` edit takes them.
+        "effects": layer.effects.as_ref().filter(|effects| !effects.is_empty()),
         "raw": layer.raw.as_ref().map(super::raw::describe),
         "generated": layer.generated,
         "provenance": layer.provenance,
@@ -710,6 +714,15 @@ pub enum Edit {
             skip_serializing_if = "Option::is_none"
         )]
         clip_to: Option<Option<Uuid>>,
+        /// The layer's effects, all of them, as `.xuan` files store them and
+        /// `document/get` reports them (see [`effects_from`]), replacing what
+        /// it had; `null` removes them. Left out, they do not change.
+        #[serde(
+            default,
+            deserialize_with = "nullable_effects",
+            skip_serializing_if = "Option::is_none"
+        )]
+        effects: Option<Option<LayerEffects>>,
     },
     RemoveLayer {
         layer: Uuid,
@@ -793,6 +806,14 @@ pub enum Edit {
         /// cover the whole canvas, leaving no corner empty.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cover: bool,
+        /// Whether the layer is mirrored left to right, as Flip Horizontal
+        /// leaves it, about its own centre; a group mirrors as a whole across
+        /// its layers' bounds. Missing, it does not change.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_x: Option<bool>,
+        /// The same top to bottom, as Flip Vertical leaves it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_y: Option<bool>,
     },
     /// A rectangle or ellipse combined with the selection, its edge
     /// softened by `feather` pixels first.
@@ -1800,6 +1821,143 @@ where
 {
     Option::<T>::deserialize(deserializer).map(Some)
 }
+
+/// [`nullable`] for layer effects, read by [`effects_from`].
+fn nullable_effects<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<LayerEffects>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let effects = value.as_ref().map(effects_from).transpose();
+    effects.map(Some).map_err(serde::de::Error::custom)
+}
+
+/// The layer effects by the names `.xuan` files and `document/get` give them.
+const EFFECTS: [(&str, EffectKind); 6] = [
+    ("stroke", EffectKind::Stroke),
+    ("drop_shadow", EffectKind::DropShadow),
+    ("color_overlay", EffectKind::ColorOverlay),
+    ("inner_shadow", EffectKind::InnerShadow),
+    ("outer_glow", EffectKind::OuterGlow),
+    ("inner_glow", EffectKind::InnerGlow),
+];
+
+/// Layer effects a plugin sent, in the shape `.xuan` files store them: an object with any of
+/// the [`EFFECTS`], each an object of its settings. Each effect starts from the settings Layer
+/// Effects gives a new one (with a black stroke or overlay), so settings left out keep those,
+/// and names Xuan does not know are refused rather than ignored.
+fn effects_from(value: &Value) -> Result<LayerEffects> {
+    const EXAMPLE: &str =
+        r#"{"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}"#;
+    let names = || EFFECTS.map(|(name, _)| name).join(", ");
+    let Value::Object(given) = value else {
+        bail!("Layer effects are an object such as {EXAMPLE}, or null to remove them");
+    };
+    let mut effects = serde_json::Map::new();
+    for (name, settings) in given {
+        let Some((_, kind)) = EFFECTS.iter().find(|(known, _)| known == name) else {
+            bail!(
+                "`{name}` is not a layer effect; the effects are {}",
+                names()
+            );
+        };
+        if settings.is_null() {
+            continue;
+        }
+        let Value::Object(settings) = settings else {
+            bail!("`{name}` takes an object of its settings, as in {EXAMPLE}");
+        };
+        let mut fresh = LayerEffects::default();
+        fresh.add(*kind, [0; 3]);
+        let Some(Value::Object(mut merged)) = serde_json::to_value(fresh)?
+            .get_mut(name.as_str())
+            .map(Value::take)
+        else {
+            bail!("`{name}` cannot be set");
+        };
+        for (field, value) in settings {
+            ensure!(
+                merged.contains_key(field),
+                "`{name}` has no setting `{field}`; it takes {}",
+                merged
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            ensure!(
+                !(field == "color" && value.is_string()),
+                "An effect's `color` is [r, g, b], each 0–255, not {value}"
+            );
+            merged.insert(field.clone(), value.clone());
+        }
+        effects.insert(name.clone(), Value::Object(merged));
+    }
+    let mut effects: LayerEffects = serde_json::from_value(Value::Object(effects))
+        .map_err(|error| anyhow::anyhow!("Invalid layer effects: {error}"))?;
+    hold_to_dialog_ranges(&mut effects)?;
+    effects.validate()?;
+    Ok(effects)
+}
+
+/// Keep plugin effects to what Layer → Layer Effects… offers (see
+/// [`layer_effects::ranges`](crate::layer_effects::ranges)), whose sliders would otherwise change
+/// a value outside them, or one with more decimals than they keep, as soon as the dialog shows
+/// it. A shadow's light angle is brought into range by whole turns, which changes nothing;
+/// anything else outside is refused.
+fn hold_to_dialog_ranges(effects: &mut LayerEffects) -> Result<()> {
+    use crate::layer_effects::ranges;
+    // Opacities keep every decimal; the dialog's other sliders keep `ranges::DECIMALS`.
+    fn check(effect: &str, setting: &str, value: f32, range: RangeInclusive<f32>) -> Result<()> {
+        let opacity = setting == "opacity";
+        let scale = 10f32.powi(ranges::DECIMALS as i32);
+        let kept = opacity || (value * scale).round() / scale == value;
+        let what = match (opacity, ranges::DECIMALS) {
+            (true, _) => String::new(),
+            (false, 0) => "a whole number ".into(),
+            (false, decimals) => format!("a number with at most {decimals} decimals "),
+        };
+        ensure!(
+            kept && range.contains(&value),
+            "`{effect}` `{setting}` must be {what}from {} to {}, as Layer Effects offers, not {value}",
+            range.start(),
+            range.end()
+        );
+        Ok(())
+    }
+    if let Some(stroke) = &effects.stroke {
+        check("stroke", "size", stroke.size, ranges::STROKE_SIZE)?;
+        check("stroke", "opacity", stroke.opacity, ranges::OPACITY)?;
+    }
+    for (name, shadow) in [
+        ("drop_shadow", &mut effects.drop_shadow),
+        ("inner_shadow", &mut effects.inner_shadow),
+    ] {
+        let Some(shadow) = shadow else { continue };
+        if !ranges::SHADOW_ANGLE.contains(&shadow.angle) {
+            shadow.angle = crate::document::normalized_degrees(shadow.angle);
+        }
+        check(name, "angle", shadow.angle, ranges::SHADOW_ANGLE)?;
+        check(name, "distance", shadow.distance, ranges::SHADOW_DISTANCE)?;
+        check(name, "blur", shadow.blur, ranges::SHADOW_BLUR)?;
+        check(name, "opacity", shadow.opacity, ranges::OPACITY)?;
+    }
+    if let Some(overlay) = &effects.color_overlay {
+        check("color_overlay", "opacity", overlay.opacity, ranges::OPACITY)?;
+    }
+    for (name, glow) in [
+        ("outer_glow", &effects.outer_glow),
+        ("inner_glow", &effects.inner_glow),
+    ] {
+        let Some(glow) = glow else { continue };
+        check(name, "size", glow.size, ranges::GLOW_SIZE)?;
+        check(name, "opacity", glow.opacity, ranges::OPACITY)?;
+    }
+    Ok(())
+}
+
 /// The ids `"$n"` references are parsed to until [`apply`] resolves them:
 /// "xuan" then zeros and `n`, a version-0 UUID that no layer ever has.
 const REFERENCE: u128 = 0x7875_616e_0000_0000_0000_0000_0000_0000;
@@ -2067,6 +2225,7 @@ fn apply_each(
                 fill,
                 blend,
                 clip_to,
+                effects,
             } => {
                 if let Some(base) = clip_to {
                     let base = clipping_base(document, *layer, *base)?;
@@ -2103,6 +2262,17 @@ fn apply_each(
                 }
                 if let Some(blend) = blend {
                     target.blend = *blend;
+                }
+                if let Some(effects) = effects {
+                    let effects = effects.clone().filter(|effects| !effects.is_empty());
+                    // As the Layer Effects dialog allows; anything can lose its effects.
+                    ensure!(
+                        effects.is_none() || target.can_attach_effects(),
+                        "\"{}\" cannot take layer effects: only pixel, text and shape layers \
+                         can, not groups, masks, adjustment or filter layers",
+                        target.name
+                    );
+                    target.effects = effects;
                 }
             }
             Edit::RemoveLayer { layer } => {
@@ -2254,12 +2424,25 @@ fn apply_each(
                 rotation,
                 pivot,
                 cover,
+                flip_x,
+                flip_y,
             } => {
                 let target = find(document, *layer)?;
                 ensure!(!target.locked, "Layer {} is locked", target.name);
+                let flipped = (target.transform.flip_x, target.transform.flip_y);
                 document.select(*layer, false);
                 let mut transform = crate::operations::transform_box(document, false)
                     .context("The layer cannot be transformed")?;
+                // Flip the box when the layer is not as asked: a layer's box is the layer, and
+                // a group's, its layers' bounds, mirrors them together, as Flip Horizontal does.
+                for (wanted, now, flip) in [
+                    (flip_x, flipped.0, &mut transform.flip_x),
+                    (flip_y, flipped.1, &mut transform.flip_y),
+                ] {
+                    if wanted.is_some_and(|wanted| wanted != now) {
+                        *flip = !*flip;
+                    }
+                }
                 let turned_from = transform.rotation;
                 for (value, field) in [
                     (x, &mut transform.x),
@@ -3959,6 +4142,7 @@ mod tests {
                     fill: None,
                     blend: None,
                     clip_to: None,
+                    effects: None,
                 },
             ],
         )
@@ -4010,6 +4194,7 @@ mod tests {
                     fill: None,
                     blend: None,
                     clip_to: None,
+                    effects: None,
                 }]
             )
             .is_err()
@@ -6337,6 +6522,294 @@ mod tests {
         )
         .unwrap();
         assert!(covered(&document));
+    }
+
+    #[test]
+    fn layer_effects_are_reported_and_set_whole_in_the_shape_files_store() {
+        let mut document = Document::new(40, 30).unwrap();
+        let square = run(
+            &mut document,
+            &[edit(json!({
+                "op": "add_shape_layer", "shape": "Rectangle", "x": 15, "y": 10,
+                "width": 10, "height": 10, "color": "#ff0000",
+            }))],
+        )
+        .unwrap()[0];
+        let set = |document: &mut Document, effects: Value| {
+            run(
+                document,
+                &[edit(
+                    json!({"op": "set", "layer": square, "effects": effects}),
+                )],
+            )
+        };
+        let effects = |document: &Document| described(document, square)["effects"].clone();
+        // Alpha a few pixels left of the square, and in a far corner.
+        let around = |document: &Document| {
+            let shown = crate::render::render(document);
+            (shown.get_pixel(12, 15).0[3], shown.get_pixel(0, 0).0[3])
+        };
+        assert_eq!(effects(&document), Value::Null);
+        assert_eq!(around(&document), (0, 0));
+
+        // Settings left out take those of a new effect; the layer reports them all.
+        let glow = json!({"outer_glow": {"size": 6, "color": [255, 217, 120], "opacity": 0.75}});
+        set(&mut document, glow.clone()).unwrap();
+        let reported = effects(&document);
+        assert_eq!(
+            reported,
+            json!({"outer_glow": {"enabled": true, "size": 6.0, "color": [255, 217, 120], "opacity": 0.75}})
+        );
+        let (near, far) = around(&document);
+        assert!(near > 0, "the glow shows around the layer");
+        assert_eq!(far, 0);
+
+        // What is reported goes back unchanged; a changed copy replaces the whole set.
+        let before = document
+            .layers
+            .iter()
+            .find(|l| l.id == square)
+            .unwrap()
+            .effects
+            .clone();
+        set(&mut document, reported.clone()).unwrap();
+        let layer = document.layers.iter().find(|l| l.id == square).unwrap();
+        assert_eq!(layer.effects, before);
+        let mut changed = reported;
+        changed["outer_glow"]["size"] = json!(8);
+        changed["drop_shadow"] = json!({"distance": 4});
+        set(&mut document, changed).unwrap();
+        assert_eq!(effects(&document)["outer_glow"]["size"], 8.0);
+        assert_eq!(
+            effects(&document)["drop_shadow"],
+            json!({"enabled": true, "angle": 90.0, "distance": 4.0, "blur": 20.0, "color": [0, 0, 0], "opacity": 0.5})
+        );
+        // Each effect starts from its own defaults, and the set replaces what was there.
+        set(&mut document, json!({"inner_shadow": {}, "stroke": null})).unwrap();
+        assert_eq!(
+            effects(&document),
+            json!({"inner_shadow": {"enabled": true, "angle": 90.0, "distance": 10.0, "blur": 10.0, "color": [0, 0, 0], "opacity": 0.5}})
+        );
+
+        // A hidden effect keeps its settings and draws nothing; null or {} removes them all.
+        set(
+            &mut document,
+            json!({"outer_glow": {"size": 6, "enabled": false}}),
+        )
+        .unwrap();
+        assert_eq!(effects(&document)["outer_glow"]["enabled"], false);
+        assert_eq!(around(&document), (0, 0));
+        for removed in [Value::Null, json!({})] {
+            set(&mut document, glow.clone()).unwrap();
+            set(&mut document, removed).unwrap();
+            assert_eq!(effects(&document), Value::Null);
+            let layer = document.layers.iter().find(|l| l.id == square).unwrap();
+            assert_eq!(layer.effects, None);
+        }
+
+        // Mistakes are refused with what to send instead, before anything changes.
+        for (bad, says) in [
+            (json!({"OuterGlow": {"size": 24}}), "not a layer effect"),
+            (json!({"outer_glow": {"radius": 24}}), "no setting `radius`"),
+            (json!({"outer_glow": {"color": "#ffd978"}}), "[r, g, b]"),
+            // Held to what the Layer Effects dialog offers, which would change anything else.
+            (
+                json!({"outer_glow": {"size": 400}}),
+                "`outer_glow` `size` must be a whole number from 0 to 250, as Layer Effects offers, not 400",
+            ),
+            (
+                json!({"inner_glow": {"size": 251}}),
+                "`inner_glow` `size` must be a whole number from 0 to 250",
+            ),
+            (
+                json!({"drop_shadow": {"distance": 3000}}),
+                "`drop_shadow` `distance` must be a whole number from 0 to 1000",
+            ),
+            (
+                json!({"inner_shadow": {"blur": 400}}),
+                "`inner_shadow` `blur` must be a whole number from 0 to 250",
+            ),
+            (
+                json!({"stroke": {"size": 0}}),
+                "`stroke` `size` must be a whole number from 1 to 500",
+            ),
+            (
+                json!({"drop_shadow": {"opacity": 2}}),
+                "`drop_shadow` `opacity` must be from 0 to 1",
+            ),
+            // The dialog shows these as whole numbers and would round them.
+            (
+                json!({"drop_shadow": {"blur": 12.25}}),
+                "`drop_shadow` `blur` must be a whole number from 0 to 250, as Layer Effects offers, not 12.25",
+            ),
+            (
+                json!({"inner_shadow": {"angle": 37.5}}),
+                "`inner_shadow` `angle` must be a whole number from -180 to 180",
+            ),
+            (
+                json!({"outer_glow": {"size": 0.75}}),
+                "`outer_glow` `size` must be a whole number",
+            ),
+            (
+                json!({"color_overlay": {"opacity": -0.5}}),
+                "`color_overlay` `opacity` must be from 0 to 1",
+            ),
+            (json!({"stroke": 4}), "object of its settings"),
+            (json!([{"outer_glow": {}}]), "an object such as"),
+            (
+                json!({"outer_glow": {"size": "big"}}),
+                "Invalid layer effects",
+            ),
+        ] {
+            let error = parse_edits(json!([{"op": "set", "layer": square, "effects": bad}]))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(says), "{bad}: {error}");
+        }
+        // A light angle past the dialog's −180–180 is the same angle a whole turn round.
+        for (sent, kept) in [
+            (270.0, -90.0),
+            (-270.0, 90.0),
+            (540.0, 180.0),
+            (-180.0, -180.0),
+            (725.0, 5.0),
+        ] {
+            set(
+                &mut document,
+                json!({"drop_shadow": {"angle": sent}, "inner_shadow": {"angle": sent}}),
+            )
+            .unwrap();
+            for shadow in ["drop_shadow", "inner_shadow"] {
+                assert_eq!(effects(&document)[shadow]["angle"], kept, "{sent}");
+            }
+        }
+        // Groups, masks, adjustment and filter layers take none, though null is harmless.
+        let invert = run(
+            &mut document,
+            &[edit(
+                json!({"op": "add_adjustment_layer", "adjustment": "Invert"}),
+            )],
+        )
+        .unwrap()[0];
+        let on = |layer, effects| edit(json!({"op": "set", "layer": layer, "effects": effects}));
+        let error = run(&mut document.clone(), &[on(invert, glow)]).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot take layer effects"),
+            "{error}"
+        );
+        run(&mut document, &[on(invert, Value::Null)]).unwrap();
+    }
+
+    #[test]
+    fn transform_sets_flips_about_the_layer_or_mirrors_a_group_as_one() {
+        let (mut document, base) = grey_document();
+        let mut pixels = (**document.layers[0].pixels.as_ref().unwrap()).clone();
+        for y in 0..30 {
+            pixels.put_pixel(0, y, image::Rgba([255, 0, 0, 255]));
+        }
+        document.layers[0].pixels = Some(Arc::new(pixels));
+        let flips = |document: &Document, id| {
+            let layer = described(document, id);
+            (layer["flip_x"].clone(), layer["flip_y"].clone())
+        };
+        let placed = |document: &Document, id| {
+            let t = document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .unwrap()
+                .transform;
+            (t.x, t.y, t.width, t.height, t.warp)
+        };
+        let before = placed(&document, base);
+
+        // A layer flips about its own centre, and the flips are absolute.
+        for (sent, expected) in [
+            (json!({"flip_x": true}), (json!(true), json!(false))),
+            (json!({"flip_x": true}), (json!(true), json!(false))),
+            (json!({"flip_y": true}), (json!(true), json!(true))),
+            (
+                json!({"flip_x": false, "flip_y": false}),
+                (json!(false), json!(false)),
+            ),
+            (json!({"flip_x": false}), (json!(false), json!(false))),
+        ] {
+            let mut op = json!({"op": "transform", "layer": base});
+            op.as_object_mut()
+                .unwrap()
+                .extend(sent.as_object().unwrap().clone());
+            run(&mut document, &[edit(op)]).unwrap();
+            assert_eq!(flips(&document, base), expected, "{sent}");
+            assert_eq!(placed(&document, base), before, "{sent}");
+        }
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": base, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        let shown = crate::render::render(&document);
+        assert_eq!(shown.get_pixel(39, 10).0, [255, 0, 0, 255]);
+        assert_eq!(shown.get_pixel(0, 10).0, [100, 100, 100, 255]);
+
+        // A group mirrors as a whole, its layers trading places and each reporting the flip.
+        let shape = |x: f32| {
+            edit(json!({
+                "op": "add_shape_layer", "shape": "Rectangle", "x": x, "y": 4,
+                "width": 10, "height": 6, "color": "#0000ff",
+            }))
+        };
+        let added = run(&mut document, &[shape(2.0), shape(20.0)]).unwrap();
+        let (left, right) = (added[0], added[1]);
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [left, right]}))],
+        )
+        .unwrap()[0];
+        let (left_before, right_before) = (placed(&document, left), placed(&document, right));
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        for id in [group, left, right] {
+            assert_eq!(flips(&document, id), (json!(true), json!(false)));
+        }
+        let x = |document: &Document, id| placed(document, id).0;
+        assert!((x(&document, left) - 20.0).abs() < 0.001);
+        assert!((x(&document, right) - 2.0).abs() < 0.001);
+        assert_eq!(placed(&document, left).4, None, "no warp");
+        // Asked again, the group is already flipped; asked back, it returns.
+        let flipped = document.clone();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(placed(&document, left), placed(&flipped, left));
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": false}),
+            )],
+        )
+        .unwrap();
+        for (id, before) in [(left, left_before), (right, right_before)] {
+            assert_eq!(flips(&document, id), (json!(false), json!(false)));
+            let now = placed(&document, id);
+            assert!((now.0 - before.0).abs() < 0.001 && (now.1 - before.1).abs() < 0.001);
+        }
+        assert!(
+            serde_json::from_value::<Edit>(
+                json!({"op": "transform", "layer": base, "flip_x": "yes"})
+            )
+            .is_err()
+        );
     }
 
     #[test]
