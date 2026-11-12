@@ -39,6 +39,8 @@ mod levels_controls;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
+pub(crate) use macos::install_open_handler;
+#[cfg(target_os = "macos")]
 mod macos_menu;
 // The macOS menu bar's logic, tested on every platform.
 #[cfg(any(target_os = "macos", test))]
@@ -2357,6 +2359,14 @@ impl EditorApp {
         if !self.drops_blocked() {
             self.shortcuts(ctx);
             self.process_drops();
+        }
+        // Files opened from Finder or dropped on the Dock icon open as new tabs, like the
+        // command line's; they wait in the queue while a dialog is open or Develop runs.
+        #[cfg(target_os = "macos")]
+        if !self.drops_blocked() && self.develop.is_none() {
+            for path in macos::take_opened_files() {
+                self.open_path(&path, false);
+            }
         }
         // Keep antialiased panel seams opaque while preserving the rounded window corners.
         ctx.layer_painter(egui::LayerId::background()).rect_filled(
