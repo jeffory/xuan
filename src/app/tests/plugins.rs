@@ -7516,3 +7516,24 @@ fn headless_file_requests_follow_allow_files() {
     app.queue_file_request("mock", save());
     assert_eq!(app.plugins.file_requests.len(), 1);
 }
+
+#[test]
+fn host_run_mask_keeps_the_plugins_colours() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.brush.color = [200, 10, 30, 255];
+    app.background = [5, 90, 160, 255];
+    for action in ["mask", "new_mask_layer"] {
+        plugin_request(&mut app, "host/run", json!({"action": action})).unwrap();
+        assert_eq!(app.brush.color, [200, 10, 30, 255], "{action}");
+        assert_eq!(app.background, [5, 90, 160, 255], "{action}");
+    }
+    // The menu item still switches to white and black for painting the mask.
+    app.run_command("mask");
+    assert_eq!(app.brush.color, [255; 4]);
+    assert_eq!(app.background, [0, 0, 0, 255]);
+}
