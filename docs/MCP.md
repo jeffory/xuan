@@ -74,15 +74,16 @@ the document takes effect on the next frame and is drawn at once.
 | open a document | `file/open` (new): the user confirms the file |
 | save / export a document | `file/save_as`, `file/export` (new): the system save dialog, or with `path` Xuan's own prompt (#54); `file/save` saves in place |
 | switch document | `document/activate` (new) |
-| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, fill, blend, parent, placement, flips, masks, the image an effect is attached to, shape style, text and its path, provenance) |
+| list layers, inspect | `document/get` (layers with id, kind, name, visibility, lock, opacity, fill, blend, parent, placement, flips, layer effects, masks, the image an effect is attached to, shape style, text and its path, provenance) |
 | choose the active layer | `document/edit` `select_layers` (MCP `select_layers`); `host/run` with `layers` (MCP `run_command` `layers`, `modify_selection` `layer`) |
 | get/set layer properties: name, visibility, lock, opacity, fill, blend, clipping | `document/edit` `set` (`clip_to`: a layer or group id below in the same folder, or `null` to release) |
-| … transform | `document/edit` `transform` (new) |
+| … transform, flip | `document/edit` `transform` (new; `flip_x` and `flip_y` set a layer's flips, MCP `set_layer`) |
 | create image layer | `document/edit` `add_layer` (a PNG the plugin writes), `add_empty_layer` (new) |
 | create text / shape layer | `document/edit` `add_text_layer` (with an SVG `path` for text on a path), `add_shape_layer` (new) |
 | edit text, set it on a path (#64) | `document/edit` `set_text` (new) |
 | create adjustment / filter layer | `document/edit` `add_adjustment_layer` (new) |
 | auto contrast, tone and white balance | `document/edit` `auto_adjust` (MCP `auto_adjust`) |
+| read and set layer effects (stroke, shadows, colour overlay, glows) | `document/get` lists them under `effects`; `document/edit` `set` `effects` replaces them, `null` removes them (MCP `set_layer`) |
 | read and change an adjustment / filter layer's settings | `document/get` lists them under `adjustment` and `filter`; `document/edit` `set_adjustment` (MCP `set_adjustment`) |
 | create mask (layer) | `document/edit` `add_mask_layer` (new), `set_mask`; `host/run` `mask` |
 | paint via strokes, fills and gradients | `document/edit` `stroke` (with `points` or an SVG `path`), `fill`, `fill_path`, `gradient` (new) |
@@ -258,6 +259,27 @@ like the existing ones, rather than anything specific to MCP:
   references through untouched. When a request of several edits fails, Xuan
   names the edit (`Edit 3 (stroke): …`), which the server maps back to the
   step.
+- **Selections that clip paint** (#135). An agent that forgot a selection an
+  earlier step made painted three batches of rings outside it, was answered
+  `ok: true` each time, and blamed the SVG arcs of its paths. While a selection
+  is active, `document/edit` now adds `notes` for the edits that paint inside
+  it (`fill`, `fill_path`, `gradient`, `stroke`, and `apply_filter`,
+  `apply_adjustment` and `auto_adjust` on pixels): the selection's bounds and
+  whether the edit changed any pixel. Xuan compares only the pixels the edit
+  can reach: those inside the selection's bounds and, for a stroke, within its
+  brush's reach of its points (with scatter and every symmetric copy). The
+  pixels from before cost nothing while the document the request started from
+  still shares them, the first edit of each layer in a request; for a later
+  edit of the same layer only that part is copied. So a stroke's check costs
+  about as much as the stroke, however large the selection, while a fill,
+  filter or adjustment, which visits the whole layer anyway, may copy and
+  compare the selection's whole rectangle. The server passes the notes on: a
+  tool's answer gains `clipped_to_selection` and `changed`, a batch's `notes`
+  name each step that ran inside the selection, and a step (or some of a
+  tool's strokes) that changed nothing gets a plain warning before the JSON,
+  saying how to clear the selection. Nothing is refused and the selection is
+  never cleared for the agent: painting inside a selection is how agents mask
+  fills and strokes on purpose.
 - **Letters in their own font or colour** (#110). A word with one red letter
   took a text layer per colour, placed side by side by hand. `create_text_layer`
   and `set_layer` take `runs` (`start`, `end` in Unicode code points, and any of

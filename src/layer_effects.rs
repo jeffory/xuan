@@ -137,6 +137,31 @@ impl GlowEffect {
     };
 }
 
+/// The range Layer → Layer Effects… offers for each setting, which its sliders hold values to as
+/// soon as they are shown. Plugins are held to the same ranges, so nothing a plugin sets changes
+/// when the dialog opens. They are narrower than [`LayerEffects::validate`], which takes what
+/// files may hold.
+pub mod ranges {
+    use std::ops::RangeInclusive;
+
+    /// The decimals the sliders keep for sizes, distances, blurs and angles, rounding a value
+    /// with more as soon as they show it: whole numbers. Opacities keep all of theirs.
+    pub const DECIMALS: usize = 0;
+
+    /// A stroke's width, in layer pixels.
+    pub const STROKE_SIZE: RangeInclusive<f32> = 1.0..=500.0;
+    /// A shadow's light angle, in degrees.
+    pub const SHADOW_ANGLE: RangeInclusive<f32> = -180.0..=180.0;
+    /// How far a shadow falls, in layer pixels.
+    pub const SHADOW_DISTANCE: RangeInclusive<f32> = 0.0..=1000.0;
+    /// A shadow's softness, in layer pixels.
+    pub const SHADOW_BLUR: RangeInclusive<f32> = 0.0..=250.0;
+    /// A glow's size, in layer pixels.
+    pub const GLOW_SIZE: RangeInclusive<f32> = 0.0..=250.0;
+    /// Every effect's opacity.
+    pub const OPACITY: RangeInclusive<f32> = 0.0..=1.0;
+}
+
 /// What a layer draws around itself. `None` is an effect the layer does not have; a present but
 /// disabled effect keeps its settings and draws nothing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

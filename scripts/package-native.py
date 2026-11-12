@@ -51,6 +51,26 @@ RPM_LIBRARIES = [
 ]
 
 
+def appimage_update_information(architecture):
+    """What the AppImage names as its source of updates, for AppImageUpdate
+    and AppImageLauncher: the latest GitHub release of the repository in
+    XUAN_APPIMAGE_UPDATE_REPOSITORY (owner/name), whose .zsync file
+    build_appimage writes beside the image. None when that is unset."""
+    repository = os.environ.get("XUAN_APPIMAGE_UPDATE_REPOSITORY", "")
+    if not repository:
+        return None
+    match = re.fullmatch(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)", repository)
+    if not match:
+        raise ValueError(
+            f"XUAN_APPIMAGE_UPDATE_REPOSITORY is not owner/name: {repository!r}"
+        )
+    owner, name = match.groups()
+    return (
+        f"gh-releases-zsync|{owner}|{name}|latest|"
+        f"xuan-*-{architecture}.AppImage.zsync"
+    )
+
+
 def check_tools(package_format):
     commands = ["readelf"]
     if package_format in ("deb", "all"):
@@ -59,6 +79,8 @@ def check_tools(package_format):
         commands.append("rpmbuild")
     if package_format in ("appimage", "all"):
         commands.extend(("linuxdeploy", "patchelf", "ldconfig"))
+        if appimage_update_information(platform.machine()):
+            commands.append("zsyncmake")
     missing = [command for command in commands if not shutil.which(command)]
     if missing:
         raise ValueError(f"Missing packaging tools: {', '.join(missing)}")
@@ -340,6 +362,11 @@ def build_appimage(payload, output, version, architecture, temporary):
         "PATH": f"{ROOT / 'scripts'}{os.pathsep}{os.environ['PATH']}",
         "XUAN_HELD_PLUGINS": str(held),
     }
+    update_information = appimage_update_information(architecture)
+    if update_information:
+        # Older releases of the AppImage output plugin read the unprefixed name.
+        environment["LDAI_UPDATE_INFORMATION"] = update_information
+        environment["UPDATE_INFORMATION"] = update_information
     subprocess.run(
         [
             "linuxdeploy",
@@ -371,6 +398,17 @@ def build_appimage(payload, output, version, architecture, temporary):
         check=True,
     )
     output.chmod(0o755)
+    if update_information:
+        # Written here rather than left to the output plugin, so it is always
+        # made, and it points at the image by its name next to it.
+        zsync = output.with_name(output.name + ".zsync")
+        zsync.unlink(missing_ok=True)
+        subprocess.run(
+            ["zsyncmake", "-u", output.name, "-o", zsync, output],
+            cwd=output.parent,
+            stdout=subprocess.DEVNULL,
+            check=True,
+        )
 
 
 def main():

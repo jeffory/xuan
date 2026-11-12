@@ -269,7 +269,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `get_histogram` | Luminance and RGB histograms with mean, median, range and clipped share; of the image, a `region` or one `layer` | `document/histogram` |
 | `get_selection` | The selection mask as a PNG with its position | `selection/export` |
 | `get_edit_permission` | Whether this session may edit, and auto mode | `session/status` |
-| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation (about the centre or a `pivot`), `cover` to scale up until no canvas corner is empty; a text layer's `text`, `runs`, `path` and `path_options` | `set`, `set_text`, `transform` |
+| `set_layer` | Name, visibility, lock, opacity, blend mode, clipping (`clip_to`), position, size, rotation (about the centre or a `pivot`), `cover` to scale up until no canvas corner is empty, `flip_x` / `flip_y` (about the layer's centre; a group mirrors as a whole), layer effects (`effects`: stroke, shadows, colour overlay, glows); a text layer's `text`, `runs`, `path` and `path_options` | `set`, `set_text`, `transform` |
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
 | `create_text_layer` | Editable text in a box, or with `path` along an SVG path | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
@@ -293,7 +293,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `rotate_canvas`, `trim_canvas` | Rotate Canvas (any angle clockwise; `expand` grows the canvas to fit, the default), Trim (transparent, top-left or bottom-right colour margins, per side); `run_command` `crop_to_selection` crops to the selection | `rotate_canvas`, `trim` |
 | `undo`, `redo` | Up to 20 steps | `host/run` |
 | `batch` | Several edit tools' steps as one undo step, all or nothing | one `document/edit` |
-| `run_command` | Flatten, duplicate, flip, rotate canvas, crop to selection, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
+| `run_command` | Flatten, duplicate, flip (several layers flip together as a group), rotate canvas, crop to selection, invert, clear, content-aware fill, remove background, masks, zoom… on the active layer, or on `layers`; returns the ids of new layers | `host/run` |
 | `switch_document` | Switch tabs | `document/activate` |
 | `save_document` | Save as a `.xuan` project: through the save dialog, or to an absolute `path` (or back to its own file with `in_place`) after Xuan's prompt or under Always Allow; `overwrite` to replace a file | `file/save_as`, `file/save` |
 | `export_document` | Export PNG, JPEG, TIFF or WebP: through the save dialog, or to an absolute `path` after Xuan's prompt or under Always Allow; `overwrite` to replace a file; `quality` (1–100) for JPEG and lossy WebP, `lossless` for WebP; with `path`, `layer`, `region` and `max_side` write one layer, a rectangle or a smaller copy as a PNG | `file/export` |
@@ -394,6 +394,30 @@ layer's `runs`.
 `select_layers`. `get_document` lists each layer's `kind` (`image`, `text`,
 `shape` with its style, `raw`, `group`, `mask`, `adjustment` or `filter`) and
 its `flip_x` and `flip_y`; `get_layer_image` returns pixels before the flips.
+`run_command` `flip_h` or `flip_v` on several layers mirrors them together
+across their combined bounds, as Photoshop does, so they also trade places;
+each then reports its flip. To flip layers each in place, send `set_layer`
+with `flip_x` or `flip_y` for each, in one `batch` for one undo step.
+
+Layer effects (**Layer → Layer Effects…**: a stroke, drop shadow, colour
+overlay, inner shadow, outer glow and inner glow) are kept with the layer and
+redrawn as it changes, so a glow never goes stale. `get_document` lists a
+layer's under `effects` (`null` when it has none), in the shape `.xuan` files
+store them, and `set_layer` `effects` takes that object back whole: it
+replaces all the layer's effects, so read them, change one and send them all.
+Settings left out take the defaults a new effect gets; colours are
+`[r, g, b]`; `null` removes them. Settings are held to what the Layer Effects
+dialog offers, in whole numbers but for opacities: a stroke 1–500 pixels, a
+glow 0–250, a shadow's distance 0–1000, blur 0–250 and light angle −180–180
+(in the layer's own pixels, so the shadow turns and flips with the layer).
+For a warm glow on a layer:
+
+```json
+{"layer": "<id>", "effects": {"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}}
+```
+
+Only pixel, text and shape layers take effects, not groups, masks,
+adjustment or filter layers.
 
 A mask is a layer of its own. `run_command` `mask` attaches one, made from the
 selection, to the active image: a layer of kind `mask` whose `parent` and
@@ -451,6 +475,11 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
   limit. Split larger work into several calls.
 - The answer lists the ids of the layers created, in order, and the selection
   or canvas size when a step changed them.
+- A selection a step makes stays active for the steps after it, and for later
+  calls, until it is replaced or cleared. The answer's `notes` name each step
+  that ran inside it (`"Step 2 (fill) ran inside the selection (448, 292,
+  184×216)."`), and a warning comes before the JSON for a step that changed
+  nothing inside it.
 
 ### Other plugins' actions
 
@@ -540,8 +569,13 @@ the call returns when it is done. Look at the result with `get_preview`.
   without repainting.
 - Name the layers you create, so the user can find them.
 - Selections limit fills, strokes, filters and adjustments, and become the
-  mask of new adjustment layers. Clear it with `modify_selection` `none` when
-  done.
+  mask of new adjustment layers. A selection stays active for every later step
+  and call until it is replaced or cleared, so clear it with `modify_selection`
+  `none` when done. While one is active, `paint_stroke`, `fill`,
+  `fill_gradient`, and `apply_filter`, `apply_adjustment` and `auto_adjust`
+  without `as_layer` answer with `clipped_to_selection` (its bounds) and
+  `changed`; when nothing changed, a warning comes first. Check the selection
+  before blaming the path, the colour or the layer.
 - Each tool call is one undo step. If the user did not like a change,
   `undo` it rather than trying to reverse it by hand.
 - Group work that belongs together, so it is one undo step and one round

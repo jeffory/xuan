@@ -215,6 +215,65 @@ fn path_options() -> Value {
         "additionalProperties": false,
     })
 }
+/// A layer's effects for set_layer, in the shape `.xuan` files store them (Xuan's
+/// `LayerEffects`) and get_document reports them, with the ranges Xuan takes from plugins: those
+/// of the Layer Effects dialog (`layer_effects::ranges`), in whole numbers but for opacities.
+fn layer_effects() -> Value {
+    let enabled = json!({"type": "boolean", "description": "Shown (default true); false keeps the settings and draws nothing"});
+    let rgb = |default: &str| {
+        json!({"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3,
+               "description": format!("[r, g, b], each 0–255 (default {default})")})
+    };
+    let opacity = |default: f32| json!({"type": "number", "minimum": 0, "maximum": 1, "description": format!("0–1 (default {default})")});
+    let pixels = |min: u32, max: u32, default: u32| json!({"type": "integer", "minimum": min, "maximum": max, "description": format!("Whole layer pixels, {min}–{max} (default {default})")});
+    let shadow = |description: &str, distance: u32, blur: u32| {
+        json!({
+            "type": "object",
+            "description": description,
+            "properties": {
+                "enabled": enabled,
+                "angle": {"type": "integer", "minimum": -180, "maximum": 180, "description": "Where the light comes from, in whole degrees counterclockwise from the right of the layer's own pixels, so it turns and flips with the layer: 90 (the default) is from the layer's top, which drops the shadow towards its bottom. An angle past ±180 is taken a whole turn round (270 is -90)"},
+                "distance": pixels(0, 1000, distance),
+                "blur": pixels(0, 250, blur),
+                "color": rgb("[0, 0, 0]"),
+                "opacity": opacity(0.5),
+            },
+            "additionalProperties": false,
+        })
+    };
+    let glow = |description: &str, size: u32| {
+        json!({
+            "type": "object",
+            "description": description,
+            "properties": {"enabled": enabled, "size": pixels(0, 250, size), "color": rgb("[255, 255, 255]"), "opacity": opacity(0.75)},
+            "additionalProperties": false,
+        })
+    };
+    json!({
+        "type": ["object", "null"],
+        "description": EFFECTS,
+        "properties": {
+            "stroke": {
+                "type": "object",
+                "description": "A line around what the layer shows",
+                "properties": {"enabled": enabled, "size": pixels(1, 500, 4), "color": rgb("[0, 0, 0]"), "opacity": opacity(1.0), "inside": {"type": "boolean", "description": "Inside the edge instead of outside it (default false)"}},
+                "additionalProperties": false,
+            },
+            "drop_shadow": shadow("A shadow behind the layer", 20, 20),
+            "color_overlay": {
+                "type": "object",
+                "description": "A flat colour over everything the layer shows",
+                "properties": {"enabled": enabled, "color": rgb("[0, 0, 0]"), "opacity": opacity(1.0)},
+                "additionalProperties": false,
+            },
+            "inner_shadow": shadow("A shadow inside the layer's edges", 10, 10),
+            "outer_glow": glow("A soft glow around the outside of the layer", 20),
+            "inner_glow": glow("A soft glow inward from the layer's edges", 10),
+        },
+        "additionalProperties": false,
+    })
+}
+const EFFECTS: &str = r##"The layer's effects (Layer → Layer Effects… in Xuan), ALL of them as one object, as .xuan files store them and get_document reports them under `effects`: any of "stroke", "drop_shadow", "color_overlay", "inner_shadow", "outer_glow" and "inner_glow", each an object of its settings. It replaces every effect the layer had, so to change one, read them with get_document, change it and send them all back; null (or {}) removes them all. Settings left out take the defaults a new effect gets in Xuan. Sizes, distances, blurs and angles are whole numbers within the ranges the Layer Effects dialog offers (a stroke 1–500 pixels; a glow 0–250; a shadow's distance 0–1000 and blur 0–250), so the dialog shows them unchanged; anything else is refused, naming the setting. Colours are [r, g, b] lists, not "#rrggbb". Only pixel, text and shape layers take effects. Example, a warm glow: {"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}."##;
 const TEXT_PATH: &str = "Set the text along this path instead of in a box: SVG path data in document pixels, as in an SVG <path d=…>, e.g. \"M 100 400 Q 300 200 500 400\". Only the first subpath is followed; letters past the end of an open path are hidden, and on a closed path the text wraps around";
 const SVG_PATH: &str = "SVG path data in document pixels, as in an SVG <path d=…>: M, L, H, V, C, S, Q, T, A and Z, lowercase for relative, e.g. \"M 0 700 C 120 640 380 640 512 700 Z\". Open subpaths are closed";
 /// Requests that hand over what is in the image, which the user may refuse.
@@ -251,7 +310,7 @@ fn name() -> Value {
     json!({"type": "string", "description": "Layer name"})
 }
 fn above() -> Value {
-    json!({"type": "string", "description": "Put it above this layer id (default: above the active layer)"})
+    json!({"type": "string", "description": "Put it directly above this layer id, in that layer's group (default: above the active layer, or at the top of the active group)"})
 }
 /// An adjustment or filter: a name for those without settings, else an
 /// object.
@@ -322,7 +381,7 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "get_document",
             title: "Describe the document",
-            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, for generated layers their provenance, and for RAW layers under `raw` the camera file, camera, lens, ISO, aperture, shutter and focal length, and the Develop `settings` develop_raw changes). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
+            description: "The current document: size, resolution, the active layer, the selection's bounds and every layer (id, name, kind: image, text, shape, raw, group, mask, adjustment or filter; visibility, lock, opacity, blend mode, parent, position and size, rotation, flip_x and flip_y, masks, the image it is attached_to, a shape's style, its layer `effects` (null when it has none, else as set_layer takes them), for generated layers their provenance, and for RAW layers under `raw` the camera file, camera, lens, ISO, aperture, shutter and focal length, and the Develop `settings` develop_raw changes). Layers are listed bottom to top. An image's mask is a layer of its own, of kind \"mask\", whose `parent` and `attached_to` are the image; the image lists it under `masks` with the mask layer's id and whether it is `enabled` and `linked` (moves with the image). Adjustment and filter layers attach to an image the same way and then change only that image; elsewhere they change everything below them. With `document`, that document is made current first.",
             properties: json!({"document": {"type": "string", "description": "A document id from list_documents"}}),
             required: &[],
             kind: Kind::Read,
@@ -483,13 +542,15 @@ fn specs() -> Vec<Spec> {
         Spec {
             name: "set_layer",
             title: "Change a layer",
-            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees clockwise). `rotation` turns the layer about its own centre, or about `pivot` [x, y] in document pixels when given, which keeps that point of the picture where it is (to straighten about the subject, say). `cover: true` then scales the layer up about its centre just enough to cover the whole canvas, so a turned or moved layer leaves no corner empty; a layer that already covers it is left as it is. x and y are the top-left of the box before it is turned. Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
+            description: "Set a layer's name, visibility, lock (it can lock a layer; only the user can unlock one), opacity (0–1), fill (0–1: Photoshop's Fill, which fades a pixel, text or shape layer's own pixels but not its layer effects; in Color Burn, Linear Burn, Color Dodge, Linear Dodge, Vivid Light, Linear Light, Hard Mix and Difference it weakens the blend instead of fading it), blend mode (Normal, Multiply, Screen, Overlay, …), clipping (`clip_to`) and placement (x, y, width, height in document pixels, rotation in degrees clockwise). `rotation` turns the layer about its own centre, or about `pivot` [x, y] in document pixels when given, which keeps that point of the picture where it is (to straighten about the subject, say). `cover: true` then scales the layer up about its centre just enough to cover the whole canvas, so a turned or moved layer leaves no corner empty; a layer that already covers it is left as it is. `flip_x` mirrors the layer left to right and `flip_y` top to bottom, about its own centre: true flipped, false not, as get_document reports them (setting the flip it already has changes nothing). A group mirrors as a whole across its layers' bounds, its layers trading places; its own `flip_x` and `flip_y` say whether it has been mirrored so as a whole, not whether its layers were flipped one by one, and are what these compare with. To flip several layers each in place, batch one set_layer per layer. Layers flipped together in documents saved by older versions of Xuan were stored warped instead and still report false until flipped again. x and y are the top-left of the box before it is turned. Leave out what should not change. `clip_to` clips the layer to a base below it in the same folder, so it only shows where the base has pixels: a pixel layer, or a group, whose shape is all its layers together (its opacity and mask included). The base's opacity applies to the clipped layer too. A base that is itself clipped passes on its own base. `null` releases the clipping. Groups, mask layers and filter layers cannot be clipped; mask, adjustment and filter layers cannot be bases. `effects` sets the layer's effects (stroke, drop shadow, colour overlay, inner shadow, outer glow, inner glow) as one object that replaces them all, in the shape get_document reports under `effects`, so read, change and send back; null removes them. For a text layer, `text` replaces its text (each unchanged letter keeps its own font and colour), `runs` replaces which letters have their own font, colour, bold or italic (`[]` clears them), `path` (SVG path data in document pixels) sets it along a path or `null` returns it to a box, and `path_options` changes how it follows the path, keeping the options it leaves out. Text changes are applied before a new placement.",
             properties: json!({
                 "layer": layer(), "name": name(), "visible": {"type": "boolean"}, "locked": {"type": "boolean"},
                 "opacity": number("0–1"), "fill": number("0–1; pixel, text and shape layers only"),
                 "blend": {"type": "string", "description": "Blend mode, e.g. Normal, Multiply, Screen, Overlay, SoftLight"},
                 "clip_to": {"type": ["string", "null"], "description": "Clip to this layer or group id below the layer in the same folder; null releases the clipping"},
                 "x": number("Left edge"), "y": number("Top edge"), "width": number("Width"), "height": number("Height"), "rotation": number("Degrees clockwise"), "pivot": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "The point [x, y] in document pixels the rotation turns about"}, "cover": {"type": "boolean", "description": "Scale the layer up just enough to cover the canvas"},
+                "flip_x": {"type": "boolean", "description": "Mirrored left to right about its centre (true) or not (false)"}, "flip_y": {"type": "boolean", "description": "Mirrored top to bottom about its centre (true) or not (false)"},
+                "effects": layer_effects(),
                 "text": {"type": "string", "description": "A text layer's new text"},
                 "runs": text_runs(),
                 "path": {"type": ["string", "null"], "description": "A text layer's path, SVG path data in document pixels; null puts the text back in a box"},
@@ -516,13 +577,16 @@ fn specs() -> Vec<Spec> {
                         "rotation",
                         "pivot",
                         "cover",
+                        "flip_x",
+                        "flip_y",
+                        "effects",
                         "text",
                         "runs",
                         "path",
                         "path_options",
                     ],
                 )?;
-                let args = unquote(unquote(args, "path_options"), "runs");
+                let args = unquote(unquote(unquote(args, "path_options"), "runs"), "effects");
                 // Locks protect layers from the agent: it may lock, but only
                 // the user unlocks.
                 if args.get("locked") == Some(&json!(false)) {
@@ -545,6 +609,15 @@ fn specs() -> Vec<Spec> {
                         return Err("`clip_to` must be a layer id or null".into());
                     }
                     set.insert("clip_to".into(), clip_to.clone());
+                }
+                // So does `null` for the effects, which removes them.
+                if let Some(effects) = args.get("effects") {
+                    if !(effects.is_null() || effects.is_object()) {
+                        return Err(
+                            "`effects` must be an object of effects, as get_document reports them, or null".into(),
+                        );
+                    }
+                    set.insert("effects".into(), effects.clone());
                 }
                 if set.len() > 2 {
                     edits.push(Value::Object(set));
@@ -569,6 +642,7 @@ fn specs() -> Vec<Spec> {
                     &args,
                     &[
                         "layer", "x", "y", "width", "height", "rotation", "pivot", "cover",
+                        "flip_x", "flip_y",
                     ],
                 );
                 if transform.len() > 2 {
@@ -1010,7 +1084,7 @@ fn specs() -> Vec<Spec> {
                         Some("invert") => "invert_selection",
                         Some("subject") => "select_subject",
                         Some("layer_pixels") => "select_layer_pixels",
-                        _ => return perform(cx, selection_edit(&args)?),
+                        _ => return perform(cx, "modify_selection", selection_edit(&args)?),
                     };
                     cx.run_on(command, layer.map(|layer| json!([layer])))?;
                     if command == "select_subject" {
@@ -1171,7 +1245,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             required: &["filter"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = unquote(pick(args, &["filter", "layer", "as_layer"])?, "filter");
+                let args = effect_args(pick(args, &["filter", "layer", "as_layer"])?, "filter");
                 let edit = if args.get("as_layer") == Some(&json!(true)) {
                     op("add_adjustment_layer", &args, &["filter"])
                 } else {
@@ -1192,7 +1266,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             required: &["adjustment"],
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
-                let args = unquote(
+                let args = effect_args(
                     pick(args, &["adjustment", "layer", "as_layer"])?,
                     "adjustment",
                 );
@@ -1241,7 +1315,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
             kind: Kind::Edit,
             run: Action::Edit(|_, args| {
                 let keys = ["layer", "adjustment", "filter"];
-                let args = unquote(unquote(pick(args, &keys)?, "adjustment"), "filter");
+                let args = effect_args(effect_args(pick(args, &keys)?, "adjustment"), "filter");
                 if args.contains_key("adjustment") == args.contains_key("filter") {
                     return Err("Give either `adjustment` or `filter`".into());
                 }
@@ -1403,7 +1477,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "run_command",
             title: "Run an editor command",
-            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (attach a mask layer made from the selection to the image), new_mask_layer, delete_mask, disable_mask, link_mask (these three on a mask layer), clip (clipping mask), flip_h, flip_v (the layer), flip_canvas_h, flip_canvas_v, rotate_canvas_cw, rotate_canvas_ccw, rotate_canvas_180 (the whole canvas), crop_to_selection (crop the canvas to the selection's bounds), invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out. Commands act on the selected layers, the last one active: give `layers` to select them first, as select_layers does. Returns the ids of the layers the command added. content_fill, remove_background and remove_flat_background run in the background: other edits fail with \"The editor is busy\" until they finish.",
+            description: "Run one of Xuan's menu commands on the current document, as its menu item does: flatten, duplicate (the selected layers), new_layer, delete_layer, move_out (of its group), mask (attach a mask layer made from the selection to the image), new_mask_layer, delete_mask, disable_mask, link_mask (these three on a mask layer), clip (clipping mask), flip_h, flip_v (the layer; several selected layers flip together as a group, mirrored across their combined bounds so they also trade places, and each reports the flip in flip_x / flip_y; set_layer `flip_x` / `flip_y` flips a layer about its own centre), flip_canvas_h, flip_canvas_v, rotate_canvas_cw, rotate_canvas_ccw, rotate_canvas_180 (the whole canvas), crop_to_selection (crop the canvas to the selection's bounds), invert (the layer's pixels), clear (the selected pixels), fill_fg, fill_bg, content_fill (fill the selection from its surroundings), remove_background, remove_flat_background, fit, actual, zoom_in, zoom_out. Commands act on the selected layers, the last one active: give `layers` to select them first, as select_layers does. Returns the ids of the layers the command added. content_fill, remove_background and remove_flat_background run in the background: other edits fail with \"The editor is busy\" until they finish.",
             properties: json!({
                 "command": {"type": "string", "enum": COMMANDS},
                 "layers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "Layer ids to select first, the last one active (default: the layers selected now); only for commands that edit"},
@@ -1435,7 +1509,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A selection a step makes stays active for the steps after it, and for later calls, until it is replaced or cleared (modify_selection none): strokes, fills, gradients and filters or adjustments on pixels change only what is inside it, so the answer's `notes` name each step that ran inside it, and a warning comes first for a step that changed nothing. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1746,10 +1820,12 @@ pub fn started(name: &str, result: &CallToolResult) -> Option<String> {
     Some(format!("started {label} from {plugin}"))
 }
 
-/// The JSON a tool answered with.
+/// The JSON a tool answered with: its first text that is JSON, since a
+/// warning in prose may come before it.
 fn answer_of(result: &CallToolResult) -> Option<Value> {
-    let text = (result.content.iter()).find_map(|content| content.as_text())?;
-    serde_json::from_str(&text.text).ok()
+    (result.content.iter())
+        .filter_map(|content| content.as_text())
+        .find_map(|text| serde_json::from_str(&text.text).ok())
 }
 
 /// Text from Xuan for the pane: without control and bidi characters, at
@@ -1777,10 +1853,10 @@ pub fn call(cx: &Context, name: &str, args: Map<String, Value>) -> CallToolResul
     let Some(spec) = specs().into_iter().find(|spec| spec.name == name) else {
         return CallToolResult::error(vec![ContentBlock::text(format!("Unknown tool {name}"))]);
     };
-    let result = match spec.run {
+    let result = retype(args, &spec.properties).and_then(|args| match spec.run {
         Action::Run(run) | Action::Mixed(run, _) => run(cx, args),
-        Action::Edit(plan) => plan(cx, args).and_then(|plan| perform(cx, plan)),
-    };
+        Action::Edit(plan) => plan(cx, args).and_then(|plan| perform(cx, spec.name, plan)),
+    });
     match result {
         Ok(content) => CallToolResult::success(content),
         // Where the user keeps files is not the client's business.
@@ -1843,16 +1919,146 @@ pub fn batchable() -> Vec<&'static str> {
         .collect()
 }
 
-/// Send a tool's edits as one request and answer as the tool does.
-fn perform(cx: &Context, plan: Plan) -> Result<Vec<ContentBlock>, String> {
+/// Send a tool's edits as one request and answer as the tool does. When a
+/// selection limited what it painted, the answer says so, and a warning
+/// comes first when it painted nothing.
+fn perform(cx: &Context, tool: &str, plan: Plan) -> Result<Vec<ContentBlock>, String> {
+    let owners = vec![0; plan.edits.len()];
     let answer = cx.edit(plan.name, plan.edits)?;
-    match plan.reply {
-        Reply::Ok => text(json!({"ok": true})),
-        Reply::Layer(layer) => text(json!({"ok": true, "layer": layer})),
-        Reply::Active(active) => text(json!({"ok": true, "active": active})),
-        Reply::Added => added(answer),
-        Reply::Selection => selection_summary(cx),
-        Reply::Size => size_summary(cx),
+    let mut result = match plan.reply {
+        Reply::Ok => json!({"ok": true}),
+        Reply::Layer(layer) => json!({"ok": true, "layer": layer}),
+        Reply::Active(active) => json!({"ok": true, "active": active}),
+        Reply::Added => {
+            json!({"ok": true, "layers": answer.get("layers").cloned().unwrap_or(json!([]))})
+        }
+        Reply::Selection => json!({"ok": true, "selection": document(cx)?["selection"]}),
+        Reply::Size => {
+            let document = document(cx)?;
+            json!({"ok": true, "width": document["width"], "height": document["height"]})
+        }
+    };
+    let Some(clipped) = clipping(&answer, &owners, 1).pop().flatten() else {
+        return text(result);
+    };
+    result["clipped_to_selection"] = clipped.bounds.clone();
+    result["changed"] = json!(clipped.unchanged.len() < clipped.noted);
+    let warning = clipped
+        .warning(tool, None)
+        .map(|line| format!("{line}\n{SELECTION_STAYS}"));
+    Ok((warning.into_iter().map(ContentBlock::text))
+        .chain(text(result)?)
+        .collect())
+}
+
+/// After a warning that an edit changed nothing inside the selection.
+const SELECTION_STAYS: &str = "Strokes, fills, gradients, filters and adjustments change only pixels inside the selection, and a selection stays active, for later steps and calls too, until it is replaced or cleared. If it is left over from earlier, clear it with modify_selection none, or give select_shape a different shape.";
+
+/// What Xuan noted about one step's edits that ran while a selection was
+/// active (see `notes` in `document/edit`'s answer).
+struct Clipped {
+    /// The selection's bounds, `{x, y, width, height}`.
+    bounds: Value,
+    /// How many edits the step sent, how many of them Xuan noted, and which
+    /// (from 1) changed nothing.
+    edits: usize,
+    noted: usize,
+    unchanged: Vec<usize>,
+}
+
+/// Xuan's notes on a request's edits, for each of its `steps`: `owners`
+/// says which step each edit came from.
+fn clipping(answer: &Value, owners: &[usize], steps: usize) -> Vec<Option<Clipped>> {
+    let mut clipped: Vec<Option<Clipped>> = (0..steps).map(|_| None).collect();
+    let notes = answer.get("notes").and_then(Value::as_array);
+    for note in notes.into_iter().flatten() {
+        let Some(edit) = (note.get("edit").and_then(Value::as_u64))
+            .and_then(|edit| usize::try_from(edit).ok()?.checked_sub(1))
+        else {
+            continue;
+        };
+        let Some(&step) = owners.get(edit) else {
+            continue;
+        };
+        let first = owners
+            .iter()
+            .position(|&owner| owner == step)
+            .unwrap_or(edit);
+        let entry = clipped[step].get_or_insert_with(|| Clipped {
+            bounds: note
+                .get("clipped_to_selection")
+                .cloned()
+                .unwrap_or(Value::Null),
+            edits: owners.iter().filter(|&&owner| owner == step).count(),
+            noted: 0,
+            unchanged: Vec::new(),
+        });
+        entry.noted += 1;
+        if note.get("changed") == Some(&Value::Bool(false)) {
+            entry.unchanged.push(edit - first + 1);
+        }
+    }
+    clipped
+}
+
+impl Clipped {
+    /// "the selection (448, 292, 184×216)".
+    fn selection(&self) -> String {
+        let number = |key: &str| self.bounds.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let (width, height) = (number("width"), number("height"));
+        if width == 0 || height == 0 {
+            return "the selection, which is empty".into();
+        }
+        format!(
+            "the selection ({}, {}, {width}×{height})",
+            number("x"),
+            number("y")
+        )
+    }
+
+    /// Who did it: the tool, or the step of a batch.
+    fn who(tool: &str, step: Option<usize>) -> String {
+        match step {
+            Some(step) => format!("Step {} ({tool})", step + 1),
+            None => tool.to_owned(),
+        }
+    }
+
+    /// The warning when the tool (or some of its strokes) changed nothing,
+    /// e.g. "Step 19 (paint_stroke) painted nothing inside the selection
+    /// (448, 292, 184×216)."
+    fn warning(&self, tool: &str, step: Option<usize>) -> Option<String> {
+        if self.unchanged.is_empty() {
+            return None;
+        }
+        let verb = match tool {
+            "apply_filter" | "apply_adjustment" | "auto_adjust" => "changed nothing",
+            _ => "painted nothing",
+        };
+        let who = Self::who(tool, step);
+        let which = match self.unchanged.len() {
+            all if all == self.edits => String::new(),
+            many if many > 8 => format!(": {many} of its {} strokes", self.edits),
+            1 => format!(": stroke {} of {}", self.unchanged[0], self.edits),
+            _ => {
+                let (last, rest) = self.unchanged.split_last().unwrap_or((&0, &[]));
+                let rest: Vec<String> = rest.iter().map(usize::to_string).collect();
+                format!(": strokes {} and {last} of {}", rest.join(", "), self.edits)
+            }
+        };
+        Some(format!("{who}{which} {verb} inside {}.", self.selection()))
+    }
+
+    /// A batch's note on the step: its warning, or that it ran inside the
+    /// selection.
+    fn note(&self, tool: &str, step: usize) -> String {
+        self.warning(tool, Some(step)).unwrap_or_else(|| {
+            format!(
+                "{} ran inside {}.",
+                Self::who(tool, Some(step)),
+                self.selection()
+            )
+        })
     }
 }
 
@@ -1903,12 +2109,14 @@ fn batch(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, St
                 ));
             }
         };
-        let plan = planner(cx, arguments).map_err(|error| {
-            format!(
-                "Step {number} ({}): {error}. Nothing was changed.",
-                spec.name
-            )
-        })?;
+        let plan = retype(arguments, &spec.properties)
+            .and_then(|arguments| planner(cx, arguments))
+            .map_err(|error| {
+                format!(
+                    "Step {number} ({}): {error}. Nothing was changed.",
+                    spec.name
+                )
+            })?;
         plans.push((spec.name, plan));
     }
     // Which step each edit came from, to say which one Xuan refused.
@@ -1946,7 +2154,25 @@ fn batch(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, St
             result["height"] = document["height"].clone();
         }
     }
-    text(result)
+    // The steps a selection clipped, and first, as prose, the ones it let
+    // paint nothing.
+    let clipped = clipping(&answer, &owners, plans.len());
+    let mut notes = Vec::new();
+    let mut warnings = Vec::new();
+    for (step, clipped) in clipped.iter().enumerate() {
+        let Some(clipped) = clipped else { continue };
+        let tool = plans[step].0;
+        notes.push(clipped.note(tool, step));
+        warnings.extend(clipped.warning(tool, Some(step)));
+    }
+    if !notes.is_empty() {
+        result["notes"] = json!(notes);
+    }
+    let warning =
+        (!warnings.is_empty()).then(|| format!("{}\n{SELECTION_STAYS}", warnings.join("\n")));
+    Ok((warning.into_iter().map(ContentBlock::text))
+        .chain(text(result)?)
+        .collect())
 }
 
 /// Xuan's error for a batch, naming the step whose edit it refused. Xuan
@@ -2444,6 +2670,185 @@ fn unquote(mut args: Map<String, Value>, key: &str) -> Map<String, Value> {
     args
 }
 
+/// The arguments with the types some clients lose put back, by the tool's
+/// `properties`. Clients that turn a model's text into JSON with the schema
+/// get it wrong where the schema has no types (a batch step's `arguments`):
+/// arrays come as `{"item": […]}` and numbers and booleans as text. Only
+/// what the schema asks for is changed, so a layer named "12" stays text.
+/// Text where the schema wants a number or boolean is refused, naming it.
+fn retype(args: Map<String, Value>, properties: &Value) -> Result<Map<String, Value>, String> {
+    let schema = json!({"type": "object", "properties": properties});
+    let mut args = Value::Object(args);
+    retype_value(&mut args, &schema, "")?;
+    match args {
+        Value::Object(args) => Ok(args),
+        _ => unreachable!("an object stays an object"),
+    }
+}
+
+/// [`retype`] for one value at `path`, and what it holds.
+fn retype_value(value: &mut Value, schema: &Value, path: &str) -> Result<(), String> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let branches = (schema.get("oneOf").or_else(|| schema.get("anyOf"))).and_then(Value::as_array);
+    if let Some(branches) = branches {
+        let branch = (branches.iter())
+            .find(|branch| fits(value, branch))
+            .or_else(|| (branches.iter()).find(|branch| coerce(value, branch).is_some()));
+        if let Some(branch) = branch {
+            if let Some(retyped) = coerce(value, branch) {
+                *value = retyped;
+            }
+            return retype_value(value, branch, path);
+        }
+        return Ok(());
+    }
+    if !fits(value, schema) {
+        if let Some(retyped) = coerce(value, schema) {
+            *value = retyped;
+        } else if let Value::String(text) = value {
+            let types = types(schema);
+            let what = if types.contains(&"boolean") {
+                "true or false"
+            } else {
+                "a number"
+            };
+            if !types.is_empty()
+                && (types.iter()).all(|kind| matches!(*kind, "number" | "integer" | "boolean"))
+            {
+                return Err(format!("`{path}` must be {what}, not the text {text:?}"));
+            }
+        }
+    }
+    match value {
+        Value::Array(items) => {
+            if let Some(schema) = schema.get("items") {
+                for (index, item) in items.iter_mut().enumerate() {
+                    retype_value(item, schema, &format!("{path}[{index}]"))?;
+                }
+            }
+        }
+        Value::Object(fields) => {
+            if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+                for (key, field) in fields.iter_mut() {
+                    if let Some(schema) = properties.get(key) {
+                        let path = if path.is_empty() {
+                            key.clone()
+                        } else {
+                            format!("{path}.{key}")
+                        };
+                        retype_value(field, schema, &path)?;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The JSON types a schema allows; none when it does not say.
+fn types(schema: &Value) -> Vec<&str> {
+    match schema.get("type") {
+        Some(Value::String(kind)) => vec![kind.as_str()],
+        Some(Value::Array(kinds)) => kinds.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether the value is of a type the schema allows, or the schema says none.
+fn fits(value: &Value, schema: &Value) -> bool {
+    let types = types(schema);
+    types.is_empty()
+        || types.iter().any(|kind| match *kind {
+            "number" => value.is_number(),
+            "integer" => value.is_i64() || value.is_u64(),
+            "boolean" => value.is_boolean(),
+            "string" => value.is_string(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            "null" => value.is_null(),
+            _ => true,
+        })
+}
+
+/// The value as a type the schema allows, from the forms clients lose it to:
+/// `{"item": […]}` for an array, text for a number or boolean.
+fn coerce(value: &Value, schema: &Value) -> Option<Value> {
+    types(schema)
+        .into_iter()
+        .find_map(|kind| match (kind, value) {
+            ("array", Value::Object(fields)) if fields.len() == 1 => match fields.get("item")? {
+                Value::Array(items) => Some(Value::Array(items.clone())),
+                // A converter's one repeated element, not in a list.
+                item => Some(Value::Array(vec![item.clone()])),
+            },
+            ("number", Value::String(text)) => numeric(text),
+            ("integer", Value::String(text)) => numeric(text).filter(|n| n.is_i64() || n.is_u64()),
+            ("boolean", Value::String(text)) => match text.trim() {
+                "true" => Some(json!(true)),
+                "false" => Some(json!(false)),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
+/// Text that is a number, as a JSON number: whole numbers as integers.
+fn numeric(text: &str) -> Option<Value> {
+    let text = text.trim();
+    if let Ok(n) = text.parse::<i64>() {
+        return Some(json!(n));
+    }
+    let n = text.parse::<f64>().ok().filter(|n| n.is_finite())?;
+    serde_json::Number::from_f64(n).map(Value::Number)
+}
+
+/// A filter or adjustment with the types some clients lose put back. Their
+/// schema has no types inside, but nothing in one is text: every value is a
+/// number, a boolean or a list of those. So anywhere inside, text that is a
+/// number or `true`/`false` is read as one and `{"item": […]}` as the list.
+fn loosen(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            if fields.len() == 1
+                && let Some(item) = fields.get_mut("item")
+            {
+                let items = match item.take() {
+                    Value::Array(items) => items,
+                    item => vec![item],
+                };
+                *value = Value::Array(items);
+                return loosen(value);
+            }
+            fields.values_mut().for_each(loosen);
+        }
+        Value::Array(items) => items.iter_mut().for_each(loosen),
+        Value::String(text) => {
+            let retyped = match text.trim() {
+                "true" => Some(json!(true)),
+                "false" => Some(json!(false)),
+                text => numeric(text),
+            };
+            if let Some(retyped) = retyped {
+                *value = retyped;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The arguments with the effect at `key` read as JSON when sent as a
+/// string ([`unquote`]) and, when it is an object, [`loosen`]ed.
+fn effect_args(args: Map<String, Value>, key: &str) -> Map<String, Value> {
+    let mut args = unquote(args, key);
+    if let Some(effect @ Value::Object(_)) = args.get_mut(key) {
+        loosen(effect);
+    }
+    args
+}
+
 /// An edit op with the given arguments copied over when present.
 fn op(name: &str, args: &Map<String, Value>, keys: &[&str]) -> Map<String, Value> {
     let mut edit = Map::new();
@@ -2478,10 +2883,6 @@ fn text(value: Value) -> Result<Vec<ContentBlock>, String> {
     )])
 }
 
-fn added(answer: Value) -> Result<Vec<ContentBlock>, String> {
-    text(json!({"ok": true, "layers": answer.get("layers").cloned().unwrap_or(json!([]))}))
-}
-
 fn document(cx: &Context) -> Result<Value, String> {
     let document = cx.call("document/get", json!({}))?;
     if document.is_null() {
@@ -2492,11 +2893,6 @@ fn document(cx: &Context) -> Result<Value, String> {
 
 fn selection_summary(cx: &Context) -> Result<Vec<ContentBlock>, String> {
     text(json!({"ok": true, "selection": document(cx)?["selection"]}))
-}
-
-fn size_summary(cx: &Context) -> Result<Vec<ContentBlock>, String> {
-    let document = document(cx)?;
-    text(json!({"ok": true, "width": document["width"], "height": document["height"]}))
 }
 
 fn history(

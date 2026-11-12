@@ -101,7 +101,9 @@ release. The settings are kept in an `[updates]` table of the configuration file
 `last_check` (when the last check started, in seconds since 1970) and `skipped`.
 
 `.deb` and `.rpm` installations can also be updated by installing the newer package with
-APT or DNF.
+APT or DNF. The AppImage carries update information, so
+[AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) and AppImageLauncher can
+update it in place, downloading only the parts that changed.
 
 ## Workspace
 

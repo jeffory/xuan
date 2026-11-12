@@ -286,3 +286,245 @@ fn a_clipping_base_with_effects_lends_them_its_shape() {
     assert_eq!(image.get_pixel(8, 20).0, [0, 255, 0, 255]);
     assert_eq!(image.get_pixel(4, 20).0[3], 0);
 }
+
+/// On a 40 × 40 canvas: a text layer with a stroke and a sharp drop shadow, and a shape with an
+/// outer glow, both clear of the canvas edges.
+fn styled_document() -> Document {
+    let mut text = red_square();
+    text.name = "Text".into();
+    text.text = Some(crate::text::TextStyle {
+        content: "Hello".into(),
+        ..Default::default()
+    });
+    text.effects.as_mut().unwrap().drop_shadow = Some(ShadowEffect {
+        distance: 2.0,
+        blur: 0.0,
+        opacity: 1.0,
+        ..ShadowEffect::DROP
+    });
+    let mut shape = Layer::image("Shape", square(4, 4, [0, 255, 0]));
+    shape.transform.x = 24.0;
+    shape.transform.y = 14.0;
+    shape.shape = Some(crate::document::ShapeStyle {
+        kind: crate::paint::ShapeKind::Rectangle,
+        color: [0, 255, 0, 255],
+        corner_radius: 0.0,
+        path: None,
+    });
+    shape.effects = Some(LayerEffects {
+        outer_glow: Some(GlowEffect {
+            size: 3.0,
+            ..GlowEffect::OUTER
+        }),
+        ..LayerEffects::default()
+    });
+    let mut document = document_with(text);
+    document.layers.push(shape);
+    let id = document.layers[0].id;
+    document.select(id, false);
+    document
+}
+
+/// Asserts that `after` shows `before` moved by whole pixels: `after`'s pixel (x, y) is
+/// `before`'s (x + left, y + top), or transparent where that is off `before`.
+fn assert_moved(name: &str, before: &RgbaImage, after: &RgbaImage, left: i64, top: i64) {
+    for (x, y, pixel) in after.enumerate_pixels() {
+        let (sx, sy) = (i64::from(x) + left, i64::from(y) + top);
+        let expected = if (0..i64::from(before.width())).contains(&sx)
+            && (0..i64::from(before.height())).contains(&sy)
+        {
+            *before.get_pixel(sx as u32, sy as u32)
+        } else {
+            Rgba([0; 4])
+        };
+        assert_eq!(*pixel, expected, "{name} at {x}, {y}");
+    }
+}
+
+/// Upstream Compositor#180: Canvas Size, Image Size, Crop and Trim dropped every layer's
+/// effects and turned text and shapes into plain pixels. Xuan's canvas edits only move, scale,
+/// turn or flip layers, so each layer comes through with its effects, its text or shape and its
+/// own pixels; the edits that only move layers draw exactly what was there before, effects and
+/// all (issue 122).
+#[test]
+fn canvas_edits_keep_effects_and_live_text() {
+    use crate::operations::{self, CanvasRotation, TrimBasis, TrimSides};
+    let document = styled_document();
+    let before = crate::render::render(&document);
+    let trimmed = operations::trim_bounds(&before, TrimBasis::Transparent, TrimSides::default())
+        .expect("the effects stay clear of the canvas edges");
+    type Edit = (&'static str, fn(&mut Document));
+    let edits: [Edit; 7] = [
+        ("Canvas Size", |d| {
+            operations::canvas_size(d, 60, 50, [0.5, 0.5]).unwrap()
+        }),
+        ("Image Size", |d| operations::image_size(d, 80, 60).unwrap()),
+        ("Crop", |d| {
+            operations::crop(d, Point::new(4.0, 4.0), Point::new(36.0, 30.0)).unwrap()
+        }),
+        ("Trim", |d| {
+            assert!(operations::trim(d, TrimBasis::Transparent, TrimSides::default()).unwrap())
+        }),
+        ("Crop to Selection", |d| {
+            d.selection = Some(Arc::new(GrayImage::from_fn(40, 40, |x, y| {
+                image::Luma([if (2..38).contains(&x) && (6..34).contains(&y) {
+                    255
+                } else {
+                    0
+                }])
+            })));
+            operations::crop_to_selection(d).unwrap()
+        }),
+        ("Rotate Canvas", |d| {
+            operations::rotate_canvas(d, CanvasRotation::Clockwise)
+        }),
+        ("Flip Canvas", |d| operations::flip_canvas(d, true)),
+    ];
+    for (name, edit) in edits {
+        let mut edited = document.clone();
+        edit(&mut edited);
+        edited.validate().unwrap();
+        assert_eq!(edited.layers.len(), document.layers.len(), "{name}");
+        for (old, new) in document.layers.iter().zip(&edited.layers) {
+            let layer = format!("{name}: {}", old.name);
+            assert_eq!(new.effects, old.effects, "{layer}");
+            assert_eq!(new.text, old.text, "{layer}");
+            // `ShapeStyle` has no `PartialEq`.
+            assert_eq!(
+                format!("{:?}", new.shape),
+                format!("{:?}", old.shape),
+                "{layer}"
+            );
+            assert!(
+                Arc::ptr_eq(old.pixels.as_ref().unwrap(), new.pixels.as_ref().unwrap()),
+                "{layer} was redrawn"
+            );
+        }
+        let after = crate::render::render(&edited);
+        match name {
+            "Canvas Size" => assert_moved(name, &before, &after, -10, -5),
+            "Crop" => assert_moved(name, &before, &after, 4, 4),
+            "Crop to Selection" => assert_moved(name, &before, &after, 2, 6),
+            "Trim" => {
+                let (left, top, right, bottom) = trimmed;
+                assert_eq!(after.dimensions(), (right - left, bottom - top));
+                assert_moved(name, &before, &after, left.into(), top.into());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The rows (or columns, `across`) of `image` along column (or row) `line` that are not
+/// transparent: their first and last index.
+fn drawn_span(image: &RgbaImage, line: u32, across: bool) -> (u32, u32) {
+    let length = if across {
+        image.width()
+    } else {
+        image.height()
+    };
+    let drawn: Vec<u32> = (0..length)
+        .filter(|&i| {
+            let pixel = if across {
+                image.get_pixel(i, line)
+            } else {
+                image.get_pixel(line, i)
+            };
+            pixel[3] > 127
+        })
+        .collect();
+    (*drawn.first().unwrap(), *drawn.last().unwrap())
+}
+
+/// Issue 122 asks whether Image Size scales effects with the image, as Photoshop's "Scale
+/// Styles" does. Effect sizes are in layer pixels and Image Size scales the layer, so they do:
+/// at twice the size, the stroke is twice as wide, and the shadow falls twice as far and is
+/// twice as soft.
+#[test]
+fn image_size_scales_effects_with_the_layer() {
+    let mut layer = red_square();
+    layer.effects.as_mut().unwrap().drop_shadow = Some(ShadowEffect {
+        distance: 4.0,
+        blur: 0.0,
+        opacity: 1.0,
+        ..ShadowEffect::DROP
+    });
+    let sharp = document_with(layer);
+    let mut doubled = sharp.clone();
+    crate::operations::image_size(&mut doubled, 80, 80).unwrap();
+    let (before, after) = (
+        crate::render::render(&sharp),
+        crate::render::render(&doubled),
+    );
+    // The square covers 10–29 and its 3-pixel stroke 7–32; the square's shadow drops 4 pixels,
+    // to 33.
+    assert_eq!(drawn_span(&before, 20, true), (7, 32));
+    assert_eq!(drawn_span(&before, 20, false), (7, 33));
+    let (left, right) = drawn_span(&after, 40, true);
+    let (top, bottom) = drawn_span(&after, 40, false);
+    for (side, value, expected) in [
+        ("left", left, 14),
+        ("right", right, 65),
+        ("top", top, 14),
+        ("bottom", bottom, 67),
+    ] {
+        assert!(
+            value.abs_diff(expected) <= 1,
+            "{side}: {value}, not {expected}"
+        );
+    }
+    // A soft shadow fades from 90% to 10% over twice the rows.
+    let soft = |document: &Document, line: u32| {
+        let image = crate::render::render(document);
+        (0..image.height())
+            .filter(|&y| (26..=229).contains(&image.get_pixel(line, y)[3]))
+            .count()
+    };
+    let mut blurred = sharp.clone();
+    let shadow = blurred.layers[0].effects.as_mut().unwrap();
+    shadow.drop_shadow.as_mut().unwrap().blur = 6.0;
+    shadow.stroke = None;
+    let mut doubled = blurred.clone();
+    crate::operations::image_size(&mut doubled, 80, 80).unwrap();
+    let (fade, scaled) = (soft(&blurred, 20), soft(&doubled, 40));
+    assert!(fade > 3, "{fade}");
+    assert!(
+        scaled.abs_diff(fade * 2) <= 2,
+        "{fade} rows became {scaled}"
+    );
+}
+
+/// Upstream Compositor#180 also lost a layer's effects when Hue/Saturation, Levels or Invert was
+/// applied to it directly. Here they change the layer's pixels and keep its effects.
+#[test]
+fn direct_adjustments_keep_the_layers_effects() {
+    use crate::document::Adjustment;
+    let mut hue = crate::color::HueSettings::default();
+    hue.adjustments[0][0] = 120.0;
+    let mut levels = [crate::color::DEFAULT_LEVELS; 4];
+    levels[0][4] = 200.0;
+    for adjustment in [
+        Adjustment::HueRanges {
+            settings: Box::new(hue),
+        },
+        Adjustment::LevelsChannels { ranges: levels },
+        Adjustment::Invert,
+    ] {
+        let mut document = document_with(red_square());
+        let id = document.layers[0].id;
+        document.select(id, false);
+        let (effects, pixels) = (
+            document.layers[0].effects.clone(),
+            document.layers[0].pixels.clone().unwrap(),
+        );
+        crate::effects::apply_adjustment(&mut document, &adjustment, false).unwrap();
+        let layer = &document.layers[0];
+        let name = adjustment.name();
+        assert_ne!(
+            **layer.pixels.as_ref().unwrap(),
+            *pixels,
+            "{name} changed nothing"
+        );
+        assert_eq!(layer.effects, effects, "{name}");
+    }
+}

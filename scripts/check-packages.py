@@ -353,6 +353,29 @@ def check_source(temporary):
     )
 
 
+def check_appimage_updates(package):
+    """With XUAN_APPIMAGE_UPDATE_REPOSITORY set, the image names that
+    repository's latest release in its .upd_info section and has a .zsync
+    file beside it for that release."""
+    repository = os.environ.get("XUAN_APPIMAGE_UPDATE_REPOSITORY", "")
+    if not repository:
+        return
+    owner, name = repository.split("/")
+    expected = (
+        f"gh-releases-zsync|{owner}|{name}|latest|"
+        f"xuan-*-{platform.machine()}.AppImage.zsync"
+    )
+    dump = subprocess.check_output(
+        ["readelf", "--string-dump=.upd_info", package], text=True
+    )
+    assert expected in dump, f"Missing AppImage update information: {dump}"
+    zsync = package.with_name(package.name + ".zsync")
+    header = zsync.read_bytes().split(b"\n\n", 1)[0].decode()
+    assert f"Filename: {package.name}" in header, header
+    assert f"URL: {package.name}" in header, header
+    assert f"Length: {package.stat().st_size}" in header, header
+
+
 def check_appimage(temporary):
     package = ROOT / "dist" / f"xuan-{VERSION}-{platform.machine()}.AppImage"
     check_checksum(package)
@@ -367,6 +390,7 @@ def check_appimage(temporary):
     assert "INTERP" not in headers and "(NEEDED)" not in dynamic, (
         "The AppImage runtime must not depend on the host C library"
     )
+    check_appimage_updates(package)
     destination = temporary / "AppImage with spaces"
     destination.mkdir()
     appdir = destination / "squashfs-root"

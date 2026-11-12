@@ -1,6 +1,7 @@
 //! What plugins see of a document and how they change it: JSON descriptions,
 //! PNG exports and batched edits that the editor records as one undo step.
 use std::{
+    ops::RangeInclusive,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -16,6 +17,7 @@ use crate::{
     blend::BlendMode,
     document::{Adjustment, Document, Layer, MAX_SIDE, Mask, Point, Transform},
     effects::Filter,
+    layer_effects::{EffectKind, LayerEffects},
     paint::ShapeKind,
     selection::SelectionMode,
     text::{PathTextOptions, RunStyle, TextPath, TextRenderer, TextRun, TextStyle},
@@ -155,6 +157,8 @@ pub fn describe_layer(document: &Document, layer: &Layer) -> Value {
         // An adjustment or filter layer's settings, as `set_adjustment` takes them.
         "adjustment": layer.adjustment,
         "filter": layer.filter,
+        // The layer's effects, as the `set` edit takes them.
+        "effects": layer.effects.as_ref().filter(|effects| !effects.is_empty()),
         "raw": layer.raw.as_ref().map(super::raw::describe),
         "generated": layer.generated,
         "provenance": layer.provenance,
@@ -327,6 +331,9 @@ pub struct Reader {
     cost: Cost,
     /// Draws `add_text_layer` edits; made when first needed.
     text: Option<TextRenderer>,
+    /// What the edits that paint inside the selection did, when asked for
+    /// with [`Reader::with_notes`].
+    notes: Option<notes::Notes>,
 }
 
 impl std::fmt::Debug for Reader {
@@ -352,6 +359,7 @@ impl Reader {
             edits: 0,
             cost: Cost::default(),
             text: None,
+            notes: None,
         }
     }
 
@@ -706,6 +714,15 @@ pub enum Edit {
             skip_serializing_if = "Option::is_none"
         )]
         clip_to: Option<Option<Uuid>>,
+        /// The layer's effects, all of them, as `.xuan` files store them and
+        /// `document/get` reports them (see [`effects_from`]), replacing what
+        /// it had; `null` removes them. Left out, they do not change.
+        #[serde(
+            default,
+            deserialize_with = "nullable_effects",
+            skip_serializing_if = "Option::is_none"
+        )]
+        effects: Option<Option<LayerEffects>>,
     },
     RemoveLayer {
         layer: Uuid,
@@ -789,6 +806,14 @@ pub enum Edit {
         /// cover the whole canvas, leaving no corner empty.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cover: bool,
+        /// Whether the layer is mirrored left to right, as Flip Horizontal
+        /// leaves it, about its own centre; a group mirrors as a whole across
+        /// its layers' bounds. Missing, it does not change.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_x: Option<bool>,
+        /// The same top to bottom, as Flip Vertical leaves it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flip_y: Option<bool>,
     },
     /// A rectangle or ellipse combined with the selection, its edge
     /// softened by `feather` pixels first.
@@ -1796,6 +1821,143 @@ where
 {
     Option::<T>::deserialize(deserializer).map(Some)
 }
+
+/// [`nullable`] for layer effects, read by [`effects_from`].
+fn nullable_effects<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<LayerEffects>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let effects = value.as_ref().map(effects_from).transpose();
+    effects.map(Some).map_err(serde::de::Error::custom)
+}
+
+/// The layer effects by the names `.xuan` files and `document/get` give them.
+const EFFECTS: [(&str, EffectKind); 6] = [
+    ("stroke", EffectKind::Stroke),
+    ("drop_shadow", EffectKind::DropShadow),
+    ("color_overlay", EffectKind::ColorOverlay),
+    ("inner_shadow", EffectKind::InnerShadow),
+    ("outer_glow", EffectKind::OuterGlow),
+    ("inner_glow", EffectKind::InnerGlow),
+];
+
+/// Layer effects a plugin sent, in the shape `.xuan` files store them: an object with any of
+/// the [`EFFECTS`], each an object of its settings. Each effect starts from the settings Layer
+/// Effects gives a new one (with a black stroke or overlay), so settings left out keep those,
+/// and names Xuan does not know are refused rather than ignored.
+fn effects_from(value: &Value) -> Result<LayerEffects> {
+    const EXAMPLE: &str =
+        r#"{"outer_glow": {"size": 24, "color": [255, 217, 120], "opacity": 0.8}}"#;
+    let names = || EFFECTS.map(|(name, _)| name).join(", ");
+    let Value::Object(given) = value else {
+        bail!("Layer effects are an object such as {EXAMPLE}, or null to remove them");
+    };
+    let mut effects = serde_json::Map::new();
+    for (name, settings) in given {
+        let Some((_, kind)) = EFFECTS.iter().find(|(known, _)| known == name) else {
+            bail!(
+                "`{name}` is not a layer effect; the effects are {}",
+                names()
+            );
+        };
+        if settings.is_null() {
+            continue;
+        }
+        let Value::Object(settings) = settings else {
+            bail!("`{name}` takes an object of its settings, as in {EXAMPLE}");
+        };
+        let mut fresh = LayerEffects::default();
+        fresh.add(*kind, [0; 3]);
+        let Some(Value::Object(mut merged)) = serde_json::to_value(fresh)?
+            .get_mut(name.as_str())
+            .map(Value::take)
+        else {
+            bail!("`{name}` cannot be set");
+        };
+        for (field, value) in settings {
+            ensure!(
+                merged.contains_key(field),
+                "`{name}` has no setting `{field}`; it takes {}",
+                merged
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            ensure!(
+                !(field == "color" && value.is_string()),
+                "An effect's `color` is [r, g, b], each 0–255, not {value}"
+            );
+            merged.insert(field.clone(), value.clone());
+        }
+        effects.insert(name.clone(), Value::Object(merged));
+    }
+    let mut effects: LayerEffects = serde_json::from_value(Value::Object(effects))
+        .map_err(|error| anyhow::anyhow!("Invalid layer effects: {error}"))?;
+    hold_to_dialog_ranges(&mut effects)?;
+    effects.validate()?;
+    Ok(effects)
+}
+
+/// Keep plugin effects to what Layer → Layer Effects… offers (see
+/// [`layer_effects::ranges`](crate::layer_effects::ranges)), whose sliders would otherwise change
+/// a value outside them, or one with more decimals than they keep, as soon as the dialog shows
+/// it. A shadow's light angle is brought into range by whole turns, which changes nothing;
+/// anything else outside is refused.
+fn hold_to_dialog_ranges(effects: &mut LayerEffects) -> Result<()> {
+    use crate::layer_effects::ranges;
+    // Opacities keep every decimal; the dialog's other sliders keep `ranges::DECIMALS`.
+    fn check(effect: &str, setting: &str, value: f32, range: RangeInclusive<f32>) -> Result<()> {
+        let opacity = setting == "opacity";
+        let scale = 10f32.powi(ranges::DECIMALS as i32);
+        let kept = opacity || (value * scale).round() / scale == value;
+        let what = match (opacity, ranges::DECIMALS) {
+            (true, _) => String::new(),
+            (false, 0) => "a whole number ".into(),
+            (false, decimals) => format!("a number with at most {decimals} decimals "),
+        };
+        ensure!(
+            kept && range.contains(&value),
+            "`{effect}` `{setting}` must be {what}from {} to {}, as Layer Effects offers, not {value}",
+            range.start(),
+            range.end()
+        );
+        Ok(())
+    }
+    if let Some(stroke) = &effects.stroke {
+        check("stroke", "size", stroke.size, ranges::STROKE_SIZE)?;
+        check("stroke", "opacity", stroke.opacity, ranges::OPACITY)?;
+    }
+    for (name, shadow) in [
+        ("drop_shadow", &mut effects.drop_shadow),
+        ("inner_shadow", &mut effects.inner_shadow),
+    ] {
+        let Some(shadow) = shadow else { continue };
+        if !ranges::SHADOW_ANGLE.contains(&shadow.angle) {
+            shadow.angle = crate::document::normalized_degrees(shadow.angle);
+        }
+        check(name, "angle", shadow.angle, ranges::SHADOW_ANGLE)?;
+        check(name, "distance", shadow.distance, ranges::SHADOW_DISTANCE)?;
+        check(name, "blur", shadow.blur, ranges::SHADOW_BLUR)?;
+        check(name, "opacity", shadow.opacity, ranges::OPACITY)?;
+    }
+    if let Some(overlay) = &effects.color_overlay {
+        check("color_overlay", "opacity", overlay.opacity, ranges::OPACITY)?;
+    }
+    for (name, glow) in [
+        ("outer_glow", &effects.outer_glow),
+        ("inner_glow", &effects.inner_glow),
+    ] {
+        let Some(glow) = glow else { continue };
+        check(name, "size", glow.size, ranges::GLOW_SIZE)?;
+        check(name, "opacity", glow.opacity, ranges::OPACITY)?;
+    }
+    Ok(())
+}
+
 /// The ids `"$n"` references are parsed to until [`apply`] resolves them:
 /// "xuan" then zeros and `n`, a version-0 UUID that no layer ever has.
 const REFERENCE: u128 = 0x7875_616e_0000_0000_0000_0000_0000_0000;
@@ -1814,13 +1976,33 @@ fn referenced(id: &Uuid) -> Option<u32> {
 /// Parse the `edits` of a `document/edit` request. Besides layer ids, the
 /// layer fields (`layer`, `above`, `below`, `parent` and the items of
 /// `layers`) may say `"$n"`: the n-th layer (from 1) this request added
-/// before that edit, counted as the answer's `layers` lists them.
+/// before that edit, counted as the answer's `layers` lists them. Each edit
+/// is parsed on its own, so when one of several is wrong the error says
+/// which, as `Edit 3 (stroke): …` like [`apply`].
 pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
-    let mut edits = edits;
-    for edit in edits.as_array_mut().into_iter().flatten() {
-        let Some(edit) = edit.as_object_mut() else {
-            continue;
-        };
+    let Value::Array(edits) = edits else {
+        return Ok(serde_json::from_value(edits)?);
+    };
+    let several = edits.len() > 1;
+    (edits.into_iter().enumerate())
+        .map(|(index, edit)| {
+            let op = (edit.get("op").and_then(Value::as_str))
+                .unwrap_or("no op")
+                .to_owned();
+            parse_edit(edit).map_err(|error| {
+                if several {
+                    anyhow::anyhow!("Edit {} ({op}): {error:#}", index + 1)
+                } else {
+                    error
+                }
+            })
+        })
+        .collect()
+}
+
+/// One edit of [`parse_edits`], with its `"$n"` references read.
+fn parse_edit(mut edit: Value) -> Result<Edit> {
+    if let Some(edit) = edit.as_object_mut() {
         let fields = edit.iter_mut().flat_map(|(key, value)| {
             if key == "layers" {
                 match value {
@@ -1845,7 +2027,7 @@ pub fn parse_edits(edits: Value) -> Result<Vec<Edit>> {
             *field = json!(reference(n));
         }
     }
-    Ok(serde_json::from_value(edits)?)
+    Ok(serde_json::from_value(edit)?)
 }
 
 /// The layer ids an edit names, by reference (`as_ref`, `iter`) or mutably
@@ -1940,7 +2122,9 @@ impl Edit {
 /// Apply a batch, reading its images through `reader`. The caller clones the
 /// document first and only keeps the result when every edit succeeded, so a
 /// failing batch changes nothing. When a batch of several edits fails, the
-/// error says which edit, as `Edit 3 (stroke): …`.
+/// error says which edit, as `Edit 3 (stroke): …`. A reader made
+/// [`Reader::with_notes`] notes what the edits that paint inside the
+/// selection did ([`Note`]).
 pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Result<Vec<Uuid>> {
     let mut at = None;
     apply_each(document, edits, reader, &mut at).map_err(|error| match at {
@@ -2010,12 +2194,7 @@ fn apply_each(
                 if let Some(blend) = blend {
                     layer.blend = *blend;
                 }
-                if let Some(above) = above {
-                    find(document, *above)?;
-                    document.select(*above, false);
-                }
-                added.push(layer.id);
-                document.insert(layer);
+                added.push(insert_above(document, layer, *above)?);
             }
             Edit::ReplacePixels { layer, image, x, y } => {
                 let pixels = reader.rgba(image)?;
@@ -2046,6 +2225,7 @@ fn apply_each(
                 fill,
                 blend,
                 clip_to,
+                effects,
             } => {
                 if let Some(base) = clip_to {
                     let base = clipping_base(document, *layer, *base)?;
@@ -2082,6 +2262,17 @@ fn apply_each(
                 }
                 if let Some(blend) = blend {
                     target.blend = *blend;
+                }
+                if let Some(effects) = effects {
+                    let effects = effects.clone().filter(|effects| !effects.is_empty());
+                    // As the Layer Effects dialog allows; anything can lose its effects.
+                    ensure!(
+                        effects.is_none() || target.can_attach_effects(),
+                        "\"{}\" cannot take layer effects: only pixel, text and shape layers \
+                         can, not groups, masks, adjustment or filter layers",
+                        target.name
+                    );
+                    target.effects = effects;
                 }
             }
             Edit::RemoveLayer { layer } => {
@@ -2233,12 +2424,25 @@ fn apply_each(
                 rotation,
                 pivot,
                 cover,
+                flip_x,
+                flip_y,
             } => {
                 let target = find(document, *layer)?;
                 ensure!(!target.locked, "Layer {} is locked", target.name);
+                let flipped = (target.transform.flip_x, target.transform.flip_y);
                 document.select(*layer, false);
                 let mut transform = crate::operations::transform_box(document, false)
                     .context("The layer cannot be transformed")?;
+                // Flip the box when the layer is not as asked: a layer's box is the layer, and
+                // a group's, its layers' bounds, mirrors them together, as Flip Horizontal does.
+                for (wanted, now, flip) in [
+                    (flip_x, flipped.0, &mut transform.flip_x),
+                    (flip_y, flipped.1, &mut transform.flip_y),
+                ] {
+                    if wanted.is_some_and(|wanted| wanted != now) {
+                        *flip = !*flip;
+                    }
+                }
                 let turned_from = transform.rotation;
                 for (value, field) in [
                     (x, &mut transform.x),
@@ -2408,7 +2612,9 @@ fn apply_each(
                 } else {
                     activate(document, *layer)?;
                 }
+                let watch = reader.watch(document, *mask, None);
                 crate::paint::fill(document, color.0, false, *mask)?;
+                reader.note(document, index, "fill", watch);
             }
             Edit::AddPath { path, name } => {
                 let d = VectorPath::parse(path)?;
@@ -2442,7 +2648,9 @@ fn apply_each(
             } => {
                 let path = VectorPath::parse(path)?;
                 activate(document, *layer)?;
+                let watch = reader.watch(document, false, None);
                 crate::paint::fill_path(document, &path, *fill_rule, color.0)?;
+                reader.note(document, index, "fill_path", watch);
             }
             Edit::Gradient {
                 layer,
@@ -2480,6 +2688,7 @@ fn apply_each(
                 } else {
                     activate(document, *layer)?;
                 }
+                let watch = reader.watch(document, *mask, None);
                 crate::paint::gradient_stops(
                     document,
                     ends[0],
@@ -2491,6 +2700,7 @@ fn apply_each(
                         mask_target: *mask,
                     },
                 )?;
+                reader.note(document, index, "gradient", watch);
             }
             Edit::Stroke {
                 layer,
@@ -2629,6 +2839,7 @@ fn apply_each(
                         (position, brush)
                     })
                     .collect();
+                let watch = reader.watch(document, *mask, Some(&samples[..]));
                 crate::paint::Stroke::default().path(
                     document,
                     &samples,
@@ -2639,16 +2850,21 @@ fn apply_each(
                         clone_offset: Point::default(),
                     },
                 )?;
+                reader.note(document, index, "stroke", watch);
             }
             Edit::ApplyFilter { layer, filter } => {
                 filter.validate()?;
                 activate(document, *layer)?;
+                let watch = reader.watch(document, false, None);
                 crate::effects::apply_filter(document, filter, false)?;
+                reader.note(document, index, "apply_filter", watch);
             }
             Edit::ApplyAdjustment { layer, adjustment } => {
                 check_adjustment(adjustment)?;
                 activate(document, *layer)?;
+                let watch = reader.watch(document, false, None);
                 crate::effects::apply_adjustment(document, adjustment, false)?;
+                reader.note(document, index, "apply_adjustment", watch);
             }
             Edit::AddAdjustmentLayer {
                 adjustment,
@@ -2777,7 +2993,9 @@ fn apply_each(
                     }
                     added.push(insert_above(document, layer, *above)?);
                 } else {
+                    let watch = reader.watch(document, false, None);
                     crate::effects::apply_adjustment(document, &adjustment, false)?;
+                    reader.note(document, index, "auto_adjust", watch);
                 }
             }
             Edit::SetAdjustment {
@@ -3242,14 +3460,23 @@ fn activate_mask(document: &mut Document, layer: Option<Uuid>) -> Result<()> {
     Ok(())
 }
 
-/// Insert a new layer above `above`, or above the active layer.
+/// Insert a new layer directly above `above`, in that layer's group as `move_layer` places
+/// it; or above the active layer, inside it when it is a group, as the Layers panel does.
 fn insert_above(document: &mut Document, layer: Layer, above: Option<Uuid>) -> Result<Uuid> {
+    let mut parent = None;
     if let Some(above) = above {
-        find(document, above)?;
+        let target = find(document, above)?;
+        // `insert` puts a new layer inside a selected group; `above` asks for next to it.
+        if target.group {
+            parent = Some(document.sibling_parent(target));
+        }
         document.select(above, false);
     }
     let id = layer.id;
     document.insert(layer);
+    if let Some(parent) = parent {
+        find_mut(document, id)?.parent = parent;
+    }
     Ok(id)
 }
 
@@ -3438,6 +3665,10 @@ pub fn blend_names() -> Vec<String> {
         })
         .collect()
 }
+
+#[path = "edits_notes.rs"]
+mod notes;
+pub use notes::{Bounds, Note};
 
 #[cfg(test)]
 #[path = "edits_path_tests.rs"]
@@ -3911,6 +4142,7 @@ mod tests {
                     fill: None,
                     blend: None,
                     clip_to: None,
+                    effects: None,
                 },
             ],
         )
@@ -3962,6 +4194,7 @@ mod tests {
                     fill: None,
                     blend: None,
                     clip_to: None,
+                    effects: None,
                 }]
             )
             .is_err()
@@ -4310,6 +4543,180 @@ mod tests {
         }
     }
 
+    /// Apply `edits` as `document/edit` does, keeping notes, and return them.
+    fn noted(document: &mut Document, edits: &[Value]) -> Vec<Note> {
+        let edits = parse_edits(json!(edits)).unwrap();
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS).with_notes();
+        apply(document, &edits, &mut reader).unwrap();
+        reader.take_notes()
+    }
+
+    fn note(edit: usize, op: &'static str, [x, y, width, height]: [u32; 4], changed: bool) -> Note {
+        Note {
+            edit,
+            op,
+            clipped_to_selection: Bounds {
+                x,
+                y,
+                width,
+                height,
+            },
+            changed,
+        }
+    }
+
+    #[test]
+    fn a_stroke_the_selection_keeps_out_is_noted_as_changing_nothing() {
+        let (mut document, base) = grey_document();
+        // As in the editor, the document the request started from still
+        // shares the layer's pixels.
+        let original = document.clone();
+        let select = json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10});
+        let outside =
+            json!({"op": "stroke", "points": [[20, 20], [36, 26]], "size": 4, "color": "#ff0000"});
+        let across =
+            json!({"op": "stroke", "points": [[5, 5], [30, 5]], "size": 4, "color": "#ff0000"});
+        // Entirely outside: noted, the layer unchanged.
+        let notes = noted(&mut document, &[select.clone(), outside.clone()]);
+        assert_eq!(notes, [note(2, "stroke", [0, 0, 10, 10], false)]);
+        assert_eq!(document.layers[0].pixels, original.layers[0].pixels);
+        // Partly inside: clipped, and changed. A stroke outside after it, on
+        // pixels this request already copied, still changed nothing.
+        let notes = noted(&mut document, &[across, outside.clone()]);
+        assert_eq!(
+            notes,
+            [
+                note(1, "stroke", [0, 0, 10, 10], true),
+                note(2, "stroke", [0, 0, 10, 10], false),
+            ]
+        );
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        assert_eq!(pixels.get_pixel(5, 5).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(20, 5).0, [100, 100, 100, 255]);
+        // Without a selection there are no notes, and none unless asked for.
+        let notes = noted(
+            &mut document,
+            &[json!({"op": "set_selection"}), outside.clone()],
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS);
+        let edits = [edit(select), edit(outside)];
+        apply(&mut document, &edits, &mut reader).unwrap();
+        assert!(reader.take_notes().is_empty());
+        assert_eq!(document.active, Some(base));
+    }
+
+    #[test]
+    fn notes_follow_a_turned_flipped_scaled_layer_as_strokes_grow_it() {
+        for shared in [false, true] {
+            // A 20 × 10 grey layer stretched to 40 × 20, turned a quarter and
+            // flipped: in the document it covers x 30–50, y 10–50.
+            let mut document = Document::new(80, 60).unwrap();
+            document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+                20,
+                10,
+                image::Rgba([100, 100, 100, 255]),
+            )));
+            document.layers[0].transform = Transform {
+                x: 20.0,
+                y: 20.0,
+                width: 40.0,
+                height: 20.0,
+                rotation: 90.0,
+                flip_x: true,
+                ..Transform::new(20, 10)
+            };
+            let original = shared.then(|| document.clone());
+            let stroke = |from: [f32; 2], to: [f32; 2], color: &str| json!({"op": "stroke", "points": [from, to], "size": 4, "hardness": 1, "color": color});
+            let notes = noted(
+                &mut document,
+                &[
+                    json!({"op": "select_rect", "x": 0, "y": 0, "width": 80, "height": 30}),
+                    // Grey over grey inside the selection; below the layer, where
+                    // it grows, the selection keeps the stroke out.
+                    stroke([40.0, 20.0], [40.0, 58.0], "#646464"),
+                    stroke([40.0, 20.0], [40.0, 58.0], "#ff0000"),
+                    // Beside the layer and just below the selection: the layer
+                    // grows, the selection's edge is compared, nothing there changes.
+                    stroke([55.0, 33.5], [75.0, 33.5], "#ff0000"),
+                    // Beside the layer and inside the selection: painted where it grew.
+                    stroke([60.0, 5.0], [75.0, 5.0], "#ff0000"),
+                ],
+            );
+            let top = [0, 0, 80, 30];
+            assert_eq!(
+                notes,
+                [
+                    note(2, "stroke", top, false),
+                    note(3, "stroke", top, true),
+                    note(4, "stroke", top, false),
+                    note(5, "stroke", top, true),
+                ],
+                "shared: {shared}"
+            );
+            let pixels = document.layers[0].pixels.as_ref().unwrap();
+            assert!(
+                pixels.width() > 20 && pixels.height() > 10,
+                "the layer grew"
+            );
+            drop(original);
+        }
+    }
+
+    #[test]
+    fn notes_follow_fills_masks_filters_and_layers_that_grow() {
+        let (mut document, base) = grey_document();
+        let notes = noted(
+            &mut document,
+            &[
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10}),
+                // Grey on grey changes nothing, even where it grows the layer
+                // past the canvas (outside the selection).
+                json!({"op": "stroke", "points": [[1, 1]], "size": 6, "hardness": 1, "color": "#646464"}),
+                json!({"op": "stroke", "points": [[1, 1]], "size": 6, "hardness": 1, "color": "#ffffff"}),
+                json!({"op": "fill_path", "path": "M 20 20 H 30 V 28 H 20 Z", "color": "#ff0000"}),
+                json!({"op": "gradient", "start": [0, 0], "end": [40, 0], "stops": [
+                    {"position": 0, "color": "#000000"}, {"position": 1, "color": "#ffffff"}]}),
+                // A new mask is white: filling it white changes nothing.
+                json!({"op": "fill", "layer": base, "color": "#ffffff", "mask": true}),
+                json!({"op": "fill", "layer": base, "color": "#000000", "mask": true}),
+                json!({"op": "apply_adjustment", "layer": base, "adjustment": "Invert"}),
+                // Inverting, blurring or auto-toning nothing but transparent
+                // pixels changes nothing.
+                json!({"op": "add_empty_layer"}),
+                json!({"op": "apply_adjustment", "layer": "$1", "adjustment": "Invert"}),
+                json!({"op": "apply_filter", "layer": "$1", "filter": {"GaussianBlur": {"radius": 2}}}),
+                json!({"op": "auto_adjust", "kind": "tone", "layer": "$1"}),
+                // A small layer away from the selection grows to hold a stroke.
+                json!({"op": "add_shape_layer", "shape": "Rectangle", "x": 20, "y": 20, "width": 10, "height": 5}),
+                json!({"op": "stroke", "layer": "$2", "points": [[25, 22], [38, 28]], "size": 4}),
+                json!({"op": "stroke", "layer": "$2", "points": [[3, 3]], "size": 4}),
+                // An empty selection lets nothing through.
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10, "mode": "subtract"}),
+                json!({"op": "fill", "layer": base, "color": "#00ff00"}),
+            ],
+        );
+        let square = [0, 0, 10, 10];
+        assert_eq!(
+            notes,
+            [
+                note(2, "stroke", square, false),
+                note(3, "stroke", square, true),
+                note(4, "fill_path", square, false),
+                note(5, "gradient", square, true),
+                note(6, "fill", square, false),
+                note(7, "fill", square, true),
+                note(8, "apply_adjustment", square, true),
+                note(10, "apply_adjustment", square, false),
+                note(11, "apply_filter", square, false),
+                note(12, "auto_adjust", square, false),
+                note(14, "stroke", square, false),
+                note(15, "stroke", square, true),
+                note(17, "fill", [0; 4], false),
+            ]
+        );
+    }
+
     /// Upstream Compositor's filters as plugins and MCP's `apply_filter` send them: the same
     /// JSON as `.xuan` files, Dither's settings with upstream's defaults for what is left out.
     #[test]
@@ -4530,6 +4937,22 @@ mod tests {
                 "{bad}: {error:#}"
             );
         }
+        // A wrong value in one of several edits names that edit too.
+        let error = parse_edits(json!([
+            {"op": "add_empty_layer"},
+            {"op": "gradient", "start": {"item": [0, 0]}, "end": [0, 1],
+             "stops": [{"position": 0, "color": "#000000"}, {"position": 1, "color": "#ffffff"}]},
+        ]))
+        .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.starts_with("Edit 2 (gradient): "), "{error}");
+        let error =
+            parse_edits(json!([{"op": "add_empty_layer"}, {"op": "select", "layer": "$x"}]))
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").starts_with("Edit 2 (select): `$x` is not"),
+            "{error:#}"
+        );
         // Text is never taken for a reference; a single failing edit is
         // reported as before, without an edit number.
         let text = parse_edits(json!([{"op": "add_text_layer", "text": "$1"}])).unwrap();
@@ -4748,6 +5171,61 @@ mod tests {
         // New layers count against the batch's layer limit.
         let empty = edit(json!({"op": "add_empty_layer"}));
         assert!(run(&mut document.clone(), &vec![empty; MAX_LAYERS + 1]).is_err());
+    }
+
+    #[test]
+    fn new_layers_above_a_group_go_next_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = png(dir.path(), "red.png", [255, 0, 0, 255], 4);
+        let (mut document, base) = grey_document();
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [base]}))],
+        )
+        .unwrap()[0];
+        let layer = |document: &Document, id: Uuid| {
+            document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .cloned()
+                .unwrap()
+        };
+        let index = |document: &Document, id: Uuid| {
+            document.layers.iter().position(|l| l.id == id).unwrap()
+        };
+        for op in [
+            json!({"op": "add_empty_layer", "above": group}),
+            json!({"op": "add_mask_layer", "above": group}),
+            json!({"op": "add_text_layer", "text": "A", "above": group}),
+            json!({"op": "add_shape_layer", "shape": "Rectangle", "x": 0, "y": 0, "width": 4, "height": 4, "color": "#ff0000", "above": group}),
+            json!({"op": "add_adjustment_layer", "adjustment": "Invert", "above": group}),
+            json!({"op": "auto_adjust", "kind": "contrast", "as_layer": true, "above": group}),
+            json!({"op": "add_layer", "image": image, "above": group}),
+        ] {
+            let mut document = document.clone();
+            let id = run(&mut document, &[edit(op.clone())]).unwrap()[0];
+            assert_eq!(layer(&document, id).parent, None, "{op}");
+            assert_eq!(index(&document, id), index(&document, group) + 1, "{op}");
+            document.validate().unwrap();
+        }
+        // In a nested group, it lands in the outer group.
+        let outer = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [group]}))],
+        )
+        .unwrap()[0];
+        let id = run(
+            &mut document,
+            &[edit(json!({"op": "add_empty_layer", "above": group}))],
+        )
+        .unwrap()[0];
+        assert_eq!(layer(&document, id).parent, Some(outer));
+        assert_eq!(index(&document, id), index(&document, group) + 1);
+        // Without `above`, a selected group still takes it, as in the Layers panel.
+        document.select(group, false);
+        let id = run(&mut document, &[edit(json!({"op": "add_empty_layer"}))]).unwrap()[0];
+        assert_eq!(layer(&document, id).parent, Some(group));
     }
 
     #[test]
@@ -6044,6 +6522,294 @@ mod tests {
         )
         .unwrap();
         assert!(covered(&document));
+    }
+
+    #[test]
+    fn layer_effects_are_reported_and_set_whole_in_the_shape_files_store() {
+        let mut document = Document::new(40, 30).unwrap();
+        let square = run(
+            &mut document,
+            &[edit(json!({
+                "op": "add_shape_layer", "shape": "Rectangle", "x": 15, "y": 10,
+                "width": 10, "height": 10, "color": "#ff0000",
+            }))],
+        )
+        .unwrap()[0];
+        let set = |document: &mut Document, effects: Value| {
+            run(
+                document,
+                &[edit(
+                    json!({"op": "set", "layer": square, "effects": effects}),
+                )],
+            )
+        };
+        let effects = |document: &Document| described(document, square)["effects"].clone();
+        // Alpha a few pixels left of the square, and in a far corner.
+        let around = |document: &Document| {
+            let shown = crate::render::render(document);
+            (shown.get_pixel(12, 15).0[3], shown.get_pixel(0, 0).0[3])
+        };
+        assert_eq!(effects(&document), Value::Null);
+        assert_eq!(around(&document), (0, 0));
+
+        // Settings left out take those of a new effect; the layer reports them all.
+        let glow = json!({"outer_glow": {"size": 6, "color": [255, 217, 120], "opacity": 0.75}});
+        set(&mut document, glow.clone()).unwrap();
+        let reported = effects(&document);
+        assert_eq!(
+            reported,
+            json!({"outer_glow": {"enabled": true, "size": 6.0, "color": [255, 217, 120], "opacity": 0.75}})
+        );
+        let (near, far) = around(&document);
+        assert!(near > 0, "the glow shows around the layer");
+        assert_eq!(far, 0);
+
+        // What is reported goes back unchanged; a changed copy replaces the whole set.
+        let before = document
+            .layers
+            .iter()
+            .find(|l| l.id == square)
+            .unwrap()
+            .effects
+            .clone();
+        set(&mut document, reported.clone()).unwrap();
+        let layer = document.layers.iter().find(|l| l.id == square).unwrap();
+        assert_eq!(layer.effects, before);
+        let mut changed = reported;
+        changed["outer_glow"]["size"] = json!(8);
+        changed["drop_shadow"] = json!({"distance": 4});
+        set(&mut document, changed).unwrap();
+        assert_eq!(effects(&document)["outer_glow"]["size"], 8.0);
+        assert_eq!(
+            effects(&document)["drop_shadow"],
+            json!({"enabled": true, "angle": 90.0, "distance": 4.0, "blur": 20.0, "color": [0, 0, 0], "opacity": 0.5})
+        );
+        // Each effect starts from its own defaults, and the set replaces what was there.
+        set(&mut document, json!({"inner_shadow": {}, "stroke": null})).unwrap();
+        assert_eq!(
+            effects(&document),
+            json!({"inner_shadow": {"enabled": true, "angle": 90.0, "distance": 10.0, "blur": 10.0, "color": [0, 0, 0], "opacity": 0.5}})
+        );
+
+        // A hidden effect keeps its settings and draws nothing; null or {} removes them all.
+        set(
+            &mut document,
+            json!({"outer_glow": {"size": 6, "enabled": false}}),
+        )
+        .unwrap();
+        assert_eq!(effects(&document)["outer_glow"]["enabled"], false);
+        assert_eq!(around(&document), (0, 0));
+        for removed in [Value::Null, json!({})] {
+            set(&mut document, glow.clone()).unwrap();
+            set(&mut document, removed).unwrap();
+            assert_eq!(effects(&document), Value::Null);
+            let layer = document.layers.iter().find(|l| l.id == square).unwrap();
+            assert_eq!(layer.effects, None);
+        }
+
+        // Mistakes are refused with what to send instead, before anything changes.
+        for (bad, says) in [
+            (json!({"OuterGlow": {"size": 24}}), "not a layer effect"),
+            (json!({"outer_glow": {"radius": 24}}), "no setting `radius`"),
+            (json!({"outer_glow": {"color": "#ffd978"}}), "[r, g, b]"),
+            // Held to what the Layer Effects dialog offers, which would change anything else.
+            (
+                json!({"outer_glow": {"size": 400}}),
+                "`outer_glow` `size` must be a whole number from 0 to 250, as Layer Effects offers, not 400",
+            ),
+            (
+                json!({"inner_glow": {"size": 251}}),
+                "`inner_glow` `size` must be a whole number from 0 to 250",
+            ),
+            (
+                json!({"drop_shadow": {"distance": 3000}}),
+                "`drop_shadow` `distance` must be a whole number from 0 to 1000",
+            ),
+            (
+                json!({"inner_shadow": {"blur": 400}}),
+                "`inner_shadow` `blur` must be a whole number from 0 to 250",
+            ),
+            (
+                json!({"stroke": {"size": 0}}),
+                "`stroke` `size` must be a whole number from 1 to 500",
+            ),
+            (
+                json!({"drop_shadow": {"opacity": 2}}),
+                "`drop_shadow` `opacity` must be from 0 to 1",
+            ),
+            // The dialog shows these as whole numbers and would round them.
+            (
+                json!({"drop_shadow": {"blur": 12.25}}),
+                "`drop_shadow` `blur` must be a whole number from 0 to 250, as Layer Effects offers, not 12.25",
+            ),
+            (
+                json!({"inner_shadow": {"angle": 37.5}}),
+                "`inner_shadow` `angle` must be a whole number from -180 to 180",
+            ),
+            (
+                json!({"outer_glow": {"size": 0.75}}),
+                "`outer_glow` `size` must be a whole number",
+            ),
+            (
+                json!({"color_overlay": {"opacity": -0.5}}),
+                "`color_overlay` `opacity` must be from 0 to 1",
+            ),
+            (json!({"stroke": 4}), "object of its settings"),
+            (json!([{"outer_glow": {}}]), "an object such as"),
+            (
+                json!({"outer_glow": {"size": "big"}}),
+                "Invalid layer effects",
+            ),
+        ] {
+            let error = parse_edits(json!([{"op": "set", "layer": square, "effects": bad}]))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(says), "{bad}: {error}");
+        }
+        // A light angle past the dialog's −180–180 is the same angle a whole turn round.
+        for (sent, kept) in [
+            (270.0, -90.0),
+            (-270.0, 90.0),
+            (540.0, 180.0),
+            (-180.0, -180.0),
+            (725.0, 5.0),
+        ] {
+            set(
+                &mut document,
+                json!({"drop_shadow": {"angle": sent}, "inner_shadow": {"angle": sent}}),
+            )
+            .unwrap();
+            for shadow in ["drop_shadow", "inner_shadow"] {
+                assert_eq!(effects(&document)[shadow]["angle"], kept, "{sent}");
+            }
+        }
+        // Groups, masks, adjustment and filter layers take none, though null is harmless.
+        let invert = run(
+            &mut document,
+            &[edit(
+                json!({"op": "add_adjustment_layer", "adjustment": "Invert"}),
+            )],
+        )
+        .unwrap()[0];
+        let on = |layer, effects| edit(json!({"op": "set", "layer": layer, "effects": effects}));
+        let error = run(&mut document.clone(), &[on(invert, glow)]).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot take layer effects"),
+            "{error}"
+        );
+        run(&mut document, &[on(invert, Value::Null)]).unwrap();
+    }
+
+    #[test]
+    fn transform_sets_flips_about_the_layer_or_mirrors_a_group_as_one() {
+        let (mut document, base) = grey_document();
+        let mut pixels = (**document.layers[0].pixels.as_ref().unwrap()).clone();
+        for y in 0..30 {
+            pixels.put_pixel(0, y, image::Rgba([255, 0, 0, 255]));
+        }
+        document.layers[0].pixels = Some(Arc::new(pixels));
+        let flips = |document: &Document, id| {
+            let layer = described(document, id);
+            (layer["flip_x"].clone(), layer["flip_y"].clone())
+        };
+        let placed = |document: &Document, id| {
+            let t = document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .unwrap()
+                .transform;
+            (t.x, t.y, t.width, t.height, t.warp)
+        };
+        let before = placed(&document, base);
+
+        // A layer flips about its own centre, and the flips are absolute.
+        for (sent, expected) in [
+            (json!({"flip_x": true}), (json!(true), json!(false))),
+            (json!({"flip_x": true}), (json!(true), json!(false))),
+            (json!({"flip_y": true}), (json!(true), json!(true))),
+            (
+                json!({"flip_x": false, "flip_y": false}),
+                (json!(false), json!(false)),
+            ),
+            (json!({"flip_x": false}), (json!(false), json!(false))),
+        ] {
+            let mut op = json!({"op": "transform", "layer": base});
+            op.as_object_mut()
+                .unwrap()
+                .extend(sent.as_object().unwrap().clone());
+            run(&mut document, &[edit(op)]).unwrap();
+            assert_eq!(flips(&document, base), expected, "{sent}");
+            assert_eq!(placed(&document, base), before, "{sent}");
+        }
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": base, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        let shown = crate::render::render(&document);
+        assert_eq!(shown.get_pixel(39, 10).0, [255, 0, 0, 255]);
+        assert_eq!(shown.get_pixel(0, 10).0, [100, 100, 100, 255]);
+
+        // A group mirrors as a whole, its layers trading places and each reporting the flip.
+        let shape = |x: f32| {
+            edit(json!({
+                "op": "add_shape_layer", "shape": "Rectangle", "x": x, "y": 4,
+                "width": 10, "height": 6, "color": "#0000ff",
+            }))
+        };
+        let added = run(&mut document, &[shape(2.0), shape(20.0)]).unwrap();
+        let (left, right) = (added[0], added[1]);
+        let group = run(
+            &mut document,
+            &[edit(json!({"op": "group_layers", "layers": [left, right]}))],
+        )
+        .unwrap()[0];
+        let (left_before, right_before) = (placed(&document, left), placed(&document, right));
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        for id in [group, left, right] {
+            assert_eq!(flips(&document, id), (json!(true), json!(false)));
+        }
+        let x = |document: &Document, id| placed(document, id).0;
+        assert!((x(&document, left) - 20.0).abs() < 0.001);
+        assert!((x(&document, right) - 2.0).abs() < 0.001);
+        assert_eq!(placed(&document, left).4, None, "no warp");
+        // Asked again, the group is already flipped; asked back, it returns.
+        let flipped = document.clone();
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": true}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(placed(&document, left), placed(&flipped, left));
+        run(
+            &mut document,
+            &[edit(
+                json!({"op": "transform", "layer": group, "flip_x": false}),
+            )],
+        )
+        .unwrap();
+        for (id, before) in [(left, left_before), (right, right_before)] {
+            assert_eq!(flips(&document, id), (json!(false), json!(false)));
+            let now = placed(&document, id);
+            assert!((now.0 - before.0).abs() < 0.001 && (now.1 - before.1).abs() < 0.001);
+        }
+        assert!(
+            serde_json::from_value::<Edit>(
+                json!({"op": "transform", "layer": base, "flip_x": "yes"})
+            )
+            .is_err()
+        );
     }
 
     #[test]

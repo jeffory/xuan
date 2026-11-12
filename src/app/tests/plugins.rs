@@ -2273,6 +2273,68 @@ fn a_gradient_edit_is_one_undo_step() {
 }
 
 #[test]
+fn edits_say_when_the_selection_clipped_them_or_let_nothing_through() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("fill_fg");
+    let pixels = |app: &EditorApp| app.session().unwrap().document.layers[0].pixels.clone();
+    let before = pixels(&app);
+    assert!(before.is_some());
+    let stroke = |points| json!({"op": "stroke", "points": points, "size": 4, "color": "#ff0000"});
+    let clipped = |edit, changed| {
+        json!({"edit": edit, "op": "stroke", "changed": changed,
+               "clipped_to_selection": {"x": 0, "y": 0, "width": 8, "height": 8}})
+    };
+    // A stroke the selection keeps out entirely: applied, but it changed nothing.
+    let answer = plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"name": "Rings", "edits": [
+            {"op": "select_rect", "x": 0, "y": 0, "width": 8, "height": 8},
+            stroke(json!([[16, 16], [28, 20]])),
+        ]}),
+    )
+    .unwrap();
+    assert_eq!(
+        answer,
+        json!({"ok": true, "layers": [], "notes": [clipped(2, false)]})
+    );
+    assert_eq!(pixels(&app), before);
+    assert_eq!(
+        app.session().unwrap().history.undo_name(),
+        Some("Rings"),
+        "still one undo step"
+    );
+    // The selection stays for the next request: a stroke across it paints
+    // only inside.
+    let answer = plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"edits": [stroke(json!([[2, 4], [28, 4]]))]}),
+    )
+    .unwrap();
+    assert_eq!(answer["notes"], json!([clipped(1, true)]));
+    let after = pixels(&app).unwrap();
+    assert_eq!(after.get_pixel(4, 4).0, [255, 0, 0, 255]);
+    assert_eq!(
+        after.get_pixel(20, 4).0,
+        before.as_ref().unwrap().get_pixel(20, 4).0
+    );
+    // Without a selection the answer is as before.
+    let answer = plugin_request(
+        &mut app,
+        "document/edit",
+        json!({"edits": [{"op": "set_selection"}, stroke(json!([[20, 20]]))]}),
+    )
+    .unwrap();
+    assert_eq!(answer, json!({"ok": true, "layers": []}));
+}
+
+#[test]
 fn edits_name_layers_the_request_added_and_fail_as_a_whole() {
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();
@@ -2657,6 +2719,24 @@ fn host_run_picks_its_layers_and_reports_what_it_added_and_started() {
         (&flipped["flip_x"], &flipped["flip_y"]),
         (&json!(true), &json!(false))
     );
+    // Several layers flip together, as one step, and each reports its own flip.
+    let steps = app.session().unwrap().history.names().count();
+    plugin_request(
+        &mut app,
+        "host/run",
+        json!({"action": "flip_h", "layers": [base, copies[0]]}),
+    )
+    .unwrap();
+    assert_eq!(app.session().unwrap().history.names().count(), steps + 1);
+    for (id, flip_x) in [(base, false), (copies[0], true)] {
+        let layer = describe(&mut app, id);
+        assert_eq!(
+            (&layer["flip_x"], &layer["x"]),
+            (&json!(flip_x), &json!(0.0))
+        );
+    }
+    let document = &app.session().unwrap().document;
+    assert!(document.layers.iter().all(|l| l.transform.warp.is_none()));
 
     // A mask attached to the image is reported on it and exported through it.
     let answer = plugin_request(
@@ -7435,4 +7515,25 @@ fn headless_file_requests_follow_allow_files() {
     app.new_document();
     app.queue_file_request("mock", save());
     assert_eq!(app.plugins.file_requests.len(), 1);
+}
+
+#[test]
+fn host_run_mask_keeps_the_plugins_colours() {
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let (_context, mut app) = app();
+    install_mock(&mut app, dir.path());
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.brush.color = [200, 10, 30, 255];
+    app.background = [5, 90, 160, 255];
+    for action in ["mask", "new_mask_layer"] {
+        plugin_request(&mut app, "host/run", json!({"action": action})).unwrap();
+        assert_eq!(app.brush.color, [200, 10, 30, 255], "{action}");
+        assert_eq!(app.background, [5, 90, 160, 255], "{action}");
+    }
+    // The menu item still switches to white and black for painting the mask.
+    app.run_command("mask");
+    assert_eq!(app.brush.color, [255; 4]);
+    assert_eq!(app.background, [0, 0, 0, 255]);
 }
