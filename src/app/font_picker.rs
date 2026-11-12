@@ -20,12 +20,19 @@ pub(super) struct FontPicker {
     pixels_per_point: f32,
 }
 
+/// Whether the font list offers `family`. macOS names its private system fonts with a leading
+/// dot (".SF NS"); they are not meant to be picked, so the list leaves them out. The renderer
+/// still knows them, so text that already names one keeps drawing in it.
+fn listed(family: &str) -> bool {
+    !family.starts_with('.')
+}
+
 impl FontPicker {
     fn matching_families(&self, families: &[String]) -> Vec<String> {
         let filter = self.filter.to_lowercase();
         families
             .iter()
-            .filter(|name| name.to_lowercase().contains(&filter))
+            .filter(|name| listed(name) && name.to_lowercase().contains(&filter))
             .cloned()
             .collect()
     }
@@ -223,6 +230,49 @@ impl FontPicker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// macOS's dot-named system fonts are neither listed nor found by searching, and the
+    /// arrow keys skip them (issue 130).
+    #[test]
+    fn hidden_system_families_are_left_out_of_the_list() {
+        let families: Vec<String> = [".SF NS", ".SF NS Mono", "Arial", "Helvetica Neue"]
+            .map(String::from)
+            .into();
+        let mut picker = FontPicker::default();
+        assert_eq!(
+            picker.matching_families(&families),
+            ["Arial", "Helvetica Neue"]
+        );
+        for search in [".", ".sf", "sf ns"] {
+            picker.filter = search.into();
+            assert!(picker.matching_families(&families).is_empty(), "{search}");
+        }
+        // Only a leading dot hides a family.
+        let dotted: Vec<String> = vec!["Dr. Sans".into()];
+        picker.filter = "dr.".into();
+        assert_eq!(picker.matching_families(&dotted), dotted);
+
+        let ctx = Context::default();
+        let id = Id::new("font_picker_test");
+        picker.popup_id = Some(id);
+        picker.filter.clear();
+        Popup::open_id(&ctx, id);
+        let mut selected = ".SF NS".to_owned();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: Key::ArrowDown,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| picker.handle_keys(ctx, &families, &mut selected),
+        );
+        assert_eq!(selected, "Arial");
+    }
 
     #[test]
     fn visible_options_use_font_rasters_and_cache_at_display_resolution() {
