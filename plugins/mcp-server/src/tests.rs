@@ -3544,6 +3544,62 @@ fn auto_adjust_sends_its_kind_and_where_to_measure() {
 }
 
 #[test]
+fn create_image_layer_says_it_takes_base64_when_given_a_file_path() {
+    let editor = FakeEditor::new(false);
+    for path in [
+        "/tmp/opencode/art/wanderer.png",
+        "~/Pictures/moon.webp",
+        "C:\\Users\\me\\art.png",
+        "D:/renders/glow.JPG",
+        "./layer.png",
+        "../out/frame",
+        "file:///tmp/a.png",
+        "wanderer.png",
+        "/tmp/renders/frame-01",
+    ] {
+        let result = call_tool(&editor, "create_image_layer", json!({"png_base64": path}));
+        assert_eq!(result.is_error, Some(true), "{path}");
+        let text = text_of(&result);
+        assert!(
+            text.contains("encoded as base64, not a file path")
+                && text.contains("cannot read files"),
+            "{path}: {text}"
+        );
+    }
+    // Other mistakes keep their own answers; base64 of a JPEG starts with a slash too.
+    for (sent, says) in [
+        ("not base64 at all!", "is not base64"),
+        ("/9j/4AAQSkZJRgABAQ==", "is not a PNG"),
+        ("bm90IGEgcG5n", "is not a PNG"),
+    ] {
+        let result = call_tool(&editor, "create_image_layer", json!({"png_base64": sent}));
+        assert_eq!(result.is_error, Some(true), "{sent}");
+        let text = text_of(&result);
+        assert!(
+            text.contains(says) && !text.contains("file path"),
+            "{sent}: {text}"
+        );
+    }
+    assert!(edit_requests(&editor).is_empty(), "nothing was sent");
+    let result = call_tool(&editor, "create_image_layer", json!({"png_base64": PNG}));
+    assert_ne!(result.is_error, Some(true), "{}", text_of(&result));
+
+    let tools = tools::list();
+    let tool = tools
+        .iter()
+        .find(|t| t.name == "create_image_layer")
+        .unwrap();
+    assert!(
+        tool.description
+            .as_deref()
+            .unwrap()
+            .contains("(not a file path")
+    );
+    let png = &tool.input_schema["properties"]["png_base64"]["description"];
+    assert!(png.as_str().unwrap().contains("not a file path"), "{png}");
+}
+
+#[test]
 fn set_layer_sets_flips_with_the_placement_and_run_command_says_layers_flip_together() {
     let editor = FakeEditor::new(false);
     let layer = "11111111-1111-1111-1111-111111111111";

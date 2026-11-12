@@ -273,7 +273,7 @@ larger tool arguments with a tool error saying the request is too large.
 | `create_layer` | An empty layer or a mask layer from the selection | `add_empty_layer`, `add_mask_layer` |
 | `create_text_layer` | Editable text in a box, or with `path` along an SVG path | `add_text_layer` |
 | `create_shape_layer` | Rectangle, ellipse or rounded rectangle; or with `shape: "path"` an editable vector shape from SVG path data | `add_shape_layer` |
-| `create_image_layer` | A PNG the client sends (base64) | `add_layer` |
+| `create_image_layer` | A PNG the client sends (its bytes as base64, not a file path: the tool cannot read files) | `add_layer` |
 | `delete_layer` | Delete a layer or group | `remove_layer` |
 | `merge_layers`, `group_layers`, `ungroup_layer` | Merge, group, ungroup | `merge_layers`, `group_layers`, `ungroup_layers` |
 | `move_layer` | Move a layer above or below another, or into a group | `move_layer` |
