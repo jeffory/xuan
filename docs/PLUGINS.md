@@ -1218,6 +1218,11 @@ bottom to top. `layer` is the layer that holds the mask: select it to run
 Out-of-range filter and adjustment settings are refused with the field and
 its range, such as `` `Grain.amount` must be between 0 and 100, not 120 ``.
 
+In the edits below that add a layer, `above` puts the new layer directly
+above that layer, in that layer's group, so above a group it lands next to
+the group, not inside it. Without `above`, it goes above the active layer, or
+at the top of the active group.
+
 `document/edit` edits, applied together as one undo step named `name`:
 
 - `{"op": "add_layer", "image": path, "name"?, "x"?, "y"?, "mask"?, "above"?, "opacity"?, "blend"?}`
