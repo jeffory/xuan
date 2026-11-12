@@ -184,26 +184,90 @@ pub fn translate(mask: &GrayImage, dx: i32, dy: i32) -> GrayImage {
     translated
 }
 
+/// The box of the mask's nonzero pixels, `(x0, y0, x1, y1)` with the ends
+/// excluded. Each row is read from both ends, sixteen bytes at a time, and
+/// only as far as its first and last nonzero pixel.
 pub fn bounds(mask: &GrayImage) -> Option<(u32, u32, u32, u32)> {
-    let mut min_x = mask.width();
-    let mut min_y = mask.height();
-    let mut max_x = 0;
-    let mut max_y = 0;
-    for (x, y, p) in mask.enumerate_pixels() {
-        if p[0] > 0 {
-            min_x = min_x.min(x);
-            min_y = min_y.min(y);
-            max_x = max_x.max(x);
-            max_y = max_y.max(y);
-        }
+    let width = mask.width() as usize;
+    if width == 0 {
+        return None;
     }
-    (min_x <= max_x && min_y <= max_y).then_some((min_x, min_y, max_x + 1, max_y + 1))
+    let (mut left, mut right) = (width, 0);
+    let (mut top, mut bottom) = (None, 0);
+    for (y, row) in mask.as_raw().chunks_exact(width).enumerate() {
+        let (Some(first), Some(last)) = (first_set(row), last_set(row)) else {
+            continue;
+        };
+        top.get_or_insert(y);
+        bottom = y + 1;
+        left = left.min(first);
+        right = right.max(last + 1);
+    }
+    top.map(|top| (left as u32, top as u32, right as u32, bottom as u32))
+}
+
+/// Where the first nonzero byte of `row` is.
+fn first_set(row: &[u8]) -> Option<usize> {
+    let (chunks, rest) = row.as_chunks::<16>();
+    match chunks.iter().position(|chunk| *chunk != [0; 16]) {
+        Some(i) => (chunks[i].iter().position(|&v| v != 0)).map(|j| i * 16 + j),
+        None => (rest.iter().position(|&v| v != 0)).map(|j| chunks.len() * 16 + j),
+    }
+}
+
+/// Where the last nonzero byte of `row` is.
+fn last_set(row: &[u8]) -> Option<usize> {
+    let (chunks, rest) = row.as_chunks::<16>();
+    if let Some(j) = rest.iter().rposition(|&v| v != 0) {
+        return Some(chunks.len() * 16 + j);
+    }
+    let i = chunks.iter().rposition(|chunk| *chunk != [0; 16])?;
+    (chunks[i].iter().rposition(|&v| v != 0)).map(|j| i * 16 + j)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    fn bounds_match_a_pixel_by_pixel_scan() {
+        let reference = |mask: &GrayImage| {
+            let set: Vec<(u32, u32)> = (mask.enumerate_pixels())
+                .filter(|(.., p)| p[0] > 0)
+                .map(|(x, y, _)| (x, y))
+                .collect();
+            let x0 = set.iter().map(|p| p.0).min()?;
+            let y0 = set.iter().map(|p| p.1).min()?;
+            let x1 = set.iter().map(|p| p.0).max()? + 1;
+            let y1 = set.iter().map(|p| p.1).max()? + 1;
+            Some((x0, y0, x1, y1))
+        };
+        let mut state = 7_u32;
+        let mut next = |limit: u32| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) % limit
+        };
+        // Widths around the 16-byte steps, empty, single-pixel and scattered masks.
+        for width in [1, 15, 16, 17, 31, 33, 50] {
+            for case in 0..40 {
+                let height = 1 + next(20);
+                let mut mask = GrayImage::new(width, height);
+                for _ in 0..case % 6 {
+                    let (x, y) = (next(width), next(height));
+                    mask.put_pixel(x, y, Luma([1 + next(255) as u8]));
+                }
+                assert_eq!(
+                    bounds(&mask),
+                    reference(&mask),
+                    "{width}×{height} case {case}"
+                );
+            }
+        }
+        assert_eq!(bounds(&GrayImage::new(0, 0)), None);
+        let full = GrayImage::from_pixel(40, 30, Luma([255]));
+        assert_eq!(bounds(&full), Some((0, 0, 40, 30)));
+    }
 
     #[test]
     fn scanline_lasso_matches_pixel_reference_for_concave_and_crossing_paths() {

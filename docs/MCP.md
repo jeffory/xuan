@@ -258,6 +258,27 @@ like the existing ones, rather than anything specific to MCP:
   references through untouched. When a request of several edits fails, Xuan
   names the edit (`Edit 3 (stroke): …`), which the server maps back to the
   step.
+- **Selections that clip paint** (#135). An agent that forgot a selection an
+  earlier step made painted three batches of rings outside it, was answered
+  `ok: true` each time, and blamed the SVG arcs of its paths. While a selection
+  is active, `document/edit` now adds `notes` for the edits that paint inside
+  it (`fill`, `fill_path`, `gradient`, `stroke`, and `apply_filter`,
+  `apply_adjustment` and `auto_adjust` on pixels): the selection's bounds and
+  whether the edit changed any pixel. Xuan compares only the pixels the edit
+  can reach: those inside the selection's bounds and, for a stroke, within its
+  brush's reach of its points (with scatter and every symmetric copy). The
+  pixels from before cost nothing while the document the request started from
+  still shares them, the first edit of each layer in a request; for a later
+  edit of the same layer only that part is copied. So a stroke's check costs
+  about as much as the stroke, however large the selection, while a fill,
+  filter or adjustment, which visits the whole layer anyway, may copy and
+  compare the selection's whole rectangle. The server passes the notes on: a
+  tool's answer gains `clipped_to_selection` and `changed`, a batch's `notes`
+  name each step that ran inside the selection, and a step (or some of a
+  tool's strokes) that changed nothing gets a plain warning before the JSON,
+  saying how to clear the selection. Nothing is refused and the selection is
+  never cleared for the agent: painting inside a selection is how agents mask
+  fills and strokes on purpose.
 - **Letters in their own font or colour** (#110). A word with one red letter
   took a text layer per colour, placed side by side by hand. `create_text_layer`
   and `set_layer` take `runs` (`start`, `end` in Unicode code points, and any of

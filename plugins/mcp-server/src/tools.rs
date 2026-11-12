@@ -1010,7 +1010,7 @@ fn specs() -> Vec<Spec> {
                         Some("invert") => "invert_selection",
                         Some("subject") => "select_subject",
                         Some("layer_pixels") => "select_layer_pixels",
-                        _ => return perform(cx, selection_edit(&args)?),
+                        _ => return perform(cx, "modify_selection", selection_edit(&args)?),
                     };
                     cx.run_on(command, layer.map(|layer| json!([layer])))?;
                     if command == "select_subject" {
@@ -1435,7 +1435,7 @@ Brush dynamics, all off by default: `taper_in` and `taper_out` grow and shrink t
         Spec {
             name: "batch",
             title: "Several edits as one step",
-            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
+            description: "Apply several edits in one request to Xuan, as ONE undo step: `steps` is a list of {\"tool\": name, \"arguments\": {…}}, each an edit tool with the arguments it takes on its own. The steps run in order, each on the result of the ones before. A selection a step makes stays active for the steps after it, and for later calls, until it is replaced or cleared (modify_selection none): strokes, fills, gradients and filters or adjustments on pixels change only what is inside it, so the answer's `notes` name each step that ran inside it, and a warning comes first for a step that changed nothing. A later step can name a layer an earlier step created as \"$1\", \"$2\", …: the n-th layer the batch has created so far, in any layer argument (`layer`, `layers`, `above`, `below`, `parent`, `clip_to`). create_layer, create_text_layer, create_shape_layer, create_image_layer, merge_layers, group_layers, and apply_filter, apply_adjustment or auto_adjust with `as_layer` each create one. For example create_text_layer, then set_layer with \"layer\": \"$1\" to rotate it. If any step fails, nothing in the batch is applied and the error names the step. The tools a batch takes: set_layer, create_layer, create_text_layer, create_shape_layer, create_image_layer, delete_layer, merge_layers, group_layers, ungroup_layer, move_layer, select_layers, select_shape, select_color, modify_selection (only none, grow, shrink and feather), paint_stroke, fill, save_path, fill_gradient, apply_filter, apply_adjustment, auto_adjust, set_adjustment, crop_canvas, trim_canvas, rotate_canvas, resize_canvas and resize_image. Reading tools, history, commands (run_command), plugin actions (run_plugin_action), documents and files cannot be batched. At most 1000 edits in all (a stroke is one edit; set_layer is one edit each for properties, text and placement). `name` names the undo step. Returns the ids of the layers the batch created, in order.",
             properties: json!({
                 "name": {"type": "string", "description": "The undo step's name, e.g. \"Stars\""},
                 "steps": {
@@ -1746,10 +1746,12 @@ pub fn started(name: &str, result: &CallToolResult) -> Option<String> {
     Some(format!("started {label} from {plugin}"))
 }
 
-/// The JSON a tool answered with.
+/// The JSON a tool answered with: its first text that is JSON, since a
+/// warning in prose may come before it.
 fn answer_of(result: &CallToolResult) -> Option<Value> {
-    let text = (result.content.iter()).find_map(|content| content.as_text())?;
-    serde_json::from_str(&text.text).ok()
+    (result.content.iter())
+        .filter_map(|content| content.as_text())
+        .find_map(|text| serde_json::from_str(&text.text).ok())
 }
 
 /// Text from Xuan for the pane: without control and bidi characters, at
@@ -1779,7 +1781,7 @@ pub fn call(cx: &Context, name: &str, args: Map<String, Value>) -> CallToolResul
     };
     let result = retype(args, &spec.properties).and_then(|args| match spec.run {
         Action::Run(run) | Action::Mixed(run, _) => run(cx, args),
-        Action::Edit(plan) => plan(cx, args).and_then(|plan| perform(cx, plan)),
+        Action::Edit(plan) => plan(cx, args).and_then(|plan| perform(cx, spec.name, plan)),
     });
     match result {
         Ok(content) => CallToolResult::success(content),
@@ -1843,16 +1845,146 @@ pub fn batchable() -> Vec<&'static str> {
         .collect()
 }
 
-/// Send a tool's edits as one request and answer as the tool does.
-fn perform(cx: &Context, plan: Plan) -> Result<Vec<ContentBlock>, String> {
+/// Send a tool's edits as one request and answer as the tool does. When a
+/// selection limited what it painted, the answer says so, and a warning
+/// comes first when it painted nothing.
+fn perform(cx: &Context, tool: &str, plan: Plan) -> Result<Vec<ContentBlock>, String> {
+    let owners = vec![0; plan.edits.len()];
     let answer = cx.edit(plan.name, plan.edits)?;
-    match plan.reply {
-        Reply::Ok => text(json!({"ok": true})),
-        Reply::Layer(layer) => text(json!({"ok": true, "layer": layer})),
-        Reply::Active(active) => text(json!({"ok": true, "active": active})),
-        Reply::Added => added(answer),
-        Reply::Selection => selection_summary(cx),
-        Reply::Size => size_summary(cx),
+    let mut result = match plan.reply {
+        Reply::Ok => json!({"ok": true}),
+        Reply::Layer(layer) => json!({"ok": true, "layer": layer}),
+        Reply::Active(active) => json!({"ok": true, "active": active}),
+        Reply::Added => {
+            json!({"ok": true, "layers": answer.get("layers").cloned().unwrap_or(json!([]))})
+        }
+        Reply::Selection => json!({"ok": true, "selection": document(cx)?["selection"]}),
+        Reply::Size => {
+            let document = document(cx)?;
+            json!({"ok": true, "width": document["width"], "height": document["height"]})
+        }
+    };
+    let Some(clipped) = clipping(&answer, &owners, 1).pop().flatten() else {
+        return text(result);
+    };
+    result["clipped_to_selection"] = clipped.bounds.clone();
+    result["changed"] = json!(clipped.unchanged.len() < clipped.noted);
+    let warning = clipped
+        .warning(tool, None)
+        .map(|line| format!("{line}\n{SELECTION_STAYS}"));
+    Ok((warning.into_iter().map(ContentBlock::text))
+        .chain(text(result)?)
+        .collect())
+}
+
+/// After a warning that an edit changed nothing inside the selection.
+const SELECTION_STAYS: &str = "Strokes, fills, gradients, filters and adjustments change only pixels inside the selection, and a selection stays active, for later steps and calls too, until it is replaced or cleared. If it is left over from earlier, clear it with modify_selection none, or give select_shape a different shape.";
+
+/// What Xuan noted about one step's edits that ran while a selection was
+/// active (see `notes` in `document/edit`'s answer).
+struct Clipped {
+    /// The selection's bounds, `{x, y, width, height}`.
+    bounds: Value,
+    /// How many edits the step sent, how many of them Xuan noted, and which
+    /// (from 1) changed nothing.
+    edits: usize,
+    noted: usize,
+    unchanged: Vec<usize>,
+}
+
+/// Xuan's notes on a request's edits, for each of its `steps`: `owners`
+/// says which step each edit came from.
+fn clipping(answer: &Value, owners: &[usize], steps: usize) -> Vec<Option<Clipped>> {
+    let mut clipped: Vec<Option<Clipped>> = (0..steps).map(|_| None).collect();
+    let notes = answer.get("notes").and_then(Value::as_array);
+    for note in notes.into_iter().flatten() {
+        let Some(edit) = (note.get("edit").and_then(Value::as_u64))
+            .and_then(|edit| usize::try_from(edit).ok()?.checked_sub(1))
+        else {
+            continue;
+        };
+        let Some(&step) = owners.get(edit) else {
+            continue;
+        };
+        let first = owners
+            .iter()
+            .position(|&owner| owner == step)
+            .unwrap_or(edit);
+        let entry = clipped[step].get_or_insert_with(|| Clipped {
+            bounds: note
+                .get("clipped_to_selection")
+                .cloned()
+                .unwrap_or(Value::Null),
+            edits: owners.iter().filter(|&&owner| owner == step).count(),
+            noted: 0,
+            unchanged: Vec::new(),
+        });
+        entry.noted += 1;
+        if note.get("changed") == Some(&Value::Bool(false)) {
+            entry.unchanged.push(edit - first + 1);
+        }
+    }
+    clipped
+}
+
+impl Clipped {
+    /// "the selection (448, 292, 184×216)".
+    fn selection(&self) -> String {
+        let number = |key: &str| self.bounds.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let (width, height) = (number("width"), number("height"));
+        if width == 0 || height == 0 {
+            return "the selection, which is empty".into();
+        }
+        format!(
+            "the selection ({}, {}, {width}×{height})",
+            number("x"),
+            number("y")
+        )
+    }
+
+    /// Who did it: the tool, or the step of a batch.
+    fn who(tool: &str, step: Option<usize>) -> String {
+        match step {
+            Some(step) => format!("Step {} ({tool})", step + 1),
+            None => tool.to_owned(),
+        }
+    }
+
+    /// The warning when the tool (or some of its strokes) changed nothing,
+    /// e.g. "Step 19 (paint_stroke) painted nothing inside the selection
+    /// (448, 292, 184×216)."
+    fn warning(&self, tool: &str, step: Option<usize>) -> Option<String> {
+        if self.unchanged.is_empty() {
+            return None;
+        }
+        let verb = match tool {
+            "apply_filter" | "apply_adjustment" | "auto_adjust" => "changed nothing",
+            _ => "painted nothing",
+        };
+        let who = Self::who(tool, step);
+        let which = match self.unchanged.len() {
+            all if all == self.edits => String::new(),
+            many if many > 8 => format!(": {many} of its {} strokes", self.edits),
+            1 => format!(": stroke {} of {}", self.unchanged[0], self.edits),
+            _ => {
+                let (last, rest) = self.unchanged.split_last().unwrap_or((&0, &[]));
+                let rest: Vec<String> = rest.iter().map(usize::to_string).collect();
+                format!(": strokes {} and {last} of {}", rest.join(", "), self.edits)
+            }
+        };
+        Some(format!("{who}{which} {verb} inside {}.", self.selection()))
+    }
+
+    /// A batch's note on the step: its warning, or that it ran inside the
+    /// selection.
+    fn note(&self, tool: &str, step: usize) -> String {
+        self.warning(tool, Some(step)).unwrap_or_else(|| {
+            format!(
+                "{} ran inside {}.",
+                Self::who(tool, Some(step)),
+                self.selection()
+            )
+        })
     }
 }
 
@@ -1948,7 +2080,25 @@ fn batch(cx: &Context, args: Map<String, Value>) -> Result<Vec<ContentBlock>, St
             result["height"] = document["height"].clone();
         }
     }
-    text(result)
+    // The steps a selection clipped, and first, as prose, the ones it let
+    // paint nothing.
+    let clipped = clipping(&answer, &owners, plans.len());
+    let mut notes = Vec::new();
+    let mut warnings = Vec::new();
+    for (step, clipped) in clipped.iter().enumerate() {
+        let Some(clipped) = clipped else { continue };
+        let tool = plans[step].0;
+        notes.push(clipped.note(tool, step));
+        warnings.extend(clipped.warning(tool, Some(step)));
+    }
+    if !notes.is_empty() {
+        result["notes"] = json!(notes);
+    }
+    let warning =
+        (!warnings.is_empty()).then(|| format!("{}\n{SELECTION_STAYS}", warnings.join("\n")));
+    Ok((warning.into_iter().map(ContentBlock::text))
+        .chain(text(result)?)
+        .collect())
 }
 
 /// Xuan's error for a batch, naming the step whose edit it refused. Xuan
@@ -2659,10 +2809,6 @@ fn text(value: Value) -> Result<Vec<ContentBlock>, String> {
     )])
 }
 
-fn added(answer: Value) -> Result<Vec<ContentBlock>, String> {
-    text(json!({"ok": true, "layers": answer.get("layers").cloned().unwrap_or(json!([]))}))
-}
-
 fn document(cx: &Context) -> Result<Value, String> {
     let document = cx.call("document/get", json!({}))?;
     if document.is_null() {
@@ -2673,11 +2819,6 @@ fn document(cx: &Context) -> Result<Value, String> {
 
 fn selection_summary(cx: &Context) -> Result<Vec<ContentBlock>, String> {
     text(json!({"ok": true, "selection": document(cx)?["selection"]}))
-}
-
-fn size_summary(cx: &Context) -> Result<Vec<ContentBlock>, String> {
-    let document = document(cx)?;
-    text(json!({"ok": true, "width": document["width"], "height": document["height"]}))
 }
 
 fn history(

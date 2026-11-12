@@ -451,6 +451,11 @@ created as `"$1"`, `"$2"`, …, the n-th layer the batch has created so far
   limit. Split larger work into several calls.
 - The answer lists the ids of the layers created, in order, and the selection
   or canvas size when a step changed them.
+- A selection a step makes stays active for the steps after it, and for later
+  calls, until it is replaced or cleared. The answer's `notes` name each step
+  that ran inside it (`"Step 2 (fill) ran inside the selection (448, 292,
+  184×216)."`), and a warning comes before the JSON for a step that changed
+  nothing inside it.
 
 ### Other plugins' actions
 
@@ -540,8 +545,13 @@ the call returns when it is done. Look at the result with `get_preview`.
   without repainting.
 - Name the layers you create, so the user can find them.
 - Selections limit fills, strokes, filters and adjustments, and become the
-  mask of new adjustment layers. Clear it with `modify_selection` `none` when
-  done.
+  mask of new adjustment layers. A selection stays active for every later step
+  and call until it is replaced or cleared, so clear it with `modify_selection`
+  `none` when done. While one is active, `paint_stroke`, `fill`,
+  `fill_gradient`, and `apply_filter`, `apply_adjustment` and `auto_adjust`
+  without `as_layer` answer with `clipped_to_selection` (its bounds) and
+  `changed`; when nothing changed, a warning comes first. Check the selection
+  before blaming the path, the colour or the layer.
 - Each tool call is one undo step. If the user did not like a change,
   `undo` it rather than trying to reverse it by hand.
 - Group work that belongs together, so it is one undo step and one round

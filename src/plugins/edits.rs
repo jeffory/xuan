@@ -327,6 +327,9 @@ pub struct Reader {
     cost: Cost,
     /// Draws `add_text_layer` edits; made when first needed.
     text: Option<TextRenderer>,
+    /// What the edits that paint inside the selection did, when asked for
+    /// with [`Reader::with_notes`].
+    notes: Option<notes::Notes>,
 }
 
 impl std::fmt::Debug for Reader {
@@ -352,6 +355,7 @@ impl Reader {
             edits: 0,
             cost: Cost::default(),
             text: None,
+            notes: None,
         }
     }
 
@@ -1960,7 +1964,9 @@ impl Edit {
 /// Apply a batch, reading its images through `reader`. The caller clones the
 /// document first and only keeps the result when every edit succeeded, so a
 /// failing batch changes nothing. When a batch of several edits fails, the
-/// error says which edit, as `Edit 3 (stroke): …`.
+/// error says which edit, as `Edit 3 (stroke): …`. A reader made
+/// [`Reader::with_notes`] notes what the edits that paint inside the
+/// selection did ([`Note`]).
 pub fn apply(document: &mut Document, edits: &[Edit], reader: &mut Reader) -> Result<Vec<Uuid>> {
     let mut at = None;
     apply_each(document, edits, reader, &mut at).map_err(|error| match at {
@@ -2428,7 +2434,9 @@ fn apply_each(
                 } else {
                     activate(document, *layer)?;
                 }
+                let watch = reader.watch(document, *mask, None);
                 crate::paint::fill(document, color.0, false, *mask)?;
+                reader.note(document, index, "fill", watch);
             }
             Edit::AddPath { path, name } => {
                 let d = VectorPath::parse(path)?;
@@ -2462,7 +2470,9 @@ fn apply_each(
             } => {
                 let path = VectorPath::parse(path)?;
                 activate(document, *layer)?;
+                let watch = reader.watch(document, false, None);
                 crate::paint::fill_path(document, &path, *fill_rule, color.0)?;
+                reader.note(document, index, "fill_path", watch);
             }
             Edit::Gradient {
                 layer,
@@ -2500,6 +2510,7 @@ fn apply_each(
                 } else {
                     activate(document, *layer)?;
                 }
+                let watch = reader.watch(document, *mask, None);
                 crate::paint::gradient_stops(
                     document,
                     ends[0],
@@ -2511,6 +2522,7 @@ fn apply_each(
                         mask_target: *mask,
                     },
                 )?;
+                reader.note(document, index, "gradient", watch);
             }
             Edit::Stroke {
                 layer,
@@ -2649,6 +2661,7 @@ fn apply_each(
                         (position, brush)
                     })
                     .collect();
+                let watch = reader.watch(document, *mask, Some(&samples[..]));
                 crate::paint::Stroke::default().path(
                     document,
                     &samples,
@@ -2659,16 +2672,21 @@ fn apply_each(
                         clone_offset: Point::default(),
                     },
                 )?;
+                reader.note(document, index, "stroke", watch);
             }
             Edit::ApplyFilter { layer, filter } => {
                 filter.validate()?;
                 activate(document, *layer)?;
+                let watch = reader.watch(document, false, None);
                 crate::effects::apply_filter(document, filter, false)?;
+                reader.note(document, index, "apply_filter", watch);
             }
             Edit::ApplyAdjustment { layer, adjustment } => {
                 check_adjustment(adjustment)?;
                 activate(document, *layer)?;
+                let watch = reader.watch(document, false, None);
                 crate::effects::apply_adjustment(document, adjustment, false)?;
+                reader.note(document, index, "apply_adjustment", watch);
             }
             Edit::AddAdjustmentLayer {
                 adjustment,
@@ -2797,7 +2815,9 @@ fn apply_each(
                     }
                     added.push(insert_above(document, layer, *above)?);
                 } else {
+                    let watch = reader.watch(document, false, None);
                     crate::effects::apply_adjustment(document, &adjustment, false)?;
+                    reader.note(document, index, "auto_adjust", watch);
                 }
             }
             Edit::SetAdjustment {
@@ -3458,6 +3478,10 @@ pub fn blend_names() -> Vec<String> {
         })
         .collect()
 }
+
+#[path = "edits_notes.rs"]
+mod notes;
+pub use notes::{Bounds, Note};
 
 #[cfg(test)]
 #[path = "edits_path_tests.rs"]
@@ -4328,6 +4352,180 @@ mod tests {
             let error = run(&mut document.clone(), &[edit(locked.clone())]).unwrap_err();
             assert!(error.to_string().contains("lock"), "{locked}: {error}");
         }
+    }
+
+    /// Apply `edits` as `document/edit` does, keeping notes, and return them.
+    fn noted(document: &mut Document, edits: &[Value]) -> Vec<Note> {
+        let edits = parse_edits(json!(edits)).unwrap();
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS).with_notes();
+        apply(document, &edits, &mut reader).unwrap();
+        reader.take_notes()
+    }
+
+    fn note(edit: usize, op: &'static str, [x, y, width, height]: [u32; 4], changed: bool) -> Note {
+        Note {
+            edit,
+            op,
+            clipped_to_selection: Bounds {
+                x,
+                y,
+                width,
+                height,
+            },
+            changed,
+        }
+    }
+
+    #[test]
+    fn a_stroke_the_selection_keeps_out_is_noted_as_changing_nothing() {
+        let (mut document, base) = grey_document();
+        // As in the editor, the document the request started from still
+        // shares the layer's pixels.
+        let original = document.clone();
+        let select = json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10});
+        let outside =
+            json!({"op": "stroke", "points": [[20, 20], [36, 26]], "size": 4, "color": "#ff0000"});
+        let across =
+            json!({"op": "stroke", "points": [[5, 5], [30, 5]], "size": 4, "color": "#ff0000"});
+        // Entirely outside: noted, the layer unchanged.
+        let notes = noted(&mut document, &[select.clone(), outside.clone()]);
+        assert_eq!(notes, [note(2, "stroke", [0, 0, 10, 10], false)]);
+        assert_eq!(document.layers[0].pixels, original.layers[0].pixels);
+        // Partly inside: clipped, and changed. A stroke outside after it, on
+        // pixels this request already copied, still changed nothing.
+        let notes = noted(&mut document, &[across, outside.clone()]);
+        assert_eq!(
+            notes,
+            [
+                note(1, "stroke", [0, 0, 10, 10], true),
+                note(2, "stroke", [0, 0, 10, 10], false),
+            ]
+        );
+        let pixels = document.layers[0].pixels.clone().unwrap();
+        assert_eq!(pixels.get_pixel(5, 5).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(20, 5).0, [100, 100, 100, 255]);
+        // Without a selection there are no notes, and none unless asked for.
+        let notes = noted(
+            &mut document,
+            &[json!({"op": "set_selection"}), outside.clone()],
+        );
+        assert!(notes.is_empty(), "{notes:?}");
+        let mut reader = Reader::new(Access::anywhere(), MAX_LAYERS);
+        let edits = [edit(select), edit(outside)];
+        apply(&mut document, &edits, &mut reader).unwrap();
+        assert!(reader.take_notes().is_empty());
+        assert_eq!(document.active, Some(base));
+    }
+
+    #[test]
+    fn notes_follow_a_turned_flipped_scaled_layer_as_strokes_grow_it() {
+        for shared in [false, true] {
+            // A 20 × 10 grey layer stretched to 40 × 20, turned a quarter and
+            // flipped: in the document it covers x 30–50, y 10–50.
+            let mut document = Document::new(80, 60).unwrap();
+            document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+                20,
+                10,
+                image::Rgba([100, 100, 100, 255]),
+            )));
+            document.layers[0].transform = Transform {
+                x: 20.0,
+                y: 20.0,
+                width: 40.0,
+                height: 20.0,
+                rotation: 90.0,
+                flip_x: true,
+                ..Transform::new(20, 10)
+            };
+            let original = shared.then(|| document.clone());
+            let stroke = |from: [f32; 2], to: [f32; 2], color: &str| json!({"op": "stroke", "points": [from, to], "size": 4, "hardness": 1, "color": color});
+            let notes = noted(
+                &mut document,
+                &[
+                    json!({"op": "select_rect", "x": 0, "y": 0, "width": 80, "height": 30}),
+                    // Grey over grey inside the selection; below the layer, where
+                    // it grows, the selection keeps the stroke out.
+                    stroke([40.0, 20.0], [40.0, 58.0], "#646464"),
+                    stroke([40.0, 20.0], [40.0, 58.0], "#ff0000"),
+                    // Beside the layer and just below the selection: the layer
+                    // grows, the selection's edge is compared, nothing there changes.
+                    stroke([55.0, 33.5], [75.0, 33.5], "#ff0000"),
+                    // Beside the layer and inside the selection: painted where it grew.
+                    stroke([60.0, 5.0], [75.0, 5.0], "#ff0000"),
+                ],
+            );
+            let top = [0, 0, 80, 30];
+            assert_eq!(
+                notes,
+                [
+                    note(2, "stroke", top, false),
+                    note(3, "stroke", top, true),
+                    note(4, "stroke", top, false),
+                    note(5, "stroke", top, true),
+                ],
+                "shared: {shared}"
+            );
+            let pixels = document.layers[0].pixels.as_ref().unwrap();
+            assert!(
+                pixels.width() > 20 && pixels.height() > 10,
+                "the layer grew"
+            );
+            drop(original);
+        }
+    }
+
+    #[test]
+    fn notes_follow_fills_masks_filters_and_layers_that_grow() {
+        let (mut document, base) = grey_document();
+        let notes = noted(
+            &mut document,
+            &[
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10}),
+                // Grey on grey changes nothing, even where it grows the layer
+                // past the canvas (outside the selection).
+                json!({"op": "stroke", "points": [[1, 1]], "size": 6, "hardness": 1, "color": "#646464"}),
+                json!({"op": "stroke", "points": [[1, 1]], "size": 6, "hardness": 1, "color": "#ffffff"}),
+                json!({"op": "fill_path", "path": "M 20 20 H 30 V 28 H 20 Z", "color": "#ff0000"}),
+                json!({"op": "gradient", "start": [0, 0], "end": [40, 0], "stops": [
+                    {"position": 0, "color": "#000000"}, {"position": 1, "color": "#ffffff"}]}),
+                // A new mask is white: filling it white changes nothing.
+                json!({"op": "fill", "layer": base, "color": "#ffffff", "mask": true}),
+                json!({"op": "fill", "layer": base, "color": "#000000", "mask": true}),
+                json!({"op": "apply_adjustment", "layer": base, "adjustment": "Invert"}),
+                // Inverting, blurring or auto-toning nothing but transparent
+                // pixels changes nothing.
+                json!({"op": "add_empty_layer"}),
+                json!({"op": "apply_adjustment", "layer": "$1", "adjustment": "Invert"}),
+                json!({"op": "apply_filter", "layer": "$1", "filter": {"GaussianBlur": {"radius": 2}}}),
+                json!({"op": "auto_adjust", "kind": "tone", "layer": "$1"}),
+                // A small layer away from the selection grows to hold a stroke.
+                json!({"op": "add_shape_layer", "shape": "Rectangle", "x": 20, "y": 20, "width": 10, "height": 5}),
+                json!({"op": "stroke", "layer": "$2", "points": [[25, 22], [38, 28]], "size": 4}),
+                json!({"op": "stroke", "layer": "$2", "points": [[3, 3]], "size": 4}),
+                // An empty selection lets nothing through.
+                json!({"op": "select_rect", "x": 0, "y": 0, "width": 10, "height": 10, "mode": "subtract"}),
+                json!({"op": "fill", "layer": base, "color": "#00ff00"}),
+            ],
+        );
+        let square = [0, 0, 10, 10];
+        assert_eq!(
+            notes,
+            [
+                note(2, "stroke", square, false),
+                note(3, "stroke", square, true),
+                note(4, "fill_path", square, false),
+                note(5, "gradient", square, true),
+                note(6, "fill", square, false),
+                note(7, "fill", square, true),
+                note(8, "apply_adjustment", square, true),
+                note(10, "apply_adjustment", square, false),
+                note(11, "apply_filter", square, false),
+                note(12, "auto_adjust", square, false),
+                note(14, "stroke", square, false),
+                note(15, "stroke", square, true),
+                note(17, "fill", [0; 4], false),
+            ]
+        );
     }
 
     /// Upstream Compositor's filters as plugins and MCP's `apply_filter` send them: the same
